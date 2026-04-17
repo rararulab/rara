@@ -1797,6 +1797,9 @@ impl IOSubsystem {
     /// Access the endpoint registry.
     pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
 
+    /// Access the identity resolver (platform id → kernel `UserId`).
+    pub fn identity_resolver(&self) -> &IdentityResolverRef { &self.identity_resolver }
+
     /// Deliver a single outbound envelope to all resolved targets.
     #[tracing::instrument(
         skip(self, envelope),

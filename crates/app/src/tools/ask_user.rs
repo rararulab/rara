@@ -90,11 +90,12 @@ impl ToolExecute for AskUserTool {
         // question back to the same conversation surface (e.g. a Telegram
         // forum topic) instead of a default fallback like `primary_chat_id`.
         let endpoint = context.origin_endpoint.clone();
-        // Propagate the platform-native user identifier so channel adapters
-        // can bind the pending question to the specific user who triggered
-        // the turn — other members of a shared chat must not be able to
-        // answer on their behalf.
-        let expected_platform_user_id = context.origin_platform_user_id.clone();
+        // Propagate the kernel `UserId` so channel adapters can bind the
+        // pending question to the specific user who triggered the turn —
+        // other members of a shared chat must not be able to answer on
+        // their behalf. Adapters resolve the incoming reply/callback
+        // sender to a `UserId` via `IdentityResolver` and compare.
+        let expected_user_id = Some(rara_kernel::identity::UserId(context.user_id.clone()));
         // Either the caller explicitly marked the prompt sensitive, or the
         // question text matches common secret-request patterns. Heuristic
         // detection is a defense-in-depth safety net, not a substitute for
@@ -105,7 +106,7 @@ impl ToolExecute for AskUserTool {
             .ask(
                 params.question,
                 endpoint,
-                expected_platform_user_id,
+                expected_user_id,
                 sensitive,
                 params.options,
                 timeout,

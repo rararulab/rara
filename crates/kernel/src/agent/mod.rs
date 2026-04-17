@@ -2305,7 +2305,9 @@ pub(crate) async fn run_agent_loop(
                             timeout_secs:            120,
                             context:                 None,
                             origin_endpoint:         tc.origin_endpoint.clone(),
-                            origin_platform_user_id: tc.origin_platform_user_id.clone(),
+                            origin_user_id:          Some(crate::identity::UserId(
+                                tc.user_id.clone(),
+                            )),
                         };
 
                         let decision = approval_manager.request_approval(approval_req).await;

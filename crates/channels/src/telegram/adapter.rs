@@ -58,28 +58,32 @@ static GUARD_EXPIRY_HANDLES: LazyLock<DashMap<Uuid, AbortHandle>> = LazyLock::ne
 /// Inserted by [`approval_listener`] after the inline-keyboard prompt has
 /// been rendered, removed by [`handle_guard_callback`] (on resolve) or by
 /// the per-request expiry task spawned alongside the prompt. When
-/// `expected_platform_user_id` is set, [`handle_guard_callback`] rejects
-/// approve/deny presses from any other user — strictly narrower than the
+/// `expected_user_id` is set, [`handle_guard_callback`] resolves the
+/// incoming presser via `IdentityResolver` and rejects approve/deny presses
+/// from anyone whose kernel `UserId` differs — strictly narrower than the
 /// chat-level `allowed_user_ids` gate so the original asker (and only them)
-/// can resolve a guard prompt that was raised inside a shared chat.
+/// can resolve a guard prompt that was raised inside a shared chat. Using
+/// `UserId` here also allows cross-channel routing: a web-originated
+/// approval rendered in Telegram resolves correctly when the same kernel
+/// user presses the button.
 // `_id` postfix on `request_id`/`prompt_chat_id`/`prompt_msg_id` is the
 // established naming for kernel/Telegram identifiers across the adapter
 // (see `PendingUserQuestion`); renaming would obscure the meaning.
 #[allow(clippy::struct_field_names)]
 struct PendingGuardApproval {
-    request_id:                Uuid,
-    /// Telegram `from.id` (as a string) of the user who triggered the turn
-    /// that produced this approval request. `None` when the originating
-    /// turn carries no platform identity (synthetic re-entry, background
-    /// jobs, syscall path); in that case identity-gate enforcement is
-    /// skipped and only the chat-level gate applies.
-    expected_platform_user_id: Option<String>,
+    request_id:       Uuid,
+    /// Kernel `UserId` of the user who triggered the turn that produced
+    /// this approval request. `None` when the originating turn carries no
+    /// platform identity (synthetic re-entry, background jobs, syscall
+    /// path); in that case identity-gate enforcement is skipped and only
+    /// the chat-level gate applies.
+    expected_user_id: Option<rara_kernel::identity::UserId>,
     /// Chat where the approval prompt was rendered. Kept for the expiry
     /// task and for parity with [`PendingUserQuestion::prompt_location`].
-    prompt_chat_id:            i64,
+    prompt_chat_id:   i64,
     /// Telegram message id of the rendered prompt — combined with
     /// `prompt_chat_id` to form a stable address for the expiry task.
-    prompt_msg_id:             MessageId,
+    prompt_msg_id:    MessageId,
 }
 
 /// Pending guard-approval index keyed by the kernel-generated approval
@@ -90,20 +94,21 @@ static PENDING_GUARD_APPROVALS: LazyLock<DashMap<Uuid, PendingGuardApproval>> =
 
 /// Pending user-question entry stored in [`PENDING_USER_QUESTIONS`].
 struct PendingUserQuestion {
-    question_id:               Uuid,
-    question_text:             String,
-    manager:                   UserQuestionManagerRef,
-    /// Platform-native id of the user who asked — incoming answers are
-    /// rejected unless `msg.from.id`/`callback.from.id` matches this value.
-    /// `None` when the origin had no platform identity (web/cli).
-    expected_platform_user_id: Option<String>,
+    question_id:      Uuid,
+    question_text:    String,
+    manager:          UserQuestionManagerRef,
+    /// Kernel `UserId` of the user who asked — incoming answers are
+    /// rejected unless the resolved `UserId` of the reply/callback sender
+    /// matches this value. `None` when the origin had no platform
+    /// identity (web/cli).
+    expected_user_id: Option<rara_kernel::identity::UserId>,
     /// Pre-defined answer options. When `Some`, the prompt was rendered as
     /// an inline keyboard; callback resolution maps the pressed index into
     /// this list.
-    options:                   Option<Vec<String>>,
+    options:          Option<Vec<String>>,
     /// The `(chat_id, prompt_message_id)` where the prompt was rendered.
     /// Kept so the timeout cleanup task can remove both index entries.
-    prompt_location:           (i64, i32),
+    prompt_location:  (i64, i32),
 }
 
 /// Primary pending-question index keyed by the kernel-generated question
@@ -1965,21 +1970,31 @@ async fn handle_guard_callback(
     // pre-existing behavior for syscall-driven approvals and synthetic
     // re-entries that have no platform user identity).
     let caller_pid = callback.from.id.0.to_string();
-    if let Some(entry) = PENDING_GUARD_APPROVALS.get(&request_id) {
-        if let Some(expected) = entry.expected_platform_user_id.as_deref() {
-            if expected != caller_pid {
-                warn!(
-                    request_id = %request_id,
-                    caller_pid,
-                    "guard callback: identity gate rejected non-asker"
-                );
-                let _ = bot
-                    .answer_callback_query(callback.id.clone())
-                    .text("⚠️ Only the originator can approve this prompt")
-                    .show_alert(true)
-                    .await;
-                return;
-            }
+    let expected_user_id = PENDING_GUARD_APPROVALS
+        .get(&request_id)
+        .and_then(|entry| entry.expected_user_id.clone());
+    if let Some(expected) = expected_user_id.as_ref() {
+        let resolved = handle
+            .io()
+            .identity_resolver()
+            .resolve(ChannelType::Telegram, &caller_pid, None)
+            .await
+            .ok();
+        let matches = resolved.as_ref() == Some(expected);
+        if !matches {
+            warn!(
+                request_id = %request_id,
+                caller_pid,
+                expected = %expected.0,
+                resolved = ?resolved,
+                "guard callback: identity gate rejected non-asker"
+            );
+            let _ = bot
+                .answer_callback_query(callback.id.clone())
+                .text("⚠️ Only the originator can approve this prompt")
+                .show_alert(true)
+                .await;
+            return;
         }
     }
 
@@ -2665,12 +2680,10 @@ async fn approval_listener(
                         PENDING_GUARD_APPROVALS.insert(
                             req.id,
                             PendingGuardApproval {
-                                request_id:                req.id,
-                                expected_platform_user_id: req
-                                    .origin_platform_user_id
-                                    .clone(),
-                                prompt_chat_id:            chat_id,
-                                prompt_msg_id:             sent_msg.id,
+                                request_id:       req.id,
+                                expected_user_id: req.origin_user_id.clone(),
+                                prompt_chat_id:   chat_id,
+                                prompt_msg_id:    sent_msg.id,
                             },
                         );
 
@@ -2875,7 +2888,7 @@ async fn dispatch_user_question(
             question_id: question.id,
             question_text: question.question.clone(),
             manager: Arc::clone(mgr),
-            expected_platform_user_id: question.expected_platform_user_id.clone(),
+            expected_user_id: question.expected_user_id.clone(),
             options: question.options.clone(),
             prompt_location,
         },
@@ -2908,10 +2921,12 @@ async fn dispatch_user_question(
 /// Handle `au:<question_id>:<option_index>` inline-keyboard callbacks
 /// emitted by [`dispatch_user_question`] when a question has options.
 ///
-/// Validates `callback.from.id` against the pending question's expected
-/// platform user id and rejects mismatches, preventing other group members
-/// from pressing answer buttons on behalf of the original asker.
+/// Resolves the incoming presser's kernel `UserId` via `IdentityResolver`
+/// and compares it against the pending question's `expected_user_id`,
+/// rejecting mismatches so other group members cannot press answer buttons
+/// on behalf of the original asker.
 async fn handle_ask_user_callback(
+    handle: &KernelHandle,
     bot: &teloxide::Bot,
     callback: &teloxide::types::CallbackQuery,
     data: &str,
@@ -2946,9 +2961,11 @@ async fn handle_ask_user_callback(
     // Identity check against the asker recorded at dispatch time. We use
     // `callback.from.id` which Telegram guarantees to be the user who
     // pressed the button (platform-level attestation — cannot be spoofed
-    // by another group member).
+    // by another group member), then resolve it to a kernel `UserId` so
+    // cross-channel asks (e.g. originated from web) still resolve
+    // correctly when the same kernel user answers on Telegram.
     let caller_pid = callback.from.id.0.to_string();
-    {
+    let expected_user_id = {
         let Some(entry) = PENDING_USER_QUESTIONS.get(&qid) else {
             let _ = bot
                 .answer_callback_query(callback.id.clone())
@@ -2956,15 +2973,29 @@ async fn handle_ask_user_callback(
                 .await;
             return;
         };
-        if let Some(ref expected) = entry.expected_platform_user_id {
-            if expected != &caller_pid {
-                let _ = bot
-                    .answer_callback_query(callback.id.clone())
-                    .text("Only the original asker can answer this question.")
-                    .show_alert(true)
-                    .await;
-                return;
-            }
+        entry.expected_user_id.clone()
+    };
+    if let Some(expected) = expected_user_id.as_ref() {
+        let resolved = handle
+            .io()
+            .identity_resolver()
+            .resolve(ChannelType::Telegram, &caller_pid, None)
+            .await
+            .ok();
+        if resolved.as_ref() != Some(expected) {
+            warn!(
+                question_id = %qid,
+                caller_pid,
+                expected = %expected.0,
+                resolved = ?resolved,
+                "ask-user callback: identity gate rejected non-asker"
+            );
+            let _ = bot
+                .answer_callback_query(callback.id.clone())
+                .text("Only the original asker can answer this question.")
+                .show_alert(true)
+                .await;
+            return;
         }
     }
 
@@ -3067,12 +3098,12 @@ async fn handle_update(
                 return;
             }
             // au: (ask-user option press) enforces per-question identity
-            // (expected_platform_user_id) on its own, which is strictly
-            // narrower than the shared chat-level auth below. Route it
-            // before the chat gate so a legitimate asker in a shared but
-            // unlisted chat can still answer their own prompt.
+            // (expected_user_id) on its own, which is strictly narrower
+            // than the shared chat-level auth below. Route it before the
+            // chat gate so a legitimate asker in a shared but unlisted
+            // chat can still answer their own prompt.
             if data.starts_with("au:") {
-                handle_ask_user_callback(bot, callback, data).await;
+                handle_ask_user_callback(handle, bot, callback, data).await;
                 return;
             }
 
@@ -3253,14 +3284,31 @@ async fn handle_update(
                 return;
             };
 
-            // Identity gate: only the asker may answer. Other members of a
-            // shared group/topic see the prompt but must not be able to
-            // unblock the agent by replying with, say, a fabricated API
-            // key. Re-insert the pending state on rejection so the real
-            // asker can still answer later.
-            let actual_pid = msg.from.as_ref().map(|u| u.id.0.to_string());
-            if let Some(ref expected) = pending.expected_platform_user_id {
-                if actual_pid.as_deref() != Some(expected.as_str()) {
+            // Identity gate: only the asker may answer. Resolve the
+            // Telegram sender to a kernel `UserId` (so web-originated
+            // questions still match when the same kernel user replies on
+            // Telegram) and reject mismatches. Re-insert the pending
+            // state on rejection so the real asker can still answer
+            // later.
+            if let Some(ref expected) = pending.expected_user_id {
+                let actual_pid = msg.from.as_ref().map(|u| u.id.0.to_string());
+                let resolved = match actual_pid.as_deref() {
+                    Some(pid) => handle
+                        .io()
+                        .identity_resolver()
+                        .resolve(ChannelType::Telegram, pid, None)
+                        .await
+                        .ok(),
+                    None => None,
+                };
+                if resolved.as_ref() != Some(expected) {
+                    warn!(
+                        question_id = %qid,
+                        actual_pid = ?actual_pid,
+                        expected = %expected.0,
+                        resolved = ?resolved,
+                        "ask-user reply: identity gate rejected non-asker"
+                    );
                     PENDING_USER_QUESTIONS.insert(qid, pending);
                     PROMPT_MSG_TO_QID.insert(lookup_key, qid);
                     let _ = bot
