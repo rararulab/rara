@@ -1806,12 +1806,37 @@ impl IOSubsystem {
         )
     )]
     async fn deliver_to_endpoints(&self, envelope: OutboundEnvelope) {
-        // Build candidates from origin_endpoint (if set) or user registry,
-        // then apply routing filters.
+        // Build candidates from origin_endpoint (if set) or session-scoped
+        // channel bindings, then apply routing filters.
+        //
+        // Why session bindings, not the per-user endpoint registry:
+        // the registry holds every endpoint the user has ever touched,
+        // including TG/WeChat chats from unrelated sessions. Broadcasting to
+        // that set leaks one session's output into another. Session bindings
+        // only contain endpoints explicitly tied to *this* session (via
+        // `bind_channel_for_message` or `/sessions`), so cross-channel
+        // mirroring stays within the session's own chats.
         let candidates: Vec<Endpoint> = if let Some(ref origin) = envelope.origin_endpoint {
             vec![origin.clone()]
         } else {
-            self.endpoint_registry.get_endpoints(&envelope.user)
+            match self
+                .session_index
+                .list_channel_bindings_by_session(&envelope.session_key)
+                .await
+            {
+                Ok(bindings) => bindings
+                    .into_iter()
+                    .filter_map(binding_to_endpoint)
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!(
+                        %e,
+                        session_key = %envelope.session_key,
+                        "deliver_to_endpoints: binding lookup failed; skipping fanout"
+                    );
+                    Vec::new()
+                }
+            }
         };
         let targets = resolve_delivery_targets(candidates, &envelope.routing);
 
@@ -1867,6 +1892,40 @@ impl IOSubsystem {
             }
         });
         futures::future::join_all(futs).await;
+    }
+}
+
+/// Convert a [`ChannelBinding`](crate::session::ChannelBinding) into a
+/// deliverable [`Endpoint`].
+///
+/// Only channels that accept platform-level delivery via
+/// [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter) are mapped.
+/// Web and CLI bindings are self-referential (`chat_id == session_key`) —
+/// their adapters fan out through [`StreamHub`] rather than
+/// `deliver_to_endpoints`, so routing them here would double-deliver.
+/// Returning `None` for those variants keeps the fanout list
+/// adapter-compatible without relying on downstream routing filters.
+fn binding_to_endpoint(binding: crate::session::ChannelBinding) -> Option<Endpoint> {
+    match binding.channel_type {
+        ChannelType::Telegram => {
+            let chat_id = binding.chat_id.parse::<i64>().ok()?;
+            let thread_id = binding.thread_id.and_then(|t| t.parse::<i64>().ok());
+            Some(Endpoint {
+                channel_type: ChannelType::Telegram,
+                address:      EndpointAddress::Telegram { chat_id, thread_id },
+            })
+        }
+        ChannelType::Wechat => Some(Endpoint {
+            channel_type: ChannelType::Wechat,
+            address:      EndpointAddress::Wechat {
+                user_id: binding.chat_id,
+            },
+        }),
+        ChannelType::Web
+        | ChannelType::Cli
+        | ChannelType::Api
+        | ChannelType::Internal
+        | ChannelType::Proactive => None,
     }
 }
 
@@ -1967,6 +2026,62 @@ mod delivery_routing_tests {
             },
         );
         assert_eq!(targets, vec![web]);
+    }
+
+    #[test]
+    fn binding_to_endpoint_maps_telegram_with_thread() {
+        let now = chrono::Utc::now();
+        let binding = crate::session::ChannelBinding {
+            channel_type: ChannelType::Telegram,
+            chat_id:      "-1001234567890".to_string(),
+            thread_id:    Some("42".to_string()),
+            session_key:  crate::session::SessionKey::new(),
+            created_at:   now,
+            updated_at:   now,
+        };
+        let ep = binding_to_endpoint(binding).expect("telegram binding maps");
+        assert_eq!(
+            ep,
+            Endpoint {
+                channel_type: ChannelType::Telegram,
+                address:      EndpointAddress::Telegram {
+                    chat_id:   -1001234567890,
+                    thread_id: Some(42),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn binding_to_endpoint_rejects_self_referential_web() {
+        // Web/CLI bindings are self-referential (chat_id == session_key) and
+        // their adapters deliver via StreamHub — mapping them here would
+        // double-deliver.
+        let now = chrono::Utc::now();
+        let key = crate::session::SessionKey::new();
+        let binding = crate::session::ChannelBinding {
+            channel_type: ChannelType::Web,
+            chat_id:      key.to_string(),
+            thread_id:    None,
+            session_key:  key,
+            created_at:   now,
+            updated_at:   now,
+        };
+        assert!(binding_to_endpoint(binding).is_none());
+    }
+
+    #[test]
+    fn binding_to_endpoint_rejects_malformed_telegram_chat_id() {
+        let now = chrono::Utc::now();
+        let binding = crate::session::ChannelBinding {
+            channel_type: ChannelType::Telegram,
+            chat_id:      "not-a-number".to_string(),
+            thread_id:    None,
+            session_key:  crate::session::SessionKey::new(),
+            created_at:   now,
+            updated_at:   now,
+        };
+        assert!(binding_to_endpoint(binding).is_none());
     }
 }
 
