@@ -39,7 +39,13 @@
 //! the [`Effect`]s against real subsystems and feeds the outcomes back as
 //! [`Event`]s.
 
-use crate::agent::effect::{Effect, FinishReason, TapeAppendKind, ToolCall, ToolResult};
+use crate::{
+    agent::{
+        effect::{Effect, FinishReason, TapeAppendKind, ToolCall, ToolResult},
+        loop_breaker::{LoopBreakerConfig, LoopIntervention, ToolCallLoopBreaker},
+    },
+    tool::ToolName,
+};
 
 /// High-level phases of one agent turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +70,7 @@ pub const MAX_LLM_RECOVERIES: u32 = 3;
 pub const DEFAULT_MAX_CONTINUATIONS: usize = 10;
 
 /// Mutable state carried across machine transitions for one turn.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AgentMachine {
     phase:                Phase,
     iteration:            usize,
@@ -79,6 +85,13 @@ pub struct AgentMachine {
     continuation_count:   usize,
     /// Maximum allowed continuations per turn.
     max_continuations:    usize,
+    /// Tool-call-loop detector. Fingerprints every tool call and, when
+    /// patterns (exact duplicates, ping-pong, flooding) are detected,
+    /// returns the set of tools to disable for the remainder of the turn.
+    loop_breaker:         ToolCallLoopBreaker,
+    /// Tools the loop breaker has disabled, accumulated across the turn.
+    /// Threaded into every subsequent [`Effect::CallLlm`].
+    disabled_tools:       Vec<ToolName>,
 }
 
 impl AgentMachine {
@@ -95,6 +108,8 @@ impl AgentMachine {
             continuation_pending: false,
             continuation_count: 0,
             max_continuations: DEFAULT_MAX_CONTINUATIONS,
+            loop_breaker: ToolCallLoopBreaker::new(LoopBreakerConfig::builder().build()),
+            disabled_tools: Vec::new(),
         }
     }
 
@@ -102,6 +117,22 @@ impl AgentMachine {
     pub fn with_max_continuations(max_iterations: usize, max_continuations: usize) -> Self {
         Self {
             max_continuations,
+            ..Self::new(max_iterations)
+        }
+    }
+
+    /// Construct a machine with a custom [`LoopBreakerConfig`].
+    ///
+    /// Callers use this to pass a `flooding_exempt` set (e.g. the current
+    /// turn's read-only tools) so the breaker does not disable them on long
+    /// investigations with many distinct arguments — mirroring the
+    /// `t.is_read_only(...)` exemption the legacy `run_agent_loop` builds.
+    pub(crate) fn with_loop_breaker_config(
+        max_iterations: usize,
+        loop_breaker: LoopBreakerConfig,
+    ) -> Self {
+        Self {
+            loop_breaker: ToolCallLoopBreaker::new(loop_breaker),
             ..Self::new(max_iterations)
         }
     }
@@ -132,8 +163,9 @@ impl AgentMachine {
             (Phase::Idle, Event::TurnStarted) => {
                 self.phase = Phase::AwaitingLlm;
                 vec![Effect::CallLlm {
-                    iteration:     self.iteration,
-                    tools_enabled: self.tools_enabled,
+                    iteration:      self.iteration,
+                    tools_enabled:  self.tools_enabled,
+                    disabled_tools: self.disabled_tools.clone(),
                 }]
             }
 
@@ -164,8 +196,9 @@ impl AgentMachine {
                             max:  self.max_continuations,
                         },
                         Effect::CallLlm {
-                            iteration:     self.iteration,
-                            tools_enabled: self.tools_enabled,
+                            iteration:      self.iteration,
+                            tools_enabled:  self.tools_enabled,
+                            disabled_tools: self.disabled_tools.clone(),
                         },
                     ];
                 }
@@ -215,8 +248,9 @@ impl AgentMachine {
                     self.tools_enabled = false;
                     // Stay in AwaitingLlm; runner re-issues CallLlm.
                     vec![Effect::CallLlm {
-                        iteration:     self.iteration,
-                        tools_enabled: self.tools_enabled,
+                        iteration:      self.iteration,
+                        tools_enabled:  self.tools_enabled,
+                        disabled_tools: self.disabled_tools.clone(),
                     }]
                 } else {
                     self.phase = Phase::Failed;
@@ -230,32 +264,61 @@ impl AgentMachine {
                 self.continuation_pending = results
                     .iter()
                     .any(|r| r.name == "continue-work" && r.success);
+
+                // Feed every call from this wave into the loop breaker, then
+                // consult it exactly once.  Fingerprints are (name, arguments)
+                // pairs, which `ToolResult.arguments` now preserves.
+                for r in &results {
+                    self.loop_breaker.record(r.name.as_str(), &r.arguments);
+                }
+                let loop_breaker_effect = match self.loop_breaker.check() {
+                    LoopIntervention::None => None,
+                    LoopIntervention::DisableTools { pattern, tools, .. } => {
+                        let newly_disabled: Vec<ToolName> = tools
+                            .into_iter()
+                            .map(ToolName::new)
+                            .filter(|t| !self.disabled_tools.contains(t))
+                            .collect();
+                        self.disabled_tools.extend(newly_disabled.iter().cloned());
+                        Some(Effect::LoopBreakerTriggered {
+                            disabled_tools:  newly_disabled,
+                            pattern:         pattern.to_owned(),
+                            tool_calls_made: self.tool_calls_made,
+                        })
+                    }
+                };
+
                 self.iteration += 1;
                 if self.iteration >= self.max_iterations {
                     self.phase = Phase::Done;
                     let text = std::mem::take(&mut self.last_assistant_text);
-                    vec![
-                        Effect::AppendTape {
-                            kind: TapeAppendKind::ToolResults,
-                        },
-                        Effect::Finish {
-                            text,
-                            iterations: self.iteration,
-                            tool_calls: self.tool_calls_made,
-                            reason: FinishReason::MaxIterations,
-                        },
-                    ]
+                    let mut effects = vec![Effect::AppendTape {
+                        kind: TapeAppendKind::ToolResults,
+                    }];
+                    if let Some(e) = loop_breaker_effect {
+                        effects.push(e);
+                    }
+                    effects.push(Effect::Finish {
+                        text,
+                        iterations: self.iteration,
+                        tool_calls: self.tool_calls_made,
+                        reason: FinishReason::MaxIterations,
+                    });
+                    effects
                 } else {
                     self.phase = Phase::AwaitingLlm;
-                    vec![
-                        Effect::AppendTape {
-                            kind: TapeAppendKind::ToolResults,
-                        },
-                        Effect::CallLlm {
-                            iteration:     self.iteration,
-                            tools_enabled: self.tools_enabled,
-                        },
-                    ]
+                    let mut effects = vec![Effect::AppendTape {
+                        kind: TapeAppendKind::ToolResults,
+                    }];
+                    if let Some(e) = loop_breaker_effect {
+                        effects.push(e);
+                    }
+                    effects.push(Effect::CallLlm {
+                        iteration:      self.iteration,
+                        tools_enabled:  self.tools_enabled,
+                        disabled_tools: self.disabled_tools.clone(),
+                    });
+                    effects
                 }
             }
 
@@ -339,10 +402,11 @@ mod tests {
         }
     }
 
-    fn tool_result(id: &str, name: &str, success: bool) -> Tr {
+    fn tool_result(id: &str, name: &str, args: &str, success: bool) -> Tr {
         Tr {
             id: ToolCallId::new(id),
             name: ToolName::new(name),
+            arguments: args.to_owned(),
             success,
             duration_ms: 1,
             error: if success { None } else { Some("boom".into()) },
@@ -403,7 +467,7 @@ mod tests {
         ));
 
         let effects = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c1", "search", true)],
+            results: vec![tool_result("c1", "search", "{}", true)],
         });
         // Loop continues — runner gets a fresh CallLlm.
         assert_eq!(m.phase(), Phase::AwaitingLlm);
@@ -489,7 +553,7 @@ mod tests {
             has_tool_calls: true,
         });
         let effects = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c1", "broken", false)],
+            results: vec![tool_result("c1", "broken", "{}", false)],
         });
         assert_eq!(m.phase(), Phase::AwaitingLlm);
         assert!(matches!(effects.last(), Some(Effect::CallLlm { .. })));
@@ -545,7 +609,7 @@ mod tests {
             has_tool_calls: true,
         });
         let _ = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c1", "t", true)],
+            results: vec![tool_result("c1", "t", "{}", true)],
         });
         assert_eq!(m.iteration(), 1);
         // Iteration 1: another tool call.
@@ -555,7 +619,7 @@ mod tests {
             has_tool_calls: true,
         });
         let effects = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c2", "t", true)],
+            results: vec![tool_result("c2", "t", "{}", true)],
         });
         // iteration is now 2 == max_iterations → Finish(MaxIterations).
         assert_eq!(m.phase(), Phase::Done);
@@ -580,7 +644,7 @@ mod tests {
             has_tool_calls: true,
         });
         let _ = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c1", "continue-work", true)],
+            results: vec![tool_result("c1", "continue-work", "{}", true)],
         });
 
         // LLM responds with text only — BUT continuation was signaled
@@ -614,7 +678,7 @@ mod tests {
                 has_tool_calls: true,
             });
             let _ = m.step(Event::ToolsCompleted {
-                results: vec![tool_result(&format!("c{i}"), "continue-work", true)],
+                results: vec![tool_result(&format!("c{i}"), "continue-work", "{}", true)],
             });
             // Text-only response — continuation kicks in
             let _ = m.step(Event::LlmCompleted {
@@ -636,7 +700,7 @@ mod tests {
             has_tool_calls: true,
         });
         let _ = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c3", "continue-work", true)],
+            results: vec![tool_result("c3", "continue-work", "{}", true)],
         });
         // Text-only — but limit reached, should stop
         let effects = m.step(Event::LlmCompleted {
@@ -666,7 +730,7 @@ mod tests {
             has_tool_calls: true,
         });
         let _ = m.step(Event::ToolsCompleted {
-            results: vec![tool_result("c1", "search", true)],
+            results: vec![tool_result("c1", "search", "{}", true)],
         });
 
         // Text-only — should stop normally
@@ -693,5 +757,185 @@ mod tests {
         let effects = m.step(Event::ToolsCompleted { results: vec![] });
         assert_eq!(m.phase(), Phase::Failed);
         assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+    }
+
+    // ─── Loop breaker integration ────────────────────────────────────────
+
+    /// Three identical tool calls in a row trip the exact-duplicate detector
+    /// (default `exact_dup_threshold = 3`): we expect a `LoopBreakerTriggered`
+    /// effect emitted before the next `CallLlm`, and the subsequent `CallLlm`
+    /// must carry the newly-disabled tool in its `disabled_tools` field.
+    #[test]
+    fn loop_breaker_disables_tools_on_exact_duplicate() {
+        let mut m = AgentMachine::new(16);
+        let _ = m.step(Event::TurnStarted);
+
+        // Drive three waves of the same tool+args to trip exact-duplicate.
+        for i in 0..3 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "tick".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "repeat")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(&format!("c{i}"), "repeat", "{}", true)],
+            });
+            if i < 2 {
+                assert!(
+                    !effects
+                        .iter()
+                        .any(|e| matches!(e, Effect::LoopBreakerTriggered { .. })),
+                    "breaker fired too early at wave {i}",
+                );
+                continue;
+            }
+            // Wave 3 (i == 2): third identical call → trip.
+            let trip = effects
+                .iter()
+                .find(|e| matches!(e, Effect::LoopBreakerTriggered { .. }))
+                .expect("expected LoopBreakerTriggered on third identical wave");
+            match trip {
+                Effect::LoopBreakerTriggered {
+                    pattern,
+                    disabled_tools,
+                    ..
+                } => {
+                    assert_eq!(pattern, "exact_duplicate");
+                    assert_eq!(disabled_tools, &vec![ToolName::new("repeat")]);
+                }
+                _ => unreachable!(),
+            }
+            // The next CallLlm must carry the accumulated disabled_tools.
+            let call = effects
+                .iter()
+                .find_map(|e| match e {
+                    Effect::CallLlm { disabled_tools, .. } => Some(disabled_tools),
+                    _ => None,
+                })
+                .expect("expected CallLlm after trip");
+            assert_eq!(call, &vec![ToolName::new("repeat")]);
+        }
+    }
+
+    /// Varying arguments across successive calls keeps the breaker quiet:
+    /// different fingerprints, so no exact-duplicate trip and far below
+    /// `disable_after = 25`.
+    #[test]
+    fn loop_breaker_quiet_on_varied_tools() {
+        let mut m = AgentMachine::new(16);
+        let _ = m.step(Event::TurnStarted);
+
+        for i in 0..3 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "tick".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "search")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(
+                    &format!("c{i}"),
+                    "search",
+                    &format!(r#"{{"q":"{i}"}}"#),
+                    true,
+                )],
+            });
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::LoopBreakerTriggered { .. })),
+                "breaker fired unexpectedly on varied args at wave {i}",
+            );
+        }
+    }
+
+    /// Once the breaker trips, every subsequent `CallLlm` must continue to
+    /// carry the accumulated `disabled_tools` set so the runner can keep
+    /// filtering tool definitions across iterations.
+    #[test]
+    fn disabled_tools_persist_across_iterations() {
+        let mut m = AgentMachine::new(16);
+        let _ = m.step(Event::TurnStarted);
+
+        // Trip the breaker with three identical calls.
+        for i in 0..3 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "tick".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "repeat")],
+                has_tool_calls: true,
+            });
+            let _ = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(&format!("c{i}"), "repeat", "{}", true)],
+            });
+        }
+
+        // Now run two more iterations with a different tool and verify the
+        // disabled set is still threaded through every CallLlm.
+        for i in 3..5 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "tock".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "search")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(
+                    &format!("c{i}"),
+                    "search",
+                    &format!(r#"{{"q":"{i}"}}"#),
+                    true,
+                )],
+            });
+            let disabled = effects
+                .iter()
+                .find_map(|e| match e {
+                    Effect::CallLlm { disabled_tools, .. } => Some(disabled_tools.clone()),
+                    _ => None,
+                })
+                .expect("expected CallLlm after iteration");
+            assert_eq!(
+                disabled,
+                vec![ToolName::new("repeat")],
+                "disabled set should persist at iteration {i}",
+            );
+        }
+    }
+
+    /// Mirrors the legacy `run_agent_loop` exemption for read-only tools:
+    /// callers pass a `flooding_exempt` set so tools like `search` / `read`
+    /// are not disabled after 25 varied-argument invocations. Without this
+    /// the machine would regress long read-only investigations once the
+    /// runner replaces the legacy loop in production.
+    #[test]
+    fn loop_breaker_flooding_exempt_is_honoured() {
+        use std::collections::HashSet;
+
+        let cfg = LoopBreakerConfig::builder()
+            .flooding_exempt(HashSet::from(["search".to_owned()]))
+            .build();
+        let mut m = AgentMachine::with_loop_breaker_config(200, cfg);
+        let _ = m.step(Event::TurnStarted);
+
+        // 30 varied-arg calls — would trip `disable_after = 25` without the
+        // exemption.
+        for i in 0..30 {
+            let _ = m.step(Event::LlmCompleted {
+                text:           "tick".into(),
+                tool_calls:     vec![tool_call(&format!("c{i}"), "search")],
+                has_tool_calls: true,
+            });
+            let effects = m.step(Event::ToolsCompleted {
+                results: vec![tool_result(
+                    &format!("c{i}"),
+                    "search",
+                    &format!(r#"{{"q":"{i}"}}"#),
+                    true,
+                )],
+            });
+            assert!(
+                !effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::LoopBreakerTriggered { .. })),
+                "exempt tool should not flood at wave {i}",
+            );
+        }
     }
 }
