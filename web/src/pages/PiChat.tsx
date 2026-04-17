@@ -81,6 +81,28 @@ function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
   }
 }
 
+/**
+ * Detect whether a tool-result payload represents a failure. Mirrors the
+ * backend's `is_failure_result` in `crates/app/src/tools/artifacts.rs`: a
+ * bare string starting with `Error:` (pi-mono convention) or a JSON object
+ * with an `error` key (kernel-serialized anyhow error).
+ */
+function isToolFailure(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("Error:")) return true;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return (
+      typeof parsed === "object"
+      && parsed !== null
+      && !Array.isArray(parsed)
+      && "error" in parsed
+    );
+  } catch {
+    return false;
+  }
+}
+
 function mimeToFilename(mimeType: string, index: number): string {
   const ext = mimeType.split("/")[1] || "bin";
   return `session-image-${index + 1}.${ext}`;
@@ -218,7 +240,12 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
         (lastAssistant.content as (TextContent | ThinkingContent | ToolCall)[]).push(toolCall);
       }
     } else if (m.role === "tool_result") {
-      // Tool result — emit as a separate ToolResultMessage.
+      // Tool result — emit as a separate ToolResultMessage. Preserve the
+      // backend's failure markers so ArtifactsPanel.reconstructFromMessages
+      // (which only replays successful ops) skips failed calls on reload.
+      // The kernel serializes failures in two shapes: a bare string starting
+      // with "Error:" (pi-mono convention) and JSON objects with an `error`
+      // key (produced by the anyhow -> ToolOutput path).
       if (m.tool_call_id && m.tool_name) {
         const text = typeof m.content === "string"
           ? m.content
@@ -231,7 +258,7 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
           toolCallId: m.tool_call_id,
           toolName: m.tool_name,
           content: text ? [{ type: "text", text }] : [],
-          isError: false,
+          isError: isToolFailure(text),
           timestamp: ts,
         };
         result.push(toolResult as AgentMessage);
