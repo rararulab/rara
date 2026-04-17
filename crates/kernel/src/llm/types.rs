@@ -62,6 +62,20 @@ pub enum ContentBlock {
         media_type: String,
         data:       String,
     },
+    /// Inline base64-encoded non-image document attachment (PDF/DOCX/XLSX/PPTX
+    /// and friends). Text is extracted client-side (pi-mono's
+    /// `extract-document` / `attachment-utils.loadAttachment`) and delivered as
+    /// a [`Text`](Self::Text) block alongside this one, so the LLM already has
+    /// the readable content. This variant preserves the raw bytes for future
+    /// paths that hand the file directly to a multimodal model; the current
+    /// OpenAI-compatible serializer renders it as a `[document: …]`
+    /// placeholder.
+    FileBase64 {
+        media_type: String,
+        data:       String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename:   Option<String>,
+    },
 }
 
 /// Message content — either plain text or multimodal blocks.
@@ -231,6 +245,7 @@ impl Message {
                         ContentBlock::ImageUrl { .. }
                             | ContentBlock::ImageBase64 { .. }
                             | ContentBlock::AudioBase64 { .. }
+                            | ContentBlock::FileBase64 { .. }
                     )
                 });
                 if !has_non_text {
@@ -244,6 +259,7 @@ impl Message {
                             "[image: current model does not support vision]"
                         }
                         ContentBlock::AudioBase64 { .. } => "[audio]",
+                        ContentBlock::FileBase64 { .. } => "[document]",
                     })
                     .collect();
                 MessageContent::Text(text_parts.join("\n"))
@@ -271,6 +287,9 @@ impl Message {
                     // Audio blocks are transcribed before reaching the LLM;
                     // estimate a small placeholder size.
                     ContentBlock::AudioBase64 { .. } => 100,
+                    // Extracted text is delivered in a sibling Text block, so
+                    // the raw-bytes variant only contributes a placeholder.
+                    ContentBlock::FileBase64 { .. } => 100,
                 })
                 .sum(),
         };
