@@ -20,6 +20,7 @@ use rara_kernel::tool::{AgentToolRef, ToolRegistry};
 
 mod acp_delegate;
 mod acp_tools;
+mod artifacts;
 mod ask_user;
 mod bash;
 mod composio;
@@ -63,6 +64,7 @@ mod write_file;
 
 use acp_delegate::AcpDelegateTool;
 use acp_tools::{InstallAcpAgentTool, ListAcpAgentsTool, RemoveAcpAgentTool};
+use artifacts::ArtifactsTool;
 use ask_user::AskUserTool;
 use bash::BashTool;
 use create_directory::CreateDirectoryTool;
@@ -244,7 +246,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         list_sessions,
         Arc::new(ReadTapeTool::new(deps.tape_service.clone())),
         Arc::new(MitaWriteUserNoteTool::new(deps.tape_service.clone())),
-        Arc::new(DistillUserNotesTool::new(deps.tape_service)),
+        Arc::new(DistillUserNotesTool::new(deps.tape_service.clone())),
         // Mita skill-draft tool
         Arc::new(WriteSkillDraftTool::new()),
         dispatch_rara,
@@ -264,6 +266,8 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(WechatLoginConfirmTool::new()),
         // User interaction
         Arc::new(AskUserTool::new(deps.user_question_manager)),
+        // Artifacts (rich-content side panel — deferred tier)
+        Arc::new(ArtifactsTool::new(deps.tape_service.clone())),
     ];
 
     for tool in tools {
