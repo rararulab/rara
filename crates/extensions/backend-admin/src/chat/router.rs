@@ -41,12 +41,28 @@ use rara_kernel::{
     cascade::CascadeTrace,
     channel::types::{ChannelType, ChatMessage},
 };
-use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
+use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
 use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionService};
+
+/// Parse an optional thinking-level string from a request body, converting
+/// invalid values into a 400 response with a list of accepted variants.
+fn parse_thinking_level(raw: Option<String>) -> Result<Option<ThinkingLevel>, ChatError> {
+    use strum::VariantNames;
+    raw.map(|s| {
+        s.parse::<ThinkingLevel>()
+            .map_err(|_| ChatError::InvalidRequest {
+                message: format!(
+                    "invalid thinking level: {s} (expected one of: {})",
+                    ThinkingLevel::VARIANTS.join(", "),
+                ),
+            })
+    })
+    .transpose()
+}
 
 /// Parse a session key from a URL path parameter, returning 400 on invalid
 /// UUID.
@@ -221,8 +237,9 @@ async fn create_session(
     State(service): State<SessionService>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
+    let thinking_level = parse_thinking_level(req.thinking_level)?;
     let session = service
-        .create_session(req.title, req.model, req.thinking_level, req.system_prompt)
+        .create_session(req.title, req.model, thinking_level, req.system_prompt)
         .await?;
     Ok((StatusCode::CREATED, Json(session)))
 }
@@ -286,12 +303,13 @@ async fn update_session(
     Path(key): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionEntry>, ChatError> {
+    let thinking_level = parse_thinking_level(req.thinking_level)?;
     let session = service
         .update_session_fields(
             &parse_session_key(&key)?,
             req.title,
             req.model,
-            req.thinking_level,
+            thinking_level,
             req.system_prompt,
         )
         .await?;

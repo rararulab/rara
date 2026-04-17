@@ -90,6 +90,40 @@ base::define_id!(
 );
 
 // ---------------------------------------------------------------------------
+// ThinkingLevel
+// ---------------------------------------------------------------------------
+
+/// Reasoning/thinking budget override for a chat session.
+///
+/// Serialises as the lowercase variant name (`"off"`, `"low"`, `"medium"`,
+/// `"high"`). When a session's thinking level is `None`, the agent
+/// manifest's default thinking configuration applies.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::Display,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ThinkingLevel {
+    /// Reasoning disabled — no scratch budget.
+    Off,
+    /// Low reasoning budget (small scratch allocation).
+    Low,
+    /// Medium reasoning budget.
+    Medium,
+    /// High reasoning budget (largest scratch allocation).
+    High,
+}
+
+// ---------------------------------------------------------------------------
 // SessionEntry
 // ---------------------------------------------------------------------------
 
@@ -107,11 +141,10 @@ pub struct SessionEntry {
     /// LLM model name used for this session (e.g. `"gpt-4o"`,
     /// `"claude-sonnet-4-5-20250929"`).
     pub model:          Option<String>,
-    /// Optional reasoning/thinking level override (`"off"`, `"low"`,
-    /// `"medium"`, `"high"`). When `None`, the agent manifest's default
-    /// thinking configuration is used.
+    /// Optional reasoning/thinking level override. When `None`, the agent
+    /// manifest's default thinking configuration is used.
     #[serde(default)]
-    pub thinking_level: Option<String>,
+    pub thinking_level: Option<ThinkingLevel>,
     /// Optional system prompt override. When `None`, the service-level
     /// default system prompt is used.
     pub system_prompt:  Option<String>,

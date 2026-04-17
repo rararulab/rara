@@ -37,7 +37,7 @@ use rara_kernel::{
     memory::{TapEntry, TapEntryKind, TapeService},
     session::SessionIndexRef,
 };
-use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
+use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
 use serde_json::Value;
 use tracing::{info, instrument};
 
@@ -123,7 +123,7 @@ impl SessionService {
         &self,
         title: Option<String>,
         model: Option<String>,
-        thinking_level: Option<String>,
+        thinking_level: Option<ThinkingLevel>,
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
         let now = Utc::now();
@@ -180,7 +180,7 @@ impl SessionService {
         key: &SessionKey,
         title: Option<String>,
         model: Option<String>,
-        thinking_level: Option<String>,
+        thinking_level: Option<ThinkingLevel>,
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
         let mut session = self.get_session(key).await?;
