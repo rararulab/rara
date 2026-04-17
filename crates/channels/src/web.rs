@@ -120,6 +120,20 @@ pub enum WebEvent {
         tool_calls:  usize,
         model:       String,
     },
+    /// Final per-turn token usage (sent before Done). Clients use this to
+    /// populate the cost pill + token display in the chat UI. `cache_read`
+    /// / `cache_write` are `0` until the kernel tracks them; `cost` is
+    /// reported as `0.0` and recomputed client-side against the session's
+    /// model pricing table.
+    Usage {
+        input:        u32,
+        output:       u32,
+        cache_read:   u32,
+        cache_write:  u32,
+        total_tokens: u32,
+        cost:         f64,
+        model:        String,
+    },
     /// A plan has been created with a goal and steps.
     PlanCreated {
         goal:                    String,
@@ -245,6 +259,20 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::PlanReplan { reason } => Some(WebEvent::PlanReplan { reason }),
         StreamEvent::PlanCompleted { summary } => Some(WebEvent::PlanCompleted { summary }),
         StreamEvent::UsageUpdate { .. } => None,
+        StreamEvent::TurnUsage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            model,
+        } => Some(WebEvent::Usage {
+            input: input_tokens,
+            output: output_tokens,
+            cache_read: 0,
+            cache_write: 0,
+            total_tokens,
+            cost: 0.0,
+            model,
+        }),
         StreamEvent::BackgroundTaskStarted {
             task_id,
             agent_name,
@@ -1225,6 +1253,38 @@ mod tests {
                         && data == "AAAA"
                 )
         ));
+    }
+
+    #[test]
+    fn turn_usage_is_mapped_to_web_usage_event() {
+        let event = StreamEvent::TurnUsage {
+            input_tokens:  1_234,
+            output_tokens: 56,
+            total_tokens:  1_290,
+            model:         "gpt-5".to_owned(),
+        };
+
+        let mapped = stream_event_to_web_event(event).expect("usage event");
+        match mapped {
+            WebEvent::Usage {
+                input,
+                output,
+                cache_read,
+                cache_write,
+                total_tokens,
+                cost,
+                model,
+            } => {
+                assert_eq!(input, 1_234);
+                assert_eq!(output, 56);
+                assert_eq!(cache_read, 0);
+                assert_eq!(cache_write, 0);
+                assert_eq!(total_tokens, 1_290);
+                assert!((cost - 0.0).abs() < f64::EPSILON);
+                assert_eq!(model, "gpt-5");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]

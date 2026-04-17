@@ -2592,7 +2592,10 @@ impl Kernel {
                     turn_span.record("tool_calls", result.tool_calls);
                 }
 
-                // Emit turn metrics before closing stream.
+                // Emit turn metrics and final per-turn usage before closing
+                // the stream. `TurnUsage` carries the settled totals needed
+                // for cost display; clients must ignore `UsageUpdate` once
+                // `TurnUsage` arrives.
                 if let Ok(ref result) = turn_result {
                     stream_handle.emit(crate::io::StreamEvent::TurnMetrics {
                         duration_ms: elapsed_ms,
@@ -2600,6 +2603,14 @@ impl Kernel {
                         tool_calls:  result.tool_calls,
                         model:       result.model.clone(),
                         rara_message_id: result.trace.rara_message_id.to_string(),
+                    });
+                    stream_handle.emit(crate::io::StreamEvent::TurnUsage {
+                        input_tokens:  result.input_tokens,
+                        output_tokens: result.output_tokens,
+                        total_tokens:  result
+                            .input_tokens
+                            .saturating_add(result.output_tokens),
+                        model:         result.model.clone(),
                     });
                 }
 

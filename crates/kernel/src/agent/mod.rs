@@ -534,17 +534,23 @@ pub struct TurnTrace {
 #[derive(Debug)]
 pub struct AgentTurnResult {
     /// The final text produced by the agent.
-    pub text:       String,
+    pub text:          String,
     /// Number of LLM iterations consumed.
-    pub iterations: usize,
+    pub iterations:    usize,
     /// Number of tool calls executed.
-    pub tool_calls: usize,
+    pub tool_calls:    usize,
     /// Model used for this turn.
-    pub model:      String,
+    pub model:         String,
+    /// Largest prompt_tokens across all iterations in this turn — each
+    /// iteration re-sends the full context so the last one is effectively
+    /// the max. `0` when no usage data was reported by the provider.
+    pub input_tokens:  u32,
+    /// Sum of completion_tokens across all iterations in this turn.
+    pub output_tokens: u32,
     /// Detailed trace of the turn for observability.
-    pub trace:      TurnTrace,
+    pub trace:         TurnTrace,
     /// Structured cascade trace built in real time during the turn.
-    pub cascade:    crate::cascade::CascadeTrace,
+    pub cascade:       crate::cascade::CascadeTrace,
 }
 
 impl AgentTurnResult {
@@ -552,11 +558,13 @@ impl AgentTurnResult {
     /// judgment decides Rara should not reply.
     pub fn empty() -> Self {
         Self {
-            text:       String::new(),
-            iterations: 0,
-            tool_calls: 0,
-            model:      String::new(),
-            trace:      TurnTrace {
+            text:          String::new(),
+            iterations:    0,
+            tool_calls:    0,
+            model:         String::new(),
+            input_tokens:  0,
+            output_tokens: 0,
+            trace:         TurnTrace {
                 duration_ms:      0,
                 model:            String::new(),
                 input_text:       None,
@@ -567,7 +575,7 @@ impl AgentTurnResult {
                 error:            None,
                 rara_message_id:  crate::io::MessageId::new(),
             },
-            cascade:    crate::cascade::CascadeTrace::empty(),
+            cascade:       crate::cascade::CascadeTrace::empty(),
         }
     }
 }
@@ -1139,6 +1147,10 @@ pub(crate) async fn run_agent_loop(
     // each iteration re-sends the full context.
     let mut cumulative_output_tokens: u32 = 0;
     let mut cumulative_thinking_ms: u64 = 0;
+    // Last iteration's prompt_tokens — each iteration re-sends the full
+    // context, so this represents the max context size for the turn.
+    // Surfaced in `AgentTurnResult.input_tokens` for the final usage event.
+    let mut last_prompt_tokens: u32 = 0;
     let user_id = Some(tool_context.user_id.as_str());
 
     // ── Context folding state ────────────────────────────────────────
@@ -1569,6 +1581,7 @@ pub(crate) async fn run_agent_loop(
                     if let Some(ref u) = last_usage {
                         cumulative_output_tokens =
                             cumulative_output_tokens.saturating_add(u.completion_tokens);
+                        last_prompt_tokens = u.prompt_tokens;
                         stream_handle.emit(StreamEvent::UsageUpdate {
                             input_tokens:  u.prompt_tokens,
                             output_tokens: cumulative_output_tokens,
@@ -2037,6 +2050,8 @@ pub(crate) async fn run_agent_loop(
                 iterations: iteration + 1,
                 tool_calls: tool_calls_made,
                 model: model.clone(),
+                input_tokens: last_prompt_tokens,
+                output_tokens: cumulative_output_tokens,
                 trace,
                 cascade,
             });
@@ -3056,6 +3071,8 @@ pub(crate) async fn run_agent_loop(
         iterations: actual_iterations,
         tool_calls: tool_calls_made,
         model: model.clone(),
+        input_tokens: last_prompt_tokens,
+        output_tokens: cumulative_output_tokens,
         trace,
         cascade,
     })

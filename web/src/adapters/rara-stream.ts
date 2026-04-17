@@ -27,7 +27,7 @@ import type {
   ToolCall,
   Usage,
 } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { calculateCost, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 
 import { BASE_URL } from "@/api/client";
@@ -66,6 +66,16 @@ type WebEvent =
       tool_calls: number;
       model: string;
     }
+  | {
+      type: "usage";
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      total_tokens: number;
+      cost: number;
+      model: string;
+    }
   | { type: "phase"; phase: string };
 
 // ---------------------------------------------------------------------------
@@ -79,7 +89,12 @@ export type SessionKeyFn = () => string | undefined;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build a zeroed Usage object — rara tracks usage server-side. */
+/**
+ * Build a zeroed Usage object — used as the initial value before the
+ * backend streams its final `usage` event. Cost is filled in from the
+ * session's model pricing table via {@link calculateCost} once real
+ * token counts arrive.
+ */
 function emptyUsage(): Usage {
   return {
     input: 0,
@@ -95,6 +110,7 @@ function emptyUsage(): Usage {
 function buildPartial(
   model: Model<any>,
   content: (TextContent | ThinkingContent | ToolCall)[],
+  usage: Usage,
 ): AssistantMessage {
   return {
     role: "assistant",
@@ -102,7 +118,7 @@ function buildPartial(
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: emptyUsage(),
+    usage,
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -196,9 +212,11 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
 
     const sessionKey = getSessionKey();
     if (!sessionKey) {
-      const errorMsg = buildPartial(model, [
-        { type: "text", text: "No active session key set." },
-      ]);
+      const errorMsg = buildPartial(
+        model,
+        [{ type: "text", text: "No active session key set." }],
+        emptyUsage(),
+      );
       errorMsg.stopReason = "error";
       errorMsg.errorMessage = "No active session key set.";
       stream.push({ type: "error", reason: "error", error: errorMsg });
@@ -211,6 +229,10 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
 
     // Accumulated content blocks for building partial messages
     const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+    // Running usage — starts empty, replaced when the backend emits its
+    // final `usage` event. Cost is computed against the session model's
+    // pricing table so per-session model overrides are honoured.
+    let currentUsage: Usage = emptyUsage();
     let streamEnded = false;
 
     /** Push an event to the stream, guarding against double-end. */
@@ -249,7 +271,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
 
       ws.onopen = () => {
         // Emit start event
-        safePush({ type: "start", partial: buildPartial(model, content) });
+        safePush({ type: "start", partial: buildPartial(model, content, currentUsage) });
         // Send user message
         ws.send(userPayload);
       };
@@ -272,7 +294,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
               safePush({
                 type: "text_start",
                 contentIndex: idx,
-                partial: buildPartial(model, content),
+                partial: buildPartial(model, content, currentUsage),
               });
             } else {
               block.text += event.text;
@@ -281,7 +303,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
               type: "text_delta",
               contentIndex: idx,
               delta: event.text,
-              partial: buildPartial(model, content),
+              partial: buildPartial(model, content, currentUsage),
             });
             break;
           }
@@ -294,7 +316,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
               safePush({
                 type: "thinking_start",
                 contentIndex: idx,
-                partial: buildPartial(model, content),
+                partial: buildPartial(model, content, currentUsage),
               });
             } else {
               block.thinking += event.text;
@@ -303,7 +325,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
               type: "thinking_delta",
               contentIndex: idx,
               delta: event.text,
-              partial: buildPartial(model, content),
+              partial: buildPartial(model, content, currentUsage),
             });
             break;
           }
@@ -320,7 +342,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
             safePush({
               type: "toolcall_start",
               contentIndex: idx,
-              partial: buildPartial(model, content),
+              partial: buildPartial(model, content, currentUsage),
             });
             break;
           }
@@ -335,7 +357,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
                 type: "toolcall_end",
                 contentIndex: idx,
                 toolCall,
-                partial: buildPartial(model, content),
+                partial: buildPartial(model, content, currentUsage),
               });
             }
             break;
@@ -343,9 +365,9 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
 
           case "done": {
             // Close any open text/thinking blocks
-            emitEndBlocks(model, content, safePush);
+            emitEndBlocks(model, content, currentUsage, safePush);
 
-            const finalMsg = buildPartial(model, content);
+            const finalMsg = buildPartial(model, content, currentUsage);
             finalMsg.stopReason = "stop";
             safePush({ type: "done", reason: "stop", message: finalMsg });
             safeEnd(finalMsg);
@@ -357,9 +379,9 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
             // Complete message in a single frame — treat like text + done
             const block = ensureTextBlock();
             block.text += event.content;
-            emitEndBlocks(model, content, safePush);
+            emitEndBlocks(model, content, currentUsage, safePush);
 
-            const finalMsg = buildPartial(model, content);
+            const finalMsg = buildPartial(model, content, currentUsage);
             finalMsg.stopReason = "stop";
             safePush({ type: "done", reason: "stop", message: finalMsg });
             safeEnd(finalMsg);
@@ -368,12 +390,29 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
           }
 
           case "error": {
-            const errorMsg = buildPartial(model, content);
+            const errorMsg = buildPartial(model, content, currentUsage);
             errorMsg.stopReason = "error";
             errorMsg.errorMessage = event.message;
             safePush({ type: "error", reason: "error", error: errorMsg });
             safeEnd(errorMsg);
             ws.close();
+            break;
+          }
+
+          case "usage": {
+            // Backend reports raw token counts; cost comes from pi-ai's
+            // pricing table for the session's model so per-session
+            // overrides are honoured without duplicating pricing in Rust.
+            const next: Usage = {
+              input: event.input,
+              output: event.output,
+              cacheRead: event.cache_read,
+              cacheWrite: event.cache_write,
+              totalTokens: event.total_tokens,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            };
+            next.cost = calculateCost(model, next);
+            currentUsage = next;
             break;
           }
 
@@ -388,7 +427,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
       };
 
       ws.onerror = () => {
-        const errorMsg = buildPartial(model, content);
+        const errorMsg = buildPartial(model, content, currentUsage);
         errorMsg.stopReason = "error";
         errorMsg.errorMessage = "WebSocket connection error";
         safePush({ type: "error", reason: "error", error: errorMsg });
@@ -398,7 +437,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
       ws.onclose = () => {
         // Ensure stream is ended if WS closes unexpectedly
         if (!streamEnded) {
-          const finalMsg = buildPartial(model, content);
+          const finalMsg = buildPartial(model, content, currentUsage);
           finalMsg.stopReason = content.length > 0 ? "stop" : "error";
           if (content.length > 0) {
             safePush({ type: "done", reason: "stop", message: finalMsg });
@@ -410,7 +449,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
         }
       };
     } catch (err) {
-      const errorMsg = buildPartial(model, content);
+      const errorMsg = buildPartial(model, content, currentUsage);
       errorMsg.stopReason = "error";
       errorMsg.errorMessage =
         err instanceof Error ? err.message : "Failed to connect";
@@ -429,6 +468,7 @@ export function createRaraStreamFn(getSessionKey: SessionKeyFn): StreamFn {
 function emitEndBlocks(
   model: Model<any>,
   content: (TextContent | ThinkingContent | ToolCall)[],
+  usage: Usage,
   safePush: (event: AssistantMessageEvent) => void,
 ): void {
   for (let i = 0; i < content.length; i++) {
@@ -438,14 +478,14 @@ function emitEndBlocks(
         type: "text_end",
         contentIndex: i,
         content: block.text,
-        partial: buildPartial(model, content),
+        partial: buildPartial(model, content, usage),
       });
     } else if (block.type === "thinking" && block.thinking) {
       safePush({
         type: "thinking_end",
         contentIndex: i,
         content: block.thinking,
-        partial: buildPartial(model, content),
+        partial: buildPartial(model, content, usage),
       });
     }
   }

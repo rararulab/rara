@@ -103,6 +103,16 @@ export type ChatStreamEvent =
   | { type: "iteration"; index: number }
   | { type: "tool_call_start"; id: string; name: string }
   | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string }
+  | {
+      type: "usage";
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      total_tokens: number;
+      cost: number;
+      model: string;
+    }
   | { type: "done"; text: string }
   | { type: "error"; message: string };
 
