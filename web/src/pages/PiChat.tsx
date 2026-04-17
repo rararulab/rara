@@ -35,7 +35,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 // module-level `registerToolRenderer("extract_document", ...)` side
 // effect so pi-mono can render server-triggered document-extraction tool
 // calls in chat.
-import { extractDocumentTool } from "@mariozechner/pi-web-ui";
+import { extractDocumentTool, ModelSelector } from "@mariozechner/pi-web-ui";
 
 // Reference the tool so Vite's tree-shaker keeps the module (and its
 // `registerToolRenderer` side effect) in the bundle. The actual tool
@@ -53,7 +53,7 @@ import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
 import { api } from "@/api/client";
-import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
+import type { ChatSession, ChatMessageData, ChatModel, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 
@@ -592,12 +592,42 @@ export default function PiChat() {
       chatPanelRef.current = chatPanel;
       container.appendChild(chatPanel);
 
-      // 7. Wire agent into the panel — skip API key prompt since rara manages
+      // 7. Derive the provider allowlist for pi-mono's ModelSelector from
+      //    rara's curated model catalog. `/api/v1/chat/models` already
+      //    reflects which providers the backend can route through (OpenRouter
+      //    gateway, Ollama, Kimi-Code, etc.), encoded as OpenRouter-style
+      //    `"<provider>/<model>"` ids. Splitting on "/" gives pi-mono's
+      //    provider name for each selectable family. Best-effort: if the
+      //    fetch fails, leave the allowlist undefined so pi-mono falls back
+      //    to its default (show everything).
+      let allowedProviders: string[] | undefined;
+      try {
+        const models = await api.get<ChatModel[]>("/api/v1/chat/models");
+        const providers = new Set(
+          models
+            .map((m) => m.id.split("/")[0])
+            .filter((p): p is string => Boolean(p)),
+        );
+        if (providers.size > 0) allowedProviders = [...providers];
+      } catch (e) {
+        console.warn("Failed to load model catalog for selector filter:", e);
+      }
+
+      // 8. Wire agent into the panel — skip API key prompt since rara manages
       //    keys server-side, and sync the current model/thinking override to
       //    the backend before every send so the kernel sees the user's
       //    selection for this turn.
       await chatPanel.setAgent(agent, {
         onApiKeyRequired: async () => true,
+        onModelSelect: () => {
+          // Open pi-mono's native ModelSelector but restrict to providers
+          // rara's backend can actually route to.
+          ModelSelector.open(
+            agent.state.model,
+            (model) => { agent.state.model = model; },
+            allowedProviders,
+          );
+        },
         onBeforeSend: async () => {
           const key = agent.sessionId;
           if (!key) return;
