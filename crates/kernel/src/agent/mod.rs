@@ -832,13 +832,27 @@ call `discover-tools` to load it first.{tool_list}
 ///
 /// Budgets mirror Anthropic's extended-thinking guidance: larger levels give
 /// the model more scratch tokens for silent reasoning before answering.
-/// `Off` returns `None` so the driver sees no thinking field.
+///
+/// The output distinguishes three states:
+///
+/// * `None` — no session override. Drivers fall back to their own default (e.g.
+///   OpenAI Responses uses "medium" effort for reasoning models).
+/// * `Some(ThinkingConfig { enabled: false, .. })` — the user explicitly
+///   selected `Off`. Drivers must disable extended thinking even when the model
+///   family defaults to reasoning.
+/// * `Some(ThinkingConfig { enabled: true, budget_tokens: Some(_) })` — an
+///   explicit non-zero budget.
 fn thinking_level_to_config(
     level: Option<crate::session::ThinkingLevel>,
 ) -> Option<llm::ThinkingConfig> {
     use crate::session::ThinkingLevel;
     let budget = match level? {
-        ThinkingLevel::Off => return None,
+        ThinkingLevel::Off => {
+            return Some(llm::ThinkingConfig {
+                enabled:       false,
+                budget_tokens: None,
+            });
+        }
         ThinkingLevel::Minimal => 512,
         ThinkingLevel::Low => 1024,
         ThinkingLevel::Medium => 4096,

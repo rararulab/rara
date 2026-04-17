@@ -761,12 +761,21 @@ pub(crate) fn build_responses_request(request: &CompletionRequest, _format: ApiF
         body["tools"] = json!(tools);
     }
 
-    // Reasoning config — map thinking budget to effort level.
-    let reasoning_effort = request
-        .thinking
-        .as_ref()
-        .and_then(|t| {
-            t.budget_tokens.map(|b| {
+    // Reasoning config.
+    //
+    // Three cases:
+    //   * `None` — no session override; fall back to the model family's default
+    //     (medium) so reasoning-family models still reason.
+    //   * `Some(enabled: false)` — the user explicitly turned reasoning off. Ask
+    //     the API for the minimal effort the Responses contract allows; omitting
+    //     the block entirely would be read as "default" by the server.
+    //   * `Some(enabled: true)` — map the budget to an effort bucket.
+    let reasoning_effort = match request.thinking.as_ref() {
+        None => "medium",
+        Some(t) if !t.enabled => "minimal",
+        Some(t) => t
+            .budget_tokens
+            .map(|b| {
                 if b >= 10_000 {
                     "high"
                 } else if b >= 3_000 {
@@ -775,8 +784,8 @@ pub(crate) fn build_responses_request(request: &CompletionRequest, _format: ApiF
                     "low"
                 }
             })
-        })
-        .unwrap_or("medium");
+            .unwrap_or("medium"),
+    };
 
     body["reasoning"] = json!({
         "effort": reasoning_effort,
