@@ -56,6 +56,27 @@ use crate::{
 /// `CONTEXT_WARN_THRESHOLD` constant in `agent::mod`.
 pub const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
 
+/// Per-turn configuration controlling when the machine asks the runner to
+/// auto-fold (context compression).
+///
+/// Mirrors the relevant fields of the kernel-level `ContextFoldingConfig`
+/// but is intentionally *decoupled*: the sans-IO machine must stay free of
+/// `kernel::KernelConfig` so its unit tests compile without the full
+/// subsystem tower. Production wiring copies the two thresholds from the
+/// kernel config into this struct when the machine is constructed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoFoldConfig {
+    /// Context-usage ratio at which the observer requests a fold on the
+    /// next iteration (typically below the 0.70 warning threshold, e.g.
+    /// 0.60). Strictly greater-than comparison preserves the legacy
+    /// `pressure > fold_threshold` gate exactly.
+    pub fold_threshold:            f64,
+    /// Minimum number of tape entries that must have accumulated since the
+    /// last successful fold before another fold is allowed. Prevents a
+    /// run-away loop in which every iteration folds the same short tail.
+    pub min_entries_between_folds: usize,
+}
+
 /// Usage fraction at which the machine emits a `Critical`-level
 /// `ContextPressureWarning` effect. Mirrors the legacy
 /// `CONTEXT_CRITICAL_THRESHOLD` constant in `agent::mod`.
@@ -94,7 +115,15 @@ pub const DEFAULT_MAX_CONTINUATIONS: usize = 10;
 pub const DISCOVER_TOOLS_TOOL_NAME: &str = "discover-tools";
 
 /// Mutable state carried across machine transitions for one turn.
+///
+/// The `bool`-heavy shape is intentional: each flag tracks a distinct
+/// one-shot legacy latch (`tools_enabled`, `continuation_pending`,
+/// `warned_at_warning`, `warned_at_critical`, `force_fold_pending`,
+/// `fold_disabled`) whose reset semantics differ. Combining them into an
+/// enum would require a cross-product state explosion without any safety
+/// or clarity gain.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct AgentMachine {
     phase:                Phase,
     iteration:            usize,
@@ -140,6 +169,31 @@ pub struct AgentMachine {
     /// exactly by wiping state the instant the machine enters
     /// [`Phase::AwaitingLlm`].
     repetition_guard:     RepetitionGuard,
+    /// Auto-fold configuration. `None` means auto-fold is disabled for this
+    /// turn: neither the observer nor [`AgentMachine::request_force_fold`]
+    /// will flip `force_fold_pending`. The recovery branches of
+    /// [`AgentMachine::handle_llm_failed`] still request folds regardless
+    /// (matching the legacy loop, where the empty-stream and rate-limit
+    /// paths set `force_fold_next_iteration` even when auto-fold is off —
+    /// the runner is responsible for no-oping the request when the subsystem
+    /// cannot actually fold).
+    auto_fold_config:     Option<AutoFoldConfig>,
+    /// Whether the next [`AgentMachine::rebuild_then_call`] should emit a
+    /// leading [`Effect::ForceFoldNextIteration`]. The flag is set by the
+    /// observer (pressure-driven), by [`AgentMachine::request_force_fold`]
+    /// (for `ToolHint::SuggestFold`), and by the recovery paths. It is
+    /// cleared the next time `rebuild_then_call` fires — exactly mirroring
+    /// the legacy `force_fold_next_iteration = false` reset inside the
+    /// iteration preamble.
+    force_fold_pending:   bool,
+    /// Set once a fold attempt has failed in this turn; subsequent
+    /// auto-trigger calls (`observe_fold_pressure`, `request_force_fold`)
+    /// become no-ops so the turn does not hammer a provider that already
+    /// rejected the summarization call. Mirrors the legacy
+    /// `fold_failed_this_turn` latch. Recovery paths are NOT gated by this
+    /// flag — they still emit [`Effect::ForceFoldNextIteration`] and rely
+    /// on the subsystem to no-op when its own fold path has been disabled.
+    fold_disabled:        bool,
 }
 
 impl AgentMachine {
@@ -164,6 +218,25 @@ impl AgentMachine {
             warned_at_warning: false,
             warned_at_critical: false,
             repetition_guard: RepetitionGuard::new(),
+            auto_fold_config: None,
+            force_fold_pending: false,
+            fold_disabled: false,
+        }
+    }
+
+    /// Construct a machine with an auto-fold configuration.
+    ///
+    /// When `cfg` is present, [`AgentMachine::observe_fold_pressure`] and
+    /// [`AgentMachine::request_force_fold`] become operational: they flip
+    /// `force_fold_pending`, which on the next pre-LLM boundary prepends an
+    /// [`Effect::ForceFoldNextIteration`] to the emitted effect list. When
+    /// `cfg` is `None` (the default), only the LLM-failure recovery paths
+    /// emit fold requests — matching the legacy loop with
+    /// `context_folding.enabled = false`.
+    pub(crate) fn with_auto_fold(max_iterations: usize, cfg: AutoFoldConfig) -> Self {
+        Self {
+            auto_fold_config: Some(cfg),
+            ..Self::new(max_iterations)
         }
     }
 
@@ -281,6 +354,103 @@ impl AgentMachine {
         Vec::new()
     }
 
+    /// Synchronous observation: evaluate the legacy auto-fold trigger
+    /// (`pressure > fold_threshold` AND `entries_since_last_fold >=
+    /// min_entries_between_folds`) and, if satisfied, flip the internal
+    /// `force_fold_pending` flag so the next pre-LLM boundary prepends an
+    /// [`Effect::ForceFoldNextIteration`].
+    ///
+    /// Returns `true` if a fold was just requested (the caller may log or
+    /// emit a metric), `false` otherwise. Calling on a machine without an
+    /// [`AutoFoldConfig`] always returns `false` — auto-fold is disabled.
+    ///
+    /// This observer does NOT emit effects directly: the legacy loop runs
+    /// the fold *at the top of the next iteration*, after recovery-injected
+    /// messages have been written, so the flag-then-emit-on-rebuild shape
+    /// preserves the legacy ordering
+    /// `[ForceFoldNextIteration?, Inject*?, RebuildTape, CallLlm]` (with
+    /// `Inject*` interleaved by whichever path triggered it).
+    ///
+    /// Arguments mirror the legacy call site:
+    ///
+    /// - `estimated_tokens` / `context_window_tokens`: used to compute the
+    ///   usage ratio the same way as [`AgentMachine::observe_context_usage`].
+    /// - `entries_since_last_fold`: count of tape entries since the most recent
+    ///   successful auto-fold anchor; the runner reads this from the tape (or
+    ///   supplies the total entry count when no fold has run yet).
+    ///
+    /// Subsequent calls after [`AgentMachine::mark_fold_failed`] become
+    /// no-ops — the machine will not request further folds in this turn.
+    pub fn observe_fold_pressure(
+        &mut self,
+        estimated_tokens: usize,
+        context_window_tokens: usize,
+        entries_since_last_fold: usize,
+    ) -> bool {
+        let Some(cfg) = self.auto_fold_config.as_ref() else {
+            return false;
+        };
+        if self.fold_disabled || context_window_tokens == 0 {
+            return false;
+        }
+        let ratio = estimated_tokens as f64 / context_window_tokens as f64;
+        if ratio > cfg.fold_threshold && entries_since_last_fold >= cfg.min_entries_between_folds {
+            self.force_fold_pending = true;
+            return true;
+        }
+        false
+    }
+
+    /// Imperative fold request (legacy `ToolHint::SuggestFold`).
+    ///
+    /// Flips `force_fold_pending` unconditionally *except* when
+    /// [`AgentMachine::mark_fold_failed`] has already been called this turn
+    /// or the machine has no [`AutoFoldConfig`] attached. Returns whether
+    /// the request was honoured.
+    ///
+    /// The cooldown (`min_entries_between_folds`) is **not** applied here:
+    /// the legacy loop's `if should_fold { if force_fold_next_iteration {
+    /// … } }` path bypasses the cooldown whenever the flag is set, and
+    /// tools that request a fold (e.g. a summariser skill) are trusted to
+    /// know the context needs compacting.
+    pub fn request_force_fold(&mut self) -> bool {
+        if self.auto_fold_config.is_none() || self.fold_disabled {
+            return false;
+        }
+        self.force_fold_pending = true;
+        true
+    }
+
+    /// Latch that the current turn's fold attempt failed.
+    ///
+    /// After this call:
+    ///
+    /// - [`AgentMachine::observe_fold_pressure`] and
+    ///   [`AgentMachine::request_force_fold`] become no-ops for the rest of the
+    ///   turn — avoids repeatedly hammering a provider that already failed the
+    ///   summarisation call.
+    /// - Any currently pending fold request is cleared so the next
+    ///   `rebuild_then_call` does NOT prepend a stale
+    ///   [`Effect::ForceFoldNextIteration`].
+    ///
+    /// Recovery-path fold requests inside the LLM-failure handler
+    /// intentionally bypass this latch (see the rate-limit and empty-stream
+    /// branches): legacy `run_agent_loop` keeps emitting fold requests from
+    /// those branches and relies on the runtime fold subsystem to no-op.
+    pub fn mark_fold_failed(&mut self) {
+        self.fold_disabled = true;
+        self.force_fold_pending = false;
+    }
+
+    /// Whether a fold has been requested but not yet emitted. Primarily
+    /// useful for machine-level unit tests; the runner consumes the flag
+    /// implicitly by receiving the [`Effect::ForceFoldNextIteration`]
+    /// prepended to the next pre-LLM effect pair.
+    pub fn force_fold_pending(&self) -> bool { self.force_fold_pending }
+
+    /// Whether further auto-fold requests are latched off for this turn.
+    pub fn fold_disabled(&self) -> bool { self.fold_disabled }
+
     /// Emit the standard pre-LLM effect pair: a [`Effect::RebuildTape`]
     /// immediately followed by a [`Effect::CallLlm`]. Every site that
     /// reaches [`Phase::AwaitingLlm`] uses this so the runner always
@@ -291,19 +461,33 @@ impl AgentMachine {
     /// Takes `&mut self` so it can also reset the per-iteration
     /// [`RepetitionGuard`]: a fresh accumulator starts for every new LLM
     /// round, matching the legacy loop's `let mut accumulated_text =
-    /// String::new()` pattern.
-    fn rebuild_then_call(&mut self) -> [Effect; 2] {
+    /// String::new()` pattern, and clear `force_fold_pending` after the
+    /// fold effect is emitted, matching the legacy
+    /// `force_fold_next_iteration = false` reset.
+    ///
+    /// Return type is `Vec<Effect>` (not a fixed-size array) because the
+    /// auto-fold path prepends a leading [`Effect::ForceFoldNextIteration`]
+    /// when `force_fold_pending` is set, yielding a 3-element slice in that
+    /// case. The emit order is
+    /// `[ForceFoldNextIteration?, RebuildTape, CallLlm]`; callers that also
+    /// need to inject a message interleave it *before* calling
+    /// `rebuild_then_call` (see [`AgentMachine::handle_llm_failed`]).
+    fn rebuild_then_call(&mut self) -> Vec<Effect> {
         self.repetition_guard = RepetitionGuard::new();
-        [
-            Effect::RebuildTape {
-                iteration: self.iteration,
-            },
-            Effect::CallLlm {
-                iteration:      self.iteration,
-                tools_enabled:  self.tools_enabled,
-                disabled_tools: self.disabled_tools.clone(),
-            },
-        ]
+        let mut effects = Vec::with_capacity(3);
+        if self.force_fold_pending {
+            effects.push(Effect::ForceFoldNextIteration);
+            self.force_fold_pending = false;
+        }
+        effects.push(Effect::RebuildTape {
+            iteration: self.iteration,
+        });
+        effects.push(Effect::CallLlm {
+            iteration:      self.iteration,
+            tools_enabled:  self.tools_enabled,
+            disabled_tools: self.disabled_tools.clone(),
+        });
+        effects
     }
 
     /// Synchronous observation: feed a streaming text delta into the
@@ -370,18 +554,20 @@ impl AgentMachine {
             // The legacy code path does NOT increment the recovery counter.
             LlmFailureKind::RateLimited if self.tool_calls_made > 0 => {
                 self.tools_enabled = false;
-                let [rebuild, call] = self.rebuild_then_call();
-                vec![
-                    Effect::InjectUserMessage {
-                        text: "[System] You hit a rate limit. Do NOT call any more tools. \
-                               Summarize the information you already have and answer the user's \
-                               question now."
-                            .to_owned(),
-                    },
-                    Effect::ForceFoldNextIteration,
-                    rebuild,
-                    call,
-                ]
+                // Recovery path: request a fold unconditionally so the
+                // prepended `ForceFoldNextIteration` in `rebuild_then_call`
+                // lands ahead of the follow-up LLM call. Not gated by
+                // `fold_disabled` — legacy sets the flag regardless and
+                // relies on the runner to no-op when the subsystem has
+                // already given up on folds for this turn.
+                self.force_fold_pending = true;
+                let mut effects = vec![Effect::InjectUserMessage {
+                    text: "[System] You hit a rate limit. Do NOT call any more tools. Summarize \
+                           the information you already have and answer the user's question now."
+                        .to_owned(),
+                }];
+                effects.extend(self.rebuild_then_call());
+                effects
             }
 
             // Rate-limit with no tool calls made yet falls through to the
@@ -411,18 +597,17 @@ impl AgentMachine {
                 }
                 self.llm_recoveries += 1;
                 self.tools_enabled = false;
-                let [rebuild, call] = self.rebuild_then_call();
-                vec![
-                    Effect::InjectUserMessage {
-                        text: "[System] The previous request produced an empty response (possible \
-                               context window limit). Context has been compressed. Please reply \
-                               to the user's question directly without using tools."
-                            .to_owned(),
-                    },
-                    Effect::ForceFoldNextIteration,
-                    rebuild,
-                    call,
-                ]
+                // Recovery path: see the rate-limit branch comment for why
+                // the fold request is unconditional.
+                self.force_fold_pending = true;
+                let mut effects = vec![Effect::InjectUserMessage {
+                    text: "[System] The previous request produced an empty response (possible \
+                           context window limit). Context has been compressed. Please reply to \
+                           the user's question directly without using tools."
+                        .to_owned(),
+                }];
+                effects.extend(self.rebuild_then_call());
+                effects
             }
 
             LlmFailureKind::Permanent { message } => {
@@ -444,8 +629,9 @@ impl AgentMachine {
         }
         self.llm_recoveries += 1;
         self.tools_enabled = false;
-        let [rebuild, call] = self.rebuild_then_call();
-        vec![Effect::InjectUserMessage { text: nudge }, rebuild, call]
+        let mut effects = vec![Effect::InjectUserMessage { text: nudge }];
+        effects.extend(self.rebuild_then_call());
+        effects
     }
 
     /// Drive the machine with one event.  Returns the side effects the runner
@@ -458,7 +644,7 @@ impl AgentMachine {
             // ── Turn boot ────────────────────────────────────────────────
             (Phase::Idle, Event::TurnStarted) => {
                 self.phase = Phase::AwaitingLlm;
-                self.rebuild_then_call().to_vec()
+                self.rebuild_then_call()
             }
 
             // ── LLM produced a terminal response ─────────────────────────
@@ -479,8 +665,7 @@ impl AgentMachine {
                     self.continuation_pending = false;
                     self.continuation_count += 1;
                     self.phase = Phase::AwaitingLlm;
-                    let [rebuild, call] = self.rebuild_then_call();
-                    return vec![
+                    let mut effects = vec![
                         Effect::AppendTape {
                             kind: TapeAppendKind::AssistantIntermediate,
                         },
@@ -488,9 +673,9 @@ impl AgentMachine {
                             turn: self.continuation_count,
                             max:  self.max_continuations,
                         },
-                        rebuild,
-                        call,
                     ];
+                    effects.extend(self.rebuild_then_call());
+                    return effects;
                 }
 
                 self.continuation_pending = false;
@@ -611,9 +796,7 @@ impl AgentMachine {
                         });
                     } else {
                         self.phase = Phase::AwaitingLlm;
-                        let [rebuild, call] = self.rebuild_then_call();
-                        effects.push(rebuild);
-                        effects.push(call);
+                        effects.extend(self.rebuild_then_call());
                     }
                 }
                 effects
@@ -627,7 +810,7 @@ impl AgentMachine {
                     LimitDecision::Continue => {
                         self.next_limit_at = self.tool_calls_made + self.limit_interval;
                         self.phase = Phase::AwaitingLlm;
-                        self.rebuild_then_call().to_vec()
+                        self.rebuild_then_call()
                     }
                     LimitDecision::Stop => {
                         self.phase = Phase::Done;
@@ -2254,5 +2437,184 @@ mod tests {
             ),
             "expected Abort on iteration 1"
         );
+    }
+
+    // ── Auto-fold ──────────────────────────────────────────────────────
+
+    fn auto_fold_cfg() -> AutoFoldConfig {
+        AutoFoldConfig {
+            fold_threshold:            0.60,
+            min_entries_between_folds: 15,
+        }
+    }
+
+    #[test]
+    fn observer_requests_fold_on_pressure_with_cooldown_ok() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        // 70% usage, 20 entries since last fold — both thresholds met.
+        assert!(m.observe_fold_pressure(7_000, 10_000, 20));
+        assert!(m.force_fold_pending());
+
+        // Next CallLlm boundary emits ForceFoldNextIteration first.
+        let effects = m.step(Event::TurnStarted);
+        assert!(matches!(
+            effects.as_slice(),
+            [
+                Effect::ForceFoldNextIteration,
+                Effect::RebuildTape { .. },
+                Effect::CallLlm { .. },
+            ]
+        ));
+        // Flag cleared after emission.
+        assert!(!m.force_fold_pending());
+    }
+
+    #[test]
+    fn observer_skips_below_pressure_threshold() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        // 55% usage: strictly below 0.60 threshold.
+        assert!(!m.observe_fold_pressure(5_500, 10_000, 100));
+        assert!(!m.force_fold_pending());
+    }
+
+    #[test]
+    fn observer_skips_when_cooldown_not_elapsed() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        // 80% usage but only 5 entries since last fold — still inside cooldown.
+        assert!(!m.observe_fold_pressure(8_000, 10_000, 5));
+        assert!(!m.force_fold_pending());
+    }
+
+    #[test]
+    fn observer_is_noop_without_config() {
+        let mut m = AgentMachine::new(8);
+        assert!(!m.observe_fold_pressure(9_500, 10_000, 1000));
+        assert!(!m.force_fold_pending());
+    }
+
+    #[test]
+    fn request_force_fold_bypasses_cooldown() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        // No pressure, no cooldown — a ToolHint::SuggestFold caller should
+        // still win through `request_force_fold` because trusted tools
+        // elect folds on their own.
+        assert!(m.request_force_fold());
+        assert!(m.force_fold_pending());
+    }
+
+    #[test]
+    fn request_force_fold_is_noop_without_config() {
+        let mut m = AgentMachine::new(8);
+        assert!(!m.request_force_fold());
+        assert!(!m.force_fold_pending());
+    }
+
+    #[test]
+    fn mark_fold_failed_latches_off_further_requests() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        assert!(m.observe_fold_pressure(9_000, 10_000, 100));
+        m.mark_fold_failed();
+        assert!(m.fold_disabled());
+        // Pending flag cleared so the next CallLlm does NOT emit a stale
+        // ForceFoldNextIteration.
+        assert!(!m.force_fold_pending());
+
+        // Further observer + request calls are no-ops.
+        assert!(!m.observe_fold_pressure(9_500, 10_000, 100));
+        assert!(!m.request_force_fold());
+        assert!(!m.force_fold_pending());
+
+        let effects = m.step(Event::TurnStarted);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RebuildTape { .. }, Effect::CallLlm { .. }]
+        ));
+    }
+
+    #[test]
+    fn pending_fold_survives_tool_wave_and_fires_on_next_llm() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        let _ = m.step(Event::TurnStarted);
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+
+        // Mid-turn: a summariser tool elects a fold.
+        assert!(m.request_force_fold());
+
+        // Tool wave finishes — the follow-up CallLlm should carry the fold.
+        let effects = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+        let fold_before_rebuild = effects.windows(2).any(|w| {
+            matches!(&w[0], Effect::ForceFoldNextIteration)
+                && matches!(&w[1], Effect::RebuildTape { .. })
+        });
+        assert!(
+            fold_before_rebuild,
+            "expected [ForceFoldNextIteration, RebuildTape] adjacent in {effects:?}"
+        );
+        assert!(matches!(effects.last(), Some(Effect::CallLlm { .. })));
+        assert!(!m.force_fold_pending(), "flag must clear after emission");
+    }
+
+    #[test]
+    fn recovery_path_still_requests_fold_when_auto_fold_disabled() {
+        // No auto-fold config; EmptyStream recovery must still request the
+        // fold — matches the legacy loop where stream recovery fires the
+        // flag regardless of `context_folding.enabled`.
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::EmptyStream,
+        });
+        match effects.as_slice() {
+            [
+                Effect::InjectUserMessage { .. },
+                Effect::ForceFoldNextIteration,
+                Effect::RebuildTape { .. },
+                Effect::CallLlm { tools_enabled, .. },
+            ] => assert!(!tools_enabled),
+            other => panic!("unexpected effects: {other:?}"),
+        }
+        assert!(
+            !m.force_fold_pending(),
+            "flag must be cleared after emission"
+        );
+    }
+
+    #[test]
+    fn recovery_path_ignores_fold_disabled_latch() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        m.mark_fold_failed();
+        let _ = m.step(Event::TurnStarted);
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::EmptyStream,
+        });
+        // Legacy parity: recovery branches still emit ForceFoldNextIteration
+        // even after a prior fold failure — the subsystem decides whether
+        // to actually fold.
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::ForceFoldNextIteration)),
+            "recovery must still emit ForceFold despite fold_disabled, got {effects:?}"
+        );
+    }
+
+    #[test]
+    fn observer_emits_fold_only_once_per_boundary() {
+        let mut m = AgentMachine::with_auto_fold(8, auto_fold_cfg());
+        assert!(m.observe_fold_pressure(9_000, 10_000, 100));
+        // Second observer call while flag is still pending is idempotent.
+        assert!(m.observe_fold_pressure(9_500, 10_000, 100));
+        let effects = m.step(Event::TurnStarted);
+        let fold_count = effects
+            .iter()
+            .filter(|e| matches!(e, Effect::ForceFoldNextIteration))
+            .count();
+        assert_eq!(fold_count, 1, "exactly one ForceFold per boundary");
     }
 }
