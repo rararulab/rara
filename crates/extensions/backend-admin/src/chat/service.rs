@@ -46,6 +46,86 @@ use crate::chat::{
     model_catalog::{ChatModel, ModelCatalog},
 };
 
+/// Sanitised view of an `llm.providers.<id>.*` settings group.
+///
+/// Surfaces only the fields the chat UI needs to render a picker —
+/// raw API keys are intentionally replaced with the boolean
+/// `has_api_key` so secrets never leave the backend via this endpoint.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct ProviderInfo {
+    /// Provider id, as used in `llm.providers.<id>.*` keys and in the
+    /// kernel `DriverRegistry` (e.g. `openrouter`, `kimi`, `minimax`).
+    pub id:            String,
+    /// Non-empty `default_model` value from settings. Providers without
+    /// one are omitted from the list.
+    pub default_model: String,
+    /// Base URL for OpenAI-compatible endpoints, if configured.
+    pub base_url:      Option<String>,
+    /// Whether `llm.providers.<id>.api_key` has a non-empty value.
+    pub has_api_key:   bool,
+    /// Whether `llm.providers.<id>.enabled` is the literal string `"true"`.
+    pub enabled:       bool,
+}
+
+/// Walk the flat settings map and assemble sanitised provider entries.
+/// Provider ids with no `default_model` are skipped; enabled providers
+/// sort first, then providers with an api key, then the rest by id.
+pub(crate) fn collect_providers(
+    settings: &std::collections::HashMap<String, String>,
+) -> Vec<ProviderInfo> {
+    use std::collections::HashMap;
+    let mut by_id: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
+    for (key, value) in settings {
+        let rest = match key.strip_prefix("llm.providers.") {
+            Some(r) => r,
+            None => continue,
+        };
+        // `rest` looks like `<id>.<field>` — or `<id>.<sub>.<more>` for
+        // nested fields we do not care about. Split on the FIRST dot so
+        // `id` ends at the first segment.
+        let (id, field) = match rest.split_once('.') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        by_id.entry(id).or_default().insert(field, value.as_str());
+    }
+
+    let mut entries: Vec<ProviderInfo> = by_id
+        .into_iter()
+        .filter_map(|(id, fields)| {
+            let default_model = fields.get("default_model").copied().unwrap_or("").trim();
+            if default_model.is_empty() {
+                return None;
+            }
+            let base_url = fields
+                .get("base_url")
+                .copied()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let has_api_key = fields
+                .get("api_key")
+                .copied()
+                .is_some_and(|v| !v.trim().is_empty());
+            let enabled = fields.get("enabled").copied() == Some("true");
+            Some(ProviderInfo {
+                id: id.to_owned(),
+                default_model: default_model.to_owned(),
+                base_url,
+                has_api_key,
+                enabled,
+            })
+        })
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let score = |e: &ProviderInfo| (i32::from(e.enabled) * 2) + (i32::from(e.has_api_key));
+        let diff = score(b).cmp(&score(a));
+        if diff.is_eq() { a.id.cmp(&b.id) } else { diff }
+    });
+    entries
+}
+
 /// Central orchestrator for session-based AI chat.
 ///
 /// `SessionService` ties together two concerns:
@@ -111,6 +191,15 @@ impl SessionService {
                 message: format!("failed to update favorite models: {e}"),
             })?;
         Ok(())
+    }
+
+    /// List LLM providers derived from `llm.providers.<id>.*` settings,
+    /// stripped of any sensitive fields. Only `api_key` presence is
+    /// surfaced (as a boolean); actual key material never leaves the
+    /// backend via this endpoint.
+    pub async fn list_llm_providers(&self) -> Vec<ProviderInfo> {
+        let all = self.settings_provider.list().await;
+        collect_providers(&all)
     }
 
     // -- session CRUD -------------------------------------------------------

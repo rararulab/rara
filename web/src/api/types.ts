@@ -47,6 +47,16 @@ export interface ChatModel {
   is_favorite: boolean;
 }
 
+/** Sanitised LLM provider entry from `GET /api/v1/chat/providers`.
+ *  API keys never appear here — only their presence is surfaced. */
+export interface ProviderInfo {
+  id: string;
+  default_model: string;
+  base_url: string | null;
+  has_api_key: boolean;
+  enabled: boolean;
+}
+
 
 // Chat Sessions
 

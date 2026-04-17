@@ -56,10 +56,9 @@ import { api } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
-import {
-  RaraModelDialog,
-  type RaraProviderEntry,
-} from "@/components/RaraModelDialog";
+import { RaraModelDialog } from "@/components/RaraModelDialog";
+import type { ProviderInfo } from "@/api/types";
+import { isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
 /** Strip `<think>...</think>` blocks — used only for UI preview/title text. */
 function stripForPreview(text: string): string {
@@ -105,33 +104,6 @@ function isToolFailure(text: string): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Build a pi-ai `Model<any>`-shaped object from rara's own provider
- * data. pi-chat-panel uses `agent.state.model` only for UI display (the
- * model-name pill above the composer); actual streaming bypasses pi-ai
- * entirely and rides on rara's WebSocket, so the synthesized fields
- * (`api`, `baseUrl`, `cost`, `contextWindow`) need only be structurally
- * valid — their values never hit the wire.
- */
-function syntheticModel(
-  providerId: string,
-  modelId: string,
-  options?: { baseUrl?: string; contextWindow?: number; name?: string },
-): unknown {
-  return {
-    id:            modelId,
-    name:          options?.name ?? `${providerId} / ${modelId}`,
-    api:           "openai-completions",
-    provider:      providerId,
-    baseUrl:       options?.baseUrl ?? "",
-    reasoning:     false,
-    input:         ["text", "image"],
-    cost:          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: options?.contextWindow ?? 128_000,
-    maxTokens:     4096,
-  };
 }
 
 function mimeToFilename(mimeType: string, index: number): string {
@@ -452,6 +424,9 @@ export default function PiChat() {
   const initRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
   const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
+  // Tracks the last successfully-persisted (model, provider, thinking)
+  // triple so onBeforeSend can skip no-op PATCHes on every send.
+  const lastPersistedRef = useRef<{ model: string | null; provider: string | null; thinking: string | null } | null>(null);
   const [showSessionList, setShowSessionList] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
@@ -470,12 +445,20 @@ export default function PiChat() {
     // looking the pair up in pi-ai's catalog — rara's provider ids
     // (`kimi`, `openrouter`, `scnet`, ...) do not exist there.
     if (session.model && session.model_provider) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      agent.state.model = syntheticModel(session.model_provider, session.model) as any;
+      agent.state.model = syntheticModel(session.model_provider, session.model);
     }
     if (session.thinking_level) {
       agent.state.thinkingLevel = session.thinking_level;
     }
+    // Reset the dedup ref to match the session that was just loaded so
+    // onBeforeSend correctly re-PATCHes if the user changes selection
+    // away from the restored values, and skips the identity write
+    // otherwise.
+    lastPersistedRef.current = {
+      model:    session.model ?? null,
+      provider: session.model_provider ?? null,
+      thinking: session.thinking_level ?? null,
+    };
 
     try {
       const msgs = await api.get<ChatMessageData[]>(
@@ -610,6 +593,25 @@ export default function PiChat() {
       });
       agentRef.current = agent;
 
+      // Restore the initial session's persisted model + thinking-level
+      // BEFORE mounting the chat panel, so the composer pill reflects
+      // the real selection and `onBeforeSend` does not see pi-agent-core's
+      // "unknown" default as the first thing to persist.
+      if (initialSession.model && initialSession.model_provider) {
+        agent.state.model = syntheticModel(
+          initialSession.model_provider,
+          initialSession.model,
+        );
+        lastPersistedRef.current = {
+          model:    initialSession.model,
+          provider: initialSession.model_provider,
+          thinking: initialSession.thinking_level ?? null,
+        };
+      }
+      if (initialSession.thinking_level) {
+        agent.state.thinkingLevel = initialSession.thinking_level;
+      }
+
       // 6. Mount the ChatPanel custom element
       const chatPanel = document.createElement("pi-chat-panel") as import("@mariozechner/pi-web-ui").ChatPanel;
       chatPanelRef.current = chatPanel;
@@ -630,17 +632,36 @@ export default function PiChat() {
         onBeforeSend: async () => {
           const key = agent.sessionId;
           if (!key) return;
-          const model = agent.state.model?.id ?? null;
-          const model_provider = agent.state.model?.provider ?? null;
-          const thinking_level = asThinkingLevel(agent.state.thinkingLevel);
-          // Skip the PATCH when nothing would change.
-          if (!model && !thinking_level) return;
+
+          // Skip the PATCH when `agent.state.model` is pi-agent-core's
+          // placeholder default (id/provider = "unknown"). Persisting it
+          // would overwrite any previously saved rara provider with a
+          // sentinel the kernel's DriverRegistry cannot route to, which
+          // caused the original "LLM provider not configured" failure
+          // (see #1554).
+          const picked = !isUnknownModel(agent.state.model);
+          const model = picked ? (agent.state.model?.id ?? null) : null;
+          const provider = picked ? (agent.state.model?.provider ?? null) : null;
+          const thinking = asThinkingLevel(agent.state.thinkingLevel);
+
+          // Nothing worth persisting.
+          if (!model && !thinking) return;
+
+          // Dedup consecutive identical writes — the chat UI round-trips
+          // every send through this hook even when the selection hasn't
+          // changed, and the PATCH wakes up the session index for nothing.
+          const last = lastPersistedRef.current;
+          if (last && last.model === model && last.provider === provider && last.thinking === thinking) {
+            return;
+          }
+
           try {
             await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
               model,
-              model_provider,
-              thinking_level,
+              model_provider: provider,
+              thinking_level: thinking,
             });
+            lastPersistedRef.current = { model, provider, thinking };
           } catch (e) {
             console.warn("Failed to persist session LLM override:", e);
           }
@@ -732,13 +753,12 @@ export default function PiChat() {
         open={modelDialogOpen}
         onClose={() => setModelDialogOpen(false)}
         currentProvider={agentRef.current?.state.model?.provider ?? null}
-        onSelect={(entry: RaraProviderEntry) => {
+        onSelect={(entry: ProviderInfo) => {
           const agent = agentRef.current;
           if (agent) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             agent.state.model = syntheticModel(entry.id, entry.default_model, {
-              baseUrl: entry.base_url,
-            }) as any;
+              baseUrl: entry.base_url ?? undefined,
+            });
             chatPanelRef.current?.agentInterface?.requestUpdate();
           }
           setModelDialogOpen(false);

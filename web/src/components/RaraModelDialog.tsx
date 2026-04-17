@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -23,38 +23,26 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { settingsApi } from "@/api/client";
-
-/**
- * A rara-native LLM provider entry assembled from `/api/v1/settings`.
- *
- * Rara's provider catalog lives entirely in flat KV settings under
- * `llm.providers.<id>.*`. Provider ids come straight from rara
- * (`openrouter`, `kimi`, `minimax`, `glm`, `scnet`, `stepfun`, ...) so
- * the backend's `DriverRegistry::resolve` can route directly when we
- * PATCH this back onto the session.
- */
-export interface RaraProviderEntry {
-  id:             string;
-  default_model:  string;
-  base_url?:      string;
-  has_api_key:    boolean;
-  enabled:        boolean;
-}
+import { api } from "@/api/client";
+import type { ProviderInfo } from "@/api/types";
 
 interface Props {
   open:              boolean;
   onClose:           () => void;
-  onSelect:          (entry: RaraProviderEntry) => void;
+  onSelect:          (entry: ProviderInfo) => void;
   currentProvider?:  string | null;
 }
 
 /**
- * Model picker backed by rara's own settings. Replaces pi-mono's
- * `ModelSelector`, whose catalog lives in pi-ai's hard-coded `MODELS`
- * constant and cannot address rara's custom OpenAI-compatible
- * endpoints (`scnet`, `stepfun`, `m3`, `local`, ...). Shows one entry
- * per rara provider that has a `default_model` configured.
+ * Rara-native LLM provider picker. Replaces pi-mono's `ModelSelector`,
+ * whose catalog lives in pi-ai's hard-coded `MODELS` constant and
+ * cannot address rara's custom OpenAI-compatible endpoints (`scnet`,
+ * `stepfun`, `m3`, `local`, ...).
+ *
+ * Data source: `GET /api/v1/chat/providers` — a sanitised view of
+ * `llm.providers.*` settings. Shows one entry per rara provider that
+ * has a `default_model` configured. Sensitive `api_key` values never
+ * cross the wire; the backend surfaces only a `has_api_key` boolean.
  */
 export function RaraModelDialog({
   open,
@@ -62,21 +50,39 @@ export function RaraModelDialog({
   onSelect,
   currentProvider,
 }: Props) {
-  const [entries, setEntries] = useState<RaraProviderEntry[]>([]);
+  const [entries, setEntries] = useState<ProviderInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
+  const [selectedIdx, setSelectedIdx] = useState(0);
+
+  // Cache the fetched list across open/close cycles — settings rarely
+  // change and the dialog is opened per-click.
+  const cacheRef = useRef<ProviderInfo[] | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    // Serve from cache on reopen; refetch only on first load.
+    if (cacheRef.current) {
+      setEntries(cacheRef.current);
+      return;
+    }
+    const controller = new AbortController();
     setLoading(true);
-    settingsApi
-      .list()
-      .then((settings) => setEntries(parseProviderEntries(settings)))
-      .catch((e) => {
+    api
+      .get<ProviderInfo[]>("/api/v1/chat/providers", { signal: controller.signal })
+      .then((list) => {
+        cacheRef.current = list;
+        setEntries(list);
+      })
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
         console.warn("Failed to load provider catalog:", e);
         setEntries([]);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, [open]);
 
   const filtered = useMemo(() => {
@@ -89,9 +95,31 @@ export function RaraModelDialog({
     );
   }, [entries, query]);
 
+  // Clamp the selection cursor whenever the filtered list shrinks/grows.
+  useEffect(() => {
+    setSelectedIdx((idx) =>
+      filtered.length === 0 ? 0 : Math.min(idx, filtered.length - 1),
+    );
+  }, [filtered.length]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (filtered.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIdx((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIdx((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const entry = filtered[selectedIdx];
+      if (entry) onSelect(entry);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle>Select model</DialogTitle>
           <DialogDescription>
@@ -120,14 +148,16 @@ export function RaraModelDialog({
                 : "No matches."}
             </div>
           ) : (
-            filtered.map((entry) => {
+            filtered.map((entry, idx) => {
               const active = entry.id === currentProvider;
+              const highlighted = idx === selectedIdx;
               return (
                 <button
                   key={entry.id}
-                  className={`flex w-full flex-col gap-0.5 border-b border-border/60 px-4 py-3 text-left transition-colors hover:bg-secondary/60 ${
-                    active ? "bg-secondary/80" : ""
+                  className={`flex w-full flex-col gap-0.5 border-b border-border/60 px-4 py-3 text-left transition-colors ${
+                    highlighted ? "bg-secondary/80" : active ? "bg-secondary/50" : "hover:bg-secondary/40"
                   }`}
+                  onMouseEnter={() => setSelectedIdx(idx)}
                   onClick={() => onSelect(entry)}
                 >
                   <div className="flex items-center justify-between">
@@ -163,48 +193,4 @@ export function RaraModelDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-/**
- * Extract provider entries from the flat settings map. Keep any provider
- * that has a non-empty `default_model`; surface enabled / api-key flags
- * so the UI can warn but still let the user pick.
- */
-function parseProviderEntries(settings: Record<string, string>): RaraProviderEntry[] {
-  // Group keys by provider id.
-  const byId = new Map<string, Record<string, string>>();
-  for (const [key, value] of Object.entries(settings)) {
-    const m = /^llm\.providers\.([^.]+)\.([^.]+)$/.exec(key);
-    if (!m) continue;
-    const [, id, field] = m;
-    let bucket = byId.get(id);
-    if (!bucket) {
-      bucket = {};
-      byId.set(id, bucket);
-    }
-    bucket[field] = value;
-  }
-
-  const entries: RaraProviderEntry[] = [];
-  for (const [id, fields] of byId.entries()) {
-    const defaultModel = (fields["default_model"] ?? "").trim();
-    if (!defaultModel) continue;
-    entries.push({
-      id,
-      default_model: defaultModel,
-      base_url:      (fields["base_url"] ?? "").trim() || undefined,
-      has_api_key:   (fields["api_key"] ?? "").trim().length > 0,
-      enabled:       fields["enabled"] === "true",
-    });
-  }
-
-  // Enabled first, then providers with api_key, then the rest.
-  entries.sort((a, b) => {
-    const score = (e: RaraProviderEntry) =>
-      (e.enabled ? 2 : 0) + (e.has_api_key ? 1 : 0);
-    const diff = score(b) - score(a);
-    return diff !== 0 ? diff : a.id.localeCompare(b.id);
-  });
-
-  return entries;
 }
