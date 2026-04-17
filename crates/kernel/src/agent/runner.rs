@@ -50,7 +50,9 @@
 //! - Repetition guard truncation
 //! - Deferred tool activation (`discover-tools`) feedback — ✓ machine-side
 //!   implemented; legacy removal pending
-//! - Per-iteration tape rebuild + sanitisation
+//! - Per-iteration tape rebuild + sanitisation — ✓ machine-side implemented via
+//!   [`Effect::RebuildTape`] and [`Subsystems::rebuild_tape`]; legacy removal
+//!   pending
 //! - Empty-stream / rate-limit recovery branches — ✓ machine-side implemented
 //!   via [`crate::agent::machine::LlmFailureKind`] and
 //!   [`Effect::InjectUserMessage`] / [`Effect::ForceFoldNextIteration`]; legacy
@@ -203,6 +205,29 @@ pub trait Subsystems: Send + Sync {
     /// No default impl: silent no-op would hide a broken integration where
     /// the recovery retry still overflows the context window.
     async fn force_fold_next_iteration(&mut self);
+
+    /// Rebuild the LLM message list from the persisted tape and sanitise
+    /// any malformed tool-call arguments, storing the result in the
+    /// runner's per-turn buffer so the subsequent
+    /// [`Subsystems::call_llm`] sends it to the provider.
+    ///
+    /// Production implementations call
+    /// `TapeService::rebuild_messages_for_llm(tape_name, user_id,
+    /// &effective_prompt)` followed by the
+    /// `sanitize_messages_for_llm` helper from `agent::mod` (strips
+    /// tool-call arguments that fail JSON parsing so the provider API
+    /// never sees malformed payloads). Every iteration goes through this
+    /// hook — the tape is the single source of truth for conversation
+    /// history, and in-memory message buffers drift after folds,
+    /// recovery nudges, and deferred-tool activations.
+    ///
+    /// Fire-and-continue: the machine does not wait for an event. A
+    /// rebuild failure should be logged; the bad state will surface on
+    /// the upcoming [`Subsystems::call_llm`] if messages are missing.
+    ///
+    /// No default impl: silent no-op would leave the runner's message
+    /// buffer permanently stale, so test stubs must opt in explicitly.
+    async fn rebuild_tape(&mut self, iteration: usize);
 }
 
 /// Drive the [`AgentMachine`] to completion against `subsys`.
@@ -297,6 +322,9 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                 }
                 Effect::ForceFoldNextIteration => {
                     subsys.force_fold_next_iteration().await;
+                }
+                Effect::RebuildTape { iteration } => {
+                    subsys.rebuild_tape(iteration).await;
                 }
                 Effect::ContextPressureWarning {
                     level,
@@ -411,6 +439,9 @@ mod tests {
         /// Count of `force_fold_next_iteration` calls; tests assert this
         /// against expected fold requests from recovery branches.
         force_fold_hits: u32,
+        /// Iterations observed via `rebuild_tape`, in order. Every
+        /// iteration must rebuild exactly once before its CallLlm.
+        rebuild_log:     Vec<usize>,
     }
 
     #[async_trait]
@@ -459,6 +490,8 @@ mod tests {
         }
 
         async fn force_fold_next_iteration(&mut self) { self.force_fold_hits += 1; }
+
+        async fn rebuild_tape(&mut self, iteration: usize) { self.rebuild_log.push(iteration); }
     }
 
     /// Factory producing a fresh stub with empty scripts for every field.
@@ -477,6 +510,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         }
     }
 
@@ -500,6 +534,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -548,6 +583,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -612,6 +648,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::with_max_continuations(8, 3);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -693,6 +730,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -736,6 +774,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -785,6 +824,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -835,6 +875,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -866,6 +907,7 @@ mod tests {
             next_sample:     0,
             refresh_log:     vec![],
             force_fold_hits: 0,
+            rebuild_log:     vec![],
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -1102,6 +1144,94 @@ mod tests {
             "inject should echo error: {:?}",
             s.injected
         );
+    }
+
+    // ─── Per-iteration tape rebuild ─────────────────────────────────────
+
+    /// The runner must invoke `rebuild_tape` exactly once per LLM round,
+    /// with the iteration number matching the upcoming `CallLlm`, so the
+    /// production impl can refresh its message buffer from the tape.
+    #[tokio::test]
+    async fn drive_rebuilds_tape_once_per_iteration() {
+        let tc = Tc {
+            id:        ToolCallId::new("c1"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmCompleted {
+                text:           "thinking".into(),
+                tool_calls:     vec![tc.clone()],
+                has_tool_calls: true,
+            },
+            Event::LlmCompleted {
+                text:           "final".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        s.tool_responses = vec![vec![Tr {
+            id:          ToolCallId::new("c1"),
+            name:        ToolName::new("search"),
+            arguments:   "{}".into(),
+            success:     true,
+            duration_ms: 1,
+            error:       None,
+        }]];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(
+            s.rebuild_log,
+            vec![0, 1],
+            "expected one rebuild per iteration, in order: {:?}",
+            s.rebuild_log
+        );
+    }
+
+    /// Recovery branches (empty stream) still rebuild before the retry so
+    /// the injected nudge lands in the rebuilt message buffer.
+    #[tokio::test]
+    async fn drive_rebuilds_tape_before_recovery_retry() {
+        use crate::agent::machine::LlmFailureKind;
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmFailed {
+                kind: LlmFailureKind::EmptyStream,
+            },
+            Event::LlmCompleted {
+                text:           "recovered".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        // Two rebuilds total: the initial boot and the recovery retry.
+        assert_eq!(
+            s.rebuild_log.len(),
+            2,
+            "expected rebuild before initial + recovery: {:?}",
+            s.rebuild_log
+        );
+    }
+
+    /// A turn that terminates without a second LLM round (text-only
+    /// first response) rebuilds exactly once — for the initial boot.
+    #[tokio::test]
+    async fn drive_rebuilds_only_for_initial_boot_on_fast_stop() {
+        let mut s = subsys();
+        s.llm_script = vec![Event::LlmCompleted {
+            text:           "ok".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        }];
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(s.rebuild_log, vec![0]);
     }
 
     /// Sampling `(0, 0)` (unavailable / disabled) never produces a
