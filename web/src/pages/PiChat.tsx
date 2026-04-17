@@ -38,6 +38,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
+import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
 import { api } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
@@ -448,6 +449,11 @@ export default function PiChat() {
 
     (async () => {
       try {
+      // 0. Register rara → pi-mono tool renderer aliases. Must happen before
+      //    ChatPanel.setAgent() mounts any messages — the registry is
+      //    consulted at render time with no retro-active update.
+      registerRaraToolRenderers();
+
       // 1. Create and initialize the rara storage backend
       const backend = new RaraStorageBackend();
       await backend.init();
