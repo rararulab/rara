@@ -46,7 +46,11 @@ use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionService};
+use crate::chat::{
+    error::ChatError,
+    model_catalog::ChatModel,
+    service::{ProviderInfo, SessionService},
+};
 
 /// Parse an optional thinking-level string from a request body, converting
 /// invalid values into a 400 response with a list of accepted variants.
@@ -171,6 +175,7 @@ fn model_routes(service: SessionService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(list_models))
         .routes(routes!(set_favorites))
+        .routes(routes!(list_providers))
         .with_state(service)
 }
 
@@ -205,6 +210,21 @@ fn session_routes(service: SessionService) -> OpenApiRouter {
 async fn list_models(State(service): State<SessionService>) -> Json<Vec<ChatModel>> {
     let models = service.list_models().await;
     Json(models)
+}
+
+/// `GET /api/v1/chat/providers` — return the LLM provider catalog derived
+/// from `llm.providers.*` settings, stripped of any sensitive fields
+/// (API keys never leave the backend via this endpoint).
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/providers",
+    tag = "chat",
+    responses(
+        (status = 200, description = "List of configured providers", body = Vec<ProviderInfo>),
+    )
+)]
+async fn list_providers(State(service): State<SessionService>) -> Json<Vec<ProviderInfo>> {
+    Json(service.list_llm_providers().await)
 }
 
 /// `PUT /api/v1/chat/models/favorites` — replace the user's favorite model
