@@ -529,6 +529,13 @@ export default function PiChat() {
       // Model and thinking selectors are enabled by default in ChatPanel.setAgent().
       // Rara delegates model/thinking selection to the user via pi-chat-panel's
       // built-in UI — the chosen model is passed to the backend at stream time.
+      //
+      // Surface pi-mono's built-in theme toggle in the chat header. Rara's
+      // own <ThemeToggle /> is scoped to DashboardLayout (admin pages), so
+      // there's no duplicate on the chat page.
+      if (chatPanel.agentInterface) {
+        chatPanel.agentInterface.showThemeToggle = true;
+      }
       } finally {
         // Clear the loading overlay even if init fails (network/CORS/etc.)
         // so the user sees the empty chat panel rather than a spinner forever.

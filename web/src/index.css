@@ -126,11 +126,6 @@
 
   /* ── pi-web-ui chat layout overrides (light DOM) ── */
 
-  /* User messages: right-aligned */
-  user-message > .flex.justify-start {
-    justify-content: flex-end !important;
-  }
-
   .dark pre code.hljs {
     background: transparent;
     color: var(--color-foreground);
