@@ -369,6 +369,7 @@ mod tests {
             user_id:               "test-user".into(),
             session_key:           SessionKey::new(),
             origin_endpoint:       None,
+            origin_user_id:        None,
             event_queue:           build_queue(),
             rara_message_id:       MessageId::new(),
             context_window_tokens: 0,

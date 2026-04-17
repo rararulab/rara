@@ -341,6 +341,18 @@ pub struct ToolContext {
     pub session_key:           crate::session::SessionKey,
     /// The originating endpoint (e.g. Telegram chat) for routing replies.
     pub origin_endpoint:       Option<crate::io::Endpoint>,
+    /// Kernel `UserId` of the user who triggered this turn, when the origin
+    /// is a real platform message. `None` for synthetic/background origins
+    /// (scheduled jobs, Mita/system bootstraps, `handle_spawn_agent`
+    /// re-entry), where no identifiable human triggered the turn.
+    ///
+    /// Tools that raise interactive prompts (`ask-user`, guard approval)
+    /// propagate this into `UserQuestion::expected_user_id` /
+    /// `ApprovalRequest::origin_user_id` so channel adapters can gate
+    /// responses to the originating user. `None` intentionally skips the
+    /// identity gate so fallback chat-level auth still lets the prompt be
+    /// answered (scheduled tasks etc. have no platform identity to bind).
+    pub origin_user_id:        Option<crate::identity::UserId>,
     /// Event queue for pushing outbound events.
     pub event_queue:           crate::queue::ShardedQueueRef,
     /// The inbound message ID that triggered the current turn.
@@ -364,6 +376,7 @@ impl std::fmt::Debug for ToolContext {
             .field("user_id", &self.user_id)
             .field("session_key", &self.session_key)
             .field("origin_endpoint", &self.origin_endpoint)
+            .field("origin_user_id", &self.origin_user_id)
             .field("event_queue", &"...")
             .field("rara_message_id", &self.rara_message_id)
             .field("context_window_tokens", &self.context_window_tokens)

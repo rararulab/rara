@@ -94,8 +94,11 @@ impl ToolExecute for AskUserTool {
         // pending question to the specific user who triggered the turn —
         // other members of a shared chat must not be able to answer on
         // their behalf. Adapters resolve the incoming reply/callback
-        // sender to a `UserId` via `IdentityResolver` and compare.
-        let expected_user_id = Some(rara_kernel::identity::UserId(context.user_id.clone()));
+        // sender to a `UserId` via `IdentityResolver` and compare. `None`
+        // for synthetic/background turns (scheduled jobs, Mita, spawn
+        // re-entry) so the prompt can be answered via chat-level auth
+        // when no real human originated the turn.
+        let expected_user_id = context.origin_user_id.clone();
         // Either the caller explicitly marked the prompt sensitive, or the
         // question text matches common secret-request patterns. Heuristic
         // detection is a defense-in-depth safety net, not a substitute for

@@ -2522,10 +2522,22 @@ impl Kernel {
                 // LLM calls interspersed with tool executions (bash, file I/O,
                 // etc.). The ToolContext carries the authenticated user_id so
                 // tools can access it without relying on LLM-supplied identity.
+                // Suppress `origin_user_id` for `ChannelType::Internal`
+                // synthetic re-entry (e.g. `handle_spawn_agent`, scheduled
+                // jobs, Mita bootstraps): those turns have no identifiable
+                // human originator, so forwarding a kernel `UserId` here
+                // would make the Telegram identity gate reject every
+                // Approve/Answer press (#1533 follow-up). Falling through
+                // to `None` lets chat-level auth resolve these prompts.
+                let origin_user_id = match msg.source.channel_type {
+                    crate::channel::types::ChannelType::Internal => None,
+                    _ => Some(user.clone()),
+                };
                 let tool_context = crate::tool::ToolContext {
                     user_id: user.0.clone(),
                     session_key: session_key.clone(),
                     origin_endpoint: origin_endpoint.clone(),
+                    origin_user_id,
                     event_queue: event_queue.clone(),
                     rara_message_id: msg_id.clone(),
                     context_window_tokens: 0,
