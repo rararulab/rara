@@ -272,6 +272,121 @@ impl AgentMachine {
         Vec::new()
     }
 
+    /// Translate an LLM-failure event into recovery effects.
+    ///
+    /// Preserves the legacy `run_agent_loop` branching verbatim:
+    ///
+    /// - [`LlmFailureKind::RateLimited`] with `tool_calls_made > 0`: disable
+    ///   tools, inject the "summarize with what you have" nudge, force a fold,
+    ///   and retry. Does **not** consume a recovery slot — the legacy path uses
+    ///   `continue` without bumping the counter.
+    /// - [`LlmFailureKind::RateLimited`] with `tool_calls_made == 0`: falls
+    ///   through to the retryable branch (the legacy order tests the rate-limit
+    ///   special-case first, then the generic retryable predicate, and 429
+    ///   errors satisfy both).
+    /// - [`LlmFailureKind::Retryable`]: consumes a recovery slot, disables
+    ///   tools, injects the "server error, reply without tools" nudge, retries.
+    ///   Fails when the slot budget is exhausted.
+    /// - [`LlmFailureKind::EmptyStream`]: consumes a recovery slot, disables
+    ///   tools, injects the "empty response, context compressed" nudge, and
+    ///   emits [`Effect::ForceFoldNextIteration`] so the runner folds context
+    ///   before the next call.
+    /// - [`LlmFailureKind::Permanent`]: terminates the turn immediately.
+    fn handle_llm_failed(&mut self, kind: LlmFailureKind) -> Vec<Effect> {
+        match kind {
+            // Rate-limit after at least one tool call: legacy `continue` path
+            // — disable tools, inject a final-answer nudge, and force a fold.
+            // The legacy code path does NOT increment the recovery counter.
+            LlmFailureKind::RateLimited if self.tool_calls_made > 0 => {
+                self.tools_enabled = false;
+                vec![
+                    Effect::InjectUserMessage {
+                        text: "[System] You hit a rate limit. Do NOT call any more tools. \
+                               Summarize the information you already have and answer the user's \
+                               question now."
+                            .to_owned(),
+                    },
+                    Effect::ForceFoldNextIteration,
+                    Effect::CallLlm {
+                        iteration:      self.iteration,
+                        tools_enabled:  self.tools_enabled,
+                        disabled_tools: self.disabled_tools.clone(),
+                    },
+                ]
+            }
+
+            // Rate-limit with no tool calls made yet falls through to the
+            // retryable branch (legacy guard: `rate_limit && tool_calls_made > 0`,
+            // else `is_retryable_provider_error` — 429 is classified as both).
+            LlmFailureKind::RateLimited => self.retryable_recovery(
+                "[System] The previous request encountered a server error (rate limited). Please \
+                 reply to the user's question directly without using tools."
+                    .to_owned(),
+                "rate limited".to_owned(),
+            ),
+
+            LlmFailureKind::Retryable { message } => {
+                let nudge = format!(
+                    "[System] The previous request encountered a server error ({message}). Please \
+                     reply to the user's question directly without using tools."
+                );
+                self.retryable_recovery(nudge, message)
+            }
+
+            LlmFailureKind::EmptyStream => {
+                if self.llm_recoveries >= MAX_LLM_RECOVERIES {
+                    self.phase = Phase::Failed;
+                    return vec![Effect::Fail {
+                        message: "LLM stream returned empty after max recoveries".to_owned(),
+                    }];
+                }
+                self.llm_recoveries += 1;
+                self.tools_enabled = false;
+                vec![
+                    Effect::InjectUserMessage {
+                        text: "[System] The previous request produced an empty response (possible \
+                               context window limit). Context has been compressed. Please reply \
+                               to the user's question directly without using tools."
+                            .to_owned(),
+                    },
+                    Effect::ForceFoldNextIteration,
+                    Effect::CallLlm {
+                        iteration:      self.iteration,
+                        tools_enabled:  self.tools_enabled,
+                        disabled_tools: self.disabled_tools.clone(),
+                    },
+                ]
+            }
+
+            LlmFailureKind::Permanent { message } => {
+                self.phase = Phase::Failed;
+                vec![Effect::Fail { message }]
+            }
+        }
+    }
+
+    /// Shared body for retryable-provider and no-tools rate-limit branches.
+    /// Consumes a recovery slot and emits inject+CallLlm; falls back to
+    /// `Effect::Fail` when the slot budget is exhausted.
+    fn retryable_recovery(&mut self, nudge: String, fail_message: String) -> Vec<Effect> {
+        if self.llm_recoveries >= MAX_LLM_RECOVERIES {
+            self.phase = Phase::Failed;
+            return vec![Effect::Fail {
+                message: fail_message,
+            }];
+        }
+        self.llm_recoveries += 1;
+        self.tools_enabled = false;
+        vec![
+            Effect::InjectUserMessage { text: nudge },
+            Effect::CallLlm {
+                iteration:      self.iteration,
+                tools_enabled:  self.tools_enabled,
+                disabled_tools: self.disabled_tools.clone(),
+            },
+        ]
+    }
+
     /// Drive the machine with one event.  Returns the side effects the runner
     /// must perform before feeding the next event back in.
     ///
@@ -361,22 +476,8 @@ impl AgentMachine {
                 ]
             }
 
-            // ── LLM error: retry by disabling tools, fail when exhausted ─
-            (Phase::AwaitingLlm, Event::LlmFailed { retryable, message }) => {
-                if retryable && self.llm_recoveries < MAX_LLM_RECOVERIES {
-                    self.llm_recoveries += 1;
-                    self.tools_enabled = false;
-                    // Stay in AwaitingLlm; runner re-issues CallLlm.
-                    vec![Effect::CallLlm {
-                        iteration:      self.iteration,
-                        tools_enabled:  self.tools_enabled,
-                        disabled_tools: self.disabled_tools.clone(),
-                    }]
-                } else {
-                    self.phase = Phase::Failed;
-                    vec![Effect::Fail { message }]
-                }
-            }
+            // ── LLM error: branch on failure kind ────────────────────────
+            (Phase::AwaitingLlm, Event::LlmFailed { kind }) => self.handle_llm_failed(kind),
 
             // ── Tool wave finished ───────────────────────────────────────
             (Phase::ExecutingTools, Event::ToolsCompleted { results }) => {
@@ -523,6 +624,42 @@ impl AgentMachine {
     }
 }
 
+/// Classification of an LLM streaming-call failure.
+///
+/// Each variant maps to a distinct recovery branch in the legacy
+/// `run_agent_loop` — preserved here so the sans-IO machine can express
+/// the full taxonomy without the runner having to replicate the branching
+/// logic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmFailureKind {
+    /// Provider rate limit (HTTP 429 or equivalent). Mirrors the legacy
+    /// `is_rate_limit_error` branch: when at least one tool call has
+    /// already been made this turn, stop retrying, disable tools, fold,
+    /// and inject a "summarize with what you have" nudge; when zero tool
+    /// calls have been made the machine falls back to the generic
+    /// retryable branch (legacy order: rate-limit check is gated on
+    /// `tool_calls_made > 0`, then `is_retryable_provider_error`).
+    RateLimited,
+    /// Generic retryable provider error (transient 5xx, connection reset,
+    /// parse timeouts, etc.). Disables tools and injects a
+    /// "reply without tools" nudge before retrying.
+    Retryable {
+        /// Underlying error message (surfaced to the recovery nudge).
+        message: String,
+    },
+    /// The stream completed without text, tool calls, or usage — the
+    /// provider silently dropped the request, usually because the context
+    /// window was exceeded on the free tier. Forces an auto-fold before
+    /// the retry so the follow-up request fits.
+    EmptyStream,
+    /// Non-retryable failure (authentication, model not found, …).
+    /// Terminates the turn immediately.
+    Permanent {
+        /// Underlying error message.
+        message: String,
+    },
+}
+
 /// Events fed to [`AgentMachine::step`] by the runner.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -537,12 +674,16 @@ pub enum Event {
         /// Whether the response indicates the LLM wants tools executed.
         has_tool_calls: bool,
     },
-    /// LLM streaming call errored.
+    /// LLM streaming call terminated without a usable response.
+    ///
+    /// The variants of [`LlmFailureKind`] encode the four distinct
+    /// recovery branches the legacy `run_agent_loop` distinguishes:
+    /// permanent error, retryable transport/server error, provider rate
+    /// limit, and silent empty stream (likely context-window overflow).
     LlmFailed {
-        /// True for transient/provider errors that warrant a retry.
-        retryable: bool,
-        /// Human-readable failure description.
-        message:   String,
+        /// Failure classification; drives which recovery effects the
+        /// machine emits (fold, message injection, retry limits).
+        kind: LlmFailureKind,
     },
     /// All tool calls in the current wave have results (success or error).
     ToolsCompleted {
@@ -680,13 +821,20 @@ mod tests {
         let _ = m.step(Event::TurnStarted);
 
         let effects = m.step(Event::LlmFailed {
-            retryable: true,
-            message:   "503".into(),
+            kind: LlmFailureKind::Retryable {
+                message: "503".into(),
+            },
         });
         // Recovery: machine stays in AwaitingLlm and re-issues CallLlm with tools off.
         assert_eq!(m.phase(), Phase::AwaitingLlm);
         match &effects[..] {
-            [Effect::CallLlm { tools_enabled, .. }] => assert!(!tools_enabled),
+            [
+                Effect::InjectUserMessage { text },
+                Effect::CallLlm { tools_enabled, .. },
+            ] => {
+                assert!(!tools_enabled);
+                assert!(text.contains("503"), "nudge should echo error: {text}");
+            }
             other => panic!("unexpected effects: {other:?}"),
         }
     }
@@ -697,8 +845,9 @@ mod tests {
         let _ = m.step(Event::TurnStarted);
 
         let effects = m.step(Event::LlmFailed {
-            retryable: false,
-            message:   "auth".into(),
+            kind: LlmFailureKind::Permanent {
+                message: "auth".into(),
+            },
         });
         assert_eq!(m.phase(), Phase::Failed);
         assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
@@ -710,14 +859,103 @@ mod tests {
         let _ = m.step(Event::TurnStarted);
         for _ in 0..MAX_LLM_RECOVERIES {
             let _ = m.step(Event::LlmFailed {
-                retryable: true,
-                message:   "x".into(),
+                kind: LlmFailureKind::Retryable {
+                    message: "x".into(),
+                },
             });
             assert_eq!(m.phase(), Phase::AwaitingLlm);
         }
         let effects = m.step(Event::LlmFailed {
-            retryable: true,
-            message:   "x".into(),
+            kind: LlmFailureKind::Retryable {
+                message: "x".into(),
+            },
+        });
+        assert_eq!(m.phase(), Phase::Failed);
+        assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
+    }
+
+    #[test]
+    fn rate_limit_with_tool_calls_folds_and_disables_tools() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        // Make one tool round-trip so `tool_calls_made > 0`.
+        let _ = m.step(Event::LlmCompleted {
+            text:           String::new(),
+            tool_calls:     vec![tool_call("c1", "search")],
+            has_tool_calls: true,
+        });
+        let _ = m.step(Event::ToolsCompleted {
+            results: vec![tool_result("c1", "search", "{}", true)],
+        });
+
+        // Now the follow-up LLM call hits a rate limit.
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::RateLimited,
+        });
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        match effects.as_slice() {
+            [
+                Effect::InjectUserMessage { text },
+                Effect::ForceFoldNextIteration,
+                Effect::CallLlm { tools_enabled, .. },
+            ] => {
+                assert!(!tools_enabled);
+                assert!(text.contains("rate limit"), "inject nudge: {text}");
+            }
+            other => panic!("unexpected effects: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rate_limit_before_any_tool_falls_through_to_retryable() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        // First call errors with a rate limit, no tools made yet.
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::RateLimited,
+        });
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        // Retryable branch: inject + CallLlm, no ForceFold.
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::InjectUserMessage { .. }, Effect::CallLlm { .. }]
+        ));
+    }
+
+    #[test]
+    fn empty_stream_folds_and_retries() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::EmptyStream,
+        });
+        assert_eq!(m.phase(), Phase::AwaitingLlm);
+        match effects.as_slice() {
+            [
+                Effect::InjectUserMessage { text },
+                Effect::ForceFoldNextIteration,
+                Effect::CallLlm { tools_enabled, .. },
+            ] => {
+                assert!(!tools_enabled);
+                assert!(text.contains("empty response"), "nudge: {text}");
+            }
+            other => panic!("unexpected effects: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_stream_exhausts_recoveries() {
+        let mut m = AgentMachine::new(8);
+        let _ = m.step(Event::TurnStarted);
+        for _ in 0..MAX_LLM_RECOVERIES {
+            let _ = m.step(Event::LlmFailed {
+                kind: LlmFailureKind::EmptyStream,
+            });
+            assert_eq!(m.phase(), Phase::AwaitingLlm);
+        }
+        let effects = m.step(Event::LlmFailed {
+            kind: LlmFailureKind::EmptyStream,
         });
         assert_eq!(m.phase(), Phase::Failed);
         assert!(matches!(effects.as_slice(), [Effect::Fail { .. }]));
