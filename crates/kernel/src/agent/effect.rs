@@ -119,6 +119,21 @@ pub enum Effect {
         /// Maximum continuations allowed.
         max:  usize,
     },
+    /// Inject a context-pressure warning as a user-visible message into the
+    /// conversation before the next LLM call. Emitted at most once per
+    /// threshold crossing (`Warning` at `>= 0.70`, `Critical` at `>= 0.85`)
+    /// so the LLM is nudged exactly when pressure rises, not on every
+    /// iteration thereafter. Preserves the semantics of the legacy
+    /// `classify_context_pressure` helper in `agent::mod`.
+    ContextPressureWarning {
+        /// Severity bucket the observed usage crossed.
+        level:                 PressureLevel,
+        /// Runner-estimated tokens currently in the tape context.
+        estimated_tokens:      usize,
+        /// Model context window in tokens (informational; typically from
+        /// the active `ModelCapabilities`).
+        context_window_tokens: usize,
+    },
     /// Signal that the loop breaker tripped and one or more tools were
     /// disabled for the remainder of the turn. Emitted immediately before
     /// the [`Effect::CallLlm`] of the next iteration so the runner can
@@ -166,6 +181,19 @@ pub enum TapeAppendKind {
     ToolCalls,
     /// One or more tool results returned to the LLM.
     ToolResults,
+}
+
+/// Severity bucket classifying observed context-window usage.
+///
+/// Mirrors the legacy `ContextPressure` enum in `agent::mod` but surfaces only
+/// the actionable (non-`Normal`) levels, because `Normal` never produces an
+/// effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressureLevel {
+    /// Usage ratio crossed `CONTEXT_WARN_THRESHOLD` (0.70) — a SHOULD hint.
+    Warning,
+    /// Usage ratio crossed `CONTEXT_CRITICAL_THRESHOLD` (0.85) — a MUST hint.
+    Critical,
 }
 
 /// User decision when the tool-call-limit circuit breaker pauses the turn.

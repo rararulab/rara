@@ -42,7 +42,9 @@
 //! - Loop breaker (`crate::agent::loop_breaker`) interventions — ✓ machine-side
 //!   implemented; legacy removal pending
 //! - Context pressure warnings + session-length reminders injected as user
-//!   messages
+//!   messages — ✓ machine-side implemented via
+//!   [`AgentMachine::observe_context_usage`] +
+//!   [`Effect::ContextPressureWarning`]; legacy removal pending
 //! - Tool-call-limit circuit breaker with oneshot resume — ✓ machine-side
 //!   implemented; legacy removal pending
 //! - Repetition guard truncation
@@ -58,7 +60,7 @@ use async_trait::async_trait;
 
 use crate::{
     agent::{
-        effect::{Effect, ToolCall, ToolResult},
+        effect::{Effect, PressureLevel, ToolCall, ToolResult},
         machine::{AgentMachine, Event, Phase},
     },
     tool::ToolName,
@@ -125,10 +127,33 @@ pub trait Subsystems: Send + Sync {
     /// Forward a stream event to the user-facing transport.
     async fn emit_stream(&mut self, kind: String);
 
-    /// Inject a system/user message into the conversation context so the
-    /// LLM sees it on the next `call_llm`.  Used by continuation wake.
-    /// Default: no-op (test stubs that don't model message history).
-    async fn inject_user_message(&mut self, _text: String) {}
+    /// Inject a user-role message into the conversation context so the LLM
+    /// sees it on the next `call_llm`.
+    ///
+    /// Used by the continuation-wake path and by context-pressure warnings.
+    /// Implementations append the message to the tape (persisted history),
+    /// not just to an in-memory buffer — otherwise the nudge disappears on
+    /// the next tape rebuild. Failures should be logged but must not abort
+    /// the turn.
+    ///
+    /// No default impl: silent inject would hide broken integrations
+    /// (anti-pattern: "Do NOT use noop trait implementations"). Test stubs
+    /// keep a plain `Vec<String>` log; production wires the kernel
+    /// `TapeService`.
+    async fn inject_user_message(&mut self, text: String);
+
+    /// Observe context-window usage for the current turn and return the
+    /// estimated-tokens / window pair (in tokens).
+    ///
+    /// The runner calls this once per LLM round before interpreting
+    /// `Effect::CallLlm` so the machine's
+    /// [`AgentMachine::observe_context_usage`] can emit pressure warnings.
+    ///
+    /// Return `(0, 0)` — or any usage below `CONTEXT_WARN_THRESHOLD` —
+    /// when sampling is unavailable or disabled; the machine treats a zero
+    /// window as "unknown" and emits nothing. No default impl so test stubs
+    /// have to opt in explicitly.
+    async fn sample_context_usage(&mut self) -> (usize, usize);
 
     /// Pause the turn and await the user's continue/stop decision.
     ///
@@ -169,6 +194,26 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     tools_enabled,
                     disabled_tools,
                 } => {
+                    // Sample context usage and let the machine emit any
+                    // pressure warnings before the LLM is invoked. The
+                    // generated `InjectUserMessage` is written straight to
+                    // the tape so it becomes part of the next rebuild.
+                    let (estimated_tokens, context_window_tokens) =
+                        subsys.sample_context_usage().await;
+                    for eff in
+                        machine.observe_context_usage(estimated_tokens, context_window_tokens)
+                    {
+                        if let Effect::ContextPressureWarning {
+                            level,
+                            estimated_tokens: used,
+                            context_window_tokens: window,
+                        } = eff
+                        {
+                            let text = render_pressure_message(level, used, window);
+                            subsys.inject_user_message(text.clone()).await;
+                            subsys.emit_stream(text).await;
+                        }
+                    }
                     follow_up = Some(
                         subsys
                             .call_llm(iteration, tools_enabled, disabled_tools)
@@ -205,6 +250,19 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
                     subsys.emit_stream(wake_msg).await;
                 }
                 Effect::EmitStream { kind } => subsys.emit_stream(kind).await,
+                Effect::ContextPressureWarning {
+                    level,
+                    estimated_tokens,
+                    context_window_tokens,
+                } => {
+                    // Handled inline during the CallLlm branch today; this
+                    // arm keeps the match exhaustive in case `step` ever
+                    // surfaces the effect directly.
+                    let text =
+                        render_pressure_message(level, estimated_tokens, context_window_tokens);
+                    subsys.inject_user_message(text.clone()).await;
+                    subsys.emit_stream(text).await;
+                }
                 Effect::Finish {
                     text,
                     iterations,
@@ -239,6 +297,34 @@ pub async fn drive<S: Subsystems>(machine: &mut AgentMachine, subsys: &mut S) ->
     }
 }
 
+/// Render the user-facing pressure-warning text the runner injects into the
+/// tape. Kept in the runner (not the pure machine) so the wording stays an
+/// I/O concern and the machine only tracks threshold crossings.
+fn render_pressure_message(
+    level: PressureLevel,
+    estimated_tokens: usize,
+    context_window_tokens: usize,
+) -> String {
+    let ratio = if context_window_tokens == 0 {
+        0.0
+    } else {
+        estimated_tokens as f64 / context_window_tokens as f64
+    };
+    let pct = (ratio * 100.0).round() as u32;
+    match level {
+        PressureLevel::Warning => format!(
+            "[context-pressure:warning] Context usage is at ~{pct}% \
+             ({estimated_tokens}/{context_window_tokens} tokens). SHOULD begin summarising \
+             long-tail details and prepare to hand off."
+        ),
+        PressureLevel::Critical => format!(
+            "[context-pressure:critical] Context usage is at ~{pct}% \
+             ({estimated_tokens}/{context_window_tokens} tokens). MUST hand off or summarise \
+             before further tool calls."
+        ),
+    }
+}
+
 // Silence dead-code warnings until production wiring lands.
 const _: fn() = || {
     let _ = Phase::Idle;
@@ -262,10 +348,15 @@ mod tests {
         next_tool:       usize,
         tape_log:        Vec<TapeAppendKind>,
         stream_log:      Vec<String>,
+        injected:        Vec<String>,
         /// Scripted user decisions for each `pause_for_limit` invocation,
         /// consumed in order. Leave empty for tests that never pause.
         limit_decisions: Vec<crate::agent::effect::LimitDecision>,
         next_limit:      usize,
+        /// Scripted context-usage samples, consumed in order per CallLlm.
+        /// A test can leave this empty to keep sampling off (zero window).
+        context_samples: Vec<(usize, usize)>,
+        next_sample:     usize,
     }
 
     #[async_trait]
@@ -296,6 +387,35 @@ mod tests {
             self.next_limit += 1;
             Event::LimitResolved { limit_id, decision }
         }
+
+        async fn inject_user_message(&mut self, text: String) { self.injected.push(text); }
+
+        async fn sample_context_usage(&mut self) -> (usize, usize) {
+            if self.next_sample < self.context_samples.len() {
+                let s = self.context_samples[self.next_sample];
+                self.next_sample += 1;
+                s
+            } else {
+                (0, 0)
+            }
+        }
+    }
+
+    /// Factory producing a fresh stub with empty scripts for every field.
+    fn subsys() -> ScriptedSubsys {
+        ScriptedSubsys {
+            llm_script:      vec![],
+            next_llm:        0,
+            tool_responses:  vec![],
+            next_tool:       0,
+            tape_log:        vec![],
+            stream_log:      vec![],
+            injected:        vec![],
+            limit_decisions: vec![],
+            next_limit:      0,
+            context_samples: vec![],
+            next_sample:     0,
+        }
     }
 
     #[tokio::test]
@@ -313,6 +433,9 @@ mod tests {
             stream_log:      vec![],
             limit_decisions: vec![],
             next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -356,6 +479,9 @@ mod tests {
             stream_log:      vec![],
             limit_decisions: vec![],
             next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -415,6 +541,9 @@ mod tests {
             stream_log:      vec![],
             limit_decisions: vec![],
             next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
         };
         let mut machine = AgentMachine::with_max_continuations(8, 3);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -491,6 +620,9 @@ mod tests {
             stream_log:      vec![],
             limit_decisions: vec![LimitDecision::Continue, LimitDecision::Continue],
             next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -529,6 +661,9 @@ mod tests {
             stream_log:      vec![],
             limit_decisions: vec![LimitDecision::Stop],
             next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
         };
         let mut machine = AgentMachine::with_tool_call_limit(8, 1);
         let outcome = drive(&mut machine, &mut subsys).await;
@@ -551,10 +686,154 @@ mod tests {
             stream_log:      vec![],
             limit_decisions: vec![],
             next_limit:      0,
+            injected:        vec![],
+            context_samples: vec![],
+            next_sample:     0,
         };
         let mut machine = AgentMachine::new(8);
         let outcome = drive(&mut machine, &mut subsys).await;
         assert!(!outcome.success);
         assert!(outcome.failure_message.unwrap().contains("auth"));
+    }
+
+    // ─── Context pressure warnings (runner integration) ─────────────────
+
+    /// When the sampled context usage crosses the Warning threshold on the
+    /// first iteration, the runner must inject a pressure warning into the
+    /// tape AND emit it on the stream before the LLM call returns.
+    #[tokio::test]
+    async fn drive_emits_pressure_warning_on_first_iteration() {
+        let mut s = subsys();
+        s.llm_script = vec![Event::LlmCompleted {
+            text:           "ok".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        }];
+        // 750 / 1000 = 0.75 → Warning.
+        s.context_samples = vec![(750, 1_000)];
+
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(s.injected.len(), 1, "exactly one injection");
+        assert!(
+            s.injected[0].contains("[context-pressure:warning]"),
+            "injection text missing marker: {:?}",
+            s.injected[0]
+        );
+        assert!(
+            s.stream_log
+                .iter()
+                .any(|line| line.contains("[context-pressure:warning]")),
+            "stream log missing pressure warning: {:?}",
+            s.stream_log
+        );
+    }
+
+    /// Warning fires exactly once even when multiple iterations each sample
+    /// pressure above the threshold — the one-shot latch lives in the
+    /// machine.
+    #[tokio::test]
+    async fn drive_warning_is_one_shot_across_iterations() {
+        let tc = Tc {
+            id:        ToolCallId::new("c1"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmCompleted {
+                text:           "tool".into(),
+                tool_calls:     vec![tc.clone()],
+                has_tool_calls: true,
+            },
+            Event::LlmCompleted {
+                text:           "final".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        s.tool_responses = vec![vec![Tr {
+            id:          ToolCallId::new("c1"),
+            name:        ToolName::new("search"),
+            arguments:   "{}".into(),
+            success:     true,
+            duration_ms: 1,
+            error:       None,
+        }]];
+        // Both samples above 0.70 — should still only inject once.
+        s.context_samples = vec![(750, 1_000), (800, 1_000)];
+
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(
+            s.injected.len(),
+            1,
+            "Warning should fire exactly once across iterations, got: {:?}",
+            s.injected
+        );
+    }
+
+    /// Crossing from Warning into Critical across iterations produces two
+    /// distinct injections — one per bucket.
+    #[tokio::test]
+    async fn drive_warning_then_critical_emits_two_injections() {
+        let tc = Tc {
+            id:        ToolCallId::new("c1"),
+            name:      ToolName::new("search"),
+            arguments: "{}".into(),
+        };
+        let mut s = subsys();
+        s.llm_script = vec![
+            Event::LlmCompleted {
+                text:           "tool".into(),
+                tool_calls:     vec![tc.clone()],
+                has_tool_calls: true,
+            },
+            Event::LlmCompleted {
+                text:           "final".into(),
+                tool_calls:     vec![],
+                has_tool_calls: false,
+            },
+        ];
+        s.tool_responses = vec![vec![Tr {
+            id:          ToolCallId::new("c1"),
+            name:        ToolName::new("search"),
+            arguments:   "{}".into(),
+            success:     true,
+            duration_ms: 1,
+            error:       None,
+        }]];
+        // Iter 0: 0.75 → Warning. Iter 1: 0.90 → Critical.
+        s.context_samples = vec![(750, 1_000), (900, 1_000)];
+
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert_eq!(s.injected.len(), 2);
+        assert!(s.injected[0].contains("[context-pressure:warning]"));
+        assert!(s.injected[1].contains("[context-pressure:critical]"));
+    }
+
+    /// Sampling `(0, 0)` (unavailable / disabled) never produces a
+    /// pressure injection.
+    #[tokio::test]
+    async fn drive_no_injection_when_sampling_disabled() {
+        let mut s = subsys();
+        s.llm_script = vec![Event::LlmCompleted {
+            text:           "ok".into(),
+            tool_calls:     vec![],
+            has_tool_calls: false,
+        }];
+        // Default: context_samples is empty → returns (0, 0) each call.
+        let mut machine = AgentMachine::new(8);
+        let outcome = drive(&mut machine, &mut s).await;
+        assert!(outcome.success);
+        assert!(
+            s.injected.is_empty(),
+            "expected no injections, got: {:?}",
+            s.injected
+        );
     }
 }

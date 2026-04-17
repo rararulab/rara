@@ -41,11 +41,24 @@
 
 use crate::{
     agent::{
-        effect::{Effect, FinishReason, LimitDecision, TapeAppendKind, ToolCall, ToolResult},
+        effect::{
+            Effect, FinishReason, LimitDecision, PressureLevel, TapeAppendKind, ToolCall,
+            ToolResult,
+        },
         loop_breaker::{LoopBreakerConfig, LoopIntervention, ToolCallLoopBreaker},
     },
     tool::ToolName,
 };
+
+/// Usage fraction at which the machine emits a `Warning`-level
+/// `ContextPressureWarning` effect. Mirrors the legacy
+/// `CONTEXT_WARN_THRESHOLD` constant in `agent::mod`.
+pub const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
+
+/// Usage fraction at which the machine emits a `Critical`-level
+/// `ContextPressureWarning` effect. Mirrors the legacy
+/// `CONTEXT_CRITICAL_THRESHOLD` constant in `agent::mod`.
+pub const CONTEXT_CRITICAL_THRESHOLD: f64 = 0.85;
 
 /// High-level phases of one agent turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +117,14 @@ pub struct AgentMachine {
     /// Monotonic counter for limit-pause ids, handed to the runner so it
     /// can key its oneshot channel and reject stale decisions.
     limit_id_counter:     u64,
+    /// Whether a `PressureLevel::Warning` has already been emitted this
+    /// turn.  The legacy loop nudged the LLM once at each threshold
+    /// crossing to avoid spamming a repeating reminder every iteration.
+    warned_at_warning:    bool,
+    /// Whether a `PressureLevel::Critical` has already been emitted this
+    /// turn.  Critical can fire even after Warning has fired (they are
+    /// distinct thresholds), but each is still one-shot.
+    warned_at_critical:   bool,
 }
 
 impl AgentMachine {
@@ -125,6 +146,8 @@ impl AgentMachine {
             limit_interval: 0,
             next_limit_at: usize::MAX,
             limit_id_counter: 0,
+            warned_at_warning: false,
+            warned_at_critical: false,
         }
     }
 
@@ -184,6 +207,63 @@ impl AgentMachine {
 
     /// Whether the machine has reached a terminal state.
     pub fn is_terminal(&self) -> bool { matches!(self.phase, Phase::Done | Phase::Failed) }
+
+    /// Synchronous observation: report the current context-window usage and
+    /// return any resulting `ContextPressureWarning` effects.
+    ///
+    /// The runner is expected to call this once per LLM round — after
+    /// rebuilding the tape context for the next iteration but before
+    /// interpreting `Effect::CallLlm` — so the injected warning message lands
+    /// in the conversation immediately ahead of the model's next turn.
+    ///
+    /// Unlike `step`, this method does **not** consume an [`Event`] and does
+    /// **not** change [`Phase`]. It is a pure observation:
+    ///
+    /// - Returns `[Effect::ContextPressureWarning { level: Critical, .. }]` the
+    ///   first time usage crosses `CONTEXT_CRITICAL_THRESHOLD`.
+    /// - Returns `[Effect::ContextPressureWarning { level: Warning, .. }]` the
+    ///   first time usage crosses `CONTEXT_WARN_THRESHOLD` (and Critical has
+    ///   not yet fired).
+    /// - Returns `[]` otherwise (already warned at the bucket, or below
+    ///   threshold, or window is zero).
+    ///
+    /// Warning and Critical each fire at most once per turn — the legacy
+    /// loop nudged the LLM once per crossing to avoid spam that would anchor
+    /// the conversation on the reminder itself.
+    pub fn observe_context_usage(
+        &mut self,
+        estimated_tokens: usize,
+        context_window_tokens: usize,
+    ) -> Vec<Effect> {
+        if context_window_tokens == 0 {
+            return Vec::new();
+        }
+        let usage_ratio = estimated_tokens as f64 / context_window_tokens as f64;
+
+        if usage_ratio >= CONTEXT_CRITICAL_THRESHOLD && !self.warned_at_critical {
+            self.warned_at_critical = true;
+            // Ensure Warning is also marked as delivered once we jumped
+            // straight past it — avoids emitting a stale Warning after a
+            // Critical has already been surfaced.
+            self.warned_at_warning = true;
+            return vec![Effect::ContextPressureWarning {
+                level: PressureLevel::Critical,
+                estimated_tokens,
+                context_window_tokens,
+            }];
+        }
+
+        if usage_ratio >= CONTEXT_WARN_THRESHOLD && !self.warned_at_warning {
+            self.warned_at_warning = true;
+            return vec![Effect::ContextPressureWarning {
+                level: PressureLevel::Warning,
+                estimated_tokens,
+                context_window_tokens,
+            }];
+        }
+
+        Vec::new()
+    }
 
     /// Drive the machine with one event.  Returns the side effects the runner
     /// must perform before feeding the next event back in.
@@ -1151,6 +1231,92 @@ mod tests {
             })
             .expect("expected second PauseForLimit");
         assert_eq!(id, 2, "limit id monotonically increases");
+    }
+
+    // ─── Context-pressure observation ───────────────────────────────────
+
+    /// Below the warning threshold the observer stays silent.
+    #[test]
+    fn context_pressure_silent_below_warning() {
+        let mut m = AgentMachine::new(8);
+        assert!(m.observe_context_usage(500, 1_000).is_empty());
+        assert!(m.observe_context_usage(699, 1_000).is_empty());
+    }
+
+    /// Crossing 0.70 (but not 0.85) emits a single Warning effect.
+    #[test]
+    fn context_pressure_fires_warning_at_threshold() {
+        let mut m = AgentMachine::new(8);
+        let effects = m.observe_context_usage(750, 1_000);
+        match effects.as_slice() {
+            [
+                Effect::ContextPressureWarning {
+                    level: PressureLevel::Warning,
+                    estimated_tokens,
+                    context_window_tokens,
+                },
+            ] => {
+                assert_eq!(*estimated_tokens, 750);
+                assert_eq!(*context_window_tokens, 1_000);
+            }
+            other => panic!("expected single Warning, got {other:?}"),
+        }
+    }
+
+    /// Warning is one-shot: repeated observations in the same bucket are
+    /// silent even when usage rises further within the Warning band.
+    #[test]
+    fn context_pressure_warning_is_one_shot() {
+        let mut m = AgentMachine::new(8);
+        assert_eq!(m.observe_context_usage(750, 1_000).len(), 1);
+        assert!(m.observe_context_usage(800, 1_000).is_empty());
+        assert!(m.observe_context_usage(849, 1_000).is_empty());
+    }
+
+    /// Crossing 0.85 emits Critical even if Warning has already fired; and
+    /// the subsequent Warning-band observation is swallowed.
+    #[test]
+    fn context_pressure_upgrades_to_critical() {
+        let mut m = AgentMachine::new(8);
+        assert_eq!(m.observe_context_usage(750, 1_000).len(), 1); // Warning
+        let effects = m.observe_context_usage(900, 1_000);
+        match effects.as_slice() {
+            [
+                Effect::ContextPressureWarning {
+                    level: PressureLevel::Critical,
+                    ..
+                },
+            ] => {}
+            other => panic!("expected Critical, got {other:?}"),
+        }
+        // No more warnings — critical is one-shot too.
+        assert!(m.observe_context_usage(950, 1_000).is_empty());
+    }
+
+    /// Jumping straight past Warning into Critical emits Critical only and
+    /// does not double up with a Warning.
+    #[test]
+    fn context_pressure_skips_warning_when_jumping_to_critical() {
+        let mut m = AgentMachine::new(8);
+        let effects = m.observe_context_usage(900, 1_000);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::ContextPressureWarning {
+                level: PressureLevel::Critical,
+                ..
+            }
+        ));
+        // A subsequent Warning-band observation must NOT produce a stale
+        // Warning effect.
+        assert!(m.observe_context_usage(750, 1_000).is_empty());
+    }
+
+    /// Zero context window is treated as "unknown" and never emits.
+    #[test]
+    fn context_pressure_zero_window_is_noop() {
+        let mut m = AgentMachine::new(8);
+        assert!(m.observe_context_usage(10_000, 0).is_empty());
     }
 
     /// Mirrors the legacy `run_agent_loop` exemption for read-only tools:
