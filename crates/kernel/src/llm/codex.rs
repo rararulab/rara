@@ -206,6 +206,7 @@ mod tests {
             thinking:            Some(ThinkingConfig {
                 enabled:       true,
                 budget_tokens: Some(20_000),
+                effort:        None,
             }),
             tool_choice:         Default::default(),
             parallel_tool_calls: false,

@@ -830,8 +830,15 @@ call `discover-tools` to load it first.{tool_list}
 /// Map a [`crate::session::ThinkingLevel`] to a provider
 /// [`llm::ThinkingConfig`].
 ///
-/// Budgets mirror Anthropic's extended-thinking guidance: larger levels give
-/// the model more scratch tokens for silent reasoning before answering.
+/// Two hints are stamped on the output so each driver family can pick what
+/// it understands:
+///
+/// * `budget_tokens` mirrors Anthropic's extended-thinking guidance — larger
+///   levels give the model more scratch tokens for silent reasoning.
+/// * `effort` carries the explicit level name (`"off" | "minimal" | "low" |
+///   "medium" | "high" | "xhigh"`) for the OpenAI Responses API, which rejects
+///   the intermediate budget→bucket lossy mapping (notably gpt-5.4, which needs
+///   `"none"`/`"xhigh"`).
 ///
 /// The output distinguishes three states:
 ///
@@ -840,28 +847,35 @@ call `discover-tools` to load it first.{tool_list}
 /// * `Some(ThinkingConfig { enabled: false, .. })` — the user explicitly
 ///   selected `Off`. Drivers must disable extended thinking even when the model
 ///   family defaults to reasoning.
-/// * `Some(ThinkingConfig { enabled: true, budget_tokens: Some(_) })` — an
-///   explicit non-zero budget.
+/// * `Some(ThinkingConfig { enabled: true, budget_tokens: Some(_), effort:
+///   Some(_) })` — an explicit level.
 fn thinking_level_to_config(
     level: Option<crate::session::ThinkingLevel>,
 ) -> Option<llm::ThinkingConfig> {
+    use llm::ReasoningEffort;
+
     use crate::session::ThinkingLevel;
-    let budget = match level? {
+    let (budget, effort) = match level? {
         ThinkingLevel::Off => {
             return Some(llm::ThinkingConfig {
                 enabled:       false,
                 budget_tokens: None,
+                // Preserve the explicit "off" intent for reasoning-family
+                // drivers; the OpenAI driver clamps it to the lowest bucket
+                // the concrete model accepts (`none` or `minimal`).
+                effort:        Some(ReasoningEffort::Off),
             });
         }
-        ThinkingLevel::Minimal => 512,
-        ThinkingLevel::Low => 1024,
-        ThinkingLevel::Medium => 4096,
-        ThinkingLevel::High => 16384,
-        ThinkingLevel::Xhigh => 32768,
+        ThinkingLevel::Minimal => (512, ReasoningEffort::Minimal),
+        ThinkingLevel::Low => (1024, ReasoningEffort::Low),
+        ThinkingLevel::Medium => (4096, ReasoningEffort::Medium),
+        ThinkingLevel::High => (16384, ReasoningEffort::High),
+        ThinkingLevel::Xhigh => (32768, ReasoningEffort::Xhigh),
     };
     Some(llm::ThinkingConfig {
         enabled:       true,
         budget_tokens: Some(budget),
+        effort:        Some(effort),
     })
 }
 
