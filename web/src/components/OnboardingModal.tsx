@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useNavigate } from "react-router";
+import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -44,7 +44,7 @@ interface OnboardingModalProps {
 }
 
 export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt = false }: OnboardingModalProps) {
-  const navigate = useNavigate();
+  const { openSettings } = useSettingsModal();
 
   const handleSkip = () => {
     dismissOnboarding();
@@ -54,7 +54,7 @@ export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt
   const handleOpenProviderSettings = () => {
     dismissOnboarding();
     onDismiss();
-    navigate("/settings?section=providers");
+    openSettings("providers");
   };
 
   return (

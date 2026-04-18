@@ -21,6 +21,8 @@ import type {
 } from "@mariozechner/pi-web-ui";
 
 import { api, settingsApi } from "@/api/client";
+// `settingsApi` remains imported for init()'s read-through pre-seed; write
+// persistence moved to the admin modal (#1581).
 import type { ChatSession } from "@/api/types";
 
 /**
@@ -64,15 +66,13 @@ export class RaraStorageBackend implements StorageBackend {
       metaStore.set(s.key, meta);
     }
 
-    // Populate settings store
+    // Populate settings store — pi-mono's SettingsStore still reads this
+    // cache for its own internal state. Writes no longer round-trip to the
+    // rara backend (see #1581) — the settings modal owns persistence.
     const settingsStore = this.store("settings");
     for (const [k, v] of Object.entries(settings)) {
       settingsStore.set(k, v);
     }
-
-    // Ensure provider-related stores exist (rara manages providers server-side)
-    this.store("providerKeys");
-    this.store("customProviders");
   }
 
   /** Get a value by key from a specific store. Returns null if missing. */
@@ -98,13 +98,6 @@ export class RaraStorageBackend implements StorageBackend {
       this.store("sessions-metadata").set(key, value);
     } else if (storeName === "sessions-metadata") {
       this.store("sessions").set(key, value);
-    }
-
-    // Fire-and-forget sync for settings — coerce to string for the REST API
-    if (storeName === "settings") {
-      settingsApi.set(key, String(value)).catch((e) => {
-        console.warn("Background settings sync failed:", e);
-      });
     }
   }
 

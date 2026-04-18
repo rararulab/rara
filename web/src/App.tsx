@@ -14,20 +14,58 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, useNavigate } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import PiChat from '@/pages/PiChat';
 import Docs from '@/pages/Docs';
-import Settings from '@/pages/Settings';
 import KernelTop from '@/pages/KernelTop';
 import Dock from '@/pages/Dock';
+import {
+  SettingsModalProvider,
+  useSettingsModal,
+} from '@/components/settings/SettingsModalProvider';
+import type { SettingsPage } from '@/components/settings/SettingsPanel';
 
 const STORAGE_KEY = "rara_backend_url";
 const queryClient = new QueryClient();
+
+const SETTINGS_PAGES: readonly SettingsPage[] = [
+  "general",
+  "providers",
+  "agents",
+  "skills",
+  "mcp",
+  "channels",
+  "tools",
+  "security",
+  "data-feeds",
+];
+
+function isSettingsPage(value: string | null): value is SettingsPage {
+  return !!value && (SETTINGS_PAGES as readonly string[]).includes(value);
+}
+
+/**
+ * Backwards-compat redirect for deep-links like `/settings?section=providers`.
+ * Settings now lives in a floating modal; the old route opens the modal and
+ * hops back to the root so bookmarks and external links keep working.
+ */
+function SettingsRoute() {
+  const { openSettings } = useSettingsModal();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get("section");
+    openSettings(isSettingsPage(raw) ? raw : undefined);
+    navigate("/", { replace: true });
+  }, [openSettings, navigate]);
+
+  return null;
+}
 
 export default function App() {
   const [needsSetup, setNeedsSetup] = useState(
@@ -44,18 +82,22 @@ export default function App() {
           />
         )}
         <BrowserRouter>
-          <Routes>
-            {/* Fullscreen pi-web-ui chat */}
-            <Route index element={<PiChat />} />
+          <SettingsModalProvider>
+            <Routes>
+              {/* Fullscreen pi-web-ui chat */}
+              <Route index element={<PiChat />} />
 
-            {/* Admin pages with dashboard layout */}
-            <Route element={<DashboardLayout />}>
-              <Route path="docs" element={<Docs />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="kernel-top" element={<KernelTop />} />
-              <Route path="dock" element={<Dock />} />
-            </Route>
-          </Routes>
+              {/* Deep-link redirect — see SettingsRoute */}
+              <Route path="settings" element={<SettingsRoute />} />
+
+              {/* Admin pages with dashboard layout */}
+              <Route element={<DashboardLayout />}>
+                <Route path="docs" element={<Docs />} />
+                <Route path="kernel-top" element={<KernelTop />} />
+                <Route path="dock" element={<Dock />} />
+              </Route>
+            </Routes>
+          </SettingsModalProvider>
         </BrowserRouter>
       </ServerStatusProvider>
     </QueryClientProvider>

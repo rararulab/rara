@@ -16,7 +16,6 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { settingsApi } from "@/api/client";
 import type {
@@ -80,7 +79,18 @@ import Agents from "@/pages/Agents";
 import McpServers from "@/pages/McpServers";
 import DataFeedsPanel from "@/components/DataFeedsPanel";
 
-type SettingsPage = "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools" | "security" | "data-feeds";
+/** Admin settings section identifiers. Exported so the floating modal can deep-link into a specific tab. */
+export type SettingsPage =
+  | "general"
+  | "providers"
+  | "agents"
+  | "skills"
+  | "mcp"
+  | "channels"
+  | "tools"
+  | "security"
+  | "data-feeds";
+
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
@@ -519,15 +529,29 @@ function AddProviderButton({ onAdd }: { onAdd: (name: string, baseUrl: string, a
   );
 }
 
-export default function Settings() {
-  const [searchParams, setSearchParams] = useSearchParams();
+const SETTINGS_PAGES: readonly SettingsPage[] = [
+  "general",
+  "providers",
+  "agents",
+  "skills",
+  "mcp",
+  "channels",
+  "tools",
+  "security",
+  "data-feeds",
+];
+
+/**
+ * Renders the rara admin settings UI (sidebar + content). Section state is
+ * owned locally so the panel can be embedded either in a floating modal or
+ * in a fullscreen route without coupling to the router.
+ */
+export default function SettingsPanel({ initialSection }: { initialSection?: SettingsPage }) {
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
-  const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
-    const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["general", "providers", "agents", "skills", "mcp", "channels", "tools", "security", "data-feeds"];
-    return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
-  });
+  const [activeCategory, setActiveCategory] = useState<SettingsPage>(() =>
+    initialSection && SETTINGS_PAGES.includes(initialSection) ? initialSection : "general",
+  );
   const [toast, setToast] = useState<ToastState>(null);
 
   // Track which provider cards are expanded (collapsed by default)
@@ -613,7 +637,7 @@ export default function Settings() {
 
   if (settingsQuery.isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 p-6">
         <Skeleton className="h-10 w-56" />
         <Skeleton className="h-72 w-full" />
       </div>
@@ -622,7 +646,7 @@ export default function Settings() {
 
   if (settingsQuery.isError) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 p-6">
         <h1 className="text-2xl font-bold">Settings</h1>
         <p className="text-sm text-destructive">
           Failed to load settings. Please refresh and try again.
@@ -651,7 +675,7 @@ export default function Settings() {
   ];
 
   return (
-    <div className="flex h-full gap-4 overflow-hidden">
+    <div className="flex h-full gap-4 overflow-hidden p-4">
       {/* Sidebar */}
       <aside className="data-panel w-64 shrink-0 overflow-y-auto">
         <div className="border-b border-border/70 px-4 py-4">
@@ -666,10 +690,7 @@ export default function Settings() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => {
-                  setActiveCategory(item.id);
-                  setSearchParams({ section: item.id });
-                }}
+                onClick={() => setActiveCategory(item.id)}
                 className={cn(
                   "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all",
                   activeCategory === item.id

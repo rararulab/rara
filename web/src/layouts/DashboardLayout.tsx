@@ -24,9 +24,10 @@ import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
 import ThemeToggle from '@/components/ThemeToggle';
 import { useServerStatus } from '@/hooks/use-server-status';
+import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 
 /** Routes that need zero padding in the main content area. */
-const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock', '/settings']);
+const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);
 
 /** Routes that need full bleed when they match as a prefix. */
 const FULL_BLEED_PREFIXES: string[] = [];
@@ -90,6 +91,7 @@ function ConnectionStatus() {
 export default function DashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { openSettings } = useSettingsModal();
   const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
 
   const settingsQuery = useQuery({
@@ -143,7 +145,7 @@ export default function DashboardLayout() {
             variant="ghost"
             size="sm"
             className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => navigate('/settings')}
+            onClick={() => openSettings()}
           >
             <Settings className="h-3.5 w-3.5" />
             Settings
