@@ -21,9 +21,33 @@ import type {
 } from "@mariozechner/pi-web-ui";
 
 import { api, settingsApi } from "@/api/client";
-// `settingsApi` remains imported for init()'s read-through pre-seed; write
-// persistence moved to the admin modal (#1581).
+// `settingsApi` is used for init()'s read-through pre-seed and for
+// write-back of pi-mono UI state under the `ui.pi.` prefix. Rara's own
+// admin settings (llm.*, telegram.*, etc.) are owned by the admin modal
+// (#1581) and are never round-tripped through this adapter.
 import type { ChatSession } from "@/api/types";
+
+/**
+ * Rara-owned setting key prefixes. Values under these prefixes are
+ * persisted exclusively by the admin settings modal — pi-mono must
+ * never write to them, even if a future release adds UI that touches
+ * keys in this namespace.
+ */
+const RARA_KEY_PREFIXES = [
+  "llm.",
+  "telegram.",
+  "gmail.",
+  "composio.",
+  "memory.",
+  "fs.",
+] as const;
+
+/** Prefix applied to pi-mono UI state before round-tripping to the backend. */
+const PI_UI_PREFIX = "ui.pi.";
+
+function isRaraOwnedKey(key: string): boolean {
+  return RARA_KEY_PREFIXES.some((p) => key.startsWith(p));
+}
 
 /**
  * Bridges pi-web-ui's StorageBackend interface to rara's REST API.
@@ -66,12 +90,18 @@ export class RaraStorageBackend implements StorageBackend {
       metaStore.set(s.key, meta);
     }
 
-    // Populate settings store — pi-mono's SettingsStore still reads this
-    // cache for its own internal state. Writes no longer round-trip to the
-    // rara backend (see #1581) — the settings modal owns persistence.
+    // Populate settings store. The backend holds two disjoint namespaces:
+    //   - rara-owned keys (llm.*, telegram.*, ...) — consumed by the admin
+    //     modal only; seed them verbatim so admin reads see them.
+    //   - `ui.pi.<k>` keys — pi-mono UI state; pi-mono reads the bare
+    //     `<k>`, so strip the prefix on seed.
     const settingsStore = this.store("settings");
     for (const [k, v] of Object.entries(settings)) {
-      settingsStore.set(k, v);
+      if (k.startsWith(PI_UI_PREFIX)) {
+        settingsStore.set(k.substring(PI_UI_PREFIX.length), v);
+      } else {
+        settingsStore.set(k, v);
+      }
     }
   }
 
@@ -83,8 +113,10 @@ export class RaraStorageBackend implements StorageBackend {
 
   /**
    * Set a value for a key in a specific store.
-   * Writes to the local cache immediately and syncs to the rara API
-   * in the background for the "settings" store.
+   * Writes to the local cache immediately and fires a background sync to
+   * the rara API for pi-mono UI state in the "settings" store. Rara-owned
+   * admin keys are ignored here — they are persisted exclusively by the
+   * admin settings modal.
    */
   async set<T = unknown>(
     storeName: string,
@@ -98,12 +130,24 @@ export class RaraStorageBackend implements StorageBackend {
       this.store("sessions-metadata").set(key, value);
     } else if (storeName === "sessions-metadata") {
       this.store("sessions").set(key, value);
+    } else if (storeName === "settings") {
+      // Guard: rara-owned keys (llm.*, telegram.*, ...) must never be
+      // round-tripped through the pi-mono adapter. The admin modal owns
+      // persistence for those keys; any stray write here would corrupt
+      // admin state without going through the admin UI's validation.
+      if (isRaraOwnedKey(key)) return;
+      const namespaced = `${PI_UI_PREFIX}${key}`;
+      settingsApi.set(namespaced, String(value)).catch((e) => {
+        console.warn("Background pi-mono settings sync failed:", e);
+      });
     }
   }
 
   /**
    * Delete a key from a specific store.
    * For the "sessions" store, also fires a background DELETE to the API.
+   * For the "settings" store, mirrors the namespacing rule in set() so
+   * pi-mono UI deletes remove the correct `ui.pi.<k>` backend key.
    */
   async delete(storeName: string, key: string): Promise<void> {
     this.store(storeName).delete(key);
@@ -117,6 +161,12 @@ export class RaraStorageBackend implements StorageBackend {
         .catch((e) => {
           console.warn("Background session delete failed:", e);
         });
+    } else if (storeName === "settings") {
+      if (isRaraOwnedKey(key)) return;
+      const namespaced = `${PI_UI_PREFIX}${key}`;
+      settingsApi.delete(namespaced).catch((e) => {
+        console.warn("Background pi-mono settings delete failed:", e);
+      });
     }
   }
 

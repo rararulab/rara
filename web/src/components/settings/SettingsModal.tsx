@@ -33,6 +33,10 @@ interface SettingsModalProps {
  */
 export default function SettingsModal({ open, onClose, section }: SettingsModalProps) {
   const backdropRef = useRef<HTMLDivElement>(null);
+  // Tracks whether the current click began on the backdrop itself, so a drag
+  // that started inside an input (text selection) and released on the backdrop
+  // does not dismiss the modal mid-edit.
+  const mousedownOnBackdrop = useRef(false);
 
   // Escape-to-close + body scroll lock. Scoped to `open` so the listeners
   // and lock are installed exactly while the modal is visible.
@@ -59,10 +63,17 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
     <div
       ref={backdropRef}
       className="rara-admin fixed inset-0 z-50 bg-black/40 backdrop-blur-sm"
+      onMouseDown={(e) => {
+        mousedownOnBackdrop.current = e.target === backdropRef.current;
+      }}
       onClick={(e) => {
-        // Close only when the mousedown originates on the backdrop itself,
-        // so drags ending inside an input (value selection) don't dismiss.
-        if (e.target === backdropRef.current) onClose();
+        // Only dismiss when both mousedown and click landed on the backdrop
+        // itself — protects drag-to-select gestures that originate in an
+        // input and release on the backdrop.
+        if (e.target === backdropRef.current && mousedownOnBackdrop.current) {
+          onClose();
+        }
+        mousedownOnBackdrop.current = false;
       }}
     >
       <div
@@ -77,7 +88,7 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
           <X className="h-4 w-4" />
         </button>
         <div className="min-h-0 flex-1 overflow-hidden">
-          <SettingsPanel initialSection={section} />
+          <SettingsPanel key={section ?? "general"} initialSection={section} />
         </div>
       </div>
     </div>
