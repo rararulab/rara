@@ -456,6 +456,11 @@ export default function PiChat() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
+  // `true` when the active session has no messages — we render a welcome
+  // overlay in that window so the chat page isn't just an input box on
+  // empty canvas. Flipped off on the first send and on session switches
+  // that land on a populated session.
+  const [showWelcome, setShowWelcome] = useState(true);
   const { openSettings } = useSettingsModal();
 
   // Clear any stale reset-error banner whenever the model dialog is
@@ -472,6 +477,7 @@ export default function PiChat() {
     if (!agent) return;
     agent.clearMessages();
     agent.sessionId = session.key;
+    setShowWelcome((session.message_count ?? 0) === 0);
 
     // Restore the session's persisted model + thinking-level so the
     // model pill in the composer reflects the last settings used for
@@ -714,6 +720,7 @@ export default function PiChat() {
       } else {
         initialSession = await api.post<ChatSession>("/api/v1/chat/sessions", {});
       }
+      setShowWelcome((initialSession.message_count ?? 0) === 0);
       // 5. Create the Agent with rara's WebSocket-backed stream function.
       //    The streamFn reads agent.sessionId at call time to get the active session key.
       const agent: Agent = new Agent({
@@ -782,6 +789,8 @@ export default function PiChat() {
         onBeforeSend: async () => {
           const key = agent.sessionId;
           if (!key) return;
+          // The user just committed their first message — no more welcome.
+          setShowWelcome(false);
 
           // Skip the PATCH when `agent.state.model` is pi-agent-core's
           // placeholder default (id/provider = "unknown"). Persisting it
@@ -878,6 +887,22 @@ export default function PiChat() {
       </div>
       {/* Chat panel container — takes remaining vertical space. */}
       <div ref={containerRef} className="min-h-0 flex-1 w-full" />
+      {/*
+        Welcome overlay — rendered above pi-web-ui's empty message list
+        when the active session has no messages. Pointer-events-none so
+        clicks pass through to the composer below; flipped off the
+        moment the user commits their first message (onBeforeSend).
+      */}
+      {showWelcome && !isInitializing && (
+        <div className="pointer-events-none absolute inset-x-0 top-12 bottom-40 z-10 flex flex-col items-center justify-center gap-4 px-6 text-center">
+          <h1 className="bg-gradient-to-br from-foreground via-foreground/85 to-foreground/50 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl">
+            你好，我是 Rara
+          </h1>
+          <p className="max-w-md text-sm text-muted-foreground sm:text-base">
+            有什么想聊的？写任务、问问题、让我帮你查点东西都行。
+          </p>
+        </div>
+      )}
       {/*
         Voice button floats over pi-web-ui's composer, anchored to the
         viewport bottom-right so it sits on the same line as the send
