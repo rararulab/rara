@@ -449,11 +449,24 @@ export default function PiChat() {
   // from the pre-#1554 selector). `null` = not yet loaded; we fail-open
   // in that window so the restore isn't blocked on an unrelated fetch.
   const validProvidersRef = useRef<Set<string> | null>(null);
+  // Guards against double-invocations of `handleUseDefault` while a PATCH
+  // + settings fetch is still in flight. Backend no-ops the duplicate
+  // write (see #1569 round-1 fix) but the UI would still redundantly
+  // refetch settings and reset the composer state.
+  const resetInflight = useRef(false);
   const [showSessionList, setShowSessionList] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  // Clear any stale reset-error banner whenever the model dialog is
+  // closed — regardless of close path (backdrop click, successful
+  // select, successful reset). Co-locating the clear here prevents the
+  // banner from leaking into the next dialog opening.
+  useEffect(() => {
+    if (!modelDialogOpen) setResetError(null);
+  }, [modelDialogOpen]);
 
   /** Switch the agent to a different session, loading its history. */
   const switchSession = useCallback(async (session: ChatSession) => {
@@ -548,6 +561,92 @@ export default function PiChat() {
     },
     [newSession],
   );
+
+  /**
+   * Reset the session's pinned (model, provider, thinking) triple so the
+   * backend falls back to `llm.default_provider` on the next turn, then
+   * mirror the admin-configured default into the composer pill. Guarded
+   * by `resetInflight` so a double-click cannot fire two PATCH + settings
+   * fetch round-trips. Deps are empty because the closure only reads
+   * mutable refs (`agentRef`, `chatPanelRef`, `lastPersistedRef`,
+   * `resetInflight`) and stable state setters.
+   */
+  const handleUseDefault = useCallback(async () => {
+    if (resetInflight.current) return;
+    resetInflight.current = true;
+    const agent = agentRef.current;
+    const key = agent?.sessionId;
+    if (!agent || !key) {
+      resetInflight.current = false;
+      return;
+    }
+    setResetError(null);
+    // PATCH with explicit nulls to clear the pinned provider/model
+    // and let `llm.default_provider` take over on the next turn.
+    // The double-option body is what makes the backend distinguish
+    // this from a leave-alone call (see #1569).
+    //
+    // Close the dialog only after the PATCH succeeds — a network
+    // failure keeps the dialog open so the error row is visible
+    // and the user can retry without chasing a dismissed toast.
+    try {
+      await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+        model:          null,
+        model_provider: null,
+        thinking_level: null,
+      });
+      // Race guard: the user may have switched sessions while
+      // the PATCH was in-flight. If so, the composer now
+      // reflects a different session and must not be clobbered.
+      if (agentRef.current?.sessionId !== key) {
+        setModelDialogOpen(false);
+        return;
+      }
+      // Resolve the admin-configured default so the composer
+      // pill can read e.g. "codex: codex-mini" instead of the
+      // "unknown" sentinel. PiChat does not already consume
+      // react-query so we fire a one-shot request — failures
+      // here are non-fatal and fall back to the sentinel.
+      let resolvedModel = syntheticModel(
+        UNKNOWN_MODEL_SENTINEL,
+        UNKNOWN_MODEL_SENTINEL,
+      );
+      try {
+        const settings = await settingsApi.list();
+        const provider = settings["llm.default_provider"]?.trim();
+        const model = provider
+          ? settings[`llm.providers.${provider}.default_model`]?.trim()
+          : undefined;
+        if (provider && model) {
+          resolvedModel = syntheticModel(provider, model);
+        } else if (provider) {
+          // Admin set a default provider but forgot the paired
+          // `default_model` key — surface during development so the
+          // misconfig is caught before users see the unknown sentinel.
+          console.warn(
+            `Admin default provider \`${provider}\` has no default_model set — composer pill will show unknown.`,
+          );
+        }
+      } catch (e: unknown) {
+        console.warn("Failed to resolve admin default provider:", e);
+      }
+      // Re-check the race guard after the settings fetch.
+      if (agentRef.current?.sessionId !== key) {
+        setModelDialogOpen(false);
+        return;
+      }
+      agent.state.model = resolvedModel;
+      lastPersistedRef.current = { model: null, provider: null, thinking: null };
+      chatPanelRef.current?.agentInterface?.requestUpdate();
+      setModelDialogOpen(false);
+    } catch (e: unknown) {
+      console.warn("Failed to clear session model override:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetError(`Failed to reset model: ${msg}`);
+    } finally {
+      resetInflight.current = false;
+    }
+  }, []);
 
   useEffect(() => {
     if (initRef.current || !containerRef.current) return;
@@ -810,7 +909,7 @@ export default function PiChat() {
       {/* Rara-native model picker — replaces pi-mono's ModelSelector. */}
       <RaraModelDialog
         open={modelDialogOpen}
-        onClose={() => { setModelDialogOpen(false); setResetError(null); }}
+        onClose={() => setModelDialogOpen(false)}
         currentProvider={agentRef.current?.state.model?.provider ?? null}
         onSelect={(entry: ProviderInfo) => {
           const agent = agentRef.current;
@@ -828,70 +927,7 @@ export default function PiChat() {
           setModelDialogOpen(false);
         }}
         resetError={resetError}
-        onUseDefault={() => {
-          const agent = agentRef.current;
-          const key = agent?.sessionId;
-          if (!agent || !key) return;
-          setResetError(null);
-          // PATCH with explicit nulls to clear the pinned provider/model
-          // and let `llm.default_provider` take over on the next turn.
-          // The double-option body is what makes the backend distinguish
-          // this from a leave-alone call (see #1569).
-          //
-          // Close the dialog only after the PATCH succeeds — a network
-          // failure keeps the dialog open so the error row is visible
-          // and the user can retry without chasing a dismissed toast.
-          api
-            .patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
-              model:          null,
-              model_provider: null,
-              thinking_level: null,
-            })
-            .then(async () => {
-              // Race guard: the user may have switched sessions while
-              // the PATCH was in-flight. If so, the composer now
-              // reflects a different session and must not be clobbered.
-              if (agentRef.current?.sessionId !== key) {
-                setModelDialogOpen(false);
-                return;
-              }
-              // Resolve the admin-configured default so the composer
-              // pill can read e.g. "codex: codex-mini" instead of the
-              // "unknown" sentinel. PiChat does not already consume
-              // react-query so we fire a one-shot request — failures
-              // here are non-fatal and fall back to the sentinel.
-              let resolvedModel = syntheticModel(
-                UNKNOWN_MODEL_SENTINEL,
-                UNKNOWN_MODEL_SENTINEL,
-              );
-              try {
-                const settings = await settingsApi.list();
-                const provider = settings["llm.default_provider"]?.trim();
-                const model = provider
-                  ? settings[`llm.providers.${provider}.default_model`]?.trim()
-                  : undefined;
-                if (provider && model) {
-                  resolvedModel = syntheticModel(provider, model);
-                }
-              } catch (e: unknown) {
-                console.warn("Failed to resolve admin default provider:", e);
-              }
-              // Re-check the race guard after the settings fetch.
-              if (agentRef.current?.sessionId !== key) {
-                setModelDialogOpen(false);
-                return;
-              }
-              agent.state.model = resolvedModel;
-              lastPersistedRef.current = { model: null, provider: null, thinking: null };
-              chatPanelRef.current?.agentInterface?.requestUpdate();
-              setModelDialogOpen(false);
-            })
-            .catch((e: unknown) => {
-              console.warn("Failed to clear session model override:", e);
-              const msg = e instanceof Error ? e.message : String(e);
-              setResetError(`Failed to reset model: ${msg}`);
-            });
-        }}
+        onUseDefault={handleUseDefault}
       />
     </div>
   );
