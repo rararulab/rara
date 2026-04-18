@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -38,6 +39,12 @@ interface Props {
   open:              boolean;
   onClose:           () => void;
   onSelect:          (entry: ProviderInfo) => void;
+  /**
+   * Clear the per-session model override so the admin-configured
+   * `llm.default_provider` takes effect on the next turn. Emitted by
+   * the "Use rara's default" row at the top of the picker.
+   */
+  onUseDefault:      () => void;
   currentProvider?:  string | null;
 }
 
@@ -56,6 +63,7 @@ export function RaraModelDialog({
   open,
   onClose,
   onSelect,
+  onUseDefault,
   currentProvider,
 }: Props) {
   const [entries, setEntries] = useState<ProviderInfo[]>([]);
@@ -154,6 +162,28 @@ export function RaraModelDialog({
         />
 
         <div className="max-h-[60vh] overflow-y-auto rounded border border-border">
+          {/*
+            Sits above the filter results so it stays accessible even
+            when the user is typing — the admin "default provider" is
+            the bailout path whenever a session has drifted into a pin
+            the user no longer wants.
+          */}
+          <button
+            className="flex w-full items-center gap-3 border-b border-border/60 bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-secondary/40"
+            onClick={onUseDefault}
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background text-muted-foreground">
+              <RotateCcw className="h-3.5 w-3.5" />
+            </span>
+            <span className="flex flex-col">
+              <span className="text-sm font-medium text-foreground">
+                Use rara&apos;s default
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Clear the per-session model and fall back to the admin default provider.
+              </span>
+            </span>
+          </button>
           {loading ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
               Loading…

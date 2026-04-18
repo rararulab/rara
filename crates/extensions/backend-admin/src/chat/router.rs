@@ -42,7 +42,7 @@ use rara_kernel::{
     channel::types::{ChannelType, ChatMessage},
 };
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -52,8 +52,11 @@ use crate::chat::{
     service::{ProviderInfo, SessionService},
 };
 
-/// Parse an optional thinking-level string from a request body, converting
-/// invalid values into a 400 response with a list of accepted variants.
+/// Parse an optional thinking-level string from a create-session body.
+///
+/// Returns `None` for a missing or explicit-null value and validates any
+/// non-null string against the accepted variants, producing a 400 on a
+/// typo.
 fn parse_thinking_level(raw: Option<String>) -> Result<Option<ThinkingLevel>, ChatError> {
     use strum::VariantNames;
     raw.map(|s| {
@@ -66,6 +69,47 @@ fn parse_thinking_level(raw: Option<String>) -> Result<Option<ThinkingLevel>, Ch
             })
     })
     .transpose()
+}
+
+/// Parse a PATCH-shaped thinking-level field while preserving the
+/// absent-vs-null distinction the caller needs to drive
+/// [`SessionService::update_session_fields`] semantics.
+///
+/// - `None`              → field absent, leave untouched.
+/// - `Some(None)`        → explicit `null`, clear the field.
+/// - `Some(Some(value))` → validated and normalised to the enum.
+fn parse_patch_thinking_level(
+    raw: Option<Option<String>>,
+) -> Result<Option<Option<ThinkingLevel>>, ChatError> {
+    use strum::VariantNames;
+    match raw {
+        None => Ok(None),
+        Some(None) => Ok(Some(None)),
+        Some(Some(s)) => s
+            .parse::<ThinkingLevel>()
+            .map(|v| Some(Some(v)))
+            .map_err(|_| ChatError::InvalidRequest {
+                message: format!(
+                    "invalid thinking level: {s} (expected one of: {})",
+                    ThinkingLevel::VARIANTS.join(", "),
+                ),
+            }),
+    }
+}
+
+/// Custom deserializer that distinguishes a missing field (`None`) from a
+/// present `null` (`Some(None)`) and a present value (`Some(Some(v))`).
+///
+/// Serde's default `Option<T>` collapses the first two cases together,
+/// but a session PATCH must treat "leave alone" and "reset to default"
+/// as different operations — this helper keeps the semantic visible on
+/// the wire without pulling in `serde_with`.
+fn deserialize_double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Option::<T>::deserialize(de).map(Some)
 }
 
 /// Parse a session key from a URL path parameter, returning 400 on invalid
@@ -114,19 +158,36 @@ pub struct ListSessionsQuery {
 }
 
 /// Request body for `PATCH /sessions/{key}`.
+///
+/// Each field is a double-option so the caller can distinguish three
+/// intents: **absent** (leave the stored value alone), **`null`** (clear
+/// the per-session override so the admin default applies), and **set**
+/// (persist the new value). Collapsing absent and `null` would strand
+/// sessions with a stale pinned model even after the admin changes the
+/// default provider.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     /// New human-readable title.
-    pub title:          Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub title:          Option<Option<String>>,
     /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
-    pub model:          Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub model:          Option<Option<String>>,
     /// New provider identifier paired with `model`.
-    pub model_provider: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub model_provider: Option<Option<String>>,
     /// New thinking-level override — one of `"off"`, `"minimal"`, `"low"`,
     /// `"medium"`, `"high"`, `"xhigh"`.
-    pub thinking_level: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub thinking_level: Option<Option<String>>,
     /// New system prompt override.
-    pub system_prompt:  Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub system_prompt:  Option<Option<String>>,
 }
 
 /// Request body for `PUT /models/favorites`.
@@ -335,7 +396,7 @@ async fn update_session(
     Path(key): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionEntry>, ChatError> {
-    let thinking_level = parse_thinking_level(req.thinking_level)?;
+    let thinking_level = parse_patch_thinking_level(req.thinking_level)?;
     let session = service
         .update_session_fields(
             &parse_session_key(&key)?,

@@ -58,7 +58,7 @@ import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { RaraModelDialog } from "@/components/RaraModelDialog";
 import type { ProviderInfo } from "@/api/types";
-import { isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
+import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
 /**
  * True when the given provider id is still present in rara's routable
@@ -825,6 +825,32 @@ export default function PiChat() {
             chatPanelRef.current?.agentInterface?.requestUpdate();
           }
           setModelDialogOpen(false);
+        }}
+        onUseDefault={() => {
+          const agent = agentRef.current;
+          const key = agent?.sessionId;
+          setModelDialogOpen(false);
+          if (!agent || !key) return;
+          // PATCH with explicit nulls to clear the pinned provider/model
+          // and let `llm.default_provider` take over on the next turn.
+          // The double-option body is what makes the backend distinguish
+          // this from a leave-alone call (see #1569).
+          api
+            .patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+              model:          null,
+              model_provider: null,
+              thinking_level: null,
+            })
+            .then(() => {
+              // Drop the composer pill back to the "unknown" sentinel so
+              // the UI reads "default" instead of the stale selection.
+              agent.state.model = syntheticModel(UNKNOWN_MODEL_SENTINEL, UNKNOWN_MODEL_SENTINEL);
+              lastPersistedRef.current = { model: null, provider: null, thinking: null };
+              chatPanelRef.current?.agentInterface?.requestUpdate();
+            })
+            .catch((e: unknown) => {
+              console.warn("Failed to clear session model override:", e);
+            });
         }}
       />
     </div>
