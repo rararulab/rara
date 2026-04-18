@@ -95,14 +95,24 @@ export class RaraStorageBackend implements StorageBackend {
     //     modal only; seed them verbatim so admin reads see them.
     //   - `ui.pi.<k>` keys — pi-mono UI state; pi-mono reads the bare
     //     `<k>`, so strip the prefix on seed.
+    //
+    // Two-pass seed: bare keys first, then `ui.pi.<k>` entries stripped
+    // and written second. If the backend still holds a legacy bare
+    // `<k>` from a pre-#1581 write alongside the newer `ui.pi.<k>`, the
+    // admin-owned prefixed namespace must win — iteration order from
+    // `Object.entries` is not a safe tie-breaker.
     const settingsStore = this.store("settings");
+    const bare: Array<[string, string]> = [];
+    const pinned: Array<[string, string]> = [];
     for (const [k, v] of Object.entries(settings)) {
       if (k.startsWith(PI_UI_PREFIX)) {
-        settingsStore.set(k.substring(PI_UI_PREFIX.length), v);
+        pinned.push([k.substring(PI_UI_PREFIX.length), v]);
       } else {
-        settingsStore.set(k, v);
+        bare.push([k, v]);
       }
     }
+    for (const [k, v] of bare) settingsStore.set(k, v);
+    for (const [k, v] of pinned) settingsStore.set(k, v);
   }
 
   /** Get a value by key from a specific store. Returns null if missing. */
