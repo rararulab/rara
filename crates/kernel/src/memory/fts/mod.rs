@@ -8,8 +8,10 @@
 //! business logic (entry filtering, text extraction, query sanitization).
 
 mod repo;
+mod tokenizer;
 
 use sqlx::SqlitePool;
+pub(crate) use tokenizer::warmup as warmup_tokenizer;
 use tracing::{debug, warn};
 
 use super::{TapEntry, TapEntryKind};
@@ -151,7 +153,8 @@ impl TapeFts {
 /// Delegates to [`super::service::extract_searchable_text`] so the indexed
 /// text surface is identical to the brute-force search path.
 fn extract_fts_content(entry: &TapEntry) -> String {
-    super::service::extract_searchable_text(&entry.payload, entry.metadata.as_ref())
+    let raw = super::service::extract_searchable_text(&entry.payload, entry.metadata.as_ref());
+    tokenizer::segment(&raw)
 }
 
 /// Sanitize a user query for FTS5 MATCH syntax.
@@ -160,7 +163,9 @@ fn extract_fts_content(entry: &TapEntry) -> String {
 /// We quote each term to treat them as literals, then join with spaces
 /// (implicit AND).
 fn sanitize_fts_query(query: &str) -> String {
-    query
+    // Pre-segment so CJK terms match the segmented index surface.
+    let segmented = tokenizer::segment(query);
+    segmented
         .split_whitespace()
         .filter(|t| !t.is_empty())
         .map(|term| {
@@ -326,5 +331,61 @@ mod tests {
             .await
             .expect("search after remove");
         assert!(hits.is_empty());
+    }
+
+    /// Verifies jieba pre-segmentation makes CJK BM25 work: a query for a
+    /// segmented word ("机器学习") must retrieve the right entry even when
+    /// the word appears inside a longer sentence.
+    #[tokio::test]
+    async fn chinese_segmentation_enables_bm25() {
+        let pool = test_pool().await;
+        let fts = TapeFts::new(pool);
+
+        let entries = vec![
+            TapEntry {
+                id:        1,
+                kind:      TapEntryKind::Message,
+                payload:   serde_json::json!({"content": "今天学习了机器学习的基础知识"}),
+                timestamp: jiff::Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        2,
+                kind:      TapEntryKind::Message,
+                payload:   serde_json::json!({"content": "买了一台新的机器"}),
+                timestamp: jiff::Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        3,
+                kind:      TapEntryKind::Message,
+                payload:   serde_json::json!({"content": "unrelated English content"}),
+                timestamp: jiff::Timestamp::now(),
+                metadata:  None,
+            },
+        ];
+
+        fts.index_entries("cn-tape", "session-cn", &entries)
+            .await
+            .expect("index");
+
+        // "机器学习" should hit entry 1 (where jieba keeps it as one word).
+        let hits = fts
+            .search("机器学习", Some("cn-tape"), 10)
+            .await
+            .expect("search ml");
+        assert!(
+            hits.iter().any(|h| h.entry_id == 1),
+            "expected entry 1 to match '机器学习', got {hits:?}"
+        );
+
+        // "机器" alone should retrieve both CJK entries.
+        let hits = fts
+            .search("机器", Some("cn-tape"), 10)
+            .await
+            .expect("search machine");
+        let ids: Vec<u64> = hits.iter().map(|h| h.entry_id).collect();
+        assert!(ids.contains(&1), "entry 1 should match '机器', got {ids:?}");
+        assert!(ids.contains(&2), "entry 2 should match '机器', got {ids:?}");
     }
 }

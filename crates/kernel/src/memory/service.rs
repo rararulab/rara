@@ -102,6 +102,9 @@ impl TapeService {
 
     /// Create a service with FTS5 full-text search support.
     pub fn with_fts(store: FileTapeStore, pool: sqlx::SqlitePool) -> Self {
+        // Preload the jieba dictionary so the first search doesn't pay
+        // the ~200 ms init cost inline.
+        std::thread::spawn(super::fts::warmup_tokenizer);
         Self {
             store,
             fts: Some(super::fts::TapeFts::new(pool)),

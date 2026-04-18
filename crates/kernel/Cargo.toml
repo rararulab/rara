@@ -34,6 +34,7 @@ hex.workspace = true
 hmac.workspace = true
 image.workspace = true
 indexmap.workspace = true
+jieba-rs.workspace = true
 jiff.workspace = true
 md5.workspace = true
 opendal = { workspace = true }
