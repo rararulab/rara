@@ -898,7 +898,7 @@ export default function PiChat() {
         moment the user commits their first message (onBeforeSend).
       */}
       {showWelcome && !isInitializing && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-[calc(28vh+10rem)] z-10 flex justify-center px-6">
+        <div className="pointer-events-none absolute inset-x-0 bottom-[calc(40vh+9rem)] z-10 flex justify-center px-6">
           <h1 className="bg-gradient-to-br from-foreground via-foreground/80 to-foreground/40 bg-clip-text text-6xl font-semibold tracking-[0.2em] text-transparent sm:text-7xl">
             RARA
           </h1>

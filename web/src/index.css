@@ -291,7 +291,10 @@
 .rara-chat[data-welcome="true"] > button[title*="Record" i],
 .rara-chat[data-welcome="true"] > button[title*="recording" i],
 .rara-chat[data-welcome="true"] > button[title*="Sending" i] {
-  transform: translateY(-28vh);
+  /* Lifts the composer centre close to viewport centre. Natural bottom
+     is ~8-10rem from the edge (padding + composer body), so ~40vh up
+     lands the centre near 50vh with some headroom for the wordmark. */
+  transform: translateY(-40vh);
   transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .rara-chat agent-interface .flex-col.bg-background > *:last-child,
