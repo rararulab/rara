@@ -275,10 +275,17 @@ rara-skills = { path = "crates/skills" }
 rara-soul = { path = "crates/soul" }
 rara-vault = { path = "crates/rara-vault" }
 
-# fff (Fast File Finder) — Cargo git dependencies (not vendored)
-fff-search = { git = "https://github.com/dmtrKovalenko/fff.nvim", features = ["zlob"] }
-fff-grep = { git = "https://github.com/dmtrKovalenko/fff.nvim" }
-fff-query-parser = { git = "https://github.com/dmtrKovalenko/fff.nvim", default-features = false }
+# fff (Fast File Finder) — Cargo git dependencies (not vendored).
+#
+# Pinned to a specific rev because `Cargo.lock` is gitignored workspace-wide
+# (see `.gitignore`); without the pin CI re-resolves to upstream HEAD on
+# every run and a breaking change upstream (e.g. the `grep_search` visibility
+# flip in Apr 2026) takes down every open PR at once. Bump the rev in a
+# dedicated PR after updating `crates/app/src/tools/{fff_find,fff_grep}.rs`
+# to the new upstream API.
+fff-search = { git = "https://github.com/dmtrKovalenko/fff.nvim", rev = "ea1f9802d7879345f02bef72bcadecd7252b8add", features = ["zlob"] }
+fff-grep = { git = "https://github.com/dmtrKovalenko/fff.nvim", rev = "ea1f9802d7879345f02bef72bcadecd7252b8add" }
+fff-query-parser = { git = "https://github.com/dmtrKovalenko/fff.nvim", rev = "ea1f9802d7879345f02bef72bcadecd7252b8add", default-features = false }
 
 rara-tool-macro = { path = "crates/common/tool-macro" }
 yunara-store = { path = "crates/common/yunara-store" }
