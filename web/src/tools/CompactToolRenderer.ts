@@ -12,20 +12,26 @@
  * A compact tool renderer inspired by multica's `ToolCallRow`
  * (vendor/multica/packages/views/chat/components/chat-message-list.tsx).
  *
- * Default pi-web-ui `DefaultRenderer` is visually heavy: two labeled
- * JSON code blocks (Input/Output) plus a header, per tool call. That
- * dominates the chat column when an assistant turn chains several
- * tools. This renderer compresses each call into a single-line header
- * with a short summary derived from the params, and hides the JSON
- * payloads behind a collapsible section.
+ * pi-web-ui's `DefaultRenderer` is visually heavy: two labeled JSON code
+ * blocks (Input/Output) plus a header, per tool call. That dominates
+ * the chat column when an assistant turn chains several tools. This
+ * renderer compresses each call into a single-line summary and hides
+ * the JSON payloads inside a native `<details>` element.
+ *
+ * Why `<details>` instead of pi-web-ui's `renderCollapsibleHeader`:
+ * tool renderers are re-invoked on every stream tick (params stream in
+ * one JSON chunk, then the tool result arrives). `renderCollapsibleHeader`
+ * encodes open/closed state as a CSS class on a host div that Lit
+ * rewrites on every render — so a user's expansion would collapse on
+ * the next token. `<details>` keeps `open` as DOM state that survives
+ * Lit's incremental re-render, matching what pi-web-ui's own
+ * `<code-block>` relies on.
  */
 
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import { html } from "lit";
-import { createRef, ref } from "lit/directives/ref.js";
 import { Wrench } from "lucide";
 import {
-	renderCollapsibleHeader,
 	renderHeader,
 	type ToolRenderer,
 	type ToolRenderResult,
@@ -34,20 +40,30 @@ import {
 const MAX_SUMMARY = 120;
 const MAX_RESULT_EXPANDED = 4000;
 
+/**
+ * Shorten a path to `.../parent/file` when it has more than two
+ * segments. Matches multica's `shortenPath` so summaries read the same
+ * across apps.
+ */
 function shortenPath(p: string): string {
 	const parts = p.split("/");
 	if (parts.length <= 3) return p;
 	return ".../" + parts.slice(-2).join("/");
 }
 
-function truncate(s: string, n: number): string {
-	return s.length > n ? s.slice(0, n) + "…" : s;
+/**
+ * Collapse whitespace to single spaces and truncate. Summaries live in
+ * a single-line `truncate` span, so unnormalised newlines (heredocs,
+ * multi-line commands) would either wrap awkwardly or break layout.
+ */
+function normalizeAndTruncate(s: string, n: number): string {
+	const flat = s.replace(/\s+/g, " ").trim();
+	return flat.length > n ? flat.slice(0, n) + "…" : flat;
 }
 
 /**
  * Pull a human-readable one-liner out of a tool's input JSON. Field
- * priority matches multica's `getToolSummary` so call sites feel
- * consistent for users who have seen both apps.
+ * priority mirrors multica's `getToolSummary`.
  */
 function summarizeParams(params: unknown): string {
 	if (!params || typeof params !== "object") return "";
@@ -59,26 +75,26 @@ function summarizeParams(params: unknown): string {
 	};
 
 	const command = pick("command");
-	if (command) return truncate(command, MAX_SUMMARY);
+	if (command) return normalizeAndTruncate(command, MAX_SUMMARY);
 
 	const query = pick("query") ?? pick("pattern");
-	if (query) return truncate(query, MAX_SUMMARY);
+	if (query) return normalizeAndTruncate(query, MAX_SUMMARY);
 
 	const filePath = pick("file_path") ?? pick("path");
 	if (filePath) return shortenPath(filePath);
 
 	const description = pick("description");
-	if (description) return truncate(description, MAX_SUMMARY);
+	if (description) return normalizeAndTruncate(description, MAX_SUMMARY);
 
 	const prompt = pick("prompt");
-	if (prompt) return truncate(prompt, MAX_SUMMARY);
+	if (prompt) return normalizeAndTruncate(prompt, MAX_SUMMARY);
 
 	const skill = pick("skill");
 	if (skill) return skill;
 
 	for (const v of Object.values(inp)) {
-		if (typeof v === "string" && v.length > 0 && v.length < MAX_SUMMARY) {
-			return v;
+		if (typeof v === "string" && v.length > 0) {
+			return normalizeAndTruncate(v, MAX_SUMMARY);
 		}
 	}
 	return "";
@@ -104,15 +120,26 @@ function formatJson(value: unknown): string {
 	}
 }
 
-function extractOutput(result: ToolResultMessage | undefined): string {
-	if (!result) return "";
-	const parts: string[] = [];
-	for (const c of result.content ?? []) {
-		if (c.type === "text") {
-			parts.push((c as { text?: string }).text ?? "");
+interface ExtractedOutput {
+	text: string;
+	nonTextCount: number;
+}
+
+function extractOutput(result: ToolResultMessage | undefined): ExtractedOutput {
+	if (!result) return { text: "", nonTextCount: 0 };
+	const textParts: string[] = [];
+	let nonTextCount = 0;
+	for (const block of result.content ?? []) {
+		if ("text" in block) {
+			textParts.push((block as TextContent).text ?? "");
+		} else {
+			// Currently only ImageContent falls here; treated uniformly so
+			// we degrade gracefully if pi-ai grows new block types.
+			void (block as ImageContent);
+			nonTextCount += 1;
 		}
 	}
-	return parts.join("\n");
+	return { text: textParts.join("\n"), nonTextCount };
 }
 
 export class CompactToolRenderer implements ToolRenderer {
@@ -137,10 +164,10 @@ export class CompactToolRenderer implements ToolRenderer {
 
 		const parsed = parseParams(params);
 		const summary = summarizeParams(parsed);
-		const output = extractOutput(result);
+		const { text: output, nonTextCount } = extractOutput(result);
 
 		const headerLabel = html`
-			<span class="flex items-center gap-2 min-w-0">
+			<span class="flex items-center gap-2 min-w-0 overflow-hidden">
 				<span class="font-medium text-foreground shrink-0">${this.toolName}</span>
 				${
 					summary
@@ -150,33 +177,39 @@ export class CompactToolRenderer implements ToolRenderer {
 			</span>
 		`;
 
-		// Nothing to expand — render plain header.
-		if (parsed === undefined && !output) {
+		const hasParams = parsed !== undefined;
+		const hasOutput = output.length > 0 || nonTextCount > 0;
+
+		// Nothing to expand — render plain header (streaming "thinking"
+		// state before the first param token arrives).
+		if (!hasParams && !hasOutput) {
 			return {
 				content: renderHeader(state, Wrench, headerLabel),
 				isCustom: false,
 			};
 		}
 
-		const contentRef = createRef<HTMLElement>();
-		const chevronRef = createRef<HTMLElement>();
-		const paramsJson = parsed !== undefined ? formatJson(parsed) : "";
-		const outputTrimmed =
+		const paramsJson = hasParams ? formatJson(parsed) : "";
+		const outputBody =
 			output.length > MAX_RESULT_EXPANDED
 				? output.slice(0, MAX_RESULT_EXPANDED) + "\n… (truncated)"
 				: output;
+		const outputPlaceholder =
+			!output && nonTextCount > 0
+				? `(no text output — ${nonTextCount} non-text block${nonTextCount === 1 ? "" : "s"})`
+				: "";
+
 		return {
 			content: html`
-				<div>
-					${renderCollapsibleHeader(state, Wrench, headerLabel, contentRef, chevronRef, false)}
-					<div
-						${ref(contentRef)}
-						class="overflow-hidden transition-[max-height] duration-200 max-h-0"
-					>
+				<details class="group">
+					<summary class="list-none cursor-pointer marker:hidden">
+						${renderHeader(state, Wrench, headerLabel)}
+					</summary>
+					<div class="mt-2 space-y-2">
 						${
 							paramsJson
 								? html`
-									<div class="mb-2">
+									<div>
 										<div class="text-[11px] font-medium mb-1 text-muted-foreground">Input</div>
 										<pre class="max-h-40 overflow-auto rounded bg-muted/50 p-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">${paramsJson}</pre>
 									</div>
@@ -184,17 +217,17 @@ export class CompactToolRenderer implements ToolRenderer {
 								: ""
 						}
 						${
-							output
+							hasOutput
 								? html`
 									<div>
 										<div class="text-[11px] font-medium mb-1 text-muted-foreground">Output</div>
-										<pre class="max-h-60 overflow-auto rounded bg-muted/50 p-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">${outputTrimmed}</pre>
+										<pre class="max-h-60 overflow-auto rounded bg-muted/50 p-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">${outputBody || outputPlaceholder}</pre>
 									</div>
 								`
 								: ""
 						}
 					</div>
-				</div>
+				</details>
 			`,
 			isCustom: false,
 		};

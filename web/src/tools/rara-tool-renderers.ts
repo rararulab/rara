@@ -28,11 +28,22 @@ import { CompactToolRenderer } from "./CompactToolRenderer";
 
 /**
  * Tool names declared by the rara backend (see `crates/app/src/tools/`).
- * `bash`, `artifacts`, `javascript_repl`, and `extract_document` keep
- * their specialized pi-mono renderers; everything else gets a compact
- * single-line renderer that collapses the Input/Output JSON behind a
- * disclosure, so tool-heavy assistant turns do not dominate the chat
- * column.
+ * Everything in this list gets the compact single-line renderer.
+ *
+ * Four tools keep pi-mono's specialised renderers and are intentionally
+ * absent:
+ * - `bash`            — pi-mono's `BashRenderer` shows a live terminal
+ *                       block, which fits a single command better than
+ *                       a truncated one-liner.
+ * - `artifacts`       — `ArtifactsToolRenderer` renders the artifact
+ *                       card UX; JSON wouldn't help.
+ * - `javascript_repl` — pi-mono-registered; no rara-side equivalent.
+ * - `extract_document`— pi-mono-registered; handles PDF/DOCX preview.
+ *
+ * Drift risk: this list is hand-maintained from the Rust
+ * `#[tool(name = "…")]` declarations. A new backend tool added without
+ * updating this list silently falls back to pi-web-ui's verbose
+ * `DefaultRenderer`. Tracked in #1566.
  */
 const RARA_COMPACT_TOOLS = [
 	"acp-delegate",
