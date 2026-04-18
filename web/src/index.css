@@ -38,6 +38,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-canvas: var(--canvas);
 
   /* Semantic status colors — rara admin */
   --color-ok: #7BC4A0;
@@ -68,6 +69,20 @@
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
     Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /*
+   * App-shell canvas color. Slightly cooler and a tick darker than
+   * pi-web-ui's pure-white `--background`, matching the pattern multica
+   * uses: a subtle off-white so cards, inputs, and message bubbles
+   * (which stay on `--background`) read as lifted surfaces rather than
+   * floating in a flat sheet. Hue 250 keeps it in the same cool family
+   * as the tool-call glass bubble so the page reads as one palette.
+   */
+  --canvas: oklch(0.96 0.005 250);
+}
+
+.dark {
+  --canvas: oklch(0.2 0.005 250);
 }
 
 /*
@@ -144,7 +159,14 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    /*
+     * Body sits on the canvas, not on `--background`. Pi-web-ui inputs,
+     * bubbles, and cards keep `--background` (pure white) as their own
+     * surface color so they read as "lifted" against the canvas — the
+     * multica aesthetic. `.rara-admin` overrides this with its rose
+     * radial gradient on admin pages.
+     */
+    @apply bg-canvas text-foreground antialiased;
     font-family: var(--font-sans);
     min-height: 100vh;
   }
@@ -154,6 +176,39 @@
   pre {
     font-family: var(--font-mono);
   }
+  /*
+   * Chat-shell atmosphere: one very faint info-blue glow in the top-left
+   * corner, painted on top of the canvas. Ties the page to the same cool
+   * palette the user-message glass bubble uses, stops the chat from
+   * reading as "bare white sheet" without pulling focus from content.
+   */
+  .rara-chat {
+    background-image:
+      radial-gradient(
+        ellipse 70% 50% at 0% 0%,
+        color-mix(in oklab, oklch(0.62 0.18 250) 22%, transparent) 0%,
+        transparent 65%
+      ),
+      radial-gradient(
+        ellipse 60% 45% at 100% 100%,
+        color-mix(in oklab, oklch(0.72 0.14 340) 20%, transparent) 0%,
+        transparent 60%
+      );
+  }
+  .dark .rara-chat {
+    background-image:
+      radial-gradient(
+        ellipse 70% 50% at 0% 0%,
+        color-mix(in oklab, oklch(0.62 0.18 250) 22%, transparent) 0%,
+        transparent 65%
+      ),
+      radial-gradient(
+        ellipse 60% 45% at 100% 100%,
+        color-mix(in oklab, oklch(0.55 0.14 340) 20%, transparent) 0%,
+        transparent 60%
+      );
+  }
+
   /* Rara admin gradient background — only on admin pages */
   .rara-admin {
     background-image:
@@ -196,6 +251,22 @@
  * specificity or source order — loses to an unlayered one. Wrapping this
  * in `@layer components {}` (as the first attempt did) made it invisible.
  */
+/*
+ * Pi-web-ui's `<agent-interface>` paints a full-height
+ * `flex flex-col h-full bg-background` shell that covers any gradient
+ * behind it. Unpaint that single shell so the `.rara-chat` canvas and
+ * radial glow show through; individual bubbles, inputs, and cards keep
+ * their own `bg-background` and read as lifted surfaces.
+ *
+ * Unlayered for the same reason as `.user-message-container` below:
+ * Tailwind's `.bg-background` utility lives in the `utilities` layer,
+ * which trumps any `@layer base` / `components` override regardless of
+ * specificity — so this rule must sit outside the layer system.
+ */
+.rara-chat agent-interface .flex-col.bg-background {
+  background-color: transparent;
+}
+
 .user-message-container {
   background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
   border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);

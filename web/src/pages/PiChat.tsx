@@ -843,7 +843,7 @@ export default function PiChat() {
   }, []);
 
   return (
-    <div className="relative flex h-screen w-screen flex-col">
+    <div className="rara-chat relative flex h-screen w-screen flex-col">
       {/*
         Top utility bar — reserves its own row (not `absolute`) so the
         chat panel's message list can never render underneath the
