@@ -196,6 +196,18 @@ pub struct SessionQuery {
 
 fn default_user_id() -> String { "anonymous".to_owned() }
 
+/// Map an egress [`PlatformOutbound`] into the [`WebEvent`] frame the
+/// browser consumes. Kept pure so adapter behaviour is unit-testable
+/// without spinning up the broadcast channel.
+fn platform_outbound_to_web_event(msg: PlatformOutbound) -> WebEvent {
+    match msg {
+        PlatformOutbound::Reply { content, .. } => WebEvent::Message { content },
+        PlatformOutbound::StreamChunk { delta, .. } => WebEvent::TextDelta { text: delta },
+        PlatformOutbound::Progress { text } => WebEvent::Progress { stage: text },
+        PlatformOutbound::Error { message, .. } => WebEvent::Error { message },
+    }
+}
+
 fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     match event {
         StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
@@ -1179,12 +1191,7 @@ impl ChannelAdapter for WebAdapter {
             _ => return Ok(()),
         };
 
-        let event = match msg {
-            PlatformOutbound::Reply { content, .. } => WebEvent::Message { content },
-            PlatformOutbound::StreamChunk { delta, .. } => WebEvent::TextDelta { text: delta },
-            PlatformOutbound::Progress { text } => WebEvent::Progress { stage: text },
-        };
-
+        let event = platform_outbound_to_web_event(msg);
         WebAdapter::broadcast_event(&self.sessions, broadcast_key, &event);
         Ok(())
     }
@@ -1228,11 +1235,12 @@ impl ChannelAdapter for WebAdapter {
 mod tests {
     use rara_kernel::{
         channel::types::{ContentBlock, MessageContent},
-        io::StreamEvent,
+        io::{PlatformOutbound, StreamEvent},
     };
 
     use super::{
-        SendMessageRequest, WebEvent, parse_inbound_text_frame, stream_event_to_web_event,
+        SendMessageRequest, WebEvent, parse_inbound_text_frame, platform_outbound_to_web_event,
+        stream_event_to_web_event,
     };
 
     #[test]
@@ -1357,6 +1365,27 @@ mod tests {
                         && filename.as_deref() == Some("spec.pdf")
                 )
         ));
+    }
+
+    #[test]
+    fn platform_error_maps_to_web_error_frame() {
+        let event = platform_outbound_to_web_event(PlatformOutbound::Error {
+            code:    "agent_error".to_owned(),
+            message: "model rejected reasoning=minimal".to_owned(),
+        });
+
+        match &event {
+            WebEvent::Error { message } => {
+                assert_eq!(message, "model rejected reasoning=minimal");
+            }
+            other => panic!("expected WebEvent::Error, got {other:?}"),
+        }
+
+        // The wire format is what the frontend actually parses — lock it
+        // down so a future serde rename can't silently break rara-stream.ts.
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["message"], "model rejected reasoning=minimal");
     }
 
     #[test]

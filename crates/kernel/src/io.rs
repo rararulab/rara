@@ -449,10 +449,9 @@ impl OutboundEnvelope {
             OutboundPayload::Progress { stage, detail } => PlatformOutbound::Progress {
                 text: detail.as_deref().unwrap_or(stage).to_string(),
             },
-            OutboundPayload::Error { code, message } => PlatformOutbound::Reply {
-                content:       format!("Error [{}]: {}", code, message),
-                attachments:   vec![],
-                reply_context: None,
+            OutboundPayload::Error { code, message } => PlatformOutbound::Error {
+                code:    code.clone(),
+                message: message.clone(),
             },
         }
     }
@@ -1436,6 +1435,16 @@ pub enum PlatformOutbound {
         /// Progress text.
         text: String,
     },
+    /// A terminal error for the turn. Channels that support typed error
+    /// frames (web, ACP) render this as a failed-message indicator;
+    /// legacy channels (Telegram, WeChat, terminal) fall back to a plain
+    /// text reply formatted as `"Error [{code}]: {message}"`.
+    Error {
+        /// Short error code (e.g. `"agent_error"`, `"rate_limited"`).
+        code:    String,
+        /// Human-readable error message.
+        message: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -2037,6 +2046,31 @@ fn resolve_delivery_targets(candidates: Vec<Endpoint>, routing: &OutboundRouting
             .into_iter()
             .filter(|e| channels.contains(&e.channel_type))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod outbound_payload_tests {
+    use super::*;
+    use crate::identity::UserId;
+
+    #[test]
+    fn error_envelope_produces_typed_platform_error() {
+        let envelope = OutboundEnvelope::error(
+            MessageId::new(),
+            UserId("u".into()),
+            crate::session::SessionKey::new(),
+            "agent_error",
+            "model rejected reasoning=minimal",
+        );
+
+        match envelope.to_platform_outbound() {
+            PlatformOutbound::Error { code, message } => {
+                assert_eq!(code, "agent_error");
+                assert_eq!(message, "model rejected reasoning=minimal");
+            }
+            other => panic!("expected PlatformOutbound::Error, got {other:?}"),
+        }
     }
 }
 

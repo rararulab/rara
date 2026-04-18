@@ -285,6 +285,22 @@ impl ChannelAdapter for WechatAdapter {
             }
             // WeChat does not support streaming edits.
             PlatformOutbound::StreamChunk { .. } => {}
+            PlatformOutbound::Error { code, message } => {
+                let token = context_token.ok_or_else(|| EgressError::DeliveryFailed {
+                    message: format!(
+                        "no context_token cached for wechat user {user_id} — cannot send error \
+                         without a prior inbound message"
+                    ),
+                })?;
+                let plain = format!("Error [{code}]: {message}");
+                let result = self
+                    .send_client
+                    .send_text_message(&self.bot_user_id, &user_id, &token, &plain)
+                    .await;
+                result.map_err(|e| EgressError::DeliveryFailed {
+                    message: format!("wechat send_text_message failed: {e}"),
+                })?;
+            }
         }
 
         Ok(())

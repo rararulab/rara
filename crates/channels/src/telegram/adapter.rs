@@ -1386,6 +1386,17 @@ impl ChannelAdapter for TelegramAdapter {
             }
         };
 
+        // Telegram has no typed error frame — collapse Error into a
+        // plain Reply so users still see the failure as a text bubble.
+        let msg = match msg {
+            PlatformOutbound::Error { code, message } => PlatformOutbound::Reply {
+                content:       format!("Error [{code}]: {message}"),
+                attachments:   vec![],
+                reply_context: None,
+            },
+            other => other,
+        };
+
         match msg {
             PlatformOutbound::Reply {
                 content,
@@ -1612,6 +1623,9 @@ impl ChannelAdapter for TelegramAdapter {
                 );
                 let _ = req.await;
             }
+            // Already rewritten to Reply above — kept exhaustive so the
+            // compiler catches any new PlatformOutbound variant.
+            PlatformOutbound::Error { .. } => unreachable!("Error collapsed to Reply above"),
         }
 
         Ok(())
