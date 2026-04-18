@@ -319,11 +319,124 @@ pub struct ToolDefinition {
 // ---------------------------------------------------------------------------
 
 /// Thinking/reasoning budget configuration.
+///
+/// Two hints travel together so each driver family can pick what it
+/// understands: `budget_tokens` for Anthropic-style extended thinking, and
+/// `effort` — a typed [`ReasoningEffort`] — for the OpenAI Responses API.
+/// Drivers that do not understand a hint MUST ignore it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingConfig {
     pub enabled:       bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort:        Option<ReasoningEffort>,
+}
+
+// ---------------------------------------------------------------------------
+// ReasoningEffort
+// ---------------------------------------------------------------------------
+
+/// User-facing reasoning effort bucket for OpenAI Responses-style drivers.
+///
+/// Not every variant is accepted by every model — `gpt-5.4` rejects
+/// [`Minimal`](Self::Minimal), legacy reasoning families (`o*`, `codex-*`)
+/// reject [`Xhigh`](Self::Xhigh). Call
+/// [`clamp_for_model`](Self::clamp_for_model) before serialising to the wire so
+/// the API never sees an unsupported value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    /// User intent: reasoning off. Clamps to [`None_`](Self::None_) on
+    /// gpt-5.4 and [`Minimal`](Self::Minimal) elsewhere.
+    Off,
+    /// Wire `"none"` — the gpt-5.4-only opt-out bucket.
+    #[serde(rename = "none")]
+    None_,
+    /// Wire `"minimal"` — rejected by gpt-5.4.
+    Minimal,
+    Low,
+    Medium,
+    High,
+    /// Wire `"xhigh"` — accepted by the full `gpt-5*` family; legacy
+    /// reasoning families clamp to [`High`](Self::High).
+    Xhigh,
+}
+
+impl ReasoningEffort {
+    /// Serialise to the string the OpenAI Responses API expects.
+    ///
+    /// [`Off`](Self::Off) is a pre-clamp intent; if it ever reaches this
+    /// function it means someone skipped
+    /// [`clamp_for_model`](Self::clamp_for_model). Return the safest wire
+    /// bucket the API universally accepts so the request still succeeds
+    /// even if the clamp invariant slips.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Off | Self::Minimal => "minimal",
+            Self::None_ => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+        }
+    }
+
+    /// Clamp the effort to the set the concrete OpenAI model accepts.
+    ///
+    /// The `model` argument tolerates a `<vendor>/` routing prefix so this
+    /// keeps working when a router rewrites `gpt-5.4` to `openai/gpt-5.4`.
+    #[must_use]
+    pub fn clamp_for_model(self, model: &str) -> Self {
+        match (self, ModelFamily::detect(model)) {
+            (Self::Off, ModelFamily::Gpt5_4) => Self::None_,
+            (Self::Off, _) => Self::Minimal,
+            (Self::Minimal, ModelFamily::Gpt5_4) => Self::Low,
+            (Self::Xhigh, ModelFamily::LegacyReasoning) => Self::High,
+            (e, _) => e,
+        }
+    }
+}
+
+/// OpenAI reasoning-model families with distinct effort acceptance sets.
+///
+/// The acceptance matrix (April 2026, Responses API):
+///
+/// | family            | none | minimal | low | medium | high | xhigh |
+/// |-------------------|:----:|:-------:|:---:|:------:|:----:|:-----:|
+/// | `gpt-5.4*`        |  ✓   |    ✗    |  ✓  |   ✓    |  ✓   |   ✓   |
+/// | other `gpt-5*`    |  ✗   |    ✓    |  ✓  |   ✓    |  ✓   |   ✓   |
+/// | legacy (`o*`/`codex-*`) | ✗ |   ✓    |  ✓  |   ✓    |  ✓   |   ✗   |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+enum ModelFamily {
+    /// The `gpt-5.4` family — `gpt-5.4`, `gpt-5.4-mini`, etc.
+    Gpt5_4,
+    /// Other `gpt-5*` models that accept `xhigh` but also `minimal`.
+    Gpt5,
+    /// Legacy reasoning models: `o3`, `o4`, `codex-mini`, etc. — no `xhigh`.
+    LegacyReasoning,
+    /// Non-reasoning model. Effort clamp is a no-op (drivers shouldn't
+    /// reach this path, but we fail open rather than rejecting the request).
+    Other,
+}
+
+impl ModelFamily {
+    fn detect(model: &str) -> Self {
+        let lower = model.to_lowercase();
+        // Strip a leading `<vendor>/` prefix so routers that rewrite model
+        // ids don't defeat family detection (e.g. `openai/gpt-5.4`).
+        let bare = lower.rsplit('/').next().unwrap_or(&lower);
+        if bare.starts_with("gpt-5.4") {
+            Self::Gpt5_4
+        } else if bare.starts_with("gpt-5") {
+            Self::Gpt5
+        } else if bare.starts_with('o') || bare.starts_with("codex-") {
+            Self::LegacyReasoning
+        } else {
+            Self::Other
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

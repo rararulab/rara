@@ -31,8 +31,8 @@ use super::{
     stream::StreamDelta,
     types::{
         CompletionRequest, CompletionResponse, ContentBlock, EmbeddingRequest, EmbeddingResponse,
-        LlmProviderFamily, Message, MessageContent, ModelInfo, Role, StopReason, ToolCallRequest,
-        ToolChoice, Usage, detect_provider_family,
+        LlmProviderFamily, Message, MessageContent, ModelInfo, ReasoningEffort, Role, StopReason,
+        ThinkingConfig, ToolCallRequest, ToolChoice, Usage, detect_provider_family,
     },
 };
 use crate::error::{KernelError, Result};
@@ -761,40 +761,51 @@ pub(crate) fn build_responses_request(request: &CompletionRequest, _format: ApiF
         body["tools"] = json!(tools);
     }
 
-    // Reasoning config.
-    //
-    // Three cases:
-    //   * `None` — no session override; fall back to the model family's default
-    //     (medium) so reasoning-family models still reason.
-    //   * `Some(enabled: false)` — the user explicitly turned reasoning off. Ask
-    //     the API for the minimal effort the Responses contract allows; omitting
-    //     the block entirely would be read as "default" by the server.
-    //   * `Some(enabled: true)` — map the budget to an effort bucket.
-    let reasoning_effort = match request.thinking.as_ref() {
-        None => "medium",
-        Some(t) if !t.enabled => "minimal",
-        Some(t) => t
-            .budget_tokens
-            .map(|b| {
-                if b >= 10_000 {
-                    "high"
-                } else if b >= 3_000 {
-                    "medium"
-                } else {
-                    "low"
-                }
-            })
-            .unwrap_or("medium"),
-    };
+    let reasoning_effort = resolve_reasoning_effort(&request.model, request.thinking.as_ref());
 
     body["reasoning"] = json!({
-        "effort": reasoning_effort,
+        "effort": reasoning_effort.as_wire(),
         "summary": "auto",
     });
 
     body
 }
 
+/// Resolve the [`ReasoningEffort`] for an OpenAI Responses API call.
+///
+/// Preference order:
+///
+/// 1. `ThinkingConfig { enabled: false, .. }` → [`ReasoningEffort::Off`].
+///    Dominates any `effort` hint the caller happens to carry alongside, so we
+///    cannot ask the API for reasoning on a disabled turn.
+/// 2. Typed [`ThinkingConfig::effort`] — used verbatim, clamped to the concrete
+///    model's accepted set.
+/// 3. Legacy [`ThinkingConfig::budget_tokens`] fallback — the pre-`effort` code
+///    path, kept so callers that still set only a budget keep working.
+/// 4. No config → [`ReasoningEffort::Medium`], so reasoning-family models still
+///    reason by default.
+fn resolve_reasoning_effort(model: &str, thinking: Option<&ThinkingConfig>) -> ReasoningEffort {
+    let effort = match thinking {
+        None => return ReasoningEffort::Medium,
+        Some(t) if !t.enabled => ReasoningEffort::Off,
+        Some(t) => t
+            .effort
+            .unwrap_or_else(|| effort_from_budget(t.budget_tokens)),
+    };
+    effort.clamp_for_model(model)
+}
+
+/// Map a legacy Anthropic-style token budget to the closest
+/// [`ReasoningEffort`] bucket. Kept so pre-`effort` callers still route to
+/// sensible values.
+fn effort_from_budget(budget: Option<u32>) -> ReasoningEffort {
+    match budget {
+        Some(b) if b >= 10_000 => ReasoningEffort::High,
+        Some(b) if b >= 3_000 => ReasoningEffort::Medium,
+        Some(_) => ReasoningEffort::Low,
+        None => ReasoningEffort::Medium,
+    }
+}
 // ---------------------------------------------------------------------------
 // Non-streaming response parsing
 // ---------------------------------------------------------------------------
@@ -2408,6 +2419,7 @@ mod tests {
             thinking:            Some(ThinkingConfig {
                 enabled:       true,
                 budget_tokens: Some(20_000),
+                effort:        None,
             }),
             tool_choice:         Default::default(),
             parallel_tool_calls: false,
@@ -2418,6 +2430,147 @@ mod tests {
 
         let body = build_responses_request(&request, ApiFormat::Responses);
         assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn reasoning_effort_clamp_handles_gpt_5_4_quirks() {
+        // gpt-5.4 accepts none | low | medium | high | xhigh. Off → None_
+        // (wire "none"); Minimal isn't accepted so it bumps to Low.
+        assert_eq!(
+            ReasoningEffort::Off.clamp_for_model("gpt-5.4"),
+            ReasoningEffort::None_
+        );
+        assert_eq!(
+            ReasoningEffort::Minimal.clamp_for_model("gpt-5.4"),
+            ReasoningEffort::Low
+        );
+        assert_eq!(
+            ReasoningEffort::Xhigh.clamp_for_model("gpt-5.4-mini"),
+            ReasoningEffort::Xhigh
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_clamp_preserves_minimal_for_other_models() {
+        // Non-gpt-5.4 reasoning models accept Minimal. Legacy reasoning
+        // families (`o*`, `codex-*`) cap Xhigh at High.
+        assert_eq!(
+            ReasoningEffort::Off.clamp_for_model("gpt-5"),
+            ReasoningEffort::Minimal
+        );
+        assert_eq!(
+            ReasoningEffort::Minimal.clamp_for_model("gpt-5"),
+            ReasoningEffort::Minimal
+        );
+        assert_eq!(
+            ReasoningEffort::Xhigh.clamp_for_model("codex-mini"),
+            ReasoningEffort::High
+        );
+        assert_eq!(
+            ReasoningEffort::Xhigh.clamp_for_model("o3"),
+            ReasoningEffort::High
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_clamp_keeps_xhigh_on_gpt_5_family() {
+        // gpt-5 (not just gpt-5.4) accepts Xhigh; the old budget→bucket
+        // ladder silently downgraded it to High.
+        assert_eq!(
+            ReasoningEffort::Xhigh.clamp_for_model("gpt-5"),
+            ReasoningEffort::Xhigh
+        );
+        assert_eq!(
+            ReasoningEffort::Xhigh.clamp_for_model("gpt-5-mini"),
+            ReasoningEffort::Xhigh
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_clamp_strips_vendor_prefix() {
+        // A router that prepends `<vendor>/` must not defeat family
+        // detection — gpt-5.4 quirks still apply to `openai/gpt-5.4`.
+        assert_eq!(
+            ReasoningEffort::Minimal.clamp_for_model("openai/gpt-5.4"),
+            ReasoningEffort::Low
+        );
+        assert_eq!(
+            ReasoningEffort::Off.clamp_for_model("openai/gpt-5.4"),
+            ReasoningEffort::None_
+        );
+        assert_eq!(
+            ReasoningEffort::Xhigh.clamp_for_model("openai/gpt-5"),
+            ReasoningEffort::Xhigh
+        );
+    }
+
+    #[test]
+    fn resolve_reasoning_effort_disabled_ignores_effort_hint() {
+        // `enabled: false` is authoritative — a stray `effort: High` must
+        // not leak through and ask the API for reasoning on a disabled turn.
+        let thinking = ThinkingConfig {
+            enabled:       false,
+            budget_tokens: None,
+            effort:        Some(ReasoningEffort::High),
+        };
+        assert_eq!(
+            resolve_reasoning_effort("gpt-5.4", Some(&thinking)),
+            ReasoningEffort::None_
+        );
+        assert_eq!(
+            resolve_reasoning_effort("gpt-5", Some(&thinking)),
+            ReasoningEffort::Minimal
+        );
+    }
+
+    #[test]
+    fn build_responses_request_uses_explicit_effort_hint() {
+        // Xhigh round-trips end-to-end; the pre-typed-enum ladder capped
+        // at "high" and silently lost the user's selection.
+        let request = CompletionRequest {
+            model:               "gpt-5.4".into(),
+            messages:            vec![],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            Some(ThinkingConfig {
+                enabled:       true,
+                budget_tokens: Some(32_768),
+                effort:        Some(ReasoningEffort::Xhigh),
+            }),
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+            emit_reasoning:      false,
+        };
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        assert_eq!(body["reasoning"]["effort"], "xhigh");
+    }
+
+    #[test]
+    fn build_responses_request_gpt_5_4_off_maps_to_none() {
+        // Regression: pre-fix, Off was sent as `"minimal"` which gpt-5.4
+        // rejects with HTTP 400. Must now emit `"none"`.
+        let request = CompletionRequest {
+            model:               "gpt-5.4".into(),
+            messages:            vec![],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            Some(ThinkingConfig {
+                enabled:       false,
+                budget_tokens: None,
+                effort:        Some(ReasoningEffort::Off),
+            }),
+            tool_choice:         Default::default(),
+            parallel_tool_calls: false,
+            frequency_penalty:   None,
+            top_p:               None,
+            emit_reasoning:      false,
+        };
+        let body = build_responses_request(&request, ApiFormat::Responses);
+        assert_eq!(body["reasoning"]["effort"], "none");
     }
 
     #[test]
