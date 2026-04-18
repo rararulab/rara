@@ -52,7 +52,7 @@ import type {
 import { RaraStorageBackend } from "@/adapters/rara-storage";
 import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
-import { api } from "@/api/client";
+import { api, settingsApi } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
@@ -452,6 +452,7 @@ export default function PiChat() {
   const [showSessionList, setShowSessionList] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   /** Switch the agent to a different session, loading its history. */
@@ -809,7 +810,7 @@ export default function PiChat() {
       {/* Rara-native model picker — replaces pi-mono's ModelSelector. */}
       <RaraModelDialog
         open={modelDialogOpen}
-        onClose={() => setModelDialogOpen(false)}
+        onClose={() => { setModelDialogOpen(false); setResetError(null); }}
         currentProvider={agentRef.current?.state.model?.provider ?? null}
         onSelect={(entry: ProviderInfo) => {
           const agent = agentRef.current;
@@ -826,30 +827,69 @@ export default function PiChat() {
           }
           setModelDialogOpen(false);
         }}
+        resetError={resetError}
         onUseDefault={() => {
           const agent = agentRef.current;
           const key = agent?.sessionId;
-          setModelDialogOpen(false);
           if (!agent || !key) return;
+          setResetError(null);
           // PATCH with explicit nulls to clear the pinned provider/model
           // and let `llm.default_provider` take over on the next turn.
           // The double-option body is what makes the backend distinguish
           // this from a leave-alone call (see #1569).
+          //
+          // Close the dialog only after the PATCH succeeds — a network
+          // failure keeps the dialog open so the error row is visible
+          // and the user can retry without chasing a dismissed toast.
           api
             .patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
               model:          null,
               model_provider: null,
               thinking_level: null,
             })
-            .then(() => {
-              // Drop the composer pill back to the "unknown" sentinel so
-              // the UI reads "default" instead of the stale selection.
-              agent.state.model = syntheticModel(UNKNOWN_MODEL_SENTINEL, UNKNOWN_MODEL_SENTINEL);
+            .then(async () => {
+              // Race guard: the user may have switched sessions while
+              // the PATCH was in-flight. If so, the composer now
+              // reflects a different session and must not be clobbered.
+              if (agentRef.current?.sessionId !== key) {
+                setModelDialogOpen(false);
+                return;
+              }
+              // Resolve the admin-configured default so the composer
+              // pill can read e.g. "codex: codex-mini" instead of the
+              // "unknown" sentinel. PiChat does not already consume
+              // react-query so we fire a one-shot request — failures
+              // here are non-fatal and fall back to the sentinel.
+              let resolvedModel = syntheticModel(
+                UNKNOWN_MODEL_SENTINEL,
+                UNKNOWN_MODEL_SENTINEL,
+              );
+              try {
+                const settings = await settingsApi.list();
+                const provider = settings["llm.default_provider"]?.trim();
+                const model = provider
+                  ? settings[`llm.providers.${provider}.default_model`]?.trim()
+                  : undefined;
+                if (provider && model) {
+                  resolvedModel = syntheticModel(provider, model);
+                }
+              } catch (e: unknown) {
+                console.warn("Failed to resolve admin default provider:", e);
+              }
+              // Re-check the race guard after the settings fetch.
+              if (agentRef.current?.sessionId !== key) {
+                setModelDialogOpen(false);
+                return;
+              }
+              agent.state.model = resolvedModel;
               lastPersistedRef.current = { model: null, provider: null, thinking: null };
               chatPanelRef.current?.agentInterface?.requestUpdate();
+              setModelDialogOpen(false);
             })
             .catch((e: unknown) => {
               console.warn("Failed to clear session model override:", e);
+              const msg = e instanceof Error ? e.message : String(e);
+              setResetError(`Failed to reset model: ${msg}`);
             });
         }}
       />

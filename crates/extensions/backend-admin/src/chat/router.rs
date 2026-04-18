@@ -49,7 +49,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::chat::{
     error::ChatError,
     model_catalog::ChatModel,
-    service::{ProviderInfo, SessionService},
+    service::{ProviderInfo, SessionPatch, SessionService},
 };
 
 /// Parse an optional thinking-level string from a create-session body.
@@ -104,6 +104,9 @@ fn parse_patch_thinking_level(
 /// but a session PATCH must treat "leave alone" and "reset to default"
 /// as different operations — this helper keeps the semantic visible on
 /// the wire without pulling in `serde_with`.
+///
+/// **MUST be paired with `#[serde(default)]` on the target field;
+/// otherwise an absent field becomes a hard deserialization error.**
 fn deserialize_double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
@@ -168,23 +171,38 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     /// New human-readable title.
+    ///
+    /// Null clears the override so the admin default applies; absent leaves it
+    /// untouched.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     #[schema(value_type = Option<String>, nullable)]
     pub title:          Option<Option<String>>,
     /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
+    ///
+    /// Null clears the override so the admin default applies; absent leaves it
+    /// untouched.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     #[schema(value_type = Option<String>, nullable)]
     pub model:          Option<Option<String>>,
     /// New provider identifier paired with `model`.
+    ///
+    /// Null clears the override so the admin default applies; absent leaves it
+    /// untouched.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     #[schema(value_type = Option<String>, nullable)]
     pub model_provider: Option<Option<String>>,
     /// New thinking-level override — one of `"off"`, `"minimal"`, `"low"`,
     /// `"medium"`, `"high"`, `"xhigh"`.
+    ///
+    /// Null clears the override so the admin default applies; absent leaves it
+    /// untouched.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     #[schema(value_type = Option<String>, nullable)]
     pub thinking_level: Option<Option<String>>,
     /// New system prompt override.
+    ///
+    /// Null clears the override so the admin default applies; absent leaves it
+    /// untouched.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     #[schema(value_type = Option<String>, nullable)]
     pub system_prompt:  Option<Option<String>>,
@@ -396,16 +414,15 @@ async fn update_session(
     Path(key): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionEntry>, ChatError> {
-    let thinking_level = parse_patch_thinking_level(req.thinking_level)?;
+    let patch = SessionPatch {
+        title:          req.title,
+        model:          req.model,
+        model_provider: req.model_provider,
+        thinking_level: parse_patch_thinking_level(req.thinking_level)?,
+        system_prompt:  req.system_prompt,
+    };
     let session = service
-        .update_session_fields(
-            &parse_session_key(&key)?,
-            req.title,
-            req.model,
-            req.model_provider,
-            thinking_level,
-            req.system_prompt,
-        )
+        .update_session_fields(&parse_session_key(&key)?, patch)
         .await?;
     Ok(Json(session))
 }

@@ -46,6 +46,12 @@ interface Props {
    */
   onUseDefault:      () => void;
   currentProvider?:  string | null;
+  /**
+   * Optional error surfaced when the caller's `onUseDefault` PATCH
+   * failed. Rendered as a red banner directly above the "Use default"
+   * row so the user can retry without the dialog dismissing.
+   */
+  resetError?:       string | null;
 }
 
 /**
@@ -65,6 +71,7 @@ export function RaraModelDialog({
   onSelect,
   onUseDefault,
   currentProvider,
+  resetError,
 }: Props) {
   const [entries, setEntries] = useState<ProviderInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -162,6 +169,14 @@ export function RaraModelDialog({
         />
 
         <div className="max-h-[60vh] overflow-y-auto rounded border border-border">
+          {resetError && (
+            <div
+              className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive"
+              role="alert"
+            >
+              {resetError}
+            </div>
+          )}
           {/*
             Sits above the filter results so it stays accessible even
             when the user is typing — the admin "default provider" is
