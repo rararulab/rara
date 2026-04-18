@@ -534,23 +534,27 @@ pub struct TurnTrace {
 #[derive(Debug)]
 pub struct AgentTurnResult {
     /// The final text produced by the agent.
-    pub text:          String,
+    pub text:                  String,
     /// Number of LLM iterations consumed.
-    pub iterations:    usize,
+    pub iterations:            usize,
     /// Number of tool calls executed.
-    pub tool_calls:    usize,
+    pub tool_calls:            usize,
     /// Model used for this turn.
-    pub model:         String,
+    pub model:                 String,
     /// Largest prompt_tokens across all iterations in this turn — each
     /// iteration re-sends the full context so the last one is effectively
     /// the max. `0` when no usage data was reported by the provider.
-    pub input_tokens:  u32,
+    pub input_tokens:          u32,
     /// Sum of completion_tokens across all iterations in this turn.
-    pub output_tokens: u32,
+    pub output_tokens:         u32,
+    /// Authoritative context window size (in tokens) for the model used this
+    /// turn, sourced from [`ModelCapabilities`]. `None` when the driver did
+    /// not expose a limit and no catalog/manifest override was found.
+    pub context_window_tokens: Option<u32>,
     /// Detailed trace of the turn for observability.
-    pub trace:         TurnTrace,
+    pub trace:                 TurnTrace,
     /// Structured cascade trace built in real time during the turn.
-    pub cascade:       crate::cascade::CascadeTrace,
+    pub cascade:               crate::cascade::CascadeTrace,
 }
 
 impl AgentTurnResult {
@@ -558,13 +562,14 @@ impl AgentTurnResult {
     /// judgment decides Rara should not reply.
     pub fn empty() -> Self {
         Self {
-            text:          String::new(),
-            iterations:    0,
-            tool_calls:    0,
-            model:         String::new(),
-            input_tokens:  0,
-            output_tokens: 0,
-            trace:         TurnTrace {
+            text:                  String::new(),
+            iterations:            0,
+            tool_calls:            0,
+            model:                 String::new(),
+            input_tokens:          0,
+            output_tokens:         0,
+            context_window_tokens: None,
+            trace:                 TurnTrace {
                 duration_ms:      0,
                 model:            String::new(),
                 input_text:       None,
@@ -575,7 +580,7 @@ impl AgentTurnResult {
                 error:            None,
                 rara_message_id:  crate::io::MessageId::new(),
             },
-            cascade:       crate::cascade::CascadeTrace::empty(),
+            cascade:               crate::cascade::CascadeTrace::empty(),
         }
     }
 }
@@ -1199,6 +1204,15 @@ pub(crate) async fn run_agent_loop(
     } else {
         None
     };
+
+    // Emit turn-start event so channel adapters can populate model-dependent
+    // UI (e.g. the Telegram pinned session card) before any LLM response
+    // arrives. Carrying the authoritative context window here removes the need
+    // for downstream substring-match tables.
+    stream_handle.emit(StreamEvent::TurnStarted {
+        model:                 model.clone(),
+        context_window_tokens: u32::try_from(capabilities.context_window_tokens).ok(),
+    });
 
     // +1 for potential budget grace call (only consumed if grace is injected).
     for iteration in 0..=max_iterations {
@@ -2080,6 +2094,7 @@ pub(crate) async fn run_agent_loop(
                 model: model.clone(),
                 input_tokens: last_prompt_tokens,
                 output_tokens: cumulative_output_tokens,
+                context_window_tokens: u32::try_from(capabilities.context_window_tokens).ok(),
                 trace,
                 cascade,
             });
@@ -3101,6 +3116,7 @@ pub(crate) async fn run_agent_loop(
         model: model.clone(),
         input_tokens: last_prompt_tokens,
         output_tokens: cumulative_output_tokens,
+        context_window_tokens: u32::try_from(capabilities.context_window_tokens).ok(),
         trace,
         cascade,
     })

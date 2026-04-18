@@ -2646,11 +2646,12 @@ impl Kernel {
                 // `TurnUsage` arrives.
                 if let Ok(ref result) = turn_result {
                     stream_handle.emit(crate::io::StreamEvent::TurnMetrics {
-                        duration_ms: elapsed_ms,
-                        iterations:  result.iterations,
-                        tool_calls:  result.tool_calls,
-                        model:       result.model.clone(),
-                        rara_message_id: result.trace.rara_message_id.to_string(),
+                        duration_ms:           elapsed_ms,
+                        iterations:            result.iterations,
+                        tool_calls:            result.tool_calls,
+                        model:                 result.model.clone(),
+                        rara_message_id:       result.trace.rara_message_id.to_string(),
+                        context_window_tokens: result.context_window_tokens,
                     });
                     stream_handle.emit(crate::io::StreamEvent::TurnUsage {
                         input_tokens:  result.input_tokens,

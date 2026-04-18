@@ -673,13 +673,14 @@ pub(crate) async fn run_plan_loop(
 
     let final_text_len = summary.len();
     Ok(AgentTurnResult {
-        text:          summary,
-        iterations:    total_iterations,
-        tool_calls:    total_tool_calls,
-        model:         last_model.clone(),
-        input_tokens:  0,
-        output_tokens: 0,
-        trace:         crate::agent::TurnTrace {
+        text:                  summary,
+        iterations:            total_iterations,
+        tool_calls:            total_tool_calls,
+        model:                 last_model.clone(),
+        input_tokens:          0,
+        output_tokens:         0,
+        context_window_tokens: None,
+        trace:                 crate::agent::TurnTrace {
             duration_ms: start.elapsed().as_millis() as u64,
             model: last_model,
             input_text: Some(user_text),
@@ -707,7 +708,7 @@ pub(crate) async fn run_plan_loop(
             },
             rara_message_id,
         },
-        cascade:       crate::cascade::CascadeTrace::empty(),
+        cascade:               crate::cascade::CascadeTrace::empty(),
     })
 }
 
@@ -1455,13 +1456,14 @@ mod tests {
     ) -> crate::agent::AgentTurnResult {
         use crate::io::MessageId;
         crate::agent::AgentTurnResult {
-            text:          text.to_owned(),
-            iterations:    25,
-            tool_calls:    25,
-            model:         "test-model".to_owned(),
-            input_tokens:  0,
-            output_tokens: 0,
-            trace:         crate::agent::TurnTrace {
+            text:                  text.to_owned(),
+            iterations:            25,
+            tool_calls:            25,
+            model:                 "test-model".to_owned(),
+            input_tokens:          0,
+            output_tokens:         0,
+            context_window_tokens: None,
+            trace:                 crate::agent::TurnTrace {
                 duration_ms: 1000,
                 model: "test-model".to_owned(),
                 input_text: None,
@@ -1472,7 +1474,7 @@ mod tests {
                 error: error.map(|s| s.to_owned()),
                 rara_message_id: MessageId::new(),
             },
-            cascade:       crate::cascade::CascadeTrace {
+            cascade:               crate::cascade::CascadeTrace {
                 message_id: String::new(),
                 ticks:      Vec::new(),
                 summary:    crate::cascade::CascadeSummary {
