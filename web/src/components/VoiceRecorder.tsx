@@ -16,6 +16,8 @@ type VoiceRecorderProps = {
   getSessionKey: () => string | undefined;
   /** Called when the backend finishes processing the voice message. */
   onComplete?: () => void;
+  /** Optional wrapper classes — used to position the floating button. */
+  className?: string;
 };
 
 /**
@@ -40,7 +42,7 @@ function blobToBase64(blob: Blob): Promise<string> {
  * Records audio via MediaRecorder, sends as an AudioBase64 content block
  * through the existing WebSocket chat API for server-side transcription.
  */
-export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps) {
+export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [sending, setSending] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -167,7 +169,7 @@ export function VoiceRecorder({ getSessionKey, onComplete }: VoiceRecorderProps)
           : sending
             ? "bg-muted text-muted-foreground cursor-wait"
             : "bg-background/80 text-muted-foreground backdrop-blur hover:bg-secondary hover:text-foreground"
-      }`}
+      } ${className ?? ""}`}
       title={recording ? "Stop recording" : sending ? "Sending..." : "Record voice message"}
     >
       {sending ? (

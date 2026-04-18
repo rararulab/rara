@@ -252,6 +252,17 @@
  * in `@layer components {}` (as the first attempt did) made it invisible.
  */
 /*
+ * Pi-web-ui left-aligns user messages (`class="flex justify-start"`
+ * on the bubble's parent). Flip to the right side — the standard
+ * chat convention of "my messages on the right". `:has()` gives us a
+ * parent selector without patching pi-web-ui's templates, and the
+ * rule is narrow enough that only the bubble's direct parent matches.
+ */
+.rara-chat div:has(> .user-message-container) {
+  justify-content: flex-end;
+}
+
+/*
  * Pi-web-ui's `<agent-interface>` paints a full-height
  * `flex flex-col h-full bg-background` shell that covers any gradient
  * behind it. Unpaint that single shell so the `.rara-chat` canvas and
