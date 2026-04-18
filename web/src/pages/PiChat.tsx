@@ -55,6 +55,7 @@ import { api, settingsApi } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { RaraModelDialog } from "@/components/RaraModelDialog";
+import { AlmaCaret } from "@/components/AlmaCaret";
 import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
 import type { ProviderInfo } from "@/api/types";
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
@@ -894,13 +895,10 @@ export default function PiChat() {
         moment the user commits their first message (onBeforeSend).
       */}
       {showWelcome && !isInitializing && (
-        <div className="pointer-events-none absolute inset-x-0 top-12 bottom-40 z-10 flex flex-col items-center justify-center gap-4 px-6 text-center">
-          <h1 className="bg-gradient-to-br from-foreground via-foreground/85 to-foreground/50 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl">
-            你好，我是 Rara
+        <div className="pointer-events-none absolute inset-x-0 top-12 bottom-40 z-10 flex items-center justify-center px-6">
+          <h1 className="bg-gradient-to-br from-foreground via-foreground/80 to-foreground/40 bg-clip-text text-6xl font-semibold tracking-[0.2em] text-transparent sm:text-7xl">
+            RARA
           </h1>
-          <p className="max-w-md text-sm text-muted-foreground sm:text-base">
-            有什么想聊的？写任务、问问题、让我帮你查点东西都行。
-          </p>
         </div>
       )}
       {/*
@@ -913,6 +911,13 @@ export default function PiChat() {
         getSessionKey={() => agentRef.current?.sessionId}
         onComplete={reloadMessages}
       />
+      {/*
+        Custom textarea caret (Alma-style): smooth moves + a cool-blue
+        comet tail. Mounts after pi-web-ui's composer is in the DOM via
+        an internal DOM query since the textarea is owned by a Lit
+        custom element we don't ref directly.
+      */}
+      {!isInitializing && <AlmaCaret />}
       {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
       {isInitializing && (
         <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">
