@@ -55,6 +55,7 @@ import { api, settingsApi } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { RaraModelDialog } from "@/components/RaraModelDialog";
+import { AlmaCaret } from "@/components/AlmaCaret";
 import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
 import type { ProviderInfo } from "@/api/types";
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
@@ -456,6 +457,11 @@ export default function PiChat() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
+  // `true` when the active session has no messages — we render a welcome
+  // overlay in that window so the chat page isn't just an input box on
+  // empty canvas. Flipped off on the first send and on session switches
+  // that land on a populated session.
+  const [showWelcome, setShowWelcome] = useState(true);
   const { openSettings } = useSettingsModal();
 
   // Clear any stale reset-error banner whenever the model dialog is
@@ -472,6 +478,7 @@ export default function PiChat() {
     if (!agent) return;
     agent.clearMessages();
     agent.sessionId = session.key;
+    setShowWelcome((session.message_count ?? 0) === 0);
 
     // Restore the session's persisted model + thinking-level so the
     // model pill in the composer reflects the last settings used for
@@ -714,6 +721,7 @@ export default function PiChat() {
       } else {
         initialSession = await api.post<ChatSession>("/api/v1/chat/sessions", {});
       }
+      setShowWelcome((initialSession.message_count ?? 0) === 0);
       // 5. Create the Agent with rara's WebSocket-backed stream function.
       //    The streamFn reads agent.sessionId at call time to get the active session key.
       const agent: Agent = new Agent({
@@ -782,6 +790,8 @@ export default function PiChat() {
         onBeforeSend: async () => {
           const key = agent.sessionId;
           if (!key) return;
+          // The user just committed their first message — no more welcome.
+          setShowWelcome(false);
 
           // Skip the PATCH when `agent.state.model` is pi-agent-core's
           // placeholder default (id/provider = "unknown"). Persisting it
@@ -843,46 +853,74 @@ export default function PiChat() {
   }, []);
 
   return (
-    <div className="relative flex h-screen w-screen flex-col">
+    <div
+      className="rara-chat relative flex h-screen w-screen flex-col"
+      data-welcome={showWelcome && !isInitializing ? "true" : undefined}
+    >
       {/*
         Top utility bar — reserves its own row (not `absolute`) so the
         chat panel's message list can never render underneath the
-        Sessions / Settings / Voice icon buttons.
+        Sessions / Settings icons. Transparent + backdrop-blur so the
+        chat-page canvas + radial glow read through as frosted glass.
       */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 bg-background px-2">
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setShowSessionList(true)}
-            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-            title="Sessions"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 12h18M3 6h18M3 18h18" />
-            </svg>
-          </button>
-          {/*
-            Opens the rara floating settings modal (provider keys, MCP
-            servers, agent manifests, kernel config). Single source of
-            truth since #1581 retired pi-mono's separate SettingsDialog.
-          */}
-          <button
-            onClick={() => openSettings()}
-            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-            title="Settings"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-        </div>
-        <VoiceRecorder
-          getSessionKey={() => agentRef.current?.sessionId}
-          onComplete={reloadMessages}
-        />
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b border-border/40 bg-background/40 px-2 backdrop-blur-md">
+        <button
+          onClick={() => setShowSessionList(true)}
+          className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors cursor-pointer"
+          title="Sessions"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12h18M3 6h18M3 18h18" />
+          </svg>
+        </button>
+        {/*
+          Opens the rara floating settings modal (provider keys, MCP
+          servers, agent manifests, kernel config). Single source of
+          truth since #1581 retired pi-mono's separate SettingsDialog.
+        */}
+        <button
+          onClick={() => openSettings()}
+          className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors cursor-pointer"
+          title="Settings"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </div>
       {/* Chat panel container — takes remaining vertical space. */}
       <div ref={containerRef} className="min-h-0 flex-1 w-full" />
+      {/*
+        Welcome overlay — rendered above pi-web-ui's empty message list
+        when the active session has no messages. Pointer-events-none so
+        clicks pass through to the composer below; flipped off the
+        moment the user commits their first message (onBeforeSend).
+      */}
+      {showWelcome && !isInitializing && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-[calc(40vh+9rem)] z-10 flex justify-center px-6">
+          <h1 className="bg-gradient-to-br from-foreground via-foreground/80 to-foreground/40 bg-clip-text text-6xl font-semibold tracking-[0.2em] text-transparent sm:text-7xl">
+            RARA
+          </h1>
+        </div>
+      )}
+      {/*
+        Voice button floats over pi-web-ui's composer, anchored to the
+        viewport bottom-right so it sits on the same line as the send
+        button without needing to patch pi-web-ui's input internals.
+      */}
+      <VoiceRecorder
+        className="absolute bottom-[29px] left-14 z-20 !h-8 !w-8 !rounded-md !bg-transparent !shadow-none hover:!bg-accent"
+        getSessionKey={() => agentRef.current?.sessionId}
+        onComplete={reloadMessages}
+      />
+      {/*
+        Custom textarea caret (Alma-style): smooth moves + a cool-blue
+        comet tail. Mounts after pi-web-ui's composer is in the DOM via
+        an internal DOM query since the textarea is owned by a Lit
+        custom element we don't ref directly.
+      */}
+      {!isInitializing && <AlmaCaret measureKey={showWelcome ? "welcome" : "chat"} />}
       {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
       {isInitializing && (
         <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">
