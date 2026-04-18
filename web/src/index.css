@@ -179,24 +179,36 @@
   }
 }
 
-@layer components {
-  /*
-   * Pi-web-ui ships `.user-message-container` with a warm orange gradient
-   * (`#d94f001f → #ff6b001f → #d4a5001f`) and matching orange border. On
-   * rara's rose/pink palette the orange reads as a clashing yellow. Swap
-   * to a neutral frosted-glass tint tied to the theme's foreground token
-   * so the bubble adapts with light/dark modes and any future re-palette.
-   * `backdrop-filter: blur(10px)` is already applied by pi-web-ui.
-   */
-  .user-message-container {
-    background: color-mix(in oklab, var(--color-foreground) 5%, transparent);
-    border-color: color-mix(in oklab, var(--color-foreground) 10%, transparent);
-  }
-  .dark .user-message-container {
-    background: color-mix(in oklab, var(--color-foreground) 7%, transparent);
-    border-color: color-mix(in oklab, var(--color-foreground) 14%, transparent);
-  }
+/*
+ * Pi-web-ui ships `.user-message-container` with a warm orange gradient
+ * and a heavy `blur(10px)` backdrop — too opaque and clashes with rara's
+ * rose palette. Retint to match multica's tool-call glass pattern
+ * (`border-info/20 + bg-info/5 + backdrop-blur-sm`), the canonical
+ * "transparent frosted glass" treatment in that design language.
+ *
+ * `--info` values are taken verbatim from multica's `tokens.css`:
+ *   light: oklch(0.55 0.18 250), dark: oklch(0.65 0.18 250).
+ * Inlined because rara's chat page sits outside `.rara-admin` scope and
+ * therefore can't read rara's own semantic tokens.
+ *
+ * Kept UNLAYERED on purpose: pi-web-ui's rule is unlayered too, and per
+ * the CSS Cascade Layers spec any layered declaration — no matter its
+ * specificity or source order — loses to an unlayered one. Wrapping this
+ * in `@layer components {}` (as the first attempt did) made it invisible.
+ */
+.user-message-container {
+  background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
+  border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);
+  /* `sm` in tailwind ≈ 4px; overrides pi-web-ui's heavier blur(10px). */
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.dark .user-message-container {
+  background: color-mix(in oklab, oklch(0.65 0.18 250) 6%, transparent);
+  border-color: color-mix(in oklab, oklch(0.65 0.18 250) 24%, transparent);
+}
 
+@layer components {
   .app-surface {
     background: color-mix(in oklab, var(--color-card) 92%, transparent);
     backdrop-filter: blur(14px);
