@@ -362,8 +362,12 @@ impl SessionCommandHandler {
             };
 
             let listed = self.client.list_chat_models().await;
-            if let Err(ref e) = listed {
-                warn!(error = %e, "failed to list chat models for /model");
+            match &listed {
+                Err(e) => warn!(error = %e, "failed to list chat models for /model"),
+                Ok(models) if models.is_empty() => {
+                    warn!("provider returned empty model list for /model");
+                }
+                Ok(_) => {}
             }
             match listed {
                 Ok(models) if !models.is_empty() => {
