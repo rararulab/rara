@@ -20,12 +20,11 @@ import {
   setAppStorage,
   SessionsStore,
   SettingsStore,
+  // Stub stores only — rara's admin settings modal is the real source of
+  // truth for provider keys and custom providers (see #1581).
   ProviderKeysStore,
   CustomProvidersStore,
   defaultConvertToLlm,
-  ProvidersModelsTab,
-  ProxyTab,
-  SettingsDialog,
   type Attachment,
   type UserMessageWithAttachments,
 } from "@mariozechner/pi-web-ui";
@@ -54,9 +53,9 @@ import { createRaraStreamFn } from "@/adapters/rara-stream";
 import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
 import { api, settingsApi } from "@/api/client";
 import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
-import { useNavigate } from "react-router";
 import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { RaraModelDialog } from "@/components/RaraModelDialog";
+import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
 import type { ProviderInfo } from "@/api/types";
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
@@ -302,14 +301,14 @@ function SessionListPanel({
   onClose,
   onDelete,
   onNew,
-  onNavigate,
+  onOpenAdmin,
 }: {
   activeKey: string | undefined;
   onSelect: (s: ChatSession) => void;
   onClose: () => void;
   onDelete: (key: string) => void;
   onNew: () => void;
-  onNavigate: (path: string) => void;
+  onOpenAdmin: () => void;
 }) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -411,13 +410,12 @@ function SessionListPanel({
         </div>
         {/*
           Server-wide admin settings (MCP servers, agent manifests, skills,
-          kernel config). Chat-user preferences (provider API keys, proxy,
-          theme, thinking default) live in pi-mono's SettingsDialog opened
-          from the gear icon in the top bar.
+          kernel config, provider keys). Opens the floating settings modal
+          in place — no navigation away from the chat.
         */}
         <div className="border-t border-border px-4 py-3">
           <button
-            onClick={() => { onNavigate("/settings"); onClose(); }}
+            onClick={() => { onOpenAdmin(); onClose(); }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -458,7 +456,7 @@ export default function PiChat() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
-  const navigate = useNavigate();
+  const { openSettings } = useSettingsModal();
 
   // Clear any stale reset-error banner whenever the model dialog is
   // closed — regardless of close path (backdrop click, successful
@@ -863,15 +861,12 @@ export default function PiChat() {
             </svg>
           </button>
           {/*
-            Opens pi-mono's SettingsDialog (provider API keys, custom
-            providers, proxy). Rara's server-wide admin config (MCP
-            servers, agent manifests, kernel config) still lives at
-            `/settings` — reachable from the session-list footer.
+            Opens the rara floating settings modal (provider keys, MCP
+            servers, agent manifests, kernel config). Single source of
+            truth since #1581 retired pi-mono's separate SettingsDialog.
           */}
           <button
-            onClick={() =>
-              SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()])
-            }
+            onClick={() => openSettings()}
             className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
             title="Settings"
           >
@@ -903,7 +898,7 @@ export default function PiChat() {
           onClose={() => setShowSessionList(false)}
           onDelete={handleSessionDeleted}
           onNew={newSession}
-          onNavigate={navigate}
+          onOpenAdmin={() => openSettings()}
         />
       )}
       {/* Rara-native model picker — replaces pi-mono's ModelSelector. */}
