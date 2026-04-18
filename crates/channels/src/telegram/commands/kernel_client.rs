@@ -22,6 +22,7 @@ use chrono::Utc;
 use rara_kernel::{
     channel::types::ChannelType,
     handle::KernelHandle,
+    llm::LlmModelListerRef,
     memory::{TapeService, get_fork_metadata, set_fork_metadata},
     session::{self as ks, SessionIndex, SessionKey},
 };
@@ -29,18 +30,20 @@ use rara_mcp::manager::mgr::{ConnectionStatus, McpManager};
 use snafu::ResultExt;
 
 use super::client::{
-    BotServiceClient, BotServiceError, ChannelBinding, CheckoutResult, DiscoveryJob, McpServerInfo,
-    McpServerStatus, SessionDetail, SessionListItem, SessionSnafu, TapeSnafu,
+    BotServiceClient, BotServiceError, ChannelBinding, ChatModelItem, CheckoutResult, DiscoveryJob,
+    McpServerInfo, McpServerStatus, SessionDetail, SessionListItem, SessionSnafu, TapeSnafu,
 };
 
 /// A [`BotServiceClient`] that calls [`SessionIndex`] and [`TapeService`]
 /// directly, bypassing any HTTP layer.
 pub struct KernelBotServiceClient {
-    sessions: Arc<dyn SessionIndex>,
-    tape:     TapeService,
-    handle:   Option<KernelHandle>,
+    sessions:     Arc<dyn SessionIndex>,
+    tape:         TapeService,
+    handle:       Option<KernelHandle>,
     /// Optional MCP manager for managing MCP server connections.
-    mcp:      Option<McpManager>,
+    mcp:          Option<McpManager>,
+    /// Optional model lister for `/model` to enumerate available models.
+    model_lister: Option<LlmModelListerRef>,
 }
 
 impl KernelBotServiceClient {
@@ -50,12 +53,14 @@ impl KernelBotServiceClient {
         tape: TapeService,
         handle: impl Into<Option<KernelHandle>>,
         mcp: impl Into<Option<McpManager>>,
+        model_lister: impl Into<Option<LlmModelListerRef>>,
     ) -> Self {
         Self {
             sessions,
             tape,
             handle: handle.into(),
             mcp: mcp.into(),
+            model_lister: model_lister.into(),
         }
     }
 }
@@ -490,6 +495,29 @@ impl BotServiceClient for KernelBotServiceClient {
         Ok(())
     }
 
+    async fn list_chat_models(&self) -> Result<Vec<ChatModelItem>, BotServiceError> {
+        let lister = self
+            .model_lister
+            .as_ref()
+            .ok_or_else(|| BotServiceError::Service {
+                message: "model lister not configured".to_owned(),
+            })?;
+        let models = lister
+            .list_models()
+            .await
+            .map_err(|e| BotServiceError::Service {
+                message: format!("failed to list models: {e}"),
+            })?;
+        Ok(models
+            .into_iter()
+            .map(|m| ChatModelItem {
+                name:           m.id.clone(),
+                id:             m.id,
+                context_length: None,
+            })
+            .collect())
+    }
+
     async fn delete_session(&self, key: &str) -> Result<(), BotServiceError> {
         let sk = SessionKey::try_from_raw(key).map_err(|e| BotServiceError::Service {
             message: format!("invalid session key: {e}"),
@@ -699,6 +727,7 @@ mod tests {
             tape.clone(),
             None::<KernelHandle>,
             None::<McpManager>,
+            None::<LlmModelListerRef>,
         );
 
         let root_key = SessionKey::new();

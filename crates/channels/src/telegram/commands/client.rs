@@ -80,6 +80,17 @@ pub struct SessionDetail {
     pub updated_at:    String,
 }
 
+/// A chat model entry surfaced to users (e.g. by `/model`).
+#[derive(Debug, Clone)]
+pub struct ChatModelItem {
+    /// Provider model identifier (e.g. `"openai/gpt-4o"`).
+    pub id:             String,
+    /// Human-friendly display name.
+    pub name:           String,
+    /// Maximum context window in tokens, when known.
+    pub context_length: Option<u32>,
+}
+
 /// A job discovered through the search API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscoveryJob {
@@ -269,4 +280,9 @@ pub trait BotServiceClient: Send + Sync {
 
     /// Delete a session and all associated data (metadata, tape, bindings).
     async fn delete_session(&self, key: &str) -> Result<(), BotServiceError>;
+
+    // -- LLM models ---------------------------------------------------------
+
+    /// List chat models the user can switch to (e.g. for `/model`).
+    async fn list_chat_models(&self) -> Result<Vec<ChatModelItem>, BotServiceError>;
 }

@@ -745,6 +745,7 @@ pub async fn start_with_options(
             rara.tape_service.clone(),
             kernel_handle.clone(),
             rara.mcp_manager.clone(),
+            rara.model_lister.clone(),
         ))
     };
 
@@ -802,9 +803,10 @@ pub async fn start_with_options(
         // Register callback handlers for inline keyboard interactions.
         {
             use rara_channels::telegram::commands::{
-                SessionDeleteCallbackHandler, SessionDeleteCancelHandler,
-                SessionDeleteConfirmHandler, SessionDetailCallbackHandler,
-                SessionSwitchCallbackHandler, StatusJobsCallbackHandler,
+                ModelSwitchCallbackHandler, SessionDeleteCallbackHandler,
+                SessionDeleteCancelHandler, SessionDeleteConfirmHandler,
+                SessionDetailCallbackHandler, SessionSwitchCallbackHandler,
+                StatusJobsCallbackHandler,
             };
             let callback_handlers: Vec<
                 std::sync::Arc<dyn rara_kernel::channel::command::CallbackHandler>,
@@ -814,6 +816,7 @@ pub async fn start_with_options(
                 std::sync::Arc::new(SessionDeleteCallbackHandler::new(bot_client.clone())),
                 std::sync::Arc::new(SessionDeleteConfirmHandler::new(bot_client.clone())),
                 std::sync::Arc::new(SessionDeleteCancelHandler::new()),
+                std::sync::Arc::new(ModelSwitchCallbackHandler::new(bot_client.clone())),
                 std::sync::Arc::new(StatusJobsCallbackHandler::new(kernel_handle.clone())),
             ];
             tg_adapter.set_callback_handlers(callback_handlers);
