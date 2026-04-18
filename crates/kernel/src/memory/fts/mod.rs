@@ -10,6 +10,7 @@
 mod repo;
 mod tokenizer;
 
+use serde_json::Value;
 use sqlx::SqlitePool;
 pub(crate) use tokenizer::warmup as warmup_tokenizer;
 use tracing::{debug, warn};
@@ -66,27 +67,38 @@ impl TapeFts {
         // non-Message entries are not re-scanned on subsequent calls.
         let max_id = new_entries.iter().map(|e| e.id).max().unwrap_or(hwm);
 
-        let indexable: Vec<_> = new_entries
+        let indexable: Vec<TapEntry> = new_entries
             .iter()
             .filter(|e| e.kind == TapEntryKind::Message)
+            .map(|e| (*e).clone())
             .collect();
+
+        // Run jieba segmentation on the blocking pool — it's CPU-bound
+        // and can be slow on long messages (code blocks, transcripts).
+        // Keeping it off the runtime thread avoids stalling other async
+        // work while we index.
+        let segmented: Vec<(u64, String, String)> = tokio::task::spawn_blocking(move || {
+            indexable
+                .into_iter()
+                .filter_map(|entry| {
+                    let content = extract_fts_content(&entry);
+                    (!content.is_empty()).then(|| (entry.id, entry.kind.to_string(), content))
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| sqlx::Error::Protocol(format!("fts segment task: {e}")))?;
 
         let mut tx = self.pool.begin().await?;
         let mut count = 0usize;
 
-        for entry in &indexable {
-            let content = extract_fts_content(entry);
-            if content.is_empty() {
-                continue;
-            }
-            let kind_str = entry.kind.to_string();
-
+        for (entry_id, kind_str, content) in &segmented {
             repo::insert(
                 &mut tx,
-                &content,
+                content,
                 tape_name,
-                &kind_str,
-                entry.id as i64,
+                kind_str,
+                *entry_id as i64,
                 session_key,
             )
             .await?;
@@ -150,11 +162,28 @@ impl TapeFts {
 
 /// Extract searchable text from a tape entry for FTS indexing.
 ///
-/// Delegates to [`super::service::extract_searchable_text`] so the indexed
-/// text surface is identical to the brute-force search path.
+/// Returns only JSON string leaves (payload + metadata) joined by
+/// newlines — object keys, numbers, and JSON punctuation are dropped so
+/// the jieba segmenter doesn't chew on structural noise (e.g. `"role"`,
+/// `{`, `}`). The brute-force search path keeps its fuller text surface
+/// via [`super::service::extract_searchable_text`].
 fn extract_fts_content(entry: &TapEntry) -> String {
-    let raw = super::service::extract_searchable_text(&entry.payload, entry.metadata.as_ref());
-    tokenizer::segment(&raw)
+    let mut parts = Vec::new();
+    collect_json_strings(&entry.payload, &mut parts);
+    if let Some(meta) = entry.metadata.as_ref() {
+        collect_json_strings(meta, &mut parts);
+    }
+    tokenizer::segment(&parts.join("\n"))
+}
+
+/// Recursively push every string leaf in `value` into `out`.
+fn collect_json_strings(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) if !s.is_empty() => out.push(s.clone()),
+        Value::Array(items) => items.iter().for_each(|v| collect_json_strings(v, out)),
+        Value::Object(map) => map.values().for_each(|v| collect_json_strings(v, out)),
+        _ => {}
+    }
 }
 
 /// Sanitize a user query for FTS5 MATCH syntax.

@@ -16,43 +16,59 @@
 //! (`extract_fts_content`) and user queries (`sanitize_fts_query`),
 //! keeping the token vocabulary consistent on both sides.
 
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 
 use jieba_rs::Jieba;
 
 static JIEBA: OnceLock<Jieba> = OnceLock::new();
+static WARMUP_ONCE: Once = Once::new();
 
 fn jieba() -> &'static Jieba { JIEBA.get_or_init(Jieba::new) }
 
-/// Eagerly initialize the shared Jieba instance.
+/// Eagerly initialize the shared Jieba instance on a background thread.
 ///
-/// Called once during kernel startup to absorb the ~200 ms dictionary
-/// load off the hot path. Safe to call multiple times.
-pub(crate) fn warmup() { let _ = jieba(); }
+/// Absorbs the ~200 ms dictionary load off the hot path. Subsequent
+/// calls are no-ops — the spawn itself is also guarded so repeated
+/// `TapeService::with_fts` invocations don't leak threads.
+pub(crate) fn warmup() {
+    WARMUP_ONCE.call_once(|| {
+        std::thread::spawn(|| {
+            let _ = jieba();
+        });
+    });
+}
 
 /// Segment `text` into whitespace-separated tokens suitable for
 /// `unicode61` indexing.
 ///
-/// Chinese runs are cut into semantic words; ASCII and whitespace are
-/// preserved so mixed-language input works naturally. Empty or
-/// whitespace-only input returns an empty string.
+/// Chinese runs are cut into semantic words; ASCII and whitespace pass
+/// through jieba untouched so mixed-language input works naturally.
+/// Input that contains no Chinese characters is returned verbatim
+/// (the `unicode61` tokenizer already splits such text correctly).
 pub(crate) fn segment(text: &str) -> String {
-    if text.chars().all(|c| !is_cjk(c)) {
-        // Pure non-CJK text needs no pre-segmentation — unicode61
-        // already splits it correctly.
+    if !text.chars().any(is_chinese_ideograph) {
+        // Nothing for jieba to do — skip the dictionary load for
+        // pure non-Chinese input (including empty/whitespace strings).
         return text.to_owned();
     }
 
     let tokens = jieba().cut(text, false);
     tokens
         .into_iter()
-        .map(|t| t.trim())
+        .map(str::trim)
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn is_cjk(c: char) -> bool {
+/// True when `c` is a Chinese ideograph.
+///
+/// Deliberately narrow: jieba's dictionary only covers Chinese, so we
+/// let Japanese/Korean fall through the `unicode61` path (suboptimal
+/// but non-regressive). CJK punctuation is also excluded — the
+/// surrounding ideographs will still trigger segmentation, and jieba
+/// handles punctuation internally.
+fn is_chinese_ideograph(c: char) -> bool {
     matches!(c as u32,
         0x3400..=0x4DBF       // CJK Unified Ideographs Extension A
         | 0x4E00..=0x9FFF     // CJK Unified Ideographs
@@ -71,25 +87,45 @@ mod tests {
     }
 
     #[test]
-    fn chinese_is_segmented() {
-        let out = segment("机器学习很强大");
-        // Jieba should split into at least two real words.
-        let tokens: Vec<_> = out.split_whitespace().collect();
-        assert!(tokens.len() >= 2, "expected multiple tokens, got {out:?}");
-        assert!(tokens.iter().any(|t| *t == "机器学习" || *t == "学习"));
+    fn whitespace_only_unchanged() {
+        // No Chinese → short-circuit returns input verbatim. Downstream
+        // `split_whitespace` in `sanitize_fts_query` drops it.
+        assert_eq!(segment(""), "");
+        assert_eq!(segment("   "), "   ");
+    }
+
+    #[test]
+    fn chinese_is_segmented_into_words() {
+        // Jieba's default dictionary splits "机器学习" into "机器" + "学习"
+        // — that's fine, BM25 now has real word tokens to work with
+        // instead of one sentence-sized glob. The point of this test is
+        // to assert *some* meaningful segmentation occurred, not to pin
+        // a specific dictionary's boundaries.
+        let tokens: Vec<String> = segment("今天学习了机器的原理")
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        assert!(
+            tokens.contains(&"机器".to_owned()),
+            "expected '机器' token, got {tokens:?}"
+        );
+        assert!(
+            tokens.contains(&"学习".to_owned()),
+            "expected '学习' token, got {tokens:?}"
+        );
+        assert!(
+            tokens.len() >= 3,
+            "expected multi-token split, got {tokens:?}"
+        );
     }
 
     #[test]
     fn mixed_language() {
-        let out = segment("Rust 的 所有权 模型");
-        let tokens: Vec<_> = out.split_whitespace().collect();
-        assert!(tokens.contains(&"Rust"));
-        assert!(tokens.contains(&"所有权"));
-    }
-
-    #[test]
-    fn empty_input() {
-        assert_eq!(segment(""), "");
-        assert_eq!(segment("   "), "   ");
+        let tokens: Vec<String> = segment("Rust 的所有权模型")
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        assert!(tokens.contains(&"Rust".to_owned()), "got {tokens:?}");
+        assert!(tokens.contains(&"所有权".to_owned()), "got {tokens:?}");
     }
 }
