@@ -251,6 +251,65 @@ mod provider_tests {
     }
 }
 
+/// PATCH-shaped field diff for a [`SessionEntry`].
+///
+/// Every field follows the double-option convention documented on
+/// [`SessionService::update_session_fields`]: outer `None` means
+/// **leave alone**, `Some(None)` means **clear the override**, and
+/// `Some(Some(value))` means **persist this value**.
+///
+/// Grouped into a struct so the router's 5-field call site and future
+/// callers (Telegram `/model`, CLI, ...) are not exposed to a pile of
+/// positional `Option<Option<String>>` arguments — a swap-typo waiting
+/// to happen.
+#[derive(Debug, Clone, Default)]
+pub struct SessionPatch {
+    /// New human-readable title.
+    pub title:          Option<Option<String>>,
+    /// New LLM model identifier.
+    pub model:          Option<Option<String>>,
+    /// New provider identifier paired with `model`.
+    pub model_provider: Option<Option<String>>,
+    /// New thinking-level override.
+    pub thinking_level: Option<Option<ThinkingLevel>>,
+    /// New system prompt override.
+    pub system_prompt:  Option<Option<String>>,
+}
+
+/// Apply a [`SessionPatch`] to a [`SessionEntry`] in place, returning
+/// `true` when any field actually changed.
+///
+/// Extracting the mutation into a free function keeps the per-field
+/// branching trivially unit testable without spinning up tape storage
+/// or a settings provider. The caller uses the boolean result to skip
+/// the `updated_at` bump and the session-index write on a no-op PATCH
+/// (e.g. a double-click on the "Use default" row re-sending `null` for
+/// already-`None` fields).
+fn apply_session_patch(session: &mut SessionEntry, patch: &SessionPatch) -> bool {
+    /// Assign `new` to `slot` when the patch carries that field and the
+    /// stored value actually differs. Returns whether a write happened
+    /// so the caller can aggregate a single `changed` flag across all
+    /// five fields.
+    fn assign<T: Clone + PartialEq>(slot: &mut Option<T>, new: &Option<Option<T>>) -> bool {
+        match new {
+            Some(v) if slot != v => {
+                *slot = v.clone();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // `|` (bitwise-or) instead of `||` is intentional: every field must
+    // be evaluated so its write lands even when an earlier field already
+    // flipped `changed` to true.
+    assign(&mut session.title, &patch.title)
+        | assign(&mut session.model, &patch.model)
+        | assign(&mut session.model_provider, &patch.model_provider)
+        | assign(&mut session.thinking_level, &patch.thinking_level)
+        | assign(&mut session.system_prompt, &patch.system_prompt)
+}
+
 /// Central orchestrator for session-based AI chat.
 ///
 /// `SessionService` ties together two concerns:
@@ -388,33 +447,24 @@ impl SessionService {
 
     /// Partially update mutable fields of a session.
     ///
-    /// Only the fields that are `Some` in the arguments are overwritten; the
-    /// rest are left untouched. Returns the updated [`SessionEntry`].
-    #[instrument(skip(self))]
+    /// The [`SessionPatch`] fields use the double-option convention so
+    /// callers can separately express **leave alone** (outer `None`),
+    /// **clear** (`Some(None)`) and **set** (`Some(Some(value))`). The
+    /// clear variant is what lets a user drop a per-session pin and
+    /// fall back to the admin `llm.default_provider`.
+    ///
+    /// Returns the session unchanged — without touching `updated_at` or
+    /// writing to the session index — when the patch is a no-op, so
+    /// repeat "Use default" clicks do not churn the list-order rank.
+    #[instrument(skip(self, patch))]
     pub async fn update_session_fields(
         &self,
         key: &SessionKey,
-        title: Option<String>,
-        model: Option<String>,
-        model_provider: Option<String>,
-        thinking_level: Option<ThinkingLevel>,
-        system_prompt: Option<String>,
+        patch: SessionPatch,
     ) -> Result<SessionEntry, ChatError> {
         let mut session = self.get_session(key).await?;
-        if let Some(t) = title {
-            session.title = Some(t);
-        }
-        if let Some(m) = model {
-            session.model = Some(m);
-        }
-        if let Some(mp) = model_provider {
-            session.model_provider = Some(mp);
-        }
-        if let Some(tl) = thinking_level {
-            session.thinking_level = Some(tl);
-        }
-        if let Some(sp) = system_prompt {
-            session.system_prompt = Some(sp);
+        if !apply_session_patch(&mut session, &patch) {
+            return Ok(session);
         }
         session.updated_at = Utc::now();
         let updated = self.session_index.update_session(&session).await?;
@@ -746,4 +796,215 @@ fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
         }
     }
     messages
+}
+
+#[cfg(test)]
+mod session_patch_tests {
+    use chrono::Utc;
+    use rara_sessions::types::{SessionEntry, SessionKey, ThinkingLevel};
+
+    use super::{SessionPatch, apply_session_patch};
+
+    fn sample_session() -> SessionEntry {
+        let now = Utc::now();
+        SessionEntry {
+            key:            SessionKey::new(),
+            title:          Some("existing title".to_owned()),
+            model:          Some("kimi-k2.5".to_owned()),
+            model_provider: Some("kimi".to_owned()),
+            thinking_level: Some(ThinkingLevel::Medium),
+            system_prompt:  Some("hello".to_owned()),
+            message_count:  0,
+            preview:        None,
+            metadata:       None,
+            created_at:     now,
+            updated_at:     now,
+        }
+    }
+
+    #[test]
+    fn absent_fields_leave_session_untouched() {
+        let mut session = sample_session();
+        let before = session.clone();
+        let changed = apply_session_patch(&mut session, &SessionPatch::default());
+        assert!(!changed, "all-absent patch must report no-op");
+        assert_eq!(session.title, before.title);
+        assert_eq!(session.model, before.model);
+        assert_eq!(session.model_provider, before.model_provider);
+        assert_eq!(session.thinking_level, before.thinking_level);
+        assert_eq!(session.system_prompt, before.system_prompt);
+    }
+
+    #[test]
+    fn explicit_null_clears_model_override() {
+        // This is the #1569 case: a session pinned to `kimi` is reset so
+        // the admin's `llm.default_provider` can take effect on the next
+        // turn.
+        let mut session = sample_session();
+        let patch = SessionPatch {
+            model: Some(None),
+            model_provider: Some(None),
+            thinking_level: Some(None),
+            ..Default::default()
+        };
+        let changed = apply_session_patch(&mut session, &patch);
+        assert!(changed);
+        assert!(session.model.is_none());
+        assert!(session.model_provider.is_none());
+        assert!(session.thinking_level.is_none());
+        // Fields not in the patch are preserved.
+        assert_eq!(session.title.as_deref(), Some("existing title"));
+        assert_eq!(session.system_prompt.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn partial_patch_clears_only_targeted_field() {
+        // Only `model` is cleared; `model_provider` and every other
+        // field must remain untouched.
+        let mut session = sample_session();
+        let patch = SessionPatch {
+            model: Some(None),
+            ..Default::default()
+        };
+        let changed = apply_session_patch(&mut session, &patch);
+        assert!(changed);
+        assert!(session.model.is_none());
+        assert_eq!(session.model_provider.as_deref(), Some("kimi"));
+        assert_eq!(session.thinking_level, Some(ThinkingLevel::Medium));
+        assert_eq!(session.title.as_deref(), Some("existing title"));
+        assert_eq!(session.system_prompt.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn all_fields_cleared_in_one_call() {
+        let mut session = sample_session();
+        let patch = SessionPatch {
+            title:          Some(None),
+            model:          Some(None),
+            model_provider: Some(None),
+            thinking_level: Some(None),
+            system_prompt:  Some(None),
+        };
+        let changed = apply_session_patch(&mut session, &patch);
+        assert!(changed);
+        assert!(session.title.is_none());
+        assert!(session.model.is_none());
+        assert!(session.model_provider.is_none());
+        assert!(session.thinking_level.is_none());
+        assert!(session.system_prompt.is_none());
+    }
+
+    #[test]
+    fn some_value_overwrites_field() {
+        let mut session = sample_session();
+        let patch = SessionPatch {
+            title:          Some(Some("renamed".to_owned())),
+            model:          Some(Some("gpt-4o".to_owned())),
+            model_provider: Some(Some("openai".to_owned())),
+            thinking_level: Some(Some(ThinkingLevel::High)),
+            system_prompt:  Some(Some("new prompt".to_owned())),
+        };
+        let changed = apply_session_patch(&mut session, &patch);
+        assert!(changed);
+        assert_eq!(session.title.as_deref(), Some("renamed"));
+        assert_eq!(session.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(session.model_provider.as_deref(), Some("openai"));
+        assert_eq!(session.thinking_level, Some(ThinkingLevel::High));
+        assert_eq!(session.system_prompt.as_deref(), Some("new prompt"));
+    }
+
+    #[test]
+    fn setting_same_value_is_a_noop() {
+        // Patching `model_provider` to the value it already holds must
+        // report `false` so the caller can skip the index write.
+        let mut session = sample_session();
+        let before = session.clone();
+        let patch = SessionPatch {
+            model_provider: Some(Some("kimi".to_owned())),
+            ..Default::default()
+        };
+        let changed = apply_session_patch(&mut session, &patch);
+        assert!(!changed);
+        assert_eq!(session.model_provider, before.model_provider);
+    }
+}
+
+#[cfg(test)]
+mod update_request_deserialize_tests {
+    use crate::chat::UpdateSessionRequest;
+
+    #[test]
+    fn absent_fields_deserialize_to_outer_none() {
+        let req: UpdateSessionRequest = serde_json::from_str("{}").expect("parse");
+        assert!(req.title.is_none());
+        assert!(req.model.is_none());
+        assert!(req.model_provider.is_none());
+        assert!(req.thinking_level.is_none());
+        assert!(req.system_prompt.is_none());
+    }
+
+    #[test]
+    fn explicit_null_model_deserializes_to_some_none() {
+        let req: UpdateSessionRequest =
+            serde_json::from_str(r#"{"model": null, "model_provider": null}"#).expect("parse");
+        assert_eq!(req.model, Some(None));
+        assert_eq!(req.model_provider, Some(None));
+        assert!(req.thinking_level.is_none());
+    }
+
+    #[test]
+    fn explicit_value_model_deserializes_to_some_some() {
+        let req: UpdateSessionRequest =
+            serde_json::from_str(r#"{"model": "gpt-4o", "thinking_level": "high"}"#)
+                .expect("parse");
+        assert_eq!(req.model, Some(Some("gpt-4o".to_owned())));
+        assert_eq!(req.thinking_level, Some(Some("high".to_owned())));
+    }
+
+    #[test]
+    fn title_triple_absent_null_value() {
+        let absent: UpdateSessionRequest = serde_json::from_str("{}").expect("parse");
+        assert!(absent.title.is_none());
+        let null: UpdateSessionRequest = serde_json::from_str(r#"{"title": null}"#).expect("parse");
+        assert_eq!(null.title, Some(None));
+        let value: UpdateSessionRequest =
+            serde_json::from_str(r#"{"title": "hi"}"#).expect("parse");
+        assert_eq!(value.title, Some(Some("hi".to_owned())));
+    }
+
+    #[test]
+    fn model_provider_triple_absent_null_value() {
+        let absent: UpdateSessionRequest = serde_json::from_str("{}").expect("parse");
+        assert!(absent.model_provider.is_none());
+        let null: UpdateSessionRequest =
+            serde_json::from_str(r#"{"model_provider": null}"#).expect("parse");
+        assert_eq!(null.model_provider, Some(None));
+        let value: UpdateSessionRequest =
+            serde_json::from_str(r#"{"model_provider": "openai"}"#).expect("parse");
+        assert_eq!(value.model_provider, Some(Some("openai".to_owned())));
+    }
+
+    #[test]
+    fn thinking_level_triple_absent_null_value() {
+        let absent: UpdateSessionRequest = serde_json::from_str("{}").expect("parse");
+        assert!(absent.thinking_level.is_none());
+        let null: UpdateSessionRequest =
+            serde_json::from_str(r#"{"thinking_level": null}"#).expect("parse");
+        assert_eq!(null.thinking_level, Some(None));
+        let value: UpdateSessionRequest =
+            serde_json::from_str(r#"{"thinking_level": "medium"}"#).expect("parse");
+        assert_eq!(value.thinking_level, Some(Some("medium".to_owned())));
+    }
+
+    #[test]
+    fn system_prompt_triple_absent_null_value() {
+        let absent: UpdateSessionRequest = serde_json::from_str("{}").expect("parse");
+        assert!(absent.system_prompt.is_none());
+        let null: UpdateSessionRequest =
+            serde_json::from_str(r#"{"system_prompt": null}"#).expect("parse");
+        assert_eq!(null.system_prompt, Some(None));
+        let value: UpdateSessionRequest =
+            serde_json::from_str(r#"{"system_prompt": "you are..."}"#).expect("parse");
+        assert_eq!(value.system_prompt, Some(Some("you are...".to_owned())));
+    }
 }

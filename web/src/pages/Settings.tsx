@@ -843,6 +843,10 @@ export default function Settings() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Applies to new sessions and sessions with no explicit model override.
+                    Use the model picker&apos;s &quot;Use rara&apos;s default&quot; entry to clear a pinned session.
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-between pt-2">
