@@ -90,6 +90,66 @@ impl CallbackHandler for SessionSwitchCallbackHandler {
 }
 
 // ---------------------------------------------------------------------------
+// ModelSwitchCallbackHandler
+// ---------------------------------------------------------------------------
+
+/// Handles `model:{model_id}` callback queries from the `/model` inline
+/// keyboard — switches the current session's model override.
+pub struct ModelSwitchCallbackHandler {
+    client: Arc<dyn BotServiceClient>,
+}
+
+impl ModelSwitchCallbackHandler {
+    /// Create a new handler backed by the given service client.
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
+}
+
+#[async_trait]
+impl CallbackHandler for ModelSwitchCallbackHandler {
+    fn prefix(&self) -> &str { "model:" }
+
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
+        let model_id = &context.data["model:".len()..];
+        let chat_id = super::extract_chat_id(&context.metadata)?;
+        let thread_id = super::extract_thread_id(&context.metadata);
+
+        let session_key = match self
+            .client
+            .get_channel_session("telegram", &chat_id, thread_id.as_deref())
+            .await
+        {
+            Ok(Some(binding)) => binding.session_key,
+            Ok(None) => {
+                return Ok(CallbackResult::SendMessage {
+                    text: "No active session. Send a message to create one.".to_owned(),
+                });
+            }
+            Err(e) => {
+                return Ok(CallbackResult::SendMessage {
+                    text: format!("Failed to resolve session: {e}"),
+                });
+            }
+        };
+
+        match self
+            .client
+            .update_session(&session_key, Some(model_id))
+            .await
+        {
+            Ok(detail) => {
+                let model = detail.model.as_deref().unwrap_or(model_id);
+                Ok(CallbackResult::EditMessage {
+                    text: format!("\u{2705} Model switched to <b>{}</b>", html_escape(model)),
+                })
+            }
+            Err(e) => Ok(CallbackResult::SendMessage {
+                text: format!("Failed to switch model: {e}"),
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SessionDetailCallbackHandler
 // ---------------------------------------------------------------------------
 

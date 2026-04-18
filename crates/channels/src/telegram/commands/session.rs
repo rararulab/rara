@@ -348,20 +348,53 @@ impl SessionCommandHandler {
         let new_model = args.trim();
 
         if new_model.is_empty() {
-            // Show current model.
-            match self.client.get_session(&session_key).await {
-                Ok(detail) => {
-                    let model = detail.model.as_deref().unwrap_or("(default)");
+            // No args: render an inline keyboard listing available models so
+            // the user can switch by tapping. The currently selected model is
+            // highlighted with a check mark.
+            let current_model = match self.client.get_session(&session_key).await {
+                Ok(detail) => detail.model,
+                Err(e) => {
+                    return Ok(CommandResult::Text(format!(
+                        "Failed to get session details: {e}"
+                    )));
+                }
+            };
+
+            match self.client.list_chat_models().await {
+                Ok(models) if !models.is_empty() => {
+                    let mut keyboard_rows: Vec<Vec<InlineButton>> = Vec::new();
+                    for m in &models {
+                        let is_current = current_model.as_deref() == Some(m.id.as_str());
+                        let ctx_suffix = m
+                            .context_length
+                            .map(|c| format!(" \u{00b7} {}k", c / 1000))
+                            .unwrap_or_default();
+                        let label = if is_current {
+                            format!("\u{2705} {}{ctx_suffix}", m.name)
+                        } else {
+                            format!("{}{ctx_suffix}", m.name)
+                        };
+                        keyboard_rows.push(vec![InlineButton {
+                            text:          label,
+                            callback_data: Some(format!("model:{}", truncate_str(&m.id, 56))),
+                            url:           None,
+                        }]);
+                    }
+                    let header = format!("\u{1f916} Models ({} total)", models.len());
+                    Ok(CommandResult::HtmlWithKeyboard {
+                        html:     header,
+                        keyboard: keyboard_rows,
+                    })
+                }
+                // Empty list or error: fall back to showing the current model
+                // with a usage hint.
+                _ => {
+                    let model = current_model.as_deref().unwrap_or("(default)");
                     Ok(CommandResult::Html(format!(
-                        "Session <code>{}</code>\nModel: <b>{}</b>\n\nSwitch: <code>/model \
-                         model-name</code>",
-                        html_escape(&detail.key),
+                        "Model: <b>{}</b>\n\nSwitch: <code>/model model-name</code>",
                         html_escape(model),
                     )))
                 }
-                Err(e) => Ok(CommandResult::Text(format!(
-                    "Failed to get session details: {e}"
-                ))),
             }
         } else {
             // Update model.
