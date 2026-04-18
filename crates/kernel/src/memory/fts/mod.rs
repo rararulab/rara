@@ -257,6 +257,78 @@ mod tests {
         assert!(content.contains("test"));
     }
 
+    /// Guards the narrowing in `extract_fts_content`: JSON keys, numbers,
+    /// and structural punctuation must NOT reach the index — otherwise
+    /// jieba chews on `"role"`, `{`, `}` etc. and inflates BM25 noise.
+    #[test]
+    fn extract_fts_content_drops_json_structure() {
+        let entry = TapEntry {
+            id:        10,
+            kind:      TapEntryKind::Message,
+            payload:   serde_json::json!({
+                "role": "user",
+                "content": "actual message",
+                "token_count": 42,
+            }),
+            timestamp: jiff::Timestamp::now(),
+            metadata:  Some(serde_json::json!({"model_name": "claude", "latency_ms": 123})),
+        };
+        let content = extract_fts_content(&entry);
+
+        // String leaves survive.
+        assert!(content.contains("actual message"));
+        assert!(content.contains("user"));
+        assert!(content.contains("claude"));
+
+        // Keys and numbers must be absent.
+        for forbidden in [
+            "role",
+            "content",
+            "token_count",
+            "model_name",
+            "latency_ms",
+            "42",
+            "123",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "content leaked {forbidden:?}: {content:?}"
+            );
+        }
+
+        // Structural JSON punctuation must not appear either.
+        for forbidden in ['{', '}', '[', ']', '"', ':'] {
+            assert!(
+                !content.contains(forbidden),
+                "content leaked {forbidden:?}: {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_fts_content_walks_nested_json() {
+        let entry = TapEntry {
+            id:        11,
+            kind:      TapEntryKind::Message,
+            payload:   serde_json::json!({
+                "content": "outer",
+                "parts": [
+                    {"text": "inner-a"},
+                    {"text": "inner-b", "meta": {"label": "inner-c"}},
+                ],
+            }),
+            timestamp: jiff::Timestamp::now(),
+            metadata:  None,
+        };
+        let content = extract_fts_content(&entry);
+        for expected in ["outer", "inner-a", "inner-b", "inner-c"] {
+            assert!(
+                content.contains(expected),
+                "missing {expected:?}: {content:?}"
+            );
+        }
+    }
+
     #[test]
     fn extract_fts_content_empty_payload() {
         let entry = TapEntry {
