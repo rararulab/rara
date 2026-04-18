@@ -15,52 +15,89 @@
  */
 
 /**
- * Bridges rara backend tool names to pi-mono's built-in renderers.
- *
- * Rara's backend tools (declared in `crates/app/src/tools/`) emit names like
- * `bash`, `http-fetch`, `read-file`, etc. pi-mono ships tool-specific
- * renderers (`BashRenderer`, `javascript_repl`, `extract_document`,
- * `artifacts`) keyed by exact tool name. When a name does not match, the UI
- * falls back to `DefaultRenderer`, which prints raw JSON.
- *
- * This module registers aliases so any rara tool that conceptually matches a
- * pi-mono renderer gets the richer UX. Tools without a pi-mono equivalent
- * (`mita-*`, `skill-*`, `tape-*`, `marketplace-*`, ...) stay on the default
- * JSON renderer by design — writing custom renderers for them is out of
- * scope for this phase.
+ * Bridges rara backend tool names to pi-mono's renderers, plus a
+ * rara-specific compact renderer for tools without a specialized
+ * pi-mono equivalent.
  *
  * Must be called once, BEFORE `ChatPanel.setAgent()`. The registry is a
  * module-level `Map`, so late registration would miss the first render.
  */
 
-import {
-	BashRenderer,
-	registerToolRenderer,
-} from "@mariozechner/pi-web-ui";
+import { BashRenderer, registerToolRenderer } from "@mariozechner/pi-web-ui";
+import { CompactToolRenderer } from "./CompactToolRenderer";
 
 /**
- * Register rara → pi-mono renderer aliases.
+ * Tool names declared by the rara backend (see `crates/app/src/tools/`).
+ * Everything in this list gets the compact single-line renderer.
  *
- * Current mappings:
- * - `bash` → `BashRenderer` (rara's bash tool is already named `bash`; we
- *   register explicitly so the wiring is visible and robust against any
- *   future change to pi-web-ui's auto-registration side effects).
+ * Four tools keep pi-mono's specialised renderers and are intentionally
+ * absent:
+ * - `bash`            — pi-mono's `BashRenderer` shows a live terminal
+ *                       block, which fits a single command better than
+ *                       a truncated one-liner.
+ * - `artifacts`       — `ArtifactsToolRenderer` renders the artifact
+ *                       card UX; JSON wouldn't help.
+ * - `javascript_repl` — pi-mono-registered; no rara-side equivalent.
+ * - `extract_document`— pi-mono-registered; handles PDF/DOCX preview.
  *
- * Left on `DefaultRenderer` intentionally:
- * - `http-fetch` — no pi-mono equivalent (extract_document is PDF/DOCX,
- *   not generic HTTP).
- * - `read-file` / `write-file` / `edit-file` / `multi-edit` / `grep` /
- *   `find-files` / `list-directory` / `walk-directory` / `file-stats` /
- *   `create-directory` / `delete-file` — pi-mono has no file-IO renderers.
- * - `mita-*`, `skill-*`, `tape-*`, `marketplace-*`, `mcp-*`, `acp-*`,
- *   `dispatch-rara`, `evolve-soul`, `ask-user`, etc. — rara-specific; JSON
- *   is acceptable until a custom renderer is justified.
- * - `javascript_repl`, `extract_document`, `artifacts` — pi-mono registers
- *   these itself; no rara-side equivalent exists to alias.
+ * Drift risk: this list is hand-maintained from the Rust
+ * `#[tool(name = "…")]` declarations. A new backend tool added without
+ * updating this list silently falls back to pi-web-ui's verbose
+ * `DefaultRenderer`. Tracked in #1566.
  */
+const RARA_COMPACT_TOOLS = [
+	"acp-delegate",
+	"ask-user",
+	"create-directory",
+	"create-skill",
+	"debug_trace",
+	"delete-file",
+	"delete-skill",
+	"discover-tools",
+	"dispatch-rara",
+	"distill-user-notes",
+	"edit-file",
+	"evolve-soul",
+	"fff-find",
+	"fff-grep",
+	"file-stats",
+	"find-files",
+	"get-session-info",
+	"grep",
+	"http-fetch",
+	"install-acp-agent",
+	"install-mcp-server",
+	"list-acp-agents",
+	"list-directory",
+	"list-mcp-servers",
+	"list-sessions",
+	"list-skills",
+	"multi-edit",
+	"read-file",
+	"read-tape",
+	"remove-acp-agent",
+	"remove-mcp-server",
+	"send-email",
+	"send-file",
+	"set-avatar",
+	"settings",
+	"system-paths",
+	"type",
+	"update-session-title",
+	"update-soul-state",
+	"user-note",
+	"walk-directory",
+	"wechat-login-confirm",
+	"wechat-login-start",
+	"write-file",
+	"write-skill-draft",
+	"write-user-note",
+];
+
 export function registerRaraToolRenderers(): void {
-	// `bash` is the canonical name on both sides, but we call this explicitly
-	// so the binding is documented and not dependent on import-order side
-	// effects inside pi-web-ui.
 	registerToolRenderer("bash", new BashRenderer());
+
+	for (const name of RARA_COMPACT_TOOLS) {
+		registerToolRenderer(name, new CompactToolRenderer(name));
+	}
 }
