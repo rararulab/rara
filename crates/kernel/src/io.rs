@@ -1436,8 +1436,8 @@ pub enum PlatformOutbound {
         text: String,
     },
     /// A terminal error for the turn. Channels that support typed error
-    /// frames (web, ACP) render this as a failed-message indicator;
-    /// legacy channels (Telegram, WeChat, terminal) fall back to a plain
+    /// frames (currently: web) render this as a failed-message indicator;
+    /// other channels (Telegram, WeChat, terminal) fall back to a plain
     /// text reply formatted as `"Error [{code}]: {message}"`.
     Error {
         /// Short error code (e.g. `"agent_error"`, `"rate_limited"`).
@@ -2070,6 +2070,48 @@ mod outbound_payload_tests {
                 assert_eq!(message, "model rejected reasoning=minimal");
             }
             other => panic!("expected PlatformOutbound::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reply_envelope_produces_typed_platform_reply() {
+        let envelope = OutboundEnvelope::reply(
+            MessageId::new(),
+            UserId("u".into()),
+            crate::session::SessionKey::new(),
+            crate::channel::types::MessageContent::Text("hello world".into()),
+            vec![],
+        );
+
+        match envelope.to_platform_outbound() {
+            PlatformOutbound::Reply {
+                content,
+                attachments,
+                reply_context,
+            } => {
+                assert_eq!(content, "hello world");
+                assert!(attachments.is_empty());
+                assert!(reply_context.is_none());
+            }
+            other => panic!("expected PlatformOutbound::Reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn progress_envelope_produces_typed_platform_progress() {
+        let envelope = OutboundEnvelope::progress(
+            MessageId::new(),
+            UserId("u".into()),
+            crate::session::SessionKey::new(),
+            "thinking",
+            Some("running tool xyz".to_string()),
+        );
+
+        match envelope.to_platform_outbound() {
+            PlatformOutbound::Progress { text } => {
+                assert_eq!(text, "running tool xyz");
+            }
+            other => panic!("expected PlatformOutbound::Progress, got {other:?}"),
         }
     }
 }

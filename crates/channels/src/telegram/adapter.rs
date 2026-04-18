@@ -1342,6 +1342,38 @@ impl TelegramAdapter {
         }
     }
 
+    /// Send plain text as one or more HTML-formatted Telegram messages.
+    ///
+    /// Used for `PlatformOutbound::Error` (Telegram has no typed error frame)
+    /// — applies markdown-to-HTML conversion and 4096-byte chunking without
+    /// any of `Reply`'s stream-coalescing, reply-context, or reply-keyboard
+    /// logic, which don't apply to error frames.
+    async fn send_plain_text_reply(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        content: &str,
+    ) -> Result<(), EgressError> {
+        if content.is_empty() {
+            return Ok(());
+        }
+        let html = crate::telegram::markdown::markdown_to_telegram_html(content);
+        let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+        for chunk in &chunks {
+            self.rate_limiter.acquire(chat_id).await;
+            let req = with_thread_id!(
+                self.bot
+                    .send_message(ChatId(chat_id), chunk)
+                    .parse_mode(ParseMode::Html),
+                thread_id
+            );
+            req.await.map_err(|e| EgressError::DeliveryFailed {
+                message: format!("failed to send telegram message: {e}"),
+            })?;
+        }
+        Ok(())
+    }
+
     /// Synthesize speech from `text` and send it as a Telegram voice note.
     ///
     /// Returns `true` if the voice note was sent successfully. On any failure
@@ -1386,18 +1418,14 @@ impl ChannelAdapter for TelegramAdapter {
             }
         };
 
-        // Telegram has no typed error frame — collapse Error into a
-        // plain Reply so users still see the failure as a text bubble.
-        let msg = match msg {
-            PlatformOutbound::Error { code, message } => PlatformOutbound::Reply {
-                content:       format!("Error [{code}]: {message}"),
-                attachments:   vec![],
-                reply_context: None,
-            },
-            other => other,
-        };
-
         match msg {
+            // Telegram has no typed error frame — render as plain text via
+            // the dedicated helper (bypasses stream-coalescing / keyboard
+            // logic that only makes sense for `Reply`).
+            PlatformOutbound::Error { code, message } => {
+                let text = format!("Error [{code}]: {message}");
+                return self.send_plain_text_reply(chat_id, thread_id, &text).await;
+            }
             PlatformOutbound::Reply {
                 content,
                 reply_context,
@@ -1623,9 +1651,6 @@ impl ChannelAdapter for TelegramAdapter {
                 );
                 let _ = req.await;
             }
-            // Already rewritten to Reply above — kept exhaustive so the
-            // compiler catches any new PlatformOutbound variant.
-            PlatformOutbound::Error { .. } => unreachable!("Error collapsed to Reply above"),
         }
 
         Ok(())
