@@ -81,15 +81,6 @@ fn fallback_context_window(model: &str) -> Option<u32> {
     None
 }
 
-/// Look up the context window size (in tokens) for a known model.
-///
-/// Exposed to sibling modules (e.g. [`super::reply_keyboard`]) for the
-/// context usage gauge. Prefer the authoritative value carried by
-/// `StreamEvent::TurnStarted` when available.
-pub(super) fn context_window_for_model(model: &str) -> Option<u32> {
-    fallback_context_window(model)
-}
-
 // ---------------------------------------------------------------------------
 // Session card
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ use rara_kernel::{
     session::Signal,
 };
 use teloxide::prelude::Requester;
+use tracing::warn;
 
 use super::client::BotServiceClient;
 
@@ -360,7 +361,15 @@ impl SessionCommandHandler {
                 }
             };
 
-            match self.client.list_chat_models().await {
+            let listed = self.client.list_chat_models().await;
+            match &listed {
+                Err(e) => warn!(error = %e, "failed to list chat models for /model"),
+                Ok(models) if models.is_empty() => {
+                    warn!("provider returned empty model list for /model");
+                }
+                Ok(_) => {}
+            }
+            match listed {
                 Ok(models) if !models.is_empty() => {
                     let mut keyboard_rows: Vec<Vec<InlineButton>> = Vec::new();
                     for m in &models {
