@@ -102,6 +102,9 @@ impl TapeService {
 
     /// Create a service with FTS5 full-text search support.
     pub fn with_fts(store: FileTapeStore, pool: sqlx::SqlitePool) -> Self {
+        // Preload the jieba dictionary off the hot path. `warmup` is
+        // idempotent — repeated `with_fts` calls do not leak threads.
+        super::fts::warmup_tokenizer();
         Self {
             store,
             fts: Some(super::fts::TapeFts::new(pool)),

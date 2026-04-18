@@ -8,8 +8,11 @@
 //! business logic (entry filtering, text extraction, query sanitization).
 
 mod repo;
+mod tokenizer;
 
+use serde_json::Value;
 use sqlx::SqlitePool;
+pub(crate) use tokenizer::warmup as warmup_tokenizer;
 use tracing::{debug, warn};
 
 use super::{TapEntry, TapEntryKind};
@@ -64,27 +67,38 @@ impl TapeFts {
         // non-Message entries are not re-scanned on subsequent calls.
         let max_id = new_entries.iter().map(|e| e.id).max().unwrap_or(hwm);
 
-        let indexable: Vec<_> = new_entries
+        let indexable: Vec<TapEntry> = new_entries
             .iter()
             .filter(|e| e.kind == TapEntryKind::Message)
+            .map(|e| (*e).clone())
             .collect();
+
+        // Run jieba segmentation on the blocking pool — it's CPU-bound
+        // and can be slow on long messages (code blocks, transcripts).
+        // Keeping it off the runtime thread avoids stalling other async
+        // work while we index.
+        let segmented: Vec<(u64, String, String)> = tokio::task::spawn_blocking(move || {
+            indexable
+                .into_iter()
+                .filter_map(|entry| {
+                    let content = extract_fts_content(&entry);
+                    (!content.is_empty()).then(|| (entry.id, entry.kind.to_string(), content))
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| sqlx::Error::Protocol(format!("fts segment task: {e}")))?;
 
         let mut tx = self.pool.begin().await?;
         let mut count = 0usize;
 
-        for entry in &indexable {
-            let content = extract_fts_content(entry);
-            if content.is_empty() {
-                continue;
-            }
-            let kind_str = entry.kind.to_string();
-
+        for (entry_id, kind_str, content) in &segmented {
             repo::insert(
                 &mut tx,
-                &content,
+                content,
                 tape_name,
-                &kind_str,
-                entry.id as i64,
+                kind_str,
+                *entry_id as i64,
                 session_key,
             )
             .await?;
@@ -148,10 +162,28 @@ impl TapeFts {
 
 /// Extract searchable text from a tape entry for FTS indexing.
 ///
-/// Delegates to [`super::service::extract_searchable_text`] so the indexed
-/// text surface is identical to the brute-force search path.
+/// Returns only JSON string leaves (payload + metadata) joined by
+/// newlines — object keys, numbers, and JSON punctuation are dropped so
+/// the jieba segmenter doesn't chew on structural noise (e.g. `"role"`,
+/// `{`, `}`). The brute-force search path keeps its fuller text surface
+/// via [`super::service::extract_searchable_text`].
 fn extract_fts_content(entry: &TapEntry) -> String {
-    super::service::extract_searchable_text(&entry.payload, entry.metadata.as_ref())
+    let mut parts = Vec::new();
+    collect_json_strings(&entry.payload, &mut parts);
+    if let Some(meta) = entry.metadata.as_ref() {
+        collect_json_strings(meta, &mut parts);
+    }
+    tokenizer::segment(&parts.join("\n"))
+}
+
+/// Recursively push every string leaf in `value` into `out`.
+fn collect_json_strings(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) if !s.is_empty() => out.push(s.clone()),
+        Value::Array(items) => items.iter().for_each(|v| collect_json_strings(v, out)),
+        Value::Object(map) => map.values().for_each(|v| collect_json_strings(v, out)),
+        _ => {}
+    }
 }
 
 /// Sanitize a user query for FTS5 MATCH syntax.
@@ -160,7 +192,9 @@ fn extract_fts_content(entry: &TapEntry) -> String {
 /// We quote each term to treat them as literals, then join with spaces
 /// (implicit AND).
 fn sanitize_fts_query(query: &str) -> String {
-    query
+    // Pre-segment so CJK terms match the segmented index surface.
+    let segmented = tokenizer::segment(query);
+    segmented
         .split_whitespace()
         .filter(|t| !t.is_empty())
         .map(|term| {
@@ -221,6 +255,78 @@ mod tests {
         assert!(content.contains("main text"));
         assert!(content.contains("gpt-4"));
         assert!(content.contains("test"));
+    }
+
+    /// Guards the narrowing in `extract_fts_content`: JSON keys, numbers,
+    /// and structural punctuation must NOT reach the index — otherwise
+    /// jieba chews on `"role"`, `{`, `}` etc. and inflates BM25 noise.
+    #[test]
+    fn extract_fts_content_drops_json_structure() {
+        let entry = TapEntry {
+            id:        10,
+            kind:      TapEntryKind::Message,
+            payload:   serde_json::json!({
+                "role": "user",
+                "content": "actual message",
+                "token_count": 42,
+            }),
+            timestamp: jiff::Timestamp::now(),
+            metadata:  Some(serde_json::json!({"model_name": "claude", "latency_ms": 123})),
+        };
+        let content = extract_fts_content(&entry);
+
+        // String leaves survive.
+        assert!(content.contains("actual message"));
+        assert!(content.contains("user"));
+        assert!(content.contains("claude"));
+
+        // Keys and numbers must be absent.
+        for forbidden in [
+            "role",
+            "content",
+            "token_count",
+            "model_name",
+            "latency_ms",
+            "42",
+            "123",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "content leaked {forbidden:?}: {content:?}"
+            );
+        }
+
+        // Structural JSON punctuation must not appear either.
+        for forbidden in ['{', '}', '[', ']', '"', ':'] {
+            assert!(
+                !content.contains(forbidden),
+                "content leaked {forbidden:?}: {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_fts_content_walks_nested_json() {
+        let entry = TapEntry {
+            id:        11,
+            kind:      TapEntryKind::Message,
+            payload:   serde_json::json!({
+                "content": "outer",
+                "parts": [
+                    {"text": "inner-a"},
+                    {"text": "inner-b", "meta": {"label": "inner-c"}},
+                ],
+            }),
+            timestamp: jiff::Timestamp::now(),
+            metadata:  None,
+        };
+        let content = extract_fts_content(&entry);
+        for expected in ["outer", "inner-a", "inner-b", "inner-c"] {
+            assert!(
+                content.contains(expected),
+                "missing {expected:?}: {content:?}"
+            );
+        }
     }
 
     #[test]
@@ -326,5 +432,61 @@ mod tests {
             .await
             .expect("search after remove");
         assert!(hits.is_empty());
+    }
+
+    /// Verifies jieba pre-segmentation makes CJK BM25 work: a query for a
+    /// segmented word ("机器学习") must retrieve the right entry even when
+    /// the word appears inside a longer sentence.
+    #[tokio::test]
+    async fn chinese_segmentation_enables_bm25() {
+        let pool = test_pool().await;
+        let fts = TapeFts::new(pool);
+
+        let entries = vec![
+            TapEntry {
+                id:        1,
+                kind:      TapEntryKind::Message,
+                payload:   serde_json::json!({"content": "今天学习了机器学习的基础知识"}),
+                timestamp: jiff::Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        2,
+                kind:      TapEntryKind::Message,
+                payload:   serde_json::json!({"content": "买了一台新的机器"}),
+                timestamp: jiff::Timestamp::now(),
+                metadata:  None,
+            },
+            TapEntry {
+                id:        3,
+                kind:      TapEntryKind::Message,
+                payload:   serde_json::json!({"content": "unrelated English content"}),
+                timestamp: jiff::Timestamp::now(),
+                metadata:  None,
+            },
+        ];
+
+        fts.index_entries("cn-tape", "session-cn", &entries)
+            .await
+            .expect("index");
+
+        // "机器学习" should hit entry 1 (where jieba keeps it as one word).
+        let hits = fts
+            .search("机器学习", Some("cn-tape"), 10)
+            .await
+            .expect("search ml");
+        assert!(
+            hits.iter().any(|h| h.entry_id == 1),
+            "expected entry 1 to match '机器学习', got {hits:?}"
+        );
+
+        // "机器" alone should retrieve both CJK entries.
+        let hits = fts
+            .search("机器", Some("cn-tape"), 10)
+            .await
+            .expect("search machine");
+        let ids: Vec<u64> = hits.iter().map(|h| h.entry_id).collect();
+        assert!(ids.contains(&1), "entry 1 should match '机器', got {ids:?}");
+        assert!(ids.contains(&2), "entry 2 should match '机器', got {ids:?}");
     }
 }
