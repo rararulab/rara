@@ -16,6 +16,16 @@
 
 import { useEffect, useRef, useState } from "react";
 
+interface AlmaCaretProps {
+  /**
+   * Bump this when an ancestor of the textarea animates position so
+   * the caret is re-measured both immediately and after the 420 ms
+   * layout transition finishes. Bumping the key is how PiChat tells
+   * the caret that welcome-mode was toggled.
+   */
+  measureKey?: string | number;
+}
+
 /**
  * Mirrored textarea trick: copy every layout-affecting computed style onto a
  * hidden `<div>`, drop in the text up to the caret followed by a marker
@@ -103,10 +113,28 @@ function measureCaret(textarea: HTMLTextAreaElement): CaretPos | null {
  * whose textarea lands in the DOM asynchronously, so we can't ref it
  * through React.
  */
-export function AlmaCaret() {
+export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
   const [pos, setPos] = useState<CaretPos | null>(null);
   const [visible, setVisible] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // When ancestors animate (e.g. the composer slides out of welcome
+  // position), `getBoundingClientRect()` reports the mid-animation
+  // position at measure time — we re-measure once immediately and
+  // again after the layout transition to land the caret at the final
+  // resting place.
+  useEffect(() => {
+    if (measureKey === undefined) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const now = measureCaret(ta);
+    if (now) setPos(now);
+    const timer = window.setTimeout(() => {
+      const next = measureCaret(ta);
+      if (next) setPos(next);
+    }, 460);
+    return () => window.clearTimeout(timer);
+  }, [measureKey]);
 
   useEffect(() => {
     let raf = 0;

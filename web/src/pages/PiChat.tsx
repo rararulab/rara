@@ -853,7 +853,10 @@ export default function PiChat() {
   }, []);
 
   return (
-    <div className="rara-chat relative flex h-screen w-screen flex-col">
+    <div
+      className="rara-chat relative flex h-screen w-screen flex-col"
+      data-welcome={showWelcome && !isInitializing ? "true" : undefined}
+    >
       {/*
         Top utility bar — reserves its own row (not `absolute`) so the
         chat panel's message list can never render underneath the
@@ -895,7 +898,7 @@ export default function PiChat() {
         moment the user commits their first message (onBeforeSend).
       */}
       {showWelcome && !isInitializing && (
-        <div className="pointer-events-none absolute inset-x-0 top-12 bottom-40 z-10 flex items-center justify-center px-6">
+        <div className="pointer-events-none absolute inset-x-0 bottom-[calc(28vh+10rem)] z-10 flex justify-center px-6">
           <h1 className="bg-gradient-to-br from-foreground via-foreground/80 to-foreground/40 bg-clip-text text-6xl font-semibold tracking-[0.2em] text-transparent sm:text-7xl">
             RARA
           </h1>
@@ -917,7 +920,7 @@ export default function PiChat() {
         an internal DOM query since the textarea is owned by a Lit
         custom element we don't ref directly.
       */}
-      {!isInitializing && <AlmaCaret />}
+      {!isInitializing && <AlmaCaret measureKey={showWelcome ? "welcome" : "chat"} />}
       {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
       {isInitializing && (
         <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">

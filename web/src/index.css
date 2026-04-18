@@ -278,6 +278,29 @@
   background-color: transparent;
 }
 
+/*
+ * Welcome-state composer lift. When the session is empty we float the
+ * composer (pi-web-ui's last flex-col child) up to sit near the middle
+ * of the viewport, together with the RARA wordmark positioned just
+ * above it. The floating voice button piggybacks on the same translate
+ * so it keeps its alignment with the paperclip inside the composer.
+ * Transition is long enough to read as an intentional shift when the
+ * first message flips us out of welcome mode.
+ */
+.rara-chat[data-welcome="true"] agent-interface .flex-col.bg-background > *:last-child,
+.rara-chat[data-welcome="true"] > button[title*="Record" i],
+.rara-chat[data-welcome="true"] > button[title*="recording" i],
+.rara-chat[data-welcome="true"] > button[title*="Sending" i] {
+  transform: translateY(-28vh);
+  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.rara-chat agent-interface .flex-col.bg-background > *:last-child,
+.rara-chat > button[title*="Record" i],
+.rara-chat > button[title*="recording" i],
+.rara-chat > button[title*="Sending" i] {
+  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
 .user-message-container {
   background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
   border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);
