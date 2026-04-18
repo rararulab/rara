@@ -105,6 +105,43 @@ impl WechatAdapter {
             poll_handle: Mutex::new(None),
         })
     }
+
+    /// Send `text` to `user_id` via the iLink text-message API.
+    ///
+    /// Requires a cached `context_token` from a prior inbound message —
+    /// WeChat has no way to initiate a conversation from the bot side.
+    /// Returns `EgressError::DeliveryFailed` if the token is missing or
+    /// the API call fails. Shared last-mile send path for both `Reply`
+    /// and `Error` outbound frames.
+    async fn send_plain_text(
+        &self,
+        user_id: &str,
+        context_token: Option<&str>,
+        text: &str,
+    ) -> Result<(), EgressError> {
+        let token = context_token.ok_or_else(|| EgressError::DeliveryFailed {
+            message: format!(
+                "no context_token cached for wechat user {user_id} — cannot send without a prior \
+                 inbound message"
+            ),
+        })?;
+        // iLink protocol: from_user_id = bot, to_user_id = recipient.
+        // The context_token ties the reply to the conversation.
+        info!(
+            from = %self.bot_user_id,
+            to = %user_id,
+            text_len = text.len(),
+            "sending wechat text message"
+        );
+        let result = self
+            .send_client
+            .send_text_message(&self.bot_user_id, user_id, token, text)
+            .await;
+        info!(?result, "wechat send_text_message result");
+        result.map(|_| ()).map_err(|e| EgressError::DeliveryFailed {
+            message: format!("wechat send_text_message failed: {e}"),
+        })
+    }
 }
 
 #[async_trait]
@@ -246,29 +283,9 @@ impl ChannelAdapter for WechatAdapter {
 
         match msg {
             PlatformOutbound::Reply { content, .. } => {
-                let token = context_token.ok_or_else(|| EgressError::DeliveryFailed {
-                    message: format!(
-                        "no context_token cached for wechat user {user_id} — cannot send without \
-                         a prior inbound message"
-                    ),
-                })?;
                 let plain = markdown_to_plain_text(&content);
-                // iLink protocol: from_user_id = bot, to_user_id = recipient.
-                // The context_token ties the reply to the conversation.
-                info!(
-                    from = %self.bot_user_id,
-                    to = %user_id,
-                    text_len = plain.len(),
-                    "sending wechat reply"
-                );
-                let result = self
-                    .send_client
-                    .send_text_message(&self.bot_user_id, &user_id, &token, &plain)
-                    .await;
-                info!(?result, "wechat send_text_message result");
-                result.map_err(|e| EgressError::DeliveryFailed {
-                    message: format!("wechat send_text_message failed: {e}"),
-                })?;
+                self.send_plain_text(&user_id, context_token.as_deref(), &plain)
+                    .await?;
             }
             PlatformOutbound::Progress { .. } => {
                 // Kernel sends Progress as typing indicator. Trigger the
@@ -285,6 +302,11 @@ impl ChannelAdapter for WechatAdapter {
             }
             // WeChat does not support streaming edits.
             PlatformOutbound::StreamChunk { .. } => {}
+            PlatformOutbound::Error { code, message } => {
+                let plain = format!("Error [{code}]: {message}");
+                self.send_plain_text(&user_id, context_token.as_deref(), &plain)
+                    .await?;
+            }
         }
 
         Ok(())
