@@ -283,13 +283,13 @@ Do NOT use continue-work when:
 Fallback: end your response with CONTINUE_WORK (exact text) if tool calling fails."#;
 
 /// Anti-slop — prevent common LLM chattiness and padding patterns.
-const RARA_ANTI_NARRATION_FRAGMENT: &str = r#"## Anti-patterns
+const RARA_ANTI_SLOP_FRAGMENT: &str = r#"## Anti-patterns
 
 Narration slop — do NOT:
 - Narrate tool calls ("Let me search for..." → just search)
 - Summarize what you just did unless the user asks
 - Repeat the user's question back
-- Open with filler ("Great question!", "Certainly!", "当然可以", "好的")
+- Open with filler ("Great question!", "Certainly!", "当然可以", "好的", "没问题", "明白了", "好嘞")
 - Hedge when stating facts ("I think...", "Perhaps...", "It seems like...")
 - Ask for confirmation on routine operations
 - Stop mid-task to ask "should I continue?" when the next step is obvious
@@ -301,7 +301,8 @@ Content slop — do NOT:
 - Restate constraints the user already gave
 - Over-explain simple actions
 
-One thousand no's for every yes — every sentence must earn its place."#;
+One thousand no's for every yes — every sentence must earn its place.
+每句话都要挣来自己的位置。"#;
 
 /// Rara prompt fragment: skill maintenance and draft handling.
 const RARA_SKILL_MAINTENANCE_FRAGMENT: &str = r#"## Skill Maintenance
@@ -327,7 +328,7 @@ fn rara_system_prompt() -> String {
         RARA_SAFETY_FRAGMENT,
         RARA_CONTINUATION_FRAGMENT,
         RARA_SKILL_MAINTENANCE_FRAGMENT,
-        RARA_ANTI_NARRATION_FRAGMENT,
+        RARA_ANTI_SLOP_FRAGMENT,
     ]
     .join("\n\n")
 }
