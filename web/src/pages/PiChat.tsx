@@ -61,6 +61,25 @@ import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
 import type { ProviderInfo } from "@/api/types";
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
+const ACTIVE_SESSION_KEY = "rara.activeSessionKey";
+
+function readStoredSessionKey(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSessionKey(key: string | null): void {
+  try {
+    if (key) localStorage.setItem(ACTIVE_SESSION_KEY, key);
+    else localStorage.removeItem(ACTIVE_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * True when the given provider id is still present in rara's routable
  * catalog (from `/api/v1/chat/providers`). Fails open when the catalog
@@ -371,6 +390,7 @@ export default function PiChat() {
     agent.clearMessages();
     agent.sessionId = session.key;
     setActiveSession(session);
+    writeStoredSessionKey(session.key);
     // Optimistically hide the welcome overlay during the switch: the
     // backend's `message_count` is unreliable (always 0 in the listing
     // for older sessions, see #1585 round-2 notes), so trusting it
@@ -615,21 +635,37 @@ export default function PiChat() {
         });
 
       // 4b. Resolve the active session key before creating the agent.
-      //     Use the most recent existing session or create a new one.
-      const existingSessions = await api.get<ChatSession[]>(
-        "/api/v1/chat/sessions?limit=1&offset=0",
-      );
+      //     Prefer the last-active session from localStorage so a
+      //     reload lands the user back on whatever they were reading,
+      //     falling back to the most recent session, finally creating
+      //     a fresh one when nothing exists.
+      const storedKey = readStoredSessionKey();
+      let initialSession: ChatSession | null = null;
+      if (storedKey) {
+        try {
+          initialSession = await api.get<ChatSession>(
+            `/api/v1/chat/sessions/${encodeURIComponent(storedKey)}`,
+          );
+        } catch {
+          // Session was deleted or the key is stale — fall through.
+          writeStoredSessionKey(null);
+        }
+      }
+      if (!initialSession) {
+        const existingSessions = await api.get<ChatSession[]>(
+          "/api/v1/chat/sessions?limit=1&offset=0",
+        );
+        initialSession = existingSessions[0] ?? null;
+      }
       // Block on provider catalog here so the pre-mount restore step has
       // an authoritative allowlist. It's one cheap request; running it
       // serially after the sessions fetch keeps the code simple.
       await providersPromise;
-      let initialSession: ChatSession;
-      if (existingSessions.length > 0) {
-        initialSession = existingSessions[0];
-      } else {
+      if (!initialSession) {
         initialSession = await api.post<ChatSession>("/api/v1/chat/sessions", {});
       }
       setActiveSession(initialSession);
+      writeStoredSessionKey(initialSession.key);
       setShowWelcome((initialSession.message_count ?? 0) === 0);
       // 5. Create the Agent with rara's WebSocket-backed stream function.
       //    The streamFn reads agent.sessionId at call time to get the active session key.

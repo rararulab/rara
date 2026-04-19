@@ -113,10 +113,25 @@ function measureCaret(textarea: HTMLTextAreaElement): CaretPos | null {
  * whose textarea lands in the DOM asynchronously, so we can't ref it
  * through React.
  */
+/**
+ * `true` when the user's primary pointer is coarse (touch) — i.e. a
+ * phone or tablet. The fake-caret approach relies on
+ * `getBoundingClientRect` lining up with a `position: fixed` element,
+ * which iOS Safari breaks once the virtual keyboard opens because
+ * fixed elements pin to the layout viewport while the rect reports
+ * visual-viewport coordinates. Native caret is already fine on mobile,
+ * so the cleanest fix is to opt out entirely there.
+ */
+function isCoarsePointer(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(pointer: coarse)").matches ?? false;
+}
+
 export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
   const [pos, setPos] = useState<CaretPos | null>(null);
   const [visible, setVisible] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [enabled] = useState(() => !isCoarsePointer());
 
   // When ancestors animate (e.g. the composer slides out of welcome
   // position), `getBoundingClientRect()` reports the mid-animation
@@ -124,6 +139,7 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
   // transition so the caret tracks the textarea's position in sync
   // with the layout tween rather than jumping after it finishes.
   useEffect(() => {
+    if (!enabled) return;
     if (measureKey === undefined) return;
     const ta = textareaRef.current;
     if (!ta) return;
@@ -141,9 +157,10 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [measureKey]);
+  }, [measureKey, enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     let raf = 0;
     let canceled = false;
 
@@ -202,9 +219,9 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
       if (raf) clearTimeout(raf);
       if (typeof cleanup === "function") cleanup();
     };
-  }, []);
+  }, [enabled]);
 
-  if (!pos || !visible) return null;
+  if (!enabled || !pos || !visible) return null;
 
   // Head: sharp bar; smooth translate so moves across characters glide
   // rather than jumping. Blink animation still fires because it runs on
