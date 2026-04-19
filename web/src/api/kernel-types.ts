@@ -447,3 +447,40 @@ export interface CascadeTrace {
   ticks:      CascadeTick[];
   summary:    CascadeSummary;
 }
+
+// ---------------------------------------------------------------------------
+// Execution trace
+// ---------------------------------------------------------------------------
+// Mirrors `rara_kernel::trace::ExecutionTrace` (crates/kernel/src/trace.rs).
+// Returned by `GET /api/v1/chat/sessions/{key}/execution-trace?seq={seq}` and
+// rendered by `<ExecutionTraceModal>` — the per-turn rationale / thinking /
+// plan / tools / usage summary, matching the Telegram "📊 详情" payload.
+
+/** Record of a single tool invocation within a turn. */
+export interface ToolTraceEntry {
+  name:        string;
+  /** Duration in milliseconds, when the invocation completed. */
+  duration_ms: number | null;
+  success:     boolean;
+  summary:     string;
+  error:       string | null;
+}
+
+/** Summary of a single agent turn execution. */
+export interface ExecutionTrace {
+  duration_secs:    number;
+  iterations:       number;
+  model:            string;
+  input_tokens:     number;
+  output_tokens:    number;
+  thinking_ms:      number;
+  /** Truncated reasoning text (first ~500 chars). */
+  thinking_preview: string;
+  /** Plan steps with status. */
+  plan_steps:       string[];
+  /** High-level rationale the LLM stated for this turn, when any. */
+  turn_rationale?:  string;
+  tools:            ToolTraceEntry[];
+  /** Rara internal message ID for end-to-end correlation. */
+  rara_message_id:  string;
+}
