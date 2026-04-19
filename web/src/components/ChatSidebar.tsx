@@ -34,7 +34,10 @@ interface ChatSidebarProps {
   onSelect: (session: ChatSession) => void;
   onNewSession: () => void;
   onOpenSettings: () => void;
-  onDeleteSession: (key: string) => void;
+  /** Called after a session is deleted. `fallback` is the next
+   * session the caller should switch to when the deleted row was
+   * the active one, or `null` when no sessions are left. */
+  onDeleteSession: (key: string, fallback: ChatSession | null) => void;
   /** Bump this from the parent to force a session-list refetch (e.g. after
    * creating a new session or receiving the first message of a fresh one). */
   refreshKey: number;
@@ -113,8 +116,16 @@ export function ChatSidebar({
     if (!confirm("删除这个会话？")) return;
     try {
       await api.del(`/api/v1/chat/sessions/${encodeURIComponent(key)}`);
+      // Pick the neighbour *before* the list mutation so the
+      // parent can switch into a still-cached row rather than
+      // spinning up a fresh session.
+      const idx = sessions.findIndex((s) => s.key === key);
+      const fallback =
+        idx >= 0
+          ? sessions[idx + 1] ?? sessions[idx - 1] ?? null
+          : null;
       setSessions((prev) => prev.filter((s) => s.key !== key));
-      onDeleteSession(key);
+      onDeleteSession(key, fallback);
     } catch {
       /* ignore */
     }

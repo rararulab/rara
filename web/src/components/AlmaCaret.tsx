@@ -120,20 +120,27 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
 
   // When ancestors animate (e.g. the composer slides out of welcome
   // position), `getBoundingClientRect()` reports the mid-animation
-  // position at measure time — we re-measure once immediately and
-  // again after the layout transition to land the caret at the final
-  // resting place.
+  // position at measure time. Poll on every frame through the 420ms
+  // transition so the caret tracks the textarea's position in sync
+  // with the layout tween rather than jumping after it finishes.
   useEffect(() => {
     if (measureKey === undefined) return;
     const ta = textareaRef.current;
     if (!ta) return;
-    const now = measureCaret(ta);
-    if (now) setPos(now);
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    const start = performance.now();
+    const tick = () => {
+      if (cancelled) return;
       const next = measureCaret(ta);
       if (next) setPos(next);
-    }, 460);
-    return () => window.clearTimeout(timer);
+      if (performance.now() - start < 480) {
+        requestAnimationFrame(tick);
+      }
+    };
+    requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+    };
   }, [measureKey]);
 
   useEffect(() => {
