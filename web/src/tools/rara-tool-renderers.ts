@@ -23,8 +23,8 @@
  * module-level `Map`, so late registration would miss the first render.
  */
 
-import { BashRenderer, registerToolRenderer } from "@mariozechner/pi-web-ui";
-import { CompactToolRenderer } from "./CompactToolRenderer";
+import { BashRenderer, registerToolRenderer } from '@mariozechner/pi-web-ui';
+import { CompactToolRenderer } from './CompactToolRenderer';
 
 /**
  * Tool names declared by the rara backend (see `crates/app/src/tools/`).
@@ -46,58 +46,58 @@ import { CompactToolRenderer } from "./CompactToolRenderer";
  * `DefaultRenderer`. Tracked in #1566.
  */
 const RARA_COMPACT_TOOLS = [
-	"acp-delegate",
-	"ask-user",
-	"create-directory",
-	"create-skill",
-	"debug_trace",
-	"delete-file",
-	"delete-skill",
-	"discover-tools",
-	"dispatch-rara",
-	"distill-user-notes",
-	"edit-file",
-	"evolve-soul",
-	"fff-find",
-	"fff-grep",
-	"file-stats",
-	"find-files",
-	"get-session-info",
-	"grep",
-	"http-fetch",
-	"install-acp-agent",
-	"install-mcp-server",
-	"list-acp-agents",
-	"list-directory",
-	"list-mcp-servers",
-	"list-sessions",
-	"list-skills",
-	"multi-edit",
-	"read-file",
-	"read-tape",
-	"remove-acp-agent",
-	"remove-mcp-server",
-	"send-email",
-	"send-file",
-	"set-avatar",
-	"settings",
-	"system-paths",
-	"type",
-	"update-session-title",
-	"update-soul-state",
-	"user-note",
-	"walk-directory",
-	"wechat-login-confirm",
-	"wechat-login-start",
-	"write-file",
-	"write-skill-draft",
-	"write-user-note",
+  'acp-delegate',
+  'ask-user',
+  'create-directory',
+  'create-skill',
+  'debug_trace',
+  'delete-file',
+  'delete-skill',
+  'discover-tools',
+  'dispatch-rara',
+  'distill-user-notes',
+  'edit-file',
+  'evolve-soul',
+  'fff-find',
+  'fff-grep',
+  'file-stats',
+  'find-files',
+  'get-session-info',
+  'grep',
+  'http-fetch',
+  'install-acp-agent',
+  'install-mcp-server',
+  'list-acp-agents',
+  'list-directory',
+  'list-mcp-servers',
+  'list-sessions',
+  'list-skills',
+  'multi-edit',
+  'read-file',
+  'read-tape',
+  'remove-acp-agent',
+  'remove-mcp-server',
+  'send-email',
+  'send-file',
+  'set-avatar',
+  'settings',
+  'system-paths',
+  'type',
+  'update-session-title',
+  'update-soul-state',
+  'user-note',
+  'walk-directory',
+  'wechat-login-confirm',
+  'wechat-login-start',
+  'write-file',
+  'write-skill-draft',
+  'write-user-note',
 ];
 
 export function registerRaraToolRenderers(): void {
-	registerToolRenderer("bash", new BashRenderer());
+  registerToolRenderer('bash', new BashRenderer());
 
-	for (const name of RARA_COMPACT_TOOLS) {
-		registerToolRenderer(name, new CompactToolRenderer(name));
-	}
+  for (const name of RARA_COMPACT_TOOLS) {
+    registerToolRenderer(name, new CompactToolRenderer(name));
+  }
 }

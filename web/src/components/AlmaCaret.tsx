@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from 'react';
 
 interface AlmaCaretProps {
   /**
@@ -33,27 +33,27 @@ interface AlmaCaretProps {
  * the real caret would sit — the textarea itself exposes no such API.
  */
 const MIRROR_STYLE_KEYS = [
-  "boxSizing",
-  "width",
-  "height",
-  "paddingTop",
-  "paddingRight",
-  "paddingBottom",
-  "paddingLeft",
-  "borderTopWidth",
-  "borderRightWidth",
-  "borderBottomWidth",
-  "borderLeftWidth",
-  "fontFamily",
-  "fontSize",
-  "fontWeight",
-  "fontStyle",
-  "lineHeight",
-  "letterSpacing",
-  "wordSpacing",
-  "textTransform",
-  "textIndent",
-  "tabSize",
+  'boxSizing',
+  'width',
+  'height',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'borderTopWidth',
+  'borderRightWidth',
+  'borderBottomWidth',
+  'borderLeftWidth',
+  'fontFamily',
+  'fontSize',
+  'fontWeight',
+  'fontStyle',
+  'lineHeight',
+  'letterSpacing',
+  'wordSpacing',
+  'textTransform',
+  'textIndent',
+  'tabSize',
 ] as const;
 
 interface CaretPos {
@@ -66,23 +66,23 @@ function measureCaret(textarea: HTMLTextAreaElement): CaretPos | null {
   if (!textarea.isConnected) return null;
 
   const cs = getComputedStyle(textarea);
-  const mirror = document.createElement("div");
+  const mirror = document.createElement('div');
   for (const key of MIRROR_STYLE_KEYS) {
     mirror.style[key as never] = cs[key as never];
   }
-  mirror.style.position = "absolute";
-  mirror.style.visibility = "hidden";
-  mirror.style.top = "0";
-  mirror.style.left = "0";
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.wordWrap = "break-word";
-  mirror.style.overflow = "hidden";
+  mirror.style.position = 'absolute';
+  mirror.style.visibility = 'hidden';
+  mirror.style.top = '0';
+  mirror.style.left = '0';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.wordWrap = 'break-word';
+  mirror.style.overflow = 'hidden';
 
   const end = textarea.selectionEnd ?? textarea.value.length;
   mirror.textContent = textarea.value.substring(0, end);
-  const marker = document.createElement("span");
+  const marker = document.createElement('span');
   // U+200B (zero-width space) keeps the line alive without adding glyph width.
-  marker.textContent = "\u200b";
+  marker.textContent = '\u200b';
   mirror.appendChild(marker);
 
   document.body.appendChild(mirror);
@@ -91,10 +91,7 @@ function measureCaret(textarea: HTMLTextAreaElement): CaretPos | null {
   document.body.removeChild(mirror);
 
   const taRect = textarea.getBoundingClientRect();
-  const lineHeight =
-    parseFloat(cs.lineHeight) ||
-    parseFloat(cs.fontSize) * 1.3 ||
-    18;
+  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.3 || 18;
 
   return {
     x: taRect.left + (markerRect.left - mirrorRect.left) - textarea.scrollLeft,
@@ -123,8 +120,8 @@ function measureCaret(textarea: HTMLTextAreaElement): CaretPos | null {
  * so the cleanest fix is to opt out entirely there.
  */
 function isCoarsePointer(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(pointer: coarse)').matches ?? false;
 }
 
 export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
@@ -137,11 +134,11 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
   // latching whatever pointer type happened to be active at mount.
   const [enabled, setEnabled] = useState(() => !isCoarsePointer());
   useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(pointer: coarse)");
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(pointer: coarse)');
     const onChange = (e: MediaQueryListEvent) => setEnabled(!e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, []);
 
   // When ancestors animate (e.g. the composer slides out of welcome
@@ -178,13 +175,13 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
     // Poll until pi-web-ui's textarea mounts, then bind listeners.
     const findAndBind = () => {
       if (canceled) return;
-      const ta = document.querySelector<HTMLTextAreaElement>("textarea");
+      const ta = document.querySelector<HTMLTextAreaElement>('textarea');
       if (!ta) {
         raf = window.setTimeout(findAndBind, 80);
         return;
       }
       textareaRef.current = ta;
-      ta.style.caretColor = "transparent";
+      ta.style.caretColor = 'transparent';
       // IME (composition) shows a browser-native caret under Chromium; accept it.
 
       const update = () => {
@@ -197,30 +194,30 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
       };
       const blur = () => setVisible(false);
 
-      ta.addEventListener("input", update);
-      ta.addEventListener("keydown", update);
-      ta.addEventListener("keyup", update);
-      ta.addEventListener("click", update);
-      ta.addEventListener("scroll", update);
-      ta.addEventListener("focus", focus);
-      ta.addEventListener("blur", blur);
-      window.addEventListener("resize", update);
-      document.addEventListener("selectionchange", update);
+      ta.addEventListener('input', update);
+      ta.addEventListener('keydown', update);
+      ta.addEventListener('keyup', update);
+      ta.addEventListener('click', update);
+      ta.addEventListener('scroll', update);
+      ta.addEventListener('focus', focus);
+      ta.addEventListener('blur', blur);
+      window.addEventListener('resize', update);
+      document.addEventListener('selectionchange', update);
 
       if (document.activeElement === ta) focus();
       update();
 
       return () => {
-        ta.style.caretColor = "";
-        ta.removeEventListener("input", update);
-        ta.removeEventListener("keydown", update);
-        ta.removeEventListener("keyup", update);
-        ta.removeEventListener("click", update);
-        ta.removeEventListener("scroll", update);
-        ta.removeEventListener("focus", focus);
-        ta.removeEventListener("blur", blur);
-        window.removeEventListener("resize", update);
-        document.removeEventListener("selectionchange", update);
+        ta.style.caretColor = '';
+        ta.removeEventListener('input', update);
+        ta.removeEventListener('keydown', update);
+        ta.removeEventListener('keyup', update);
+        ta.removeEventListener('click', update);
+        ta.removeEventListener('scroll', update);
+        ta.removeEventListener('focus', focus);
+        ta.removeEventListener('blur', blur);
+        window.removeEventListener('resize', update);
+        document.removeEventListener('selectionchange', update);
       };
     };
 
@@ -228,7 +225,7 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
     return () => {
       canceled = true;
       if (raf) clearTimeout(raf);
-      if (typeof cleanup === "function") cleanup();
+      if (typeof cleanup === 'function') cleanup();
     };
   }, [enabled]);
 
@@ -238,39 +235,39 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
   // rather than jumping. Blink animation still fires because it runs on
   // opacity, not transform.
   const head: React.CSSProperties = {
-    position: "fixed",
+    position: 'fixed',
     left: 0,
     top: 0,
     width: 2,
     height: pos.height,
     transform: `translate(${pos.x}px, ${pos.y}px)`,
-    background: "var(--color-foreground)",
-    transition: "transform 90ms cubic-bezier(0.2, 0.9, 0.2, 1)",
-    animation: "alma-caret-blink 1.05s step-end infinite",
-    pointerEvents: "none",
+    background: 'var(--color-foreground)',
+    transition: 'transform 90ms cubic-bezier(0.2, 0.9, 0.2, 1)',
+    animation: 'alma-caret-blink 1.05s step-end infinite',
+    pointerEvents: 'none',
     zIndex: 30,
-    willChange: "transform",
+    willChange: 'transform',
   };
 
   // Trail: painted only during moves. Keyed on the caret position so the
   // fade keyframe replays on every pixel change; between moves the element
   // sits at opacity 0 and disappears — no idle halo.
   const trail: React.CSSProperties = {
-    position: "fixed",
+    position: 'fixed',
     left: 0,
     top: 0,
     width: 24,
     height: pos.height,
     transform: `translate(${pos.x - 11}px, ${pos.y}px)`,
     background:
-      "radial-gradient(ellipse at 55% 50%, color-mix(in oklab, oklch(0.62 0.18 250) 70%, transparent) 0%, transparent 70%)",
-    transition: "transform 260ms cubic-bezier(0.25, 0.85, 0.25, 1)",
-    filter: "blur(4px)",
+      'radial-gradient(ellipse at 55% 50%, color-mix(in oklab, oklch(0.62 0.18 250) 70%, transparent) 0%, transparent 70%)',
+    transition: 'transform 260ms cubic-bezier(0.25, 0.85, 0.25, 1)',
+    filter: 'blur(4px)',
     opacity: 0,
-    animation: "alma-caret-trail 420ms ease-out",
-    pointerEvents: "none",
+    animation: 'alma-caret-trail 420ms ease-out',
+    pointerEvents: 'none',
     zIndex: 29,
-    willChange: "transform, opacity",
+    willChange: 'transform, opacity',
   };
 
   return (
@@ -279,11 +276,7 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
         @keyframes alma-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
         @keyframes alma-caret-trail { 0% { opacity: 0; } 30% { opacity: 0.9; } 100% { opacity: 0; } }
       `}</style>
-      <div
-        aria-hidden
-        key={`${Math.round(pos.x)}-${Math.round(pos.y)}`}
-        style={trail}
-      />
+      <div aria-hidden key={`${Math.round(pos.x)}-${Math.round(pos.y)}`} style={trail} />
       <div aria-hidden style={head} />
     </>
   );

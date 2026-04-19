@@ -73,30 +73,30 @@ export interface TurnTrace {
  * are ignored by the hook.
  */
 export type StreamEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "reasoning_delta"; text: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'reasoning_delta'; text: string }
   | {
-      type: "tool_call_start";
+      type: 'tool_call_start';
       name: string;
       id: string;
       arguments: Record<string, unknown>;
     }
   | {
-      type: "tool_call_end";
+      type: 'tool_call_end';
       id: string;
       result_preview: string;
       success: boolean;
       error: string | null;
     }
   | {
-      type: "turn_metrics";
+      type: 'turn_metrics';
       duration_ms: number;
       iterations: number;
       tool_calls: number;
       model: string;
       rara_message_id: string;
     }
-  | { type: "done" }
+  | { type: 'done' }
   | { type: string; [k: string]: unknown };
 
 // ---------------------------------------------------------------------------
@@ -104,12 +104,7 @@ export type StreamEvent =
 // ---------------------------------------------------------------------------
 
 /** Semantic category of a timeline item — drives icon/color/layout. */
-export type EventKind =
-  | "agent"
-  | "thinking"
-  | "tool_use"
-  | "tool_result"
-  | "error";
+export type EventKind = 'agent' | 'thinking' | 'tool_use' | 'tool_result' | 'error';
 
 /**
  * One renderable row in the session timeline.
@@ -155,7 +150,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
         items.push({
           seq: seq++,
           turn: turnIdx,
-          kind: "thinking",
+          kind: 'thinking',
           content: iter.reasoning_text,
         });
       }
@@ -164,7 +159,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
         items.push({
           seq: seq++,
           turn: turnIdx,
-          kind: "tool_use",
+          kind: 'tool_use',
           tool: tc.name,
           input: tc.arguments,
           durationMs: tc.duration_ms,
@@ -174,7 +169,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
           items.push({
             seq: seq++,
             turn: turnIdx,
-            kind: "error",
+            kind: 'error',
             tool: tc.name,
             content: tc.error,
           });
@@ -182,7 +177,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
           items.push({
             seq: seq++,
             turn: turnIdx,
-            kind: "tool_result",
+            kind: 'tool_result',
             tool: tc.name,
             output: tc.result_preview,
             success: tc.success,
@@ -194,7 +189,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
         items.push({
           seq: seq++,
           turn: turnIdx,
-          kind: "agent",
+          kind: 'agent',
           content: iter.text_preview,
         });
       }
@@ -204,7 +199,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
       items.push({
         seq: seq++,
         turn: turnIdx,
-        kind: "error",
+        kind: 'error',
         content: turn.error,
       });
     }
@@ -224,10 +219,10 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
  * terminal** (`is_terminal()` always returns false), so `Completed`,
  * `Failed`, or `Cancelled` never appear — do not branch on them.
  */
-export type KernelSessionState = "Active" | "Ready" | "Suspended" | "Paused";
+export type KernelSessionState = 'Active' | 'Ready' | 'Suspended' | 'Paused';
 
 /** UI grouping for the session list. */
-export type SessionGroup = "active" | "dormant";
+export type SessionGroup = 'active' | 'dormant';
 
 /**
  * Bucket a kernel session state into an IA group.
@@ -237,11 +232,11 @@ export type SessionGroup = "active" | "dormant";
  */
 export function sessionGroup(state: string): SessionGroup {
   switch (state.toLowerCase()) {
-    case "active":
-    case "ready":
-      return "active";
+    case 'active':
+    case 'ready':
+      return 'active';
     default:
-      return "dormant";
+      return 'dormant';
   }
 }
 
@@ -252,5 +247,5 @@ export function sessionGroup(state: string): SessionGroup {
 export function isLiveState(state: string | null): boolean {
   if (!state) return false;
   const s = state.toLowerCase();
-  return s === "active" || s === "ready";
+  return s === 'active' || s === 'ready';
 }

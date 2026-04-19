@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
-import { onlineManager } from "@tanstack/react-query";
-import { ServerStatusContext } from "@/hooks/use-server-status";
-import { resolveUrl } from "@/api/client";
+import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import { onlineManager } from '@tanstack/react-query';
+import { ServerStatusContext } from '@/hooks/use-server-status';
+import { resolveUrl } from '@/api/client';
 const CHECK_INTERVAL_MS = 10_000;
 const TIMEOUT_MS = 5_000;
 
@@ -33,7 +33,7 @@ export function ServerStatusProvider({ children }: { children: ReactNode }) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
       try {
-        const res = await fetch(resolveUrl("/api/v1/health"), { signal: controller.signal });
+        const res = await fetch(resolveUrl('/api/v1/health'), { signal: controller.signal });
         if (cancelled) return;
         const online = res.ok;
         setIsOnline(online);
@@ -59,14 +59,7 @@ export function ServerStatusProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const value = useMemo(
-    () => ({ isOnline, isChecking }),
-    [isOnline, isChecking],
-  );
+  const value = useMemo(() => ({ isOnline, isChecking }), [isOnline, isChecking]);
 
-  return (
-    <ServerStatusContext.Provider value={value}>
-      {children}
-    </ServerStatusContext.Provider>
-  );
+  return <ServerStatusContext.Provider value={value}>{children}</ServerStatusContext.Provider>;
 }

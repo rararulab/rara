@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { Fragment, useCallback, useRef, useState } from "react";
-import { Zap } from "lucide-react";
-import { useSessionTimeline } from "@/hooks/use-session-timeline";
-import { Skeleton } from "@/components/ui/skeleton";
-import { TimelineBar } from "./TimelineBar";
-import { TimelineRow } from "./TimelineRow";
-import { SessionHeader } from "./SessionHeader";
+import { Fragment, useCallback, useRef, useState } from 'react';
+import { Zap } from 'lucide-react';
+import { useSessionTimeline } from '@/hooks/use-session-timeline';
+import { Skeleton } from '@/components/ui/skeleton';
+import { TimelineBar } from './TimelineBar';
+import { TimelineRow } from './TimelineRow';
+import { SessionHeader } from './SessionHeader';
 
 interface SessionStats {
   agent_id: string;
@@ -51,9 +51,7 @@ export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
 
   const handleSegmentClick = useCallback((idx: number) => {
     setSelectedIdx(idx);
-    rowRefs.current
-      .get(idx)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    rowRefs.current.get(idx)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
   return (
@@ -101,10 +99,9 @@ export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
           <div className="divide-y">
             {timeline.items.map((item, idx) => {
               const prev = timeline.items[idx - 1];
-              const turnChanged =
-                idx > 0 && (!prev || prev.turn !== item.turn);
+              const turnChanged = idx > 0 && (!prev || prev.turn !== item.turn);
               const isLive = idx >= timeline.historicalItems.length;
-              const rowKey = `${isLive ? "l" : "h"}-${item.turn}-${item.seq}-${idx}`;
+              const rowKey = `${isLive ? 'l' : 'h'}-${item.turn}-${item.seq}-${idx}`;
               return (
                 <Fragment key={rowKey}>
                   {turnChanged && (
@@ -119,9 +116,7 @@ export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
                     }}
                     item={item}
                     isSelected={selectedIdx === idx}
-                    onClick={() =>
-                      setSelectedIdx((prev) => (prev === idx ? null : idx))
-                    }
+                    onClick={() => setSelectedIdx((prev) => (prev === idx ? null : idx))}
                   />
                 </Fragment>
               );

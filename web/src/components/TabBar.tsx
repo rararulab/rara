@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { useLayoutEffect, useRef, useState } from "react";
-import { cn } from "@/lib/utils";
+import { useLayoutEffect, useRef, useState } from 'react';
+import { cn } from '@/lib/utils';
 
 export interface Tab {
   key: string;
@@ -64,18 +64,16 @@ export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
 
     const panelEl = panelRef.current;
     const resizeObserver =
-      typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => updateIndicator())
-        : null;
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => updateIndicator()) : null;
 
     if (panelEl && resizeObserver) resizeObserver.observe(panelEl);
     Object.values(buttonRefs.current).forEach((el) => {
       if (el && resizeObserver) resizeObserver.observe(el);
     });
 
-    window.addEventListener("resize", updateIndicator);
+    window.addEventListener('resize', updateIndicator);
     return () => {
-      window.removeEventListener("resize", updateIndicator);
+      window.removeEventListener('resize', updateIndicator);
       resizeObserver?.disconnect();
     };
   }, [activeTab, tabs]);
@@ -89,8 +87,8 @@ export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
         <div
           aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute top-1 bottom-1 rounded-xl bg-background shadow-sm ring-1 ring-border/70 transition-[left,width,opacity,transform] duration-250 ease-out",
-            indicator.visible ? "opacity-100" : "opacity-0"
+            'pointer-events-none absolute top-1 bottom-1 rounded-xl bg-background shadow-sm ring-1 ring-border/70 transition-[left,width,opacity,transform] duration-250 ease-out',
+            indicator.visible ? 'opacity-100' : 'opacity-0',
           )}
           style={{
             left: indicator.left,
@@ -108,19 +106,17 @@ export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
             aria-pressed={activeTab === tab.key}
             onClick={() => onTabChange(tab.key)}
             className={cn(
-              "group relative z-10 flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all",
-              "focus-visible:ring-2 focus-visible:ring-ring/50",
+              'group relative z-10 flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all',
+              'focus-visible:ring-2 focus-visible:ring-ring/50',
               activeTab === tab.key
-                ? "text-foreground"
-                : "text-muted-foreground hover:-translate-y-0.5 hover:bg-background/70 hover:text-foreground hover:shadow-sm",
+                ? 'text-foreground'
+                : 'text-muted-foreground hover:-translate-y-0.5 hover:bg-background/70 hover:text-foreground hover:shadow-sm',
             )}
           >
             <span
               className={cn(
-                "opacity-80 transition-transform",
-                activeTab === tab.key
-                  ? "opacity-100 text-primary"
-                  : "group-hover:scale-105",
+                'opacity-80 transition-transform',
+                activeTab === tab.key ? 'opacity-100 text-primary' : 'group-hover:scale-105',
               )}
             >
               {tab.icon}

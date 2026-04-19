@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { ReactNode } from "react";
+import type { ReactNode } from 'react';
 
 export interface MetadataChipProps {
   /** Optional leading icon (typically a lucide-react icon at h-3 w-3). */

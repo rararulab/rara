@@ -14,22 +14,22 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/client";
+import { useCallback, useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/api/client';
 import type {
   McpServerInfo,
   McpToolView,
   McpResourceView,
   McpLogEntry,
   CreateMcpServerRequest,
-} from "@/api/types";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+} from '@/api/types';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -37,16 +37,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from '@/components/ui/select';
 import {
-
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -60,9 +59,9 @@ import {
   Square,
   Trash2,
   Wrench,
-} from "lucide-react";
+} from 'lucide-react';
 
-type ToastState = { kind: "success" | "error"; message: string } | null;
+type ToastState = { kind: 'success' | 'error'; message: string } | null;
 
 interface EnvEntry {
   key: string;
@@ -70,15 +69,15 @@ interface EnvEntry {
 }
 
 const EMPTY_FORM: FormState = {
-  name: "",
-  transport: "stdio",
-  command: "",
-  args: "",
-  url: "",
+  name: '',
+  transport: 'stdio',
+  command: '',
+  args: '',
+  url: '',
   env: [],
   enabled: true,
-  startupTimeout: "",
-  toolTimeout: "",
+  startupTimeout: '',
+  toolTimeout: '',
 };
 
 interface FormState {
@@ -93,23 +92,23 @@ interface FormState {
   toolTimeout: string;
 }
 
-function statusBadge(status: McpServerInfo["status"]) {
+function statusBadge(status: McpServerInfo['status']) {
   switch (status.type) {
-    case "connected":
+    case 'connected':
       return (
         <Badge className="border-transparent bg-green-100 text-green-800 hover:bg-green-100">
           Connected
         </Badge>
       );
-    case "connecting":
+    case 'connecting':
       return (
         <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
           Connecting...
         </Badge>
       );
-    case "disconnected":
+    case 'disconnected':
       return <Badge variant="secondary">Disconnected</Badge>;
-    case "error":
+    case 'error':
       return <Badge variant="destructive">Error</Badge>;
   }
 }
@@ -124,14 +123,14 @@ function formToRequest(form: FormState): CreateMcpServerRequest {
     name: form.name.trim(),
     command: form.command.trim(),
     args: form.args
-      .split("\n")
+      .split('\n')
       .map((s) => s.trim())
       .filter(Boolean),
     env,
     enabled: form.enabled,
     transport: form.transport,
   };
-  if (form.transport === "sse" && form.url.trim()) {
+  if (form.transport === 'sse' && form.url.trim()) {
     req.url = form.url.trim();
   }
   const startupSecs = Number.parseInt(form.startupTimeout, 10);
@@ -150,15 +149,15 @@ function serverToForm(server: McpServerInfo): FormState {
     name: server.name,
     transport: server.config.transport,
     command: server.config.command,
-    args: server.config.args.join("\n"),
-    url: server.config.url ?? "",
+    args: server.config.args.join('\n'),
+    url: server.config.url ?? '',
     env: Object.entries(server.config.env).map(([key, value]) => ({
       key,
       value,
     })),
     enabled: server.config.enabled,
-    startupTimeout: server.config.startup_timeout_secs?.toString() ?? "",
-    toolTimeout: server.config.tool_timeout_secs?.toString() ?? "",
+    startupTimeout: server.config.startup_timeout_secs?.toString() ?? '',
+    toolTimeout: server.config.tool_timeout_secs?.toString() ?? '',
   };
 }
 
@@ -173,27 +172,26 @@ export default function McpServers() {
   // ── Queries ──────────────────────────────────────────────
 
   const serversQuery = useQuery({
-    queryKey: ["mcp-servers"],
-    queryFn: () => api.get<McpServerInfo[]>("/api/v1/mcp/servers"),
+    queryKey: ['mcp-servers'],
+    queryFn: () => api.get<McpServerInfo[]>('/api/v1/mcp/servers'),
     refetchInterval: 5000, // Poll every 5s for status changes
   });
 
   // ── Mutations ────────────────────────────────────────────
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['mcp-servers'] });
 
   const addMutation = useMutation({
     mutationFn: (req: CreateMcpServerRequest) =>
-      api.post<McpServerInfo>("/api/v1/mcp/servers", req),
+      api.post<McpServerInfo>('/api/v1/mcp/servers', req),
     onSuccess: () => {
       invalidate();
       setDialogOpen(false);
       setForm({ ...EMPTY_FORM });
-      showToast("success", "Server added successfully.");
+      showToast('success', 'Server added successfully.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to add server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to add server'),
   });
 
   const updateMutation = useMutation({
@@ -204,76 +202,70 @@ export default function McpServers() {
       setDialogOpen(false);
       setEditingServer(null);
       setForm({ ...EMPTY_FORM });
-      showToast("success", "Server updated successfully.");
+      showToast('success', 'Server updated successfully.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to update server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to update server'),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.del<void>(`/api/v1/mcp/servers/${name}`),
+    mutationFn: (name: string) => api.del<void>(`/api/v1/mcp/servers/${name}`),
     onSuccess: () => {
       invalidate();
-      showToast("success", "Server deleted.");
+      showToast('success', 'Server deleted.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to delete server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to delete server'),
   });
 
   const startMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.post<void>(`/api/v1/mcp/servers/${name}/start`),
+    mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/start`),
     onSuccess: () => {
       invalidate();
-      showToast("success", "Server started.");
+      showToast('success', 'Server started.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to start server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to start server'),
   });
 
   const stopMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.post<void>(`/api/v1/mcp/servers/${name}/stop`),
+    mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/stop`),
     onSuccess: () => {
       invalidate();
-      showToast("success", "Server stopped.");
+      showToast('success', 'Server stopped.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to stop server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to stop server'),
   });
 
   const restartMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.post<void>(`/api/v1/mcp/servers/${name}/restart`),
+    mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/restart`),
     onSuccess: () => {
       invalidate();
-      showToast("success", "Server restarted.");
+      showToast('success', 'Server restarted.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to restart server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to restart server'),
   });
 
   const enableMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.post<void>(`/api/v1/mcp/servers/${name}/enable`),
+    mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/enable`),
     onSuccess: () => {
       invalidate();
-      showToast("success", "Server enabled.");
+      showToast('success', 'Server enabled.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to enable server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to enable server'),
   });
 
   const disableMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.post<void>(`/api/v1/mcp/servers/${name}/disable`),
+    mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/disable`),
     onSuccess: () => {
       invalidate();
-      showToast("success", "Server disabled.");
+      showToast('success', 'Server disabled.');
     },
     onError: (e: unknown) =>
-      showToast("error", e instanceof Error ? e.message : "Failed to disable server"),
+      showToast('error', e instanceof Error ? e.message : 'Failed to disable server'),
   });
 
   const anyMutating =
@@ -288,7 +280,7 @@ export default function McpServers() {
 
   // ── Helpers ──────────────────────────────────────────────
 
-  const showToast = useCallback((kind: "success" | "error", message: string) => {
+  const showToast = useCallback((kind: 'success' | 'error', message: string) => {
     setToast({ kind, message });
   }, []);
 
@@ -313,15 +305,15 @@ export default function McpServers() {
   const handleSubmit = () => {
     const req = formToRequest(form);
     if (!req.name) {
-      showToast("error", "Server name is required.");
+      showToast('error', 'Server name is required.');
       return;
     }
-    if (req.transport === "stdio" && !req.command) {
-      showToast("error", "Command is required for stdio transport.");
+    if (req.transport === 'stdio' && !req.command) {
+      showToast('error', 'Command is required for stdio transport.');
       return;
     }
-    if (req.transport === "sse" && !req.url) {
-      showToast("error", "URL is required for SSE transport.");
+    if (req.transport === 'sse' && !req.url) {
+      showToast('error', 'URL is required for SSE transport.');
       return;
     }
     if (editingServer) {
@@ -347,20 +339,14 @@ export default function McpServers() {
   const addEnvEntry = () => {
     setForm((prev) => ({
       ...prev,
-      env: [...prev.env, { key: "", value: "" }],
+      env: [...prev.env, { key: '', value: '' }],
     }));
   };
 
-  const updateEnvEntry = (
-    index: number,
-    field: "key" | "value",
-    value: string,
-  ) => {
+  const updateEnvEntry = (index: number, field: 'key' | 'value', value: string) => {
     setForm((prev) => ({
       ...prev,
-      env: prev.env.map((entry, i) =>
-        i === index ? { ...entry, [field]: value } : entry,
-      ),
+      env: prev.env.map((entry, i) => (i === index ? { ...entry, [field]: value } : entry)),
     }));
   };
 
@@ -374,12 +360,8 @@ export default function McpServers() {
   // ── Render ───────────────────────────────────────────────
 
   const servers = serversQuery.data ?? [];
-  const connectedCount = servers.filter(
-    (s) => s.status.type === "connected",
-  ).length;
-  const connectingCount = servers.filter(
-    (s) => s.status.type === "connecting",
-  ).length;
+  const connectedCount = servers.filter((s) => s.status.type === 'connected').length;
+  const connectingCount = servers.filter((s) => s.status.type === 'connecting').length;
 
   return (
     <div className="space-y-6">
@@ -388,7 +370,9 @@ export default function McpServers() {
         <div>
           <h2 className="text-xl font-bold">MCP Servers</h2>
           <p className="text-sm text-muted-foreground">
-            {connectedCount} connected{connectingCount > 0 ? ` / ${connectingCount} connecting` : ""} / {servers.length} configured
+            {connectedCount} connected
+            {connectingCount > 0 ? ` / ${connectingCount} connecting` : ''} / {servers.length}{' '}
+            configured
           </p>
         </div>
         <Button onClick={openAdd}>
@@ -409,10 +393,8 @@ export default function McpServers() {
       {/* Error */}
       {serversQuery.isError && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-          Failed to load MCP servers.{" "}
-          {serversQuery.error instanceof Error
-            ? serversQuery.error.message
-            : "Unknown error"}
+          Failed to load MCP servers.{' '}
+          {serversQuery.error instanceof Error ? serversQuery.error.message : 'Unknown error'}
         </div>
       )}
 
@@ -422,8 +404,7 @@ export default function McpServers() {
           <Server className="h-10 w-10 text-muted-foreground" />
           <p className="font-medium">No MCP servers configured</p>
           <p className="text-sm text-muted-foreground">
-            Add an MCP server to extend the agent with external tools and
-            resources.
+            Add an MCP server to extend the agent with external tools and resources.
           </p>
           <Button onClick={openAdd} variant="outline">
             <Plus className="mr-2 h-4 w-4" />
@@ -439,9 +420,7 @@ export default function McpServers() {
           server={server}
           expanded={expandedServer === server.name}
           onToggleExpand={() =>
-            setExpandedServer((prev) =>
-              prev === server.name ? null : server.name,
-            )
+            setExpandedServer((prev) => (prev === server.name ? null : server.name))
           }
           onEdit={() => openEdit(server)}
           onDelete={() => handleDelete(server.name)}
@@ -465,13 +444,11 @@ export default function McpServers() {
       >
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>
-              {editingServer ? `Edit: ${editingServer}` : "Add MCP Server"}
-            </DialogTitle>
+            <DialogTitle>{editingServer ? `Edit: ${editingServer}` : 'Add MCP Server'}</DialogTitle>
             <DialogDescription>
               {editingServer
-                ? "Update the server configuration."
-                : "Configure a new MCP server connection."}
+                ? 'Update the server configuration.'
+                : 'Configure a new MCP server connection.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -482,9 +459,7 @@ export default function McpServers() {
               <Input
                 id="mcp-name"
                 value={form.name}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, name: e.target.value }))
-                }
+                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
                 placeholder="my-mcp-server"
                 disabled={!!editingServer}
               />
@@ -495,9 +470,7 @@ export default function McpServers() {
               <Label>Transport</Label>
               <Select
                 value={form.transport}
-                onValueChange={(value) =>
-                  setForm((prev) => ({ ...prev, transport: value }))
-                }
+                onValueChange={(value) => setForm((prev) => ({ ...prev, transport: value }))}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -510,7 +483,7 @@ export default function McpServers() {
             </div>
 
             {/* Command (stdio) */}
-            {form.transport === "stdio" && (
+            {form.transport === 'stdio' && (
               <>
                 <div className="space-y-2">
                   <Label htmlFor="mcp-command">Command</Label>
@@ -528,18 +501,13 @@ export default function McpServers() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="mcp-args">
-                    Arguments{" "}
-                    <span className="text-xs text-muted-foreground">
-                      (one per line)
-                    </span>
+                    Arguments <span className="text-xs text-muted-foreground">(one per line)</span>
                   </Label>
                   <textarea
                     id="mcp-args"
                     value={form.args}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, args: e.target.value }))
-                    }
-                    placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/path/to/dir"}
+                    onChange={(e) => setForm((prev) => ({ ...prev, args: e.target.value }))}
+                    placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/path/to/dir'}
                     className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     rows={3}
                   />
@@ -548,15 +516,13 @@ export default function McpServers() {
             )}
 
             {/* URL (sse) */}
-            {form.transport === "sse" && (
+            {form.transport === 'sse' && (
               <div className="space-y-2">
                 <Label htmlFor="mcp-url">URL</Label>
                 <Input
                   id="mcp-url"
                   value={form.url}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, url: e.target.value }))
-                  }
+                  onChange={(e) => setForm((prev) => ({ ...prev, url: e.target.value }))}
                   placeholder="http://localhost:8080/sse"
                 />
               </div>
@@ -566,12 +532,7 @@ export default function McpServers() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>Environment Variables</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addEnvEntry}
-                >
+                <Button type="button" variant="outline" size="sm" onClick={addEnvEntry}>
                   <Plus className="mr-1 h-3 w-3" />
                   Add
                 </Button>
@@ -585,17 +546,13 @@ export default function McpServers() {
                 <div key={index} className="flex items-center gap-2">
                   <Input
                     value={entry.key}
-                    onChange={(e) =>
-                      updateEnvEntry(index, "key", e.target.value)
-                    }
+                    onChange={(e) => updateEnvEntry(index, 'key', e.target.value)}
                     placeholder="KEY"
                     className="flex-1"
                   />
                   <Input
                     value={entry.value}
-                    onChange={(e) =>
-                      updateEnvEntry(index, "value", e.target.value)
-                    }
+                    onChange={(e) => updateEnvEntry(index, 'value', e.target.value)}
                     placeholder="value"
                     className="flex-1"
                   />
@@ -616,8 +573,7 @@ export default function McpServers() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="mcp-startup-timeout">
-                  Startup Timeout{" "}
-                  <span className="text-xs text-muted-foreground">(secs)</span>
+                  Startup Timeout <span className="text-xs text-muted-foreground">(secs)</span>
                 </Label>
                 <Input
                   id="mcp-startup-timeout"
@@ -634,8 +590,7 @@ export default function McpServers() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="mcp-tool-timeout">
-                  Tool Timeout{" "}
-                  <span className="text-xs text-muted-foreground">(secs)</span>
+                  Tool Timeout <span className="text-xs text-muted-foreground">(secs)</span>
                 </Label>
                 <Input
                   id="mcp-tool-timeout"
@@ -662,9 +617,7 @@ export default function McpServers() {
               </div>
               <Switch
                 checked={form.enabled}
-                onCheckedChange={(checked) =>
-                  setForm((prev) => ({ ...prev, enabled: checked }))
-                }
+                onCheckedChange={(checked) => setForm((prev) => ({ ...prev, enabled: checked }))}
               />
             </div>
           </div>
@@ -685,10 +638,10 @@ export default function McpServers() {
               disabled={addMutation.isPending || updateMutation.isPending}
             >
               {addMutation.isPending || updateMutation.isPending
-                ? "Saving..."
+                ? 'Saving...'
                 : editingServer
-                  ? "Update"
-                  : "Add Server"}
+                  ? 'Update'
+                  : 'Add Server'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -699,9 +652,9 @@ export default function McpServers() {
         <div className="fixed right-6 top-6 z-50">
           <div
             className={`rounded-md border px-4 py-3 text-sm shadow-lg ${
-              toast.kind === "success"
-                ? "border-green-200 bg-green-50 text-green-800"
-                : "border-red-200 bg-red-50 text-red-800"
+              toast.kind === 'success'
+                ? 'border-green-200 bg-green-50 text-green-800'
+                : 'border-red-200 bg-red-50 text-red-800'
             }`}
           >
             {toast.message}
@@ -737,13 +690,13 @@ function ServerCard({
   onToggleEnabled: () => void;
   disabled: boolean;
 }) {
-  const isConnected = server.status.type === "connected";
-  const isConnecting = server.status.type === "connecting";
+  const isConnected = server.status.type === 'connected';
+  const isConnecting = server.status.type === 'connecting';
   const isActive = isConnected || isConnecting;
   const summary =
-    server.config.transport === "sse"
-      ? server.config.url ?? "SSE"
-      : `${server.config.command} ${server.config.args.join(" ")}`;
+    server.config.transport === 'sse'
+      ? (server.config.url ?? 'SSE')
+      : `${server.config.command} ${server.config.args.join(' ')}`;
 
   return (
     <div className="rounded-xl border bg-card shadow-sm">
@@ -781,7 +734,7 @@ function ServerCard({
       {expanded && (
         <div className="border-t px-4 pb-4 pt-3 space-y-4">
           {/* Error message */}
-          {server.status.type === "error" && (
+          {server.status.type === 'error' && (
             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               {server.status.message}
             </div>
@@ -790,12 +743,7 @@ function ServerCard({
           {/* Action buttons */}
           <div className="flex flex-wrap items-center gap-2">
             {isActive ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onStop}
-                disabled={disabled}
-              >
+              <Button variant="outline" size="sm" onClick={onStop} disabled={disabled}>
                 <Square className="mr-1 h-3 w-3" />
                 Stop
               </Button>
@@ -819,21 +767,11 @@ function ServerCard({
               <RotateCcw className="mr-1 h-3 w-3" />
               Restart
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onToggleEnabled}
-              disabled={disabled}
-            >
-              {server.config.enabled ? "Disable" : "Enable"}
+            <Button variant="outline" size="sm" onClick={onToggleEnabled} disabled={disabled}>
+              {server.config.enabled ? 'Disable' : 'Enable'}
             </Button>
             <div className="flex-1" />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onEdit}
-              disabled={disabled}
-            >
+            <Button variant="outline" size="sm" onClick={onEdit} disabled={disabled}>
               <Pencil className="mr-1 h-3 w-3" />
               Edit
             </Button>
@@ -887,9 +825,7 @@ function ConfigDetails({ server }: { server: McpServerInfo }) {
         {config.args.length > 0 && (
           <>
             <span className="text-muted-foreground">Args</span>
-            <span className="font-mono text-xs break-all">
-              {config.args.join(" ")}
-            </span>
+            <span className="font-mono text-xs break-all">{config.args.join(' ')}</span>
           </>
         )}
         {config.url && (
@@ -919,7 +855,7 @@ function ConfigDetails({ server }: { server: McpServerInfo }) {
         {config.tools_disabled.length > 0 && (
           <>
             <span className="text-muted-foreground">Disabled Tools</span>
-            <span>{config.tools_disabled.join(", ")}</span>
+            <span>{config.tools_disabled.join(', ')}</span>
           </>
         )}
       </div>
@@ -934,9 +870,8 @@ function ToolsList({ serverName }: { serverName: string }) {
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
 
   const toolsQuery = useQuery({
-    queryKey: ["mcp-server-tools", serverName],
-    queryFn: () =>
-      api.get<McpToolView[]>(`/api/v1/mcp/servers/${serverName}/tools`),
+    queryKey: ['mcp-server-tools', serverName],
+    queryFn: () => api.get<McpToolView[]>(`/api/v1/mcp/servers/${serverName}/tools`),
     enabled: expanded,
   });
 
@@ -963,11 +898,13 @@ function ToolsList({ serverName }: { serverName: string }) {
         <div className="flex items-center gap-1">
           {expanded && (
             <a
-              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({
-                datasource: "Quickwit",
-                queries: [{ refId: "A", expr: `{mcp_server="${serverName}"}` }],
-                range: { from: "now-1h", to: "now" },
-              }))}`}
+              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(
+                JSON.stringify({
+                  datasource: 'Quickwit',
+                  queries: [{ refId: 'A', expr: `{mcp_server="${serverName}"}` }],
+                  range: { from: 'now-1h', to: 'now' },
+                }),
+              )}`}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -992,31 +929,21 @@ function ToolsList({ serverName }: { serverName: string }) {
               <Skeleton className="h-6 w-full" />
             </div>
           )}
-          {toolsQuery.isError && (
-            <p className="text-xs text-destructive">Failed to load tools.</p>
-          )}
+          {toolsQuery.isError && <p className="text-xs text-destructive">Failed to load tools.</p>}
           {tools.length === 0 && !toolsQuery.isLoading && !toolsQuery.isError && (
-            <p className="text-xs text-muted-foreground">
-              No tools available.
-            </p>
+            <p className="text-xs text-muted-foreground">No tools available.</p>
           )}
           {tools.map((tool) => (
             <div key={tool.name} className="rounded border bg-background">
               <button
                 type="button"
                 className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent/30"
-                onClick={() =>
-                  setExpandedTool((prev) =>
-                    prev === tool.name ? null : tool.name,
-                  )
-                }
+                onClick={() => setExpandedTool((prev) => (prev === tool.name ? null : tool.name))}
               >
                 <div className="min-w-0">
                   <p className="font-mono text-xs font-medium">{tool.name}</p>
                   {tool.description && (
-                    <p className="truncate text-xs text-muted-foreground">
-                      {tool.description}
-                    </p>
+                    <p className="truncate text-xs text-muted-foreground">{tool.description}</p>
                   )}
                 </div>
                 {expandedTool === tool.name ? (
@@ -1049,11 +976,8 @@ function ResourcesList({ serverName }: { serverName: string }) {
   const [expanded, setExpanded] = useState(false);
 
   const resourcesQuery = useQuery({
-    queryKey: ["mcp-server-resources", serverName],
-    queryFn: () =>
-      api.get<McpResourceView[]>(
-        `/api/v1/mcp/servers/${serverName}/resources`,
-      ),
+    queryKey: ['mcp-server-resources', serverName],
+    queryFn: () => api.get<McpResourceView[]>(`/api/v1/mcp/servers/${serverName}/resources`),
     enabled: expanded,
   });
 
@@ -1080,11 +1004,13 @@ function ResourcesList({ serverName }: { serverName: string }) {
         <div className="flex items-center gap-1">
           {expanded && (
             <a
-              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({
-                datasource: "Quickwit",
-                queries: [{ refId: "A", expr: `{mcp_server="${serverName}"}` }],
-                range: { from: "now-1h", to: "now" },
-              }))}`}
+              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(
+                JSON.stringify({
+                  datasource: 'Quickwit',
+                  queries: [{ refId: 'A', expr: `{mcp_server="${serverName}"}` }],
+                  range: { from: 'now-1h', to: 'now' },
+                }),
+              )}`}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -1110,36 +1036,20 @@ function ResourcesList({ serverName }: { serverName: string }) {
             </div>
           )}
           {resourcesQuery.isError && (
-            <p className="text-xs text-destructive">
-              Failed to load resources.
-            </p>
+            <p className="text-xs text-destructive">Failed to load resources.</p>
           )}
-          {resources.length === 0 &&
-            !resourcesQuery.isLoading &&
-            !resourcesQuery.isError && (
-              <p className="text-xs text-muted-foreground">
-                No resources available.
-              </p>
-            )}
+          {resources.length === 0 && !resourcesQuery.isLoading && !resourcesQuery.isError && (
+            <p className="text-xs text-muted-foreground">No resources available.</p>
+          )}
           {resources.map((resource) => (
-            <div
-              key={resource.uri}
-              className="rounded border bg-background px-3 py-2"
-            >
+            <div key={resource.uri} className="rounded border bg-background px-3 py-2">
               <p className="font-mono text-xs font-medium">{resource.uri}</p>
-              {resource.name && (
-                <p className="text-xs text-muted-foreground">{resource.name}</p>
-              )}
+              {resource.name && <p className="text-xs text-muted-foreground">{resource.name}</p>}
               {resource.description && (
-                <p className="text-xs text-muted-foreground">
-                  {resource.description}
-                </p>
+                <p className="text-xs text-muted-foreground">{resource.description}</p>
               )}
               {resource.mime_type && (
-                <Badge
-                  variant="outline"
-                  className="mt-1 text-[10px] px-1.5 py-0"
-                >
+                <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0">
                   {resource.mime_type}
                 </Badge>
               )}
@@ -1157,9 +1067,8 @@ function LogsList({ serverName }: { serverName: string }) {
   const [expanded, setExpanded] = useState(false);
 
   const logsQuery = useQuery({
-    queryKey: ["mcp-server-logs", serverName],
-    queryFn: () =>
-      api.get<McpLogEntry[]>(`/api/v1/mcp/servers/${serverName}/logs`),
+    queryKey: ['mcp-server-logs', serverName],
+    queryFn: () => api.get<McpLogEntry[]>(`/api/v1/mcp/servers/${serverName}/logs`),
     enabled: expanded,
     refetchInterval: expanded ? 3000 : false,
   });
@@ -1187,11 +1096,13 @@ function LogsList({ serverName }: { serverName: string }) {
         <div className="flex items-center gap-1">
           {expanded && (
             <a
-              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({
-                datasource: "Quickwit",
-                queries: [{ refId: "A", expr: `{mcp_server="${serverName}"}` }],
-                range: { from: "now-1h", to: "now" },
-              }))}`}
+              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(
+                JSON.stringify({
+                  datasource: 'Quickwit',
+                  queries: [{ refId: 'A', expr: `{mcp_server="${serverName}"}` }],
+                  range: { from: 'now-1h', to: 'now' },
+                }),
+              )}`}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -1216,9 +1127,7 @@ function LogsList({ serverName }: { serverName: string }) {
               <Skeleton className="h-4 w-full" />
             </div>
           )}
-          {logsQuery.isError && (
-            <p className="text-xs text-destructive">Failed to load logs.</p>
-          )}
+          {logsQuery.isError && <p className="text-xs text-destructive">Failed to load logs.</p>}
           {logs.length === 0 && !logsQuery.isLoading && !logsQuery.isError && (
             <p className="text-xs text-muted-foreground">No logs yet.</p>
           )}
@@ -1231,21 +1140,17 @@ function LogsList({ serverName }: { serverName: string }) {
                   </span>
                   <Badge
                     variant={
-                      entry.level === "error"
-                        ? "destructive"
-                        : entry.level === "warn"
-                          ? "secondary"
-                          : "outline"
+                      entry.level === 'error'
+                        ? 'destructive'
+                        : entry.level === 'warn'
+                          ? 'secondary'
+                          : 'outline'
                     }
                     className="shrink-0 text-[10px] px-1 py-0"
                   >
                     {entry.level}
                   </Badge>
-                  <span
-                    className={
-                      entry.level === "error" ? "text-destructive" : ""
-                    }
-                  >
+                  <span className={entry.level === 'error' ? 'text-destructive' : ''}>
                     {entry.message}
                   </span>
                 </div>

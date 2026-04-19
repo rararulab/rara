@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { listSkills, getSkill, createSkill, deleteSkill } from "@/api/skills";
-import type { SkillSummary, CreateSkillRequest } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { listSkills, getSkill, createSkill, deleteSkill } from '@/api/skills';
+import type { SkillSummary, CreateSkillRequest } from '@/api/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Separator } from '@/components/ui/separator';
 import {
   Dialog,
   DialogContent,
@@ -31,18 +31,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Plus,
-  Trash2,
-  Code,
-  ExternalLink,
-  CheckCircle,
-  XCircle,
-} from "lucide-react";
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Plus, Trash2, Code, ExternalLink, CheckCircle, XCircle } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Skill Form Dialog (create only)
@@ -56,10 +49,10 @@ interface SkillFormData {
 }
 
 const EMPTY_FORM: SkillFormData = {
-  name: "",
-  description: "",
-  allowed_tools: "",
-  prompt: "",
+  name: '',
+  description: '',
+  allowed_tools: '',
+  prompt: '',
 };
 
 function SkillFormDialog({
@@ -78,7 +71,7 @@ function SkillFormDialog({
         name: data.name,
         description: data.description,
         allowed_tools: data.allowed_tools
-          .split(",")
+          .split(',')
           .map((t) => t.trim())
           .filter(Boolean),
         prompt: data.prompt,
@@ -86,7 +79,7 @@ function SkillFormDialog({
       return createSkill(req);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["skills"] });
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
       onOpenChange(false);
     },
   });
@@ -96,10 +89,7 @@ function SkillFormDialog({
     mutation.mutate(form);
   }
 
-  function updateField<K extends keyof SkillFormData>(
-    key: K,
-    value: SkillFormData[K]
-  ) {
+  function updateField<K extends keyof SkillFormData>(key: K, value: SkillFormData[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -118,7 +108,7 @@ function SkillFormDialog({
             <Input
               id="name"
               value={form.name}
-              onChange={(e) => updateField("name", e.target.value)}
+              onChange={(e) => updateField('name', e.target.value)}
               placeholder="e.g. commit"
               required
             />
@@ -128,7 +118,7 @@ function SkillFormDialog({
             <Input
               id="description"
               value={form.description}
-              onChange={(e) => updateField("description", e.target.value)}
+              onChange={(e) => updateField('description', e.target.value)}
               placeholder="e.g. Create git commits"
               required
             />
@@ -138,41 +128,33 @@ function SkillFormDialog({
             <Input
               id="allowed_tools"
               value={form.allowed_tools}
-              onChange={(e) => updateField("allowed_tools", e.target.value)}
+              onChange={(e) => updateField('allowed_tools', e.target.value)}
               placeholder="e.g. Read, Write, Bash (comma-separated)"
               required
             />
-            <p className="text-xs text-muted-foreground">
-              Comma-separated list of tool names.
-            </p>
+            <p className="text-xs text-muted-foreground">Comma-separated list of tool names.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="prompt">Body *</Label>
             <Textarea
               id="prompt"
               value={form.prompt}
-              onChange={(e) => updateField("prompt", e.target.value)}
+              onChange={(e) => updateField('prompt', e.target.value)}
               placeholder="Markdown content for this skill..."
               rows={6}
               required
             />
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Creating..." : "Create"}
+              {mutation.isPending ? 'Creating...' : 'Create'}
             </Button>
           </DialogFooter>
           {mutation.isError && (
-            <p className="text-sm text-destructive">
-              Error: {(mutation.error as Error).message}
-            </p>
+            <p className="text-sm text-destructive">Error: {(mutation.error as Error).message}</p>
           )}
         </form>
       </DialogContent>
@@ -198,7 +180,7 @@ function DeleteDialog({
   const mutation = useMutation({
     mutationFn: () => deleteSkill(skill.name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["skills"] });
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
       onOpenChange(false);
     },
   });
@@ -209,16 +191,12 @@ function DeleteDialog({
         <DialogHeader>
           <DialogTitle>Delete Skill</DialogTitle>
           <DialogDescription>
-            Are you sure you want to delete the skill{" "}
-            <strong>{skill.name}</strong>? This action cannot be undone.
+            Are you sure you want to delete the skill <strong>{skill.name}</strong>? This action
+            cannot be undone.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
@@ -226,7 +204,7 @@ function DeleteDialog({
             onClick={() => mutation.mutate()}
             disabled={mutation.isPending}
           >
-            {mutation.isPending ? "Deleting..." : "Delete"}
+            {mutation.isPending ? 'Deleting...' : 'Delete'}
           </Button>
         </DialogFooter>
         {mutation.isError && (
@@ -253,7 +231,7 @@ function SkillDetailDialog({
   skillName: string;
 }) {
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["skills", skillName],
+    queryKey: ['skills', skillName],
     queryFn: () => getSkill(skillName),
     enabled: open,
   });
@@ -266,9 +244,7 @@ function SkillDetailDialog({
             <Code className="h-5 w-5" />
             {skillName}
           </DialogTitle>
-          {data && (
-            <DialogDescription>{data.description}</DialogDescription>
-          )}
+          {data && <DialogDescription>{data.description}</DialogDescription>}
         </DialogHeader>
         <div className="flex-1 overflow-y-auto">
           {isLoading && (
@@ -280,19 +256,13 @@ function SkillDetailDialog({
             </div>
           )}
           {isError && (
-            <p className="text-sm text-destructive py-4">
-              Failed to load skill details.
-            </p>
+            <p className="text-sm text-destructive py-4">Failed to load skill details.</p>
           )}
           {data && (
             <div className="space-y-4 py-2">
               {/* Metadata row */}
               <div className="flex flex-wrap gap-2">
-                {data.source && (
-                  <Badge variant={sourceVariant(data.source)}>
-                    {data.source}
-                  </Badge>
-                )}
+                {data.source && <Badge variant={sourceVariant(data.source)}>{data.source}</Badge>}
                 {data.eligible ? (
                   <Badge variant="outline" className="text-green-600 border-green-600/30">
                     <CheckCircle className="h-3 w-3 mr-1" />
@@ -304,17 +274,13 @@ function SkillDetailDialog({
                     Missing deps
                   </Badge>
                 )}
-                {data.license && (
-                  <Badge variant="outline">{data.license}</Badge>
-                )}
+                {data.license && <Badge variant="outline">{data.license}</Badge>}
               </div>
 
               {/* Allowed tools */}
               {data.allowed_tools.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1.5">
-                    Allowed Tools
-                  </p>
+                  <p className="text-xs font-medium text-muted-foreground mb-1.5">Allowed Tools</p>
                   <div className="flex flex-wrap gap-1.5">
                     {data.allowed_tools.map((tool) => (
                       <Badge key={tool} variant="secondary" className="text-xs">
@@ -342,9 +308,7 @@ function SkillDetailDialog({
 
               {/* Body content */}
               <div className="prose prose-sm max-w-none">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {data.body}
-                </ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.body}</ReactMarkdown>
               </div>
             </div>
           )}
@@ -375,9 +339,7 @@ function SkillsSkeleton() {
 export default function Skills() {
   const [createOpen, setCreateOpen] = useState(false);
   const [detailSkillName, setDetailSkillName] = useState<string | null>(null);
-  const [deleteSkillItem, setDeleteSkillItem] = useState<SkillSummary | null>(
-    null
-  );
+  const [deleteSkillItem, setDeleteSkillItem] = useState<SkillSummary | null>(null);
 
   const {
     data: skills,
@@ -385,7 +347,7 @@ export default function Skills() {
     isError,
     error,
   } = useQuery({
-    queryKey: ["skills"],
+    queryKey: ['skills'],
     queryFn: listSkills,
   });
 
@@ -395,9 +357,7 @@ export default function Skills() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Skills</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage agent skills and allowed tools.
-          </p>
+          <p className="text-muted-foreground mt-1">Manage agent skills and allowed tools.</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="h-4 w-4" />
@@ -480,20 +440,18 @@ export default function Skills() {
 // Source badge variant helper
 // ---------------------------------------------------------------------------
 
-function sourceVariant(
-  source: string | null
-): "default" | "secondary" | "outline" | "destructive" {
+function sourceVariant(source: string | null): 'default' | 'secondary' | 'outline' | 'destructive' {
   switch (source) {
-    case "project":
-      return "default";
-    case "personal":
-      return "secondary";
-    case "plugin":
-      return "outline";
-    case "registry":
-      return "outline";
+    case 'project':
+      return 'default';
+    case 'personal':
+      return 'secondary';
+    case 'plugin':
+      return 'outline';
+    case 'registry':
+      return 'outline';
     default:
-      return "secondary";
+      return 'secondary';
   }
 }
 

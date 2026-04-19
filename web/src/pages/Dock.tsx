@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { useDockStore } from "@/hooks/use-dock-store";
-import DockHeader from "@/components/dock/DockHeader";
-import DockCanvas from "@/components/dock/DockCanvas";
-import DockConsole from "@/components/dock/DockConsole";
-import DockSidebar from "@/components/dock/DockSidebar";
+import { useCallback, useEffect, useState } from 'react';
+import { useDockStore } from '@/hooks/use-dock-store';
+import DockHeader from '@/components/dock/DockHeader';
+import DockCanvas from '@/components/dock/DockCanvas';
+import DockConsole from '@/components/dock/DockConsole';
+import DockSidebar from '@/components/dock/DockSidebar';
 
 export default function Dock() {
   const store = useDockStore();

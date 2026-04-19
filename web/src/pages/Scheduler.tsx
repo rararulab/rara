@@ -14,39 +14,31 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/client";
-import type { ScheduledTask, TaskRunRecord } from "@/api/types";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { Clock, History, CalendarClock } from "lucide-react";
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/api/client';
+import type { ScheduledTask, TaskRunRecord } from '@/api/types';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
+import { Clock, History, CalendarClock } from 'lucide-react';
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "-";
+  if (!dateStr) return '-';
   return new Date(dateStr).toLocaleString();
 }
 
 function RunStatusBadge({ status }: { status: string }) {
   switch (status) {
-    case "success":
-      return (
-        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-          success
-        </Badge>
-      );
-    case "failed":
+    case 'success':
+      return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">success</Badge>;
+    case 'failed':
       return <Badge variant="destructive">failed</Badge>;
-    case "running":
-      return (
-        <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">
-          running
-        </Badge>
-      );
+    case 'running':
+      return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">running</Badge>;
     default:
       return <Badge variant="outline">{status}</Badge>;
   }
@@ -54,11 +46,8 @@ function RunStatusBadge({ status }: { status: string }) {
 
 function TaskHistory({ taskId }: { taskId: string }) {
   const historyQuery = useQuery({
-    queryKey: ["scheduler", "history", taskId],
-    queryFn: () =>
-      api.get<TaskRunRecord[]>(
-        `/api/v1/scheduler/tasks/${taskId}/history?limit=10`
-      ),
+    queryKey: ['scheduler', 'history', taskId],
+    queryFn: () => api.get<TaskRunRecord[]>(`/api/v1/scheduler/tasks/${taskId}/history?limit=10`),
   });
 
   if (historyQuery.isLoading) {
@@ -93,9 +82,7 @@ function TaskHistory({ taskId }: { taskId: string }) {
             <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
               Finished At
             </th>
-            <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-              Error
-            </th>
+            <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">Error</th>
           </tr>
         </thead>
         <tbody>
@@ -110,9 +97,7 @@ function TaskHistory({ taskId }: { taskId: string }) {
               <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
                 {formatDate(run.finished_at)}
               </td>
-              <td className="px-4 py-2 text-sm text-destructive">
-                {run.error_message || "-"}
-              </td>
+              <td className="px-4 py-2 text-sm text-destructive">{run.error_message || '-'}</td>
             </tr>
           ))}
         </tbody>
@@ -126,18 +111,16 @@ function TaskCard({ task }: { task: ScheduledTask }) {
   const [showHistory, setShowHistory] = useState(false);
 
   const enableMutation = useMutation({
-    mutationFn: () =>
-      api.post<ScheduledTask>(`/api/v1/scheduler/tasks/${task.id}/enable`),
+    mutationFn: () => api.post<ScheduledTask>(`/api/v1/scheduler/tasks/${task.id}/enable`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["scheduler", "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ['scheduler', 'tasks'] });
     },
   });
 
   const disableMutation = useMutation({
-    mutationFn: () =>
-      api.post<ScheduledTask>(`/api/v1/scheduler/tasks/${task.id}/disable`),
+    mutationFn: () => api.post<ScheduledTask>(`/api/v1/scheduler/tasks/${task.id}/disable`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["scheduler", "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ['scheduler', 'tasks'] });
     },
   });
 
@@ -159,20 +142,14 @@ function TaskCard({ task }: { task: ScheduledTask }) {
             <h3 className="font-semibold text-lg">{task.name}</h3>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Clock className="h-3.5 w-3.5" />
-              <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
-                {task.cron_expression}
-              </code>
+              <code className="bg-muted px-1.5 py-0.5 rounded text-xs">{task.cron_expression}</code>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">
-              {task.enabled ? "Enabled" : "Disabled"}
+              {task.enabled ? 'Enabled' : 'Disabled'}
             </span>
-            <Switch
-              checked={task.enabled}
-              onCheckedChange={toggleEnabled}
-              disabled={isToggling}
-            />
+            <Switch checked={task.enabled} onCheckedChange={toggleEnabled} disabled={isToggling} />
           </div>
         </div>
 
@@ -180,27 +157,19 @@ function TaskCard({ task }: { task: ScheduledTask }) {
 
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
-            <span className="text-muted-foreground">Last run:</span>{" "}
-            <span className="font-medium">
-              {formatDate(task.last_run_at)}
-            </span>
+            <span className="text-muted-foreground">Last run:</span>{' '}
+            <span className="font-medium">{formatDate(task.last_run_at)}</span>
           </div>
           <div>
-            <span className="text-muted-foreground">Next run:</span>{" "}
-            <span className="font-medium">
-              {formatDate(task.next_run_at)}
-            </span>
+            <span className="text-muted-foreground">Next run:</span>{' '}
+            <span className="font-medium">{formatDate(task.next_run_at)}</span>
           </div>
         </div>
 
         <div className="mt-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowHistory(!showHistory)}
-          >
+          <Button variant="outline" size="sm" onClick={() => setShowHistory(!showHistory)}>
             <History className="h-3 w-3 mr-1" />
-            {showHistory ? "Hide History" : "View History"}
+            {showHistory ? 'Hide History' : 'View History'}
           </Button>
         </div>
 
@@ -217,8 +186,8 @@ function TaskCard({ task }: { task: ScheduledTask }) {
 /** Domain scheduled tasks panel (cron tasks with history). */
 export function DomainSchedulerPanel() {
   const tasksQuery = useQuery({
-    queryKey: ["scheduler", "tasks"],
-    queryFn: () => api.get<ScheduledTask[]>("/api/v1/scheduler/tasks"),
+    queryKey: ['scheduler', 'tasks'],
+    queryFn: () => api.get<ScheduledTask[]>('/api/v1/scheduler/tasks'),
   });
 
   return (
@@ -268,9 +237,7 @@ export default function Scheduler() {
           <CalendarClock className="h-5 w-5 text-muted-foreground" />
           <h2 className="text-xl font-bold">Scheduled Tasks</h2>
         </div>
-        <p className="text-muted-foreground mt-1">
-          System cron tasks and their run history.
-        </p>
+        <p className="text-muted-foreground mt-1">System cron tasks and their run history.</p>
       </div>
       <DomainSchedulerPanel />
     </div>

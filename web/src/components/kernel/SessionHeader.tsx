@@ -14,16 +14,8 @@
  * limitations under the License.
  */
 
-import {
-  CheckCircle2,
-  Clock,
-  Hash,
-  Loader2,
-  MessageSquare,
-  Wrench,
-  Zap,
-} from "lucide-react";
-import { MetadataChip } from "./MetadataChip";
+import { CheckCircle2, Clock, Hash, Loader2, MessageSquare, Wrench, Zap } from 'lucide-react';
+import { MetadataChip } from './MetadataChip';
 
 export interface SessionHeaderProps {
   manifestName: string;
@@ -65,8 +57,7 @@ export function SessionHeader({
   tokensConsumed,
   isStreaming,
 }: SessionHeaderProps) {
-  const alive =
-    state.toLowerCase() === "active" || state.toLowerCase() === "ready";
+  const alive = state.toLowerCase() === 'active' || state.toLowerCase() === 'ready';
 
   return (
     <div className="space-y-2 border-b px-4 py-3">
@@ -83,7 +74,7 @@ export function SessionHeader({
         {/* State badge */}
         {alive ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">
-            {state.toLowerCase() === "active" ? (
+            {state.toLowerCase() === 'active' ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <CheckCircle2 className="h-3 w-3" />
@@ -106,15 +97,9 @@ export function SessionHeader({
 
       {/* Metadata chips row */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <MetadataChip icon={<Clock className="h-3 w-3" />}>
-          {formatUptime(uptimeMs)}
-        </MetadataChip>
-        <MetadataChip icon={<MessageSquare className="h-3 w-3" />}>
-          {llmCalls} LLM
-        </MetadataChip>
-        <MetadataChip icon={<Wrench className="h-3 w-3" />}>
-          {toolCalls} tools
-        </MetadataChip>
+        <MetadataChip icon={<Clock className="h-3 w-3" />}>{formatUptime(uptimeMs)}</MetadataChip>
+        <MetadataChip icon={<MessageSquare className="h-3 w-3" />}>{llmCalls} LLM</MetadataChip>
+        <MetadataChip icon={<Wrench className="h-3 w-3" />}>{toolCalls} tools</MetadataChip>
         <MetadataChip icon={<Hash className="h-3 w-3" />}>
           {formatTokens(tokensConsumed)} tokens
         </MetadataChip>

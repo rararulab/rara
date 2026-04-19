@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { api } from "./client";
+import { api } from './client';
 
 // ---------------------------------------------------------------------------
 // Types — mirrors kernel::data_feed::config
@@ -23,18 +23,18 @@ import { api } from "./client";
 export interface DataFeedConfig {
   id: string;
   name: string;
-  feed_type: "webhook" | "websocket" | "polling";
+  feed_type: 'webhook' | 'websocket' | 'polling';
   tags: string[];
   transport: Record<string, unknown>;
   auth: AuthConfig | null;
   enabled: boolean;
-  status: "idle" | "running" | "error";
+  status: 'idle' | 'running' | 'error';
   last_error: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type AuthType = "header" | "query" | "bearer" | "basic" | "hmac";
+export type AuthType = 'header' | 'query' | 'bearer' | 'basic' | 'hmac';
 
 export interface AuthConfig {
   type: AuthType;
@@ -58,7 +58,7 @@ export interface FeedEventsResponse {
 
 export interface CreateFeedRequest {
   name: string;
-  feed_type: "webhook" | "websocket" | "polling";
+  feed_type: 'webhook' | 'websocket' | 'polling';
   tags: string[];
   transport: Record<string, unknown>;
   auth: AuthConfig | null;
@@ -69,32 +69,25 @@ export interface CreateFeedRequest {
 // ---------------------------------------------------------------------------
 
 export const dataFeedsApi = {
-  list: () => api.get<DataFeedConfig[]>("/api/v1/data-feeds"),
+  list: () => api.get<DataFeedConfig[]>('/api/v1/data-feeds'),
 
   get: (id: string) => api.get<DataFeedConfig>(`/api/v1/data-feeds/${id}`),
 
-  create: (feed: CreateFeedRequest) =>
-    api.post<DataFeedConfig>("/api/v1/data-feeds", feed),
+  create: (feed: CreateFeedRequest) => api.post<DataFeedConfig>('/api/v1/data-feeds', feed),
 
   update: (id: string, feed: Partial<CreateFeedRequest>) =>
     api.put<DataFeedConfig>(`/api/v1/data-feeds/${id}`, feed),
 
   delete: (id: string) => api.del(`/api/v1/data-feeds/${id}`),
 
-  toggle: (id: string) =>
-    api.put<DataFeedConfig>(`/api/v1/data-feeds/${id}/toggle`),
+  toggle: (id: string) => api.put<DataFeedConfig>(`/api/v1/data-feeds/${id}/toggle`),
 
-  events: (
-    id: string,
-    params?: { since?: string; limit?: number; offset?: number },
-  ) => {
+  events: (id: string, params?: { since?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();
-    if (params?.since) query.set("since", params.since);
-    if (params?.limit) query.set("limit", String(params.limit));
-    if (params?.offset) query.set("offset", String(params.offset));
+    if (params?.since) query.set('since', params.since);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.offset) query.set('offset', String(params.offset));
     const qs = query.toString();
-    return api.get<FeedEventsResponse>(
-      `/api/v1/data-feeds/${id}/events${qs ? `?${qs}` : ""}`,
-    );
+    return api.get<FeedEventsResponse>(`/api/v1/data-feeds/${id}/events${qs ? `?${qs}` : ''}`);
   },
 };

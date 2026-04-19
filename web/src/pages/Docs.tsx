@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { BookOpen, ExternalLink, Sparkles } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { BookOpen, ExternalLink, Sparkles } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 interface DocsCardProps {
   title: string;
@@ -62,9 +62,7 @@ export default function Docs() {
           Docs Hub
         </div>
         <h1 className="text-2xl font-bold tracking-tight">Documentation</h1>
-        <p className="mt-2 text-muted-foreground">
-          Open project guides in their dedicated page.
-        </p>
+        <p className="mt-2 text-muted-foreground">Open project guides in their dedicated page.</p>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <DocsCard

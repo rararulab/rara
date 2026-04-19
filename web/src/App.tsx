@@ -30,19 +30,19 @@ import {
 } from '@/components/settings/SettingsModalProvider';
 import type { SettingsPage } from '@/components/settings/SettingsPanel';
 
-const STORAGE_KEY = "rara_backend_url";
+const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
 
 const SETTINGS_PAGES: readonly SettingsPage[] = [
-  "general",
-  "providers",
-  "agents",
-  "skills",
-  "mcp",
-  "channels",
-  "tools",
-  "security",
-  "data-feeds",
+  'general',
+  'providers',
+  'agents',
+  'skills',
+  'mcp',
+  'channels',
+  'tools',
+  'security',
+  'data-feeds',
 ];
 
 function isSettingsPage(value: string | null): value is SettingsPage {
@@ -59,27 +59,22 @@ function SettingsRoute() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const raw = new URLSearchParams(window.location.search).get("section");
+    const raw = new URLSearchParams(window.location.search).get('section');
     openSettings(isSettingsPage(raw) ? raw : undefined);
-    navigate("/", { replace: true });
+    navigate('/', { replace: true });
   }, [openSettings, navigate]);
 
   return null;
 }
 
 export default function App() {
-  const [needsSetup, setNeedsSetup] = useState(
-    () => !localStorage.getItem(STORAGE_KEY),
-  );
+  const [needsSetup, setNeedsSetup] = useState(() => !localStorage.getItem(STORAGE_KEY));
 
   return (
     <QueryClientProvider client={queryClient}>
       <ServerStatusProvider>
         {needsSetup && (
-          <ConnectionSetupDialog
-            open={needsSetup}
-            onConnect={() => setNeedsSetup(false)}
-          />
+          <ConnectionSetupDialog open={needsSetup} onConnect={() => setNeedsSetup(false)} />
         )}
         <BrowserRouter>
           <SettingsModalProvider>

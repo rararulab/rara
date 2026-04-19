@@ -14,17 +14,10 @@
  * limitations under the License.
  */
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 
-import SettingsModal from "./SettingsModal";
-import type { SettingsPage } from "./SettingsPanel";
+import SettingsModal from './SettingsModal';
+import type { SettingsPage } from './SettingsPanel';
 
 interface SettingsModalContextValue {
   openSettings: (section?: SettingsPage) => void;
@@ -72,9 +65,7 @@ export function SettingsModalProvider({ children }: { children: ReactNode }) {
 export function useSettingsModal(): SettingsModalContextValue {
   const ctx = useContext(SettingsModalContext);
   if (!ctx) {
-    throw new Error(
-      "useSettingsModal must be used inside <SettingsModalProvider>",
-    );
+    throw new Error('useSettingsModal must be used inside <SettingsModalProvider>');
   }
   return ctx;
 }

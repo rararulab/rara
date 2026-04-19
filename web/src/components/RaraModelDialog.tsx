@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCcw } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { api } from "@/api/client";
-import type { ProviderInfo } from "@/api/types";
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { api } from '@/api/client';
+import type { ProviderInfo } from '@/api/types';
 
 /**
  * How long the in-memory provider catalog is considered fresh. Settings
@@ -36,22 +36,22 @@ import type { ProviderInfo } from "@/api/types";
 const CACHE_TTL_MS = 60_000;
 
 interface Props {
-  open:              boolean;
-  onClose:           () => void;
-  onSelect:          (entry: ProviderInfo) => void;
+  open: boolean;
+  onClose: () => void;
+  onSelect: (entry: ProviderInfo) => void;
   /**
    * Clear the per-session model override so the admin-configured
    * `llm.default_provider` takes effect on the next turn. Emitted by
    * the "Use rara's default" row at the top of the picker.
    */
-  onUseDefault:      () => void;
-  currentProvider?:  string | null;
+  onUseDefault: () => void;
+  currentProvider?: string | null;
   /**
    * Optional error surfaced when the caller's `onUseDefault` PATCH
    * failed. Rendered as a red banner directly above the "Use default"
    * row so the user can retry without the dialog dismissing.
    */
-  resetError?:       string | null;
+  resetError?: string | null;
 }
 
 /**
@@ -75,7 +75,7 @@ export function RaraModelDialog({
 }: Props) {
   const [entries, setEntries] = useState<ProviderInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
 
   // Cache the fetched list across open/close cycles — settings rarely
@@ -95,14 +95,14 @@ export function RaraModelDialog({
     const controller = new AbortController();
     setLoading(true);
     api
-      .get<ProviderInfo[]>("/api/v1/chat/providers", { signal: controller.signal })
+      .get<ProviderInfo[]>('/api/v1/chat/providers', { signal: controller.signal })
       .then((list) => {
         cacheRef.current = { list, at: Date.now() };
         setEntries(list);
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        console.warn("Failed to load provider catalog:", e);
+        console.warn('Failed to load provider catalog:', e);
         setEntries([]);
       })
       .finally(() => {
@@ -115,9 +115,7 @@ export function RaraModelDialog({
     const q = query.trim().toLowerCase();
     if (!q) return entries;
     return entries.filter(
-      (e) =>
-        e.id.toLowerCase().includes(q) ||
-        e.default_model.toLowerCase().includes(q),
+      (e) => e.id.toLowerCase().includes(q) || e.default_model.toLowerCase().includes(q),
     );
   }, [entries, query]);
 
@@ -129,20 +127,18 @@ export function RaraModelDialog({
     setSelectedIdx(0);
   }, [query]);
   useEffect(() => {
-    setSelectedIdx((idx) =>
-      filtered.length === 0 ? 0 : Math.min(idx, filtered.length - 1),
-    );
+    setSelectedIdx((idx) => (filtered.length === 0 ? 0 : Math.min(idx, filtered.length - 1)));
   }, [filtered.length]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (filtered.length === 0) return;
-    if (e.key === "ArrowDown") {
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
       setSelectedIdx((i) => Math.min(i + 1, filtered.length - 1));
-    } else if (e.key === "ArrowUp") {
+    } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setSelectedIdx((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter") {
+    } else if (e.key === 'Enter') {
       e.preventDefault();
       const entry = filtered[selectedIdx];
       if (entry) onSelect(entry);
@@ -150,13 +146,18 @@ export function RaraModelDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
       <DialogContent className="max-w-lg" onKeyDown={handleKeyDown}>
         <DialogHeader>
           <DialogTitle>Select model</DialogTitle>
           <DialogDescription>
-            Rara providers configured via{" "}
-            <code className="text-[11px]">llm.providers.*</code> settings.
+            Rara providers configured via <code className="text-[11px]">llm.providers.*</code>{' '}
+            settings.
           </DialogDescription>
         </DialogHeader>
 
@@ -191,23 +192,19 @@ export function RaraModelDialog({
               <RotateCcw className="h-3.5 w-3.5" />
             </span>
             <span className="flex flex-col">
-              <span className="text-sm font-medium text-foreground">
-                Use rara&apos;s default
-              </span>
+              <span className="text-sm font-medium text-foreground">Use rara&apos;s default</span>
               <span className="text-xs text-muted-foreground">
                 Clear the per-session model and fall back to the admin default provider.
               </span>
             </span>
           </button>
           {loading ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Loading…
-            </div>
+            <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
           ) : filtered.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
               {entries.length === 0
-                ? "No providers configured. Add one in /settings."
-                : "No matches."}
+                ? 'No providers configured. Add one in /settings.'
+                : 'No matches.'}
             </div>
           ) : (
             filtered.map((entry, idx) => {
@@ -217,15 +214,17 @@ export function RaraModelDialog({
                 <button
                   key={entry.id}
                   className={`flex w-full flex-col gap-0.5 border-b border-border/60 px-4 py-3 text-left transition-colors ${
-                    highlighted ? "bg-secondary/80" : active ? "bg-secondary/50" : "hover:bg-secondary/40"
+                    highlighted
+                      ? 'bg-secondary/80'
+                      : active
+                        ? 'bg-secondary/50'
+                        : 'hover:bg-secondary/40'
                   }`}
                   onMouseEnter={() => setSelectedIdx(idx)}
                   onClick={() => onSelect(entry)}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-foreground">
-                      {entry.id}
-                    </span>
+                    <span className="text-sm font-medium text-foreground">{entry.id}</span>
                     <div className="flex items-center gap-1">
                       {entry.enabled && (
                         <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-[10px] font-medium text-green-600">

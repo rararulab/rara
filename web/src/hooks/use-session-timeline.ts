@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/client";
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/api/client';
 import {
   isLiveState,
   turnsToTimeline,
   type StreamEvent,
   type TimelineItem,
   type TurnTrace,
-} from "@/api/kernel-types";
+} from '@/api/kernel-types';
 
 const TURNS_REFETCH_MS = 5_000;
 
@@ -61,9 +61,8 @@ export function useSessionTimeline(
   autoRefresh = true,
 ): SessionTimelineState {
   const turnsQuery = useQuery({
-    queryKey: ["session-turns", sessionKey],
-    queryFn: () =>
-      api.get<TurnTrace[]>(`/api/v1/kernel/sessions/${sessionKey}/turns`),
+    queryKey: ['session-turns', sessionKey],
+    queryFn: () => api.get<TurnTrace[]>(`/api/v1/kernel/sessions/${sessionKey}/turns`),
     enabled: !!sessionKey,
     refetchInterval: autoRefresh ? TURNS_REFETCH_MS : false,
   });
@@ -92,8 +91,8 @@ export function useSessionTimeline(
     }
 
     const host = window.location.host;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = localStorage.getItem("access_token") ?? "";
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const token = localStorage.getItem('access_token') ?? '';
     const ws = new WebSocket(
       `${protocol}//${host}/api/v1/kernel/sessions/${sessionKey}/stream?token=${token}`,
     );
@@ -129,15 +128,15 @@ export function useSessionTimeline(
       }
 
       switch (event.type) {
-        case "text_delta": {
-          const delta = (event as { text?: string }).text ?? "";
+        case 'text_delta': {
+          const delta = (event as { text?: string }).text ?? '';
           if (!delta) break;
           setLiveItems((prev) => {
             if (currentTextSeq !== null) {
               const target = currentTextSeq;
               return prev.map((it) =>
-                it.seq === target && it.kind === "agent"
-                  ? { ...it, content: (it.content ?? "") + delta }
+                it.seq === target && it.kind === 'agent'
+                  ? { ...it, content: (it.content ?? '') + delta }
                   : it,
               );
             }
@@ -148,7 +147,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "agent",
+                kind: 'agent',
                 content: delta,
                 streaming: true,
               },
@@ -157,15 +156,15 @@ export function useSessionTimeline(
           break;
         }
 
-        case "reasoning_delta": {
-          const delta = (event as { text?: string }).text ?? "";
+        case 'reasoning_delta': {
+          const delta = (event as { text?: string }).text ?? '';
           if (!delta) break;
           setLiveItems((prev) => {
             if (currentThinkSeq !== null) {
               const target = currentThinkSeq;
               return prev.map((it) =>
-                it.seq === target && it.kind === "thinking"
-                  ? { ...it, content: (it.content ?? "") + delta }
+                it.seq === target && it.kind === 'thinking'
+                  ? { ...it, content: (it.content ?? '') + delta }
                   : it,
               );
             }
@@ -176,7 +175,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "thinking",
+                kind: 'thinking',
                 content: delta,
                 streaming: true,
               },
@@ -185,20 +184,20 @@ export function useSessionTimeline(
           break;
         }
 
-        case "text_clear": {
+        case 'text_clear': {
           // Kernel emits text_clear before tool_call_start to discard
           // intermediate narration. Remove the in-flight agent row.
           if (currentTextSeq !== null) {
             const target = currentTextSeq;
             setLiveItems((prev) =>
-              prev.filter((it) => !(it.seq === target && it.kind === "agent")),
+              prev.filter((it) => !(it.seq === target && it.kind === 'agent')),
             );
             currentTextSeq = null;
           }
           break;
         }
 
-        case "tool_call_start": {
+        case 'tool_call_start': {
           const e = event as {
             name: string;
             id: string;
@@ -227,7 +226,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "tool_use",
+                kind: 'tool_use',
                 tool: e.name,
                 input: e.arguments,
                 streaming: true,
@@ -237,7 +236,7 @@ export function useSessionTimeline(
           break;
         }
 
-        case "tool_call_end": {
+        case 'tool_call_end': {
           const e = event as {
             id: string;
             result_preview: string;
@@ -251,7 +250,7 @@ export function useSessionTimeline(
             const finalized =
               usedSeq !== undefined
                 ? prev.map((it) =>
-                    it.seq === usedSeq && it.kind === "tool_use"
+                    it.seq === usedSeq && it.kind === 'tool_use'
                       ? { ...it, streaming: false, success: e.success }
                       : it,
                   )
@@ -263,7 +262,7 @@ export function useSessionTimeline(
                 {
                   seq: nextSeq(),
                   turn: liveTurnIdx,
-                  kind: "error",
+                  kind: 'error',
                   content: e.error,
                 },
               ];
@@ -274,7 +273,7 @@ export function useSessionTimeline(
                 {
                   seq: nextSeq(),
                   turn: liveTurnIdx,
-                  kind: "tool_result",
+                  kind: 'tool_result',
                   output: e.result_preview,
                   success: e.success,
                 },
@@ -285,18 +284,16 @@ export function useSessionTimeline(
           break;
         }
 
-        case "turn_metrics": {
+        case 'turn_metrics': {
           // Turn boundary — flush streaming flags; keep items so the
           // just-completed turn stays visible until turnsQuery refetches.
           currentTextSeq = null;
           currentThinkSeq = null;
-          setLiveItems((prev) =>
-            prev.map((it) => ({ ...it, streaming: false })),
-          );
+          setLiveItems((prev) => prev.map((it) => ({ ...it, streaming: false })));
           break;
         }
 
-        case "done":
+        case 'done':
           setIsStreaming(false);
           // Trigger an immediate refetch so the just-completed turn
           // appears as historical items before we clear live rows.
@@ -321,10 +318,7 @@ export function useSessionTimeline(
     };
   }, [sessionKey, sessionState]);
 
-  const items = useMemo(
-    () => [...historicalItems, ...liveItems],
-    [historicalItems, liveItems],
-  );
+  const items = useMemo(() => [...historicalItems, ...liveItems], [historicalItems, liveItems]);
 
   return {
     items,

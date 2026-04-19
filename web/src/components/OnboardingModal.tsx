@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
-import { Button } from "@/components/ui/button";
+import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -23,18 +23,18 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Sparkles } from "lucide-react";
+} from '@/components/ui/dialog';
+import { Sparkles } from 'lucide-react';
 
 /** localStorage key — marks the user has dismissed onboarding */
-const ONBOARDING_DISMISSED_KEY = "onboarding_dismissed";
+const ONBOARDING_DISMISSED_KEY = 'onboarding_dismissed';
 
 export function isOnboardingDismissed(): boolean {
-  return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "true";
+  return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true';
 }
 
 export function dismissOnboarding(): void {
-  localStorage.setItem(ONBOARDING_DISMISSED_KEY, "true");
+  localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true');
 }
 
 interface OnboardingModalProps {
@@ -43,7 +43,11 @@ interface OnboardingModalProps {
   showLlmProviderPrompt?: boolean;
 }
 
-export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt = false }: OnboardingModalProps) {
+export default function OnboardingModal({
+  open,
+  onDismiss,
+  showLlmProviderPrompt = false,
+}: OnboardingModalProps) {
   const { openSettings } = useSettingsModal();
 
   const handleSkip = () => {
@@ -54,11 +58,16 @@ export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt
   const handleOpenProviderSettings = () => {
     dismissOnboarding();
     onDismiss();
-    openSettings("providers");
+    openSettings('providers');
   };
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) handleSkip(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(isOpen) => {
+        if (!isOpen) handleSkip();
+      }}
+    >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -67,7 +76,7 @@ export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt
           </DialogTitle>
           <DialogDescription>
             {showLlmProviderPrompt
-              ? "Configure an LLM provider to get started with AI features."
+              ? 'Configure an LLM provider to get started with AI features.'
               : "You're all set. Start chatting with your agent!"}
           </DialogDescription>
         </DialogHeader>
@@ -85,7 +94,7 @@ export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt
 
         <DialogFooter>
           <Button variant="ghost" size="sm" onClick={handleSkip}>
-            {showLlmProviderPrompt ? "Skip for now" : "Got it"}
+            {showLlmProviderPrompt ? 'Skip for now' : 'Got it'}
           </Button>
         </DialogFooter>
       </DialogContent>

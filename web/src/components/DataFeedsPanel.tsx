@@ -14,21 +14,21 @@
  * limitations under the License.
  */
 
-import { useState, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   dataFeedsApi,
   type DataFeedConfig,
   type FeedEvent,
   type CreateFeedRequest,
   type AuthType,
-} from "@/api/data-feeds";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
+} from '@/api/data-feeds';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 import {
   Table,
   TableBody,
@@ -36,7 +36,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
+} from '@/components/ui/table';
 import {
   Dialog,
   DialogContent,
@@ -44,22 +44,22 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from '@/components/ui/select';
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@/components/ui/sheet";
-import { JsonTree } from "@/components/JsonTree";
+} from '@/components/ui/sheet';
+import { JsonTree } from '@/components/JsonTree';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -70,7 +70,7 @@ import {
   Plus,
   Radio,
   Trash2,
-} from "lucide-react";
+} from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,7 +82,7 @@ function timeAgo(dateStr: string): string {
   const then = new Date(dateStr).getTime();
   const diffSec = Math.floor((now - then) / 1000);
 
-  if (diffSec < 0) return "just now";
+  if (diffSec < 0) return 'just now';
   if (diffSec < 60) return `${diffSec}s ago`;
 
   const diffMin = Math.floor(diffSec / 60);
@@ -103,14 +103,14 @@ function payloadSize(payload: unknown): string {
 }
 
 /** Format type badge label. */
-function typeLabel(t: DataFeedConfig["feed_type"]): string {
+function typeLabel(t: DataFeedConfig['feed_type']): string {
   switch (t) {
-    case "polling":
-      return "Polling";
-    case "webhook":
-      return "Webhook";
-    case "websocket":
-      return "WebSocket";
+    case 'polling':
+      return 'Polling';
+    case 'webhook':
+      return 'Webhook';
+    case 'websocket':
+      return 'WebSocket';
   }
 }
 
@@ -118,13 +118,7 @@ function typeLabel(t: DataFeedConfig["feed_type"]): string {
 // Status badge
 // ---------------------------------------------------------------------------
 
-function StatusBadge({
-  status,
-  enabled,
-}: {
-  status: DataFeedConfig["status"];
-  enabled: boolean;
-}) {
+function StatusBadge({ status, enabled }: { status: DataFeedConfig['status']; enabled: boolean }) {
   if (!enabled) {
     return (
       <Badge variant="secondary" className="text-muted-foreground">
@@ -133,24 +127,20 @@ function StatusBadge({
     );
   }
   switch (status) {
-    case "running":
+    case 'running':
       return (
         <Badge className="border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-400">
           Running
         </Badge>
       );
-    case "idle":
+    case 'idle':
       return (
         <Badge className="border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-400">
           Idle
         </Badge>
       );
-    case "error":
-      return (
-        <Badge variant="destructive">
-          Error
-        </Badge>
-      );
+    case 'error':
+      return <Badge variant="destructive">Error</Badge>;
   }
 }
 
@@ -159,29 +149,25 @@ function StatusBadge({
 // ---------------------------------------------------------------------------
 
 const TIME_FILTERS = [
-  { value: "1h", label: "Last 1 hour" },
-  { value: "24h", label: "Last 24 hours" },
-  { value: "7d", label: "Last 7 days" },
-  { value: "30d", label: "Last 30 days" },
+  { value: '1h', label: 'Last 1 hour' },
+  { value: '24h', label: 'Last 24 hours' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
 ] as const;
-
-
 
 // ---------------------------------------------------------------------------
 // Empty auth/transport helpers
 // ---------------------------------------------------------------------------
 
-function emptyTransport(
-  feedType: CreateFeedRequest["feed_type"],
-): Record<string, unknown> {
+function emptyTransport(feedType: CreateFeedRequest['feed_type']): Record<string, unknown> {
   switch (feedType) {
-    case "polling":
-      return { url: "", interval_secs: 60, headers: {}, method: "GET" };
-    case "webhook":
+    case 'polling':
+      return { url: '', interval_secs: 60, headers: {}, method: 'GET' };
+    case 'webhook':
       return { events: [], body_size_limit: 1048576 };
-    case "websocket":
+    case 'websocket':
       return {
-        url: "",
+        url: '',
         reconnect_backoff: [5, 10, 30, 60],
         heartbeat_secs: 30,
       };
@@ -194,36 +180,34 @@ function emptyTransport(
 
 interface FeedFormState {
   name: string;
-  feed_type: CreateFeedRequest["feed_type"];
+  feed_type: CreateFeedRequest['feed_type'];
   tags: string;
   transport: Record<string, unknown>;
-  authType: "none" | AuthType;
+  authType: 'none' | AuthType;
   authFields: Record<string, string>;
 }
 
 const INITIAL_FORM: FeedFormState = {
-  name: "",
-  feed_type: "polling",
-  tags: "",
-  transport: emptyTransport("polling"),
-  authType: "none",
+  name: '',
+  feed_type: 'polling',
+  tags: '',
+  transport: emptyTransport('polling'),
+  authType: 'none',
   authFields: {},
 };
 
 function feedToForm(feed: DataFeedConfig): FeedFormState {
-  const authType: FeedFormState["authType"] = feed.auth
-    ? (feed.auth.type as AuthType)
-    : "none";
+  const authType: FeedFormState['authType'] = feed.auth ? (feed.auth.type as AuthType) : 'none';
   const authFields: Record<string, string> = {};
   if (feed.auth) {
     for (const [k, v] of Object.entries(feed.auth)) {
-      if (k !== "type") authFields[k] = String(v ?? "");
+      if (k !== 'type') authFields[k] = String(v ?? '');
     }
   }
   return {
     name: feed.name,
     feed_type: feed.feed_type,
-    tags: feed.tags.join(", "),
+    tags: feed.tags.join(', '),
     transport: { ...feed.transport },
     authType,
     authFields,
@@ -232,12 +216,12 @@ function feedToForm(feed: DataFeedConfig): FeedFormState {
 
 function formToRequest(form: FeedFormState): CreateFeedRequest {
   const tags = form.tags
-    .split(",")
+    .split(',')
     .map((t) => t.trim())
     .filter(Boolean);
 
   let auth = null;
-  if (form.authType !== "none") {
+  if (form.authType !== 'none') {
     auth = { type: form.authType, ...form.authFields };
   }
 
@@ -255,22 +239,21 @@ function TransportFields({
   transport,
   onChange,
 }: {
-  feedType: CreateFeedRequest["feed_type"];
+  feedType: CreateFeedRequest['feed_type'];
   transport: Record<string, unknown>;
   onChange: (t: Record<string, unknown>) => void;
 }) {
-  const set = (key: string, value: unknown) =>
-    onChange({ ...transport, [key]: value });
+  const set = (key: string, value: unknown) => onChange({ ...transport, [key]: value });
 
   switch (feedType) {
-    case "polling":
+    case 'polling':
       return (
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">URL</Label>
             <Input
-              value={String(transport.url ?? "")}
-              onChange={(e) => set("url", e.target.value)}
+              value={String(transport.url ?? '')}
+              onChange={(e) => set('url', e.target.value)}
               placeholder="https://api.example.com/data"
               className="h-9 font-mono text-sm"
             />
@@ -281,27 +264,27 @@ function TransportFields({
               type="number"
               min={1}
               value={String(transport.interval_secs ?? 60)}
-              onChange={(e) => set("interval_secs", Number(e.target.value))}
+              onChange={(e) => set('interval_secs', Number(e.target.value))}
               className="h-9 w-32 text-sm"
             />
           </div>
         </div>
       );
-    case "webhook":
+    case 'webhook':
       return (
         <p className="text-sm text-muted-foreground">
-          A unique webhook URL will be generated after creation. Configure your
-          external service to POST events to that URL.
+          A unique webhook URL will be generated after creation. Configure your external service to
+          POST events to that URL.
         </p>
       );
-    case "websocket":
+    case 'websocket':
       return (
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">WebSocket URL</Label>
             <Input
-              value={String(transport.url ?? "")}
-              onChange={(e) => set("url", e.target.value)}
+              value={String(transport.url ?? '')}
+              onChange={(e) => set('url', e.target.value)}
               placeholder="wss://stream.example.com/ws"
               className="h-9 font-mono text-sm"
             />
@@ -320,18 +303,17 @@ function AuthFields({
   fields: Record<string, string>;
   onChange: (f: Record<string, string>) => void;
 }) {
-  const set = (key: string, value: string) =>
-    onChange({ ...fields, [key]: value });
+  const set = (key: string, value: string) => onChange({ ...fields, [key]: value });
 
   switch (authType) {
-    case "header":
+    case 'header':
       return (
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">Header Name</Label>
             <Input
-              value={fields.name ?? ""}
-              onChange={(e) => set("name", e.target.value)}
+              value={fields.name ?? ''}
+              onChange={(e) => set('name', e.target.value)}
               placeholder="X-API-Key"
               className="h-9 text-sm"
             />
@@ -340,22 +322,22 @@ function AuthFields({
             <Label className="text-sm font-medium">Header Value</Label>
             <Input
               type="password"
-              value={fields.value ?? ""}
-              onChange={(e) => set("value", e.target.value)}
+              value={fields.value ?? ''}
+              onChange={(e) => set('value', e.target.value)}
               placeholder="sk-..."
               className="h-9 font-mono text-sm"
             />
           </div>
         </div>
       );
-    case "query":
+    case 'query':
       return (
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">Query Parameter</Label>
             <Input
-              value={fields.name ?? ""}
-              onChange={(e) => set("name", e.target.value)}
+              value={fields.name ?? ''}
+              onChange={(e) => set('name', e.target.value)}
               placeholder="apikey"
               className="h-9 text-sm"
             />
@@ -364,35 +346,35 @@ function AuthFields({
             <Label className="text-sm font-medium">Value</Label>
             <Input
               type="password"
-              value={fields.value ?? ""}
-              onChange={(e) => set("value", e.target.value)}
+              value={fields.value ?? ''}
+              onChange={(e) => set('value', e.target.value)}
               placeholder="sk-..."
               className="h-9 font-mono text-sm"
             />
           </div>
         </div>
       );
-    case "bearer":
+    case 'bearer':
       return (
         <div className="space-y-1.5">
           <Label className="text-sm font-medium">Bearer Token</Label>
           <Input
             type="password"
-            value={fields.token ?? ""}
-            onChange={(e) => set("token", e.target.value)}
+            value={fields.token ?? ''}
+            onChange={(e) => set('token', e.target.value)}
             placeholder="eyJ..."
             className="h-9 font-mono text-sm"
           />
         </div>
       );
-    case "basic":
+    case 'basic':
       return (
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">Username</Label>
             <Input
-              value={fields.username ?? ""}
-              onChange={(e) => set("username", e.target.value)}
+              value={fields.username ?? ''}
+              onChange={(e) => set('username', e.target.value)}
               className="h-9 text-sm"
             />
           </div>
@@ -400,22 +382,22 @@ function AuthFields({
             <Label className="text-sm font-medium">Password</Label>
             <Input
               type="password"
-              value={fields.password ?? ""}
-              onChange={(e) => set("password", e.target.value)}
+              value={fields.password ?? ''}
+              onChange={(e) => set('password', e.target.value)}
               className="h-9 font-mono text-sm"
             />
           </div>
         </div>
       );
-    case "hmac":
+    case 'hmac':
       return (
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">HMAC Secret</Label>
             <Input
               type="password"
-              value={fields.secret ?? ""}
-              onChange={(e) => set("secret", e.target.value)}
+              value={fields.secret ?? ''}
+              onChange={(e) => set('secret', e.target.value)}
               placeholder="whsec_..."
               className="h-9 font-mono text-sm"
             />
@@ -423,8 +405,8 @@ function AuthFields({
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">Signature Header</Label>
             <Input
-              value={fields.header ?? ""}
-              onChange={(e) => set("header", e.target.value)}
+              value={fields.header ?? ''}
+              onChange={(e) => set('header', e.target.value)}
               placeholder="X-Hub-Signature-256"
               className="h-9 text-sm"
             />
@@ -444,9 +426,7 @@ function FeedFormDialog({
   editFeed?: DataFeedConfig;
 }) {
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<FeedFormState>(
-    editFeed ? feedToForm(editFeed) : INITIAL_FORM,
-  );
+  const [form, setForm] = useState<FeedFormState>(editFeed ? feedToForm(editFeed) : INITIAL_FORM);
   const [error, setError] = useState<string | null>(null);
 
   const isEdit = !!editFeed;
@@ -454,17 +434,16 @@ function FeedFormDialog({
   const createMutation = useMutation({
     mutationFn: (req: CreateFeedRequest) => dataFeedsApi.create(req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["data-feeds"] });
+      queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (req: Partial<CreateFeedRequest>) =>
-      dataFeedsApi.update(editFeed!.id, req),
+    mutationFn: (req: Partial<CreateFeedRequest>) => dataFeedsApi.update(editFeed!.id, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["data-feeds"] });
+      queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -474,7 +453,7 @@ function FeedFormDialog({
     setError(null);
     const req = formToRequest(form);
     if (!req.name.trim()) {
-      setError("Name is required");
+      setError('Name is required');
       return;
     }
     if (isEdit) {
@@ -499,11 +478,11 @@ function FeedFormDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Feed" : "New Data Feed"}</DialogTitle>
+          <DialogTitle>{isEdit ? 'Edit Feed' : 'New Data Feed'}</DialogTitle>
           <DialogDescription>
             {isEdit
-              ? "Update the data feed configuration."
-              : "Configure an external data source to ingest events."}
+              ? 'Update the data feed configuration.'
+              : 'Configure an external data source to ingest events.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -526,7 +505,7 @@ function FeedFormDialog({
             <Select
               value={form.feed_type}
               onValueChange={(v) => {
-                const ft = v as CreateFeedRequest["feed_type"];
+                const ft = v as CreateFeedRequest['feed_type'];
                 setForm({
                   ...form,
                   feed_type: ft,
@@ -564,7 +543,7 @@ function FeedFormDialog({
               onValueChange={(v) => {
                 setForm({
                   ...form,
-                  authType: v as FeedFormState["authType"],
+                  authType: v as FeedFormState['authType'],
                   authFields: {},
                 });
               }}
@@ -581,7 +560,7 @@ function FeedFormDialog({
                 <SelectItem value="hmac">HMAC Signature</SelectItem>
               </SelectContent>
             </Select>
-            {form.authType !== "none" && (
+            {form.authType !== 'none' && (
               <div className="mt-3">
                 <AuthFields
                   authType={form.authType}
@@ -616,15 +595,11 @@ function FeedFormDialog({
         </div>
 
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={saving}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
           <Button onClick={handleSubmit} disabled={saving}>
-            {saving ? "Saving..." : isEdit ? "Update" : "Create"}
+            {saving ? 'Saving...' : isEdit ? 'Update' : 'Create'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -649,28 +624,21 @@ function EventDetailSheet({
 
   const handleCopy = useCallback(() => {
     if (!event) return;
-    navigator.clipboard
-      .writeText(JSON.stringify(event.payload, null, 2))
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      });
+    navigator.clipboard.writeText(JSON.stringify(event.payload, null, 2)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }, [event]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="overflow-y-auto sm:max-w-lg">
         <SheetHeader>
-          <SheetTitle className="font-mono text-sm">
-            {event?.id ?? "Event Detail"}
-          </SheetTitle>
+          <SheetTitle className="font-mono text-sm">{event?.id ?? 'Event Detail'}</SheetTitle>
           <SheetDescription>
-            {event ? timeAgo(event.received_at) : ""}
+            {event ? timeAgo(event.received_at) : ''}
             {event && (
-              <span
-                className="ml-2 text-xs text-muted-foreground"
-                title={event.received_at}
-              >
+              <span className="ml-2 text-xs text-muted-foreground" title={event.received_at}>
                 ({new Date(event.received_at).toLocaleString()})
               </span>
             )}
@@ -682,16 +650,12 @@ function EventDetailSheet({
             {/* Meta */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Type
-                </span>
+                <span className="text-xs font-medium text-muted-foreground">Type</span>
                 <Badge variant="outline">{event.event_type}</Badge>
               </div>
               {event.tags.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    Tags
-                  </span>
+                  <span className="text-xs font-medium text-muted-foreground">Tags</span>
                   {event.tags.map((tag) => (
                     <Badge key={tag} variant="secondary" className="text-xs">
                       {tag}
@@ -704,9 +668,7 @@ function EventDetailSheet({
             {/* Payload */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Payload
-                </span>
+                <span className="text-xs font-medium text-muted-foreground">Payload</span>
                 <Button
                   variant="outline"
                   size="sm"
@@ -714,7 +676,7 @@ function EventDetailSheet({
                   onClick={handleCopy}
                 >
                   <Copy className="h-3 w-3" />
-                  {copied ? "Copied" : "Copy"}
+                  {copied ? 'Copied' : 'Copy'}
                 </Button>
               </div>
               <div className="rounded-lg border bg-muted/30 p-3 font-mono text-xs">
@@ -732,14 +694,8 @@ function EventDetailSheet({
 // Event History View
 // ---------------------------------------------------------------------------
 
-function EventHistoryView({
-  feed,
-  onBack,
-}: {
-  feed: DataFeedConfig;
-  onBack: () => void;
-}) {
-  const [timeFilter, setTimeFilter] = useState("24h");
+function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () => void }) {
+  const [timeFilter, setTimeFilter] = useState('24h');
   const [selectedEvent, setSelectedEvent] = useState<FeedEvent | null>(null);
   const [offset, setOffset] = useState(0);
   const limit = 50;
@@ -747,7 +703,7 @@ function EventHistoryView({
   const since = timeFilter;
 
   const eventsQuery = useQuery({
-    queryKey: ["data-feed-events", feed.id, since, offset],
+    queryKey: ['data-feed-events', feed.id, since, offset],
     queryFn: () => dataFeedsApi.events(feed.id, { since, limit, offset }),
   });
 
@@ -759,12 +715,7 @@ function EventHistoryView({
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1"
-          onClick={onBack}
-        >
+        <Button variant="outline" size="sm" className="h-8 gap-1" onClick={onBack}>
           <ArrowLeft className="h-3.5 w-3.5" />
           Back
         </Button>
@@ -783,12 +734,10 @@ function EventHistoryView({
               <StatusBadge status={feed.status} enabled={feed.enabled} />
             </div>
             <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
-              {feed.feed_type === "polling" && !!feed.transport.url && (
-                <span className="truncate font-mono">
-                  {String(feed.transport.url)}
-                </span>
+              {feed.feed_type === 'polling' && !!feed.transport.url && (
+                <span className="truncate font-mono">{String(feed.transport.url)}</span>
               )}
-              {feed.feed_type === "polling" && !!feed.transport.interval_secs && (
+              {feed.feed_type === 'polling' && !!feed.transport.interval_secs && (
                 <span>{String(feed.transport.interval_secs)}s interval</span>
               )}
               <span>{total} events</span>
@@ -887,7 +836,7 @@ function EventHistoryView({
             onClick={() => setOffset((prev) => prev + limit)}
             disabled={eventsQuery.isFetching}
           >
-            {eventsQuery.isFetching ? "Loading..." : "Load more"}
+            {eventsQuery.isFetching ? 'Loading...' : 'Load more'}
           </Button>
         </div>
       )}
@@ -922,14 +871,13 @@ function FeedListView({
 
   const toggleMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.toggle(id),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["data-feeds"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['data-feeds'] }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["data-feeds"] });
+      queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       setDeleteId(null);
     },
   });
@@ -965,15 +913,8 @@ function FeedListView({
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-12 text-muted-foreground">
           <Radio className="mb-2 h-8 w-8" />
           <p className="text-sm">No data feeds configured</p>
-          <p className="text-xs">
-            Create a feed to start ingesting external events.
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="mt-4 gap-1"
-            onClick={handleNew}
-          >
+          <p className="text-xs">Create a feed to start ingesting external events.</p>
+          <Button size="sm" variant="outline" className="mt-4 gap-1" onClick={handleNew}>
             <Plus className="h-3.5 w-3.5" />
             Create Feed
           </Button>
@@ -1002,11 +943,7 @@ function FeedListView({
                   {feed.tags.length > 0 && (
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {feed.tags.slice(0, 3).map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="secondary"
-                          className="text-[10px] px-1.5 py-0"
-                        >
+                        <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
                           {tag}
                         </Badge>
                       ))}
@@ -1064,11 +1001,7 @@ function FeedListView({
       )}
 
       {/* Create/Edit Dialog */}
-      <FeedFormDialog
-        open={formOpen}
-        onOpenChange={setFormOpen}
-        editFeed={editFeed}
-      />
+      <FeedFormDialog open={formOpen} onOpenChange={setFormOpen} editFeed={editFeed} />
 
       {/* Delete Confirmation */}
       <Dialog
@@ -1081,8 +1014,8 @@ function FeedListView({
           <DialogHeader>
             <DialogTitle>Delete Feed</DialogTitle>
             <DialogDescription>
-              This will permanently remove this feed and stop all event
-              ingestion. This action cannot be undone.
+              This will permanently remove this feed and stop all event ingestion. This action
+              cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1094,7 +1027,7 @@ function FeedListView({
               onClick={() => deleteId && deleteMutation.mutate(deleteId)}
               disabled={deleteMutation.isPending}
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1107,15 +1040,13 @@ function FeedListView({
 // Root Component
 // ---------------------------------------------------------------------------
 
-type View =
-  | { kind: "list" }
-  | { kind: "events"; feed: DataFeedConfig };
+type View = { kind: 'list' } | { kind: 'events'; feed: DataFeedConfig };
 
 export default function DataFeedsPanel() {
-  const [view, setView] = useState<View>({ kind: "list" });
+  const [view, setView] = useState<View>({ kind: 'list' });
 
   const feedsQuery = useQuery({
-    queryKey: ["data-feeds"],
+    queryKey: ['data-feeds'],
     queryFn: () => dataFeedsApi.list(),
   });
 
@@ -1136,12 +1067,7 @@ export default function DataFeedsPanel() {
         <AlertTriangle className="mb-2 h-8 w-8 text-destructive" />
         <p className="text-sm">Failed to load data feeds</p>
         <p className="text-xs">Check the backend connection and try again.</p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-3"
-          onClick={() => feedsQuery.refetch()}
-        >
+        <Button variant="outline" size="sm" className="mt-3" onClick={() => feedsQuery.refetch()}>
           Retry
         </Button>
       </div>
@@ -1150,23 +1076,12 @@ export default function DataFeedsPanel() {
 
   const feeds = feedsQuery.data ?? [];
 
-  if (view.kind === "events") {
+  if (view.kind === 'events') {
     // When we navigate to events, refresh the feed object from the list
     // so toggling status is reflected.
-    const freshFeed =
-      feeds.find((f) => f.id === view.feed.id) ?? view.feed;
-    return (
-      <EventHistoryView
-        feed={freshFeed}
-        onBack={() => setView({ kind: "list" })}
-      />
-    );
+    const freshFeed = feeds.find((f) => f.id === view.feed.id) ?? view.feed;
+    return <EventHistoryView feed={freshFeed} onBack={() => setView({ kind: 'list' })} />;
   }
 
-  return (
-    <FeedListView
-      feeds={feeds}
-      onSelectFeed={(feed) => setView({ kind: "events", feed })}
-    />
-  );
+  return <FeedListView feeds={feeds} onSelectFeed={(feed) => setView({ kind: 'events', feed })} />;
 }

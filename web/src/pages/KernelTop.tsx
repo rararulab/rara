@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ShieldCheck, Zap } from "lucide-react";
-import { api } from "@/api/client";
-import { KernelStatsBar } from "@/components/kernel/KernelStatsBar";
-import { SessionList } from "@/components/kernel/SessionList";
-import { SessionDetail } from "@/components/kernel/SessionDetail";
-import { ApprovalsDrawer } from "@/components/kernel/ApprovalsDrawer";
-import { Badge } from "@/components/ui/badge";
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ShieldCheck, Zap } from 'lucide-react';
+import { api } from '@/api/client';
+import { KernelStatsBar } from '@/components/kernel/KernelStatsBar';
+import { SessionList } from '@/components/kernel/SessionList';
+import { SessionDetail } from '@/components/kernel/SessionDetail';
+import { ApprovalsDrawer } from '@/components/kernel/ApprovalsDrawer';
+import { Badge } from '@/components/ui/badge';
 
 // ---------------------------------------------------------------------------
 // Types (matching Rust backend — local to this page)
@@ -80,29 +80,26 @@ export default function KernelTop() {
 
   // -- Data --
   const statsQuery = useQuery({
-    queryKey: ["kernel-stats"],
-    queryFn: () => api.get<SystemStats>("/api/v1/kernel/stats"),
+    queryKey: ['kernel-stats'],
+    queryFn: () => api.get<SystemStats>('/api/v1/kernel/stats'),
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
   const sessionsQuery = useQuery({
-    queryKey: ["kernel-sessions"],
-    queryFn: () => api.get<SessionStats[]>("/api/v1/kernel/sessions"),
+    queryKey: ['kernel-sessions'],
+    queryFn: () => api.get<SessionStats[]>('/api/v1/kernel/sessions'),
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
   const approvalsQuery = useQuery({
-    queryKey: ["kernel-approvals"],
-    queryFn: () =>
-      api.get<{ id: string }[]>("/api/v1/kernel/approvals"),
+    queryKey: ['kernel-approvals'],
+    queryFn: () => api.get<{ id: string }[]>('/api/v1/kernel/approvals'),
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
   const sessions = sessionsQuery.data ?? [];
   const approvalCount = approvalsQuery.data?.length ?? 0;
-  const selectedStats = sessions.find(
-    (s) => s.agent_id === selectedSession,
-  );
+  const selectedStats = sessions.find((s) => s.agent_id === selectedSession);
 
   const handleRefresh = () => {
     statsQuery.refetch();
@@ -118,9 +115,7 @@ export default function KernelTop() {
           <KernelStatsBar
             stats={statsQuery.data}
             isLoading={statsQuery.isLoading}
-            isFetching={
-              statsQuery.isFetching || sessionsQuery.isFetching
-            }
+            isFetching={statsQuery.isFetching || sessionsQuery.isFetching}
             autoRefresh={autoRefresh}
             onAutoRefreshChange={setAutoRefresh}
             onRefresh={handleRefresh}
@@ -150,9 +145,7 @@ export default function KernelTop() {
           <SessionList
             sessions={sessions}
             selectedId={selectedSession}
-            onSelect={(id) =>
-              setSelectedSession((prev) => (prev === id ? null : id))
-            }
+            onSelect={(id) => setSelectedSession((prev) => (prev === id ? null : id))}
             isLoading={sessionsQuery.isLoading}
           />
         </div>
@@ -171,10 +164,7 @@ export default function KernelTop() {
       </div>
 
       {/* ── Approvals drawer ──────────────────────────────────── */}
-      <ApprovalsDrawer
-        open={approvalsOpen}
-        onOpenChange={setApprovalsOpen}
-      />
+      <ApprovalsDrawer open={approvalsOpen} onOpenChange={setApprovalsOpen} />
     </div>
   );
 }

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 export interface SessionListItemProps {
   manifestName: string;
@@ -27,12 +27,12 @@ export interface SessionListItemProps {
 }
 
 function formatRelativeTime(iso: string | null): string {
-  if (!iso) return "";
+  if (!iso) return '';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
+  if (Number.isNaN(d.getTime())) return '';
   const diffMs = Date.now() - d.getTime();
   const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 5) return "just now";
+  if (diffSec < 5) return 'just now';
   if (diffSec < 60) return `${diffSec}s ago`;
   const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60) return `${diffMin}m ago`;
@@ -43,7 +43,7 @@ function formatRelativeTime(iso: string | null): string {
 /** Whether this state means the session is alive (Active / Ready). */
 function isAlive(state: string): boolean {
   const s = state.toLowerCase();
-  return s === "active" || s === "ready";
+  return s === 'active' || s === 'ready';
 }
 
 /**
@@ -66,19 +66,19 @@ export function SessionListItem({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex w-full items-start gap-2 border-b border-border/30 px-3 py-2.5 text-left transition-colors",
-        isSelected ? "bg-accent/40" : "hover:bg-accent/20",
+        'flex w-full items-start gap-2 border-b border-border/30 px-3 py-2.5 text-left transition-colors',
+        isSelected ? 'bg-accent/40' : 'hover:bg-accent/20',
       )}
     >
       {/* State indicator */}
       <div className="mt-1.5 shrink-0">
-        {alive && state.toLowerCase() === "active" ? (
+        {alive && state.toLowerCase() === 'active' ? (
           <Loader2 className="h-3 w-3 animate-spin text-info" />
         ) : (
           <div
             className={cn(
-              "h-2.5 w-2.5 rounded-full",
-              alive ? "bg-emerald-500" : "bg-muted-foreground/30",
+              'h-2.5 w-2.5 rounded-full',
+              alive ? 'bg-emerald-500' : 'bg-muted-foreground/30',
             )}
           />
         )}
@@ -86,9 +86,7 @@ export function SessionListItem({
 
       {/* Content */}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-medium leading-snug text-foreground">
-          {manifestName}
-        </p>
+        <p className="truncate text-xs font-medium leading-snug text-foreground">{manifestName}</p>
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground/70">
           <span className="truncate font-mono">{agentId.slice(0, 8)}</span>
           <span>&middot;</span>
