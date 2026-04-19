@@ -15,9 +15,9 @@
  */
 
 import { useState } from 'react';
+
 import { setBackendUrl, getBackendUrl } from '@/api/client';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 interface ConnectionSetupDialogProps {
   open: boolean;
@@ -71,7 +72,7 @@ export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialog
             placeholder="http://hostname:25555"
             className="font-mono text-sm"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !testing) testConnection();
+              if (e.key === 'Enter' && !testing) void testConnection();
             }}
           />
           {error && <p className="text-sm text-destructive">{error}</p>}

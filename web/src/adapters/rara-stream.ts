@@ -15,11 +15,11 @@
  */
 
 import type { StreamFn } from '@mariozechner/pi-agent-core';
+import { calculateCost, createAssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   TextContent,
@@ -27,7 +27,6 @@ import type {
   ToolCall,
   Usage,
 } from '@mariozechner/pi-ai';
-import { calculateCost, createAssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type { Attachment } from '@mariozechner/pi-web-ui';
 
@@ -217,7 +216,7 @@ function extractUserPayload(context: Context, attachments: Attachment[]): string
         }
         if (c.type === 'image') {
           // pi-ai uses { mimeType, data }, rara uses { media_type, data }
-          const img = c as ImageContent;
+          const img = c;
           if (img.mimeType && img.data) {
             return [{ type: 'image_base64', media_type: img.mimeType, data: img.data }];
           }

@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageSquareDashed, X } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
 import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockAnnotationsProps {
   store: DockStore;

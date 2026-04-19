@@ -14,8 +14,20 @@
  * limitations under the License.
  */
 
-import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ChevronRight,
+  Clock,
+  Copy,
+  Pencil,
+  Plus,
+  Radio,
+  Trash2,
+} from 'lucide-react';
+import { useState, useCallback } from 'react';
+
 import {
   dataFeedsApi,
   type DataFeedConfig,
@@ -23,20 +35,9 @@ import {
   type CreateFeedRequest,
   type AuthType,
 } from '@/api/data-feeds';
+import { JsonTree } from '@/components/JsonTree';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Switch } from '@/components/ui/switch';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import {
   Dialog,
   DialogContent,
@@ -45,6 +46,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -59,18 +62,16 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import { JsonTree } from '@/components/JsonTree';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 import {
-  AlertTriangle,
-  ArrowLeft,
-  ChevronRight,
-  Clock,
-  Copy,
-  Pencil,
-  Plus,
-  Radio,
-  Trash2,
-} from 'lucide-react';
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -197,7 +198,7 @@ const INITIAL_FORM: FeedFormState = {
 };
 
 function feedToForm(feed: DataFeedConfig): FeedFormState {
-  const authType: FeedFormState['authType'] = feed.auth ? (feed.auth.type as AuthType) : 'none';
+  const authType: FeedFormState['authType'] = feed.auth ? feed.auth.type : 'none';
   const authFields: Record<string, string> = {};
   if (feed.auth) {
     for (const [k, v] of Object.entries(feed.auth)) {
@@ -434,7 +435,7 @@ function FeedFormDialog({
   const createMutation = useMutation({
     mutationFn: (req: CreateFeedRequest) => dataFeedsApi.create(req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -443,7 +444,7 @@ function FeedFormDialog({
   const updateMutation = useMutation({
     mutationFn: (req: Partial<CreateFeedRequest>) => dataFeedsApi.update(editFeed!.id, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -624,7 +625,7 @@ function EventDetailSheet({
 
   const handleCopy = useCallback(() => {
     if (!event) return;
-    navigator.clipboard.writeText(JSON.stringify(event.payload, null, 2)).then(() => {
+    void navigator.clipboard.writeText(JSON.stringify(event.payload, null, 2)).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -877,7 +878,7 @@ function FeedListView({
   const deleteMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       setDeleteId(null);
     },
   });

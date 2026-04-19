@@ -28,10 +28,10 @@
  * `<code-block>` relies on.
  */
 
-import type { ImageContent, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import { renderHeader, type ToolRenderer, type ToolRenderResult } from '@mariozechner/pi-web-ui';
 import { html } from 'lit';
 import { Wrench } from 'lucide';
-import { renderHeader, type ToolRenderer, type ToolRenderResult } from '@mariozechner/pi-web-ui';
 
 const MAX_SUMMARY = 120;
 const MAX_RESULT_EXPANDED = 4000;
@@ -127,11 +127,11 @@ function extractOutput(result: ToolResultMessage | undefined): ExtractedOutput {
   let nonTextCount = 0;
   for (const block of result.content ?? []) {
     if ('text' in block) {
-      textParts.push((block as TextContent).text ?? '');
+      textParts.push(block.text ?? '');
     } else {
       // Currently only ImageContent falls here; treated uniformly so
       // we degrade gracefully if pi-ai grows new block types.
-      void (block as ImageContent);
+      void block;
       nonTextCount += 1;
     }
   }

@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { ChevronDown, Loader2, PanelRightClose, PanelRightOpen, Plus } from 'lucide-react';
+import { useState } from 'react';
+
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockHeaderProps {
   store: DockStore;
@@ -56,7 +57,7 @@ export default function DockHeader({ store, rightPanelOpen, onToggleRightPanel }
                       session.id === store.activeSessionId && 'bg-accent/30 font-medium',
                     )}
                     onClick={() => {
-                      store.selectSession(session.id);
+                      void store.selectSession(session.id);
                       setDropdownOpen(false);
                     }}
                   >
@@ -70,7 +71,7 @@ export default function DockHeader({ store, rightPanelOpen, onToggleRightPanel }
                 <button
                   className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                   onClick={() => {
-                    store.newSession();
+                    void store.newSession();
                     setDropdownOpen(false);
                   }}
                 >

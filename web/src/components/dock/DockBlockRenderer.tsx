@@ -16,6 +16,7 @@
 
 import DOMPurify from 'dompurify';
 import { X } from 'lucide-react';
+
 import type { DockBlock } from '@/api/dock';
 import { Button } from '@/components/ui/button';
 

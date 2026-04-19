@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-import { Fragment, useCallback, useRef, useState } from 'react';
 import { Zap } from 'lucide-react';
-import { useSessionTimeline } from '@/hooks/use-session-timeline';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Fragment, useCallback, useRef, useState } from 'react';
+
+import { SessionHeader } from './SessionHeader';
 import { TimelineBar } from './TimelineBar';
 import { TimelineRow } from './TimelineRow';
-import { SessionHeader } from './SessionHeader';
+
+import { Skeleton } from '@/components/ui/skeleton';
+import { useSessionTimeline } from '@/hooks/use-session-timeline';
 
 interface SessionStats {
   agent_id: string;

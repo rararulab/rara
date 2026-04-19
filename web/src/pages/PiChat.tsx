@@ -14,7 +14,16 @@
  * limitations under the License.
  */
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { Agent } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type {
+  UserMessage,
+  AssistantMessage,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  ToolResultMessage,
+} from '@mariozechner/pi-ai';
 import {
   AppStorage,
   setAppStorage,
@@ -25,41 +34,32 @@ import {
   ProviderKeysStore,
   CustomProvidersStore,
   defaultConvertToLlm,
+  // Importing the extract-document tool triggers the module-level
+  // `registerToolRenderer("extract_document", ...)` side effect so
+  // pi-mono can render server-triggered document-extraction tool calls.
+  extractDocumentTool,
   type Attachment,
   type UserMessageWithAttachments,
 } from '@mariozechner/pi-web-ui';
-import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
-// Importing the extract-document tool from pi-web-ui triggers the
-// module-level `registerToolRenderer("extract_document", ...)` side
-// effect so pi-mono can render server-triggered document-extraction tool
-// calls in chat.
-import { extractDocumentTool } from '@mariozechner/pi-web-ui';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 // Reference the tool so Vite's tree-shaker keeps the module (and its
 // `registerToolRenderer` side effect) in the bundle. The actual tool
 // object is executed server-side; the renderer is what matters here.
 void extractDocumentTool;
-import type {
-  UserMessage,
-  AssistantMessage,
-  TextContent,
-  ThinkingContent,
-  ToolCall,
-  ToolResultMessage,
-} from '@mariozechner/pi-ai';
+
 import { RaraStorageBackend } from '@/adapters/rara-storage';
 import { createRaraStreamFn } from '@/adapters/rara-stream';
-import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
 import { api, settingsApi } from '@/api/client';
 import type { ChatSession, ChatMessageData, ThinkingLevel } from '@/api/types';
-import { VoiceRecorder } from '@/components/VoiceRecorder';
-import { RaraModelDialog } from '@/components/RaraModelDialog';
+import type { ProviderInfo } from '@/api/types';
 import { AlmaCaret } from '@/components/AlmaCaret';
 import { ChatSidebar } from '@/components/ChatSidebar';
+import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
-import type { ProviderInfo } from '@/api/types';
+import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
+import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
 
 const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
 
@@ -303,7 +303,7 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
           name: m.tool_name,
           arguments: args,
         };
-        (lastAssistant.content as (TextContent | ThinkingContent | ToolCall)[]).push(toolCall);
+        lastAssistant.content.push(toolCall);
       }
     } else if (m.role === 'tool_result') {
       // Tool result — emit as a separate ToolResultMessage. Preserve the
@@ -495,7 +495,7 @@ export default function PiChat() {
   /** Create a new empty session and switch to it. */
   const newSession = useCallback(async () => {
     const created = await api.post<ChatSession>('/api/v1/chat/sessions', {});
-    switchSession(created);
+    void switchSession(created);
     setSidebarRefreshKey((k) => k + 1);
   }, [switchSession]);
 
@@ -510,9 +510,9 @@ export default function PiChat() {
       // history is gone, otherwise we'd trap the user in an
       // "auto-regenerated empty session" loop.
       if (fallback) {
-        switchSession(fallback);
+        void switchSession(fallback);
       } else {
-        newSession();
+        void newSession();
       }
     },
     [activeSession, newSession, switchSession],
@@ -590,7 +590,7 @@ export default function PiChat() {
 
     const container = containerRef.current;
 
-    (async () => {
+    void (async () => {
       try {
         // 0. Register rara → pi-mono tool renderer aliases. Must happen before
         //    ChatPanel.setAgent() mounts any messages — the registry is
@@ -677,7 +677,7 @@ export default function PiChat() {
               for (let i = agent.state.messages.length - 1; i >= 0; i--) {
                 const m = agent.state.messages[i];
                 if (m.role === 'user-with-attachments') {
-                  return (m as UserMessageWithAttachments).attachments;
+                  return m.attachments;
                 }
                 if (m.role === 'user') return [];
               }
@@ -765,8 +765,8 @@ export default function PiChat() {
             // (see #1554). `isUnknownModel` returns true for null/undefined
             // too, so the subsequent reads are safe without the `?.` guard.
             const picked = !isUnknownModel(agent.state.model);
-            const model = picked ? agent.state.model!.id : null;
-            const provider = picked ? agent.state.model!.provider : null;
+            const model = picked ? agent.state.model.id : null;
+            const provider = picked ? agent.state.model.provider : null;
             const thinking = asThinkingLevel(agent.state.thinkingLevel);
 
             // Nothing worth persisting.

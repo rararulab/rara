@@ -14,24 +14,7 @@
  * limitations under the License.
  */
 
-import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { settingsApi } from '@/api/client';
-import type { SettingsMap } from '@/api/types';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   Bot,
   BookOpen,
@@ -53,6 +36,16 @@ import {
   Wifi,
   Radio,
 } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
+
+import { settingsApi } from '@/api/client';
+import { getBackendUrl, setBackendUrl } from '@/api/client';
+import type { SettingsMap } from '@/api/types';
+import DataFeedsPanel from '@/components/DataFeedsPanel';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -61,15 +54,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-
-import { cn } from '@/lib/utils';
-import { useTheme, type Theme } from '@/hooks/use-theme';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useServerStatus } from '@/hooks/use-server-status';
-import { getBackendUrl, setBackendUrl } from '@/api/client';
-import Skills from '@/pages/Skills';
+import { useTheme, type Theme } from '@/hooks/use-theme';
+import { cn } from '@/lib/utils';
 import Agents from '@/pages/Agents';
 import McpServers from '@/pages/McpServers';
-import DataFeedsPanel from '@/components/DataFeedsPanel';
+import Skills from '@/pages/Skills';
 
 /** Admin settings section identifiers. Exported so the floating modal can deep-link into a specific tab. */
 export type SettingsPage =
@@ -447,7 +447,7 @@ function ConnectionCard() {
             placeholder="http://localhost:25555"
             className="h-9 font-mono text-sm"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !saving) saveAndReconnect();
+              if (e.key === 'Enter' && !saving) void saveAndReconnect();
             }}
           />
           <Button onClick={saveAndReconnect} disabled={saving || !url.trim()} size="sm">
@@ -625,7 +625,7 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
       const next = { ...settingsQuery.data };
       // Preserve local edits for keys that haven't been saved yet
       for (const [k, v] of Object.entries(prev)) {
-        if (v !== (settingsQuery.data![k] ?? '') && v !== '') {
+        if (v !== (settingsQuery.data[k] ?? '') && v !== '') {
           next[k] = v;
         }
       }
@@ -667,7 +667,7 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
       return group;
     },
     onSuccess: (group) => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      void queryClient.invalidateQueries({ queryKey: ['settings'] });
       setGroupToasts((prev) => ({
         ...prev,
         [group]: { kind: 'success', message: 'Settings saved.' },
@@ -990,12 +990,12 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
                       <p
                         className={cn(
                           'text-sm',
-                          groupToasts['global-defaults']!.kind === 'success'
+                          groupToasts['global-defaults'].kind === 'success'
                             ? 'text-green-600'
                             : 'text-destructive',
                         )}
                       >
-                        {groupToasts['global-defaults']!.message}
+                        {groupToasts['global-defaults'].message}
                       </p>
                     )}
                   </div>
@@ -1066,7 +1066,7 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
                               await settingsApi.batchUpdate({
                                 [KEYS.LLM_DEFAULT_PROVIDER]: provider.id,
                               });
-                              queryClient.invalidateQueries({ queryKey: ['settings'] });
+                              await queryClient.invalidateQueries({ queryKey: ['settings'] });
                             }}
                           >
                             Set as default
@@ -1088,7 +1088,7 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
                                 keysToDelete[KEYS.LLM_DEFAULT_PROVIDER] = null;
                               }
                               await settingsApi.batchUpdate(keysToDelete);
-                              queryClient.invalidateQueries({ queryKey: ['settings'] });
+                              await queryClient.invalidateQueries({ queryKey: ['settings'] });
                             }}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -1136,12 +1136,12 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
                             <p
                               className={cn(
                                 'text-sm',
-                                groupToasts[groupId]!.kind === 'success'
+                                groupToasts[groupId].kind === 'success'
                                   ? 'text-green-600'
                                   : 'text-destructive',
                               )}
                             >
-                              {groupToasts[groupId]!.message}
+                              {groupToasts[groupId].message}
                             </p>
                           )}
                         </div>
@@ -1172,7 +1172,7 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
                   patch[`llm.providers.${name}.default_model`] = defaultModel;
                 }
                 await settingsApi.batchUpdate(patch);
-                queryClient.invalidateQueries({ queryKey: ['settings'] });
+                void queryClient.invalidateQueries({ queryKey: ['settings'] });
               }}
             />
           </>

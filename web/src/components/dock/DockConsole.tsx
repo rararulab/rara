@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { Button } from '@/components/ui/button';
 import type { DockStore } from '@/hooks/use-dock-store';
 
@@ -40,7 +41,7 @@ export default function DockConsole({ store }: DockConsoleProps) {
     if (!text || store.isRunning) return;
 
     const isCommand = text.startsWith(',');
-    store.sendMessage(text, isCommand);
+    void store.sendMessage(text, isCommand);
     setInput('');
   }, [input, store]);
 

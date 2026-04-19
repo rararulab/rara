@@ -15,11 +15,13 @@
  */
 
 import { MessageSquare, BookOpen, Clock } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import type { DockStore } from '@/hooks/use-dock-store';
+
 import DockAnnotations from './DockAnnotations';
 import DockFacts from './DockFacts';
 import DockTimeline from './DockTimeline';
+
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockSidebarProps {
   store: DockStore;

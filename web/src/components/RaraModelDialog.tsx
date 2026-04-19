@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { api } from '@/api/client';
+import type { ProviderInfo } from '@/api/types';
 import {
   Dialog,
   DialogContent,
@@ -24,8 +27,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { api } from '@/api/client';
-import type { ProviderInfo } from '@/api/types';
 
 /**
  * How long the in-memory provider catalog is considered fresh. Settings

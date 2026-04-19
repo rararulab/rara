@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
 
 /** Threshold beyond which string values are truncated. */
 const STRING_TRUNCATE_LEN = 200;

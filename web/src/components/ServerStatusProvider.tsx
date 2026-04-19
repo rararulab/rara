@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+import { onlineManager } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { onlineManager } from '@tanstack/react-query';
-import { ServerStatusContext } from '@/hooks/use-server-status';
+
 import { resolveUrl } from '@/api/client';
+import { ServerStatusContext } from '@/hooks/use-server-status';
 const CHECK_INTERVAL_MS = 10_000;
 const TIMEOUT_MS = 5_000;
 
@@ -50,8 +51,10 @@ export function ServerStatusProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    check();
-    const id = setInterval(check, CHECK_INTERVAL_MS);
+    void check();
+    const id = setInterval(() => {
+      void check();
+    }, CHECK_INTERVAL_MS);
 
     return () => {
       cancelled = true;

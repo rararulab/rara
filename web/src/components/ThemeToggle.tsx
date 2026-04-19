@@ -15,8 +15,9 @@
  */
 
 import { Monitor, Moon, Sun } from 'lucide-react';
-import { useTheme, type Theme } from '@/hooks/use-theme';
+
 import { Button } from '@/components/ui/button';
+import { useTheme, type Theme } from '@/hooks/use-theme';
 
 const ICON_MAP: Record<Theme, typeof Sun> = {
   light: Sun,

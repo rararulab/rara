@@ -15,6 +15,7 @@
  */
 
 import { CheckCircle2, Clock, Hash, Loader2, MessageSquare, Wrench, Zap } from 'lucide-react';
+
 import { MetadataChip } from './MetadataChip';
 
 export interface SessionHeaderProps {

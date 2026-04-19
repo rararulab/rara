@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Clock, History, CalendarClock } from 'lucide-react';
+import { useState } from 'react';
+
 import { api } from '@/api/client';
 import type { ScheduledTask, TaskRunRecord } from '@/api/types';
-import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
-import { Separator } from '@/components/ui/separator';
-import { Clock, History, CalendarClock } from 'lucide-react';
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '-';
@@ -113,14 +114,14 @@ function TaskCard({ task }: { task: ScheduledTask }) {
   const enableMutation = useMutation({
     mutationFn: () => api.post<ScheduledTask>(`/api/v1/scheduler/tasks/${task.id}/enable`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['scheduler', 'tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['scheduler', 'tasks'] });
     },
   });
 
   const disableMutation = useMutation({
     mutationFn: () => api.post<ScheduledTask>(`/api/v1/scheduler/tasks/${task.id}/disable`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['scheduler', 'tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['scheduler', 'tasks'] });
     },
   });
 

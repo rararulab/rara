@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { Sparkles } from 'lucide-react';
+
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { Button } from '@/components/ui/button';
 import {
@@ -24,7 +26,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Sparkles } from 'lucide-react';
 
 /** localStorage key — marks the user has dismissed onboarding */
 const ONBOARDING_DISMISSED_KEY = 'onboarding_dismissed';

@@ -14,25 +14,13 @@
  * limitations under the License.
  */
 
-import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Bot, Lock, Plus, Settings2, Trash2, FileText } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+
 import { fetchAgents, createAgent, deleteAgent } from '@/api/agents';
 import { settingsApi } from '@/api/client';
 import type { AgentResponse, CreateAgentRequest } from '@/api/types';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,6 +31,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -50,7 +50,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Bot, Lock, Plus, Settings2, Trash2, FileText } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 
 // ---------------------------------------------------------------------------
 // Role badge variant helper
@@ -134,7 +135,7 @@ function CreateAgentDialog({
       return createAgent(req);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
       setForm({ ...EMPTY_FORM });
       onOpenChange(false);
     },
@@ -260,7 +261,7 @@ function CreateAgentDialog({
             </Button>
           </DialogFooter>
           {mutation.isError && (
-            <p className="text-sm text-destructive">Error: {(mutation.error as Error).message}</p>
+            <p className="text-sm text-destructive">Error: {mutation.error.message}</p>
           )}
         </form>
       </DialogContent>
@@ -286,7 +287,7 @@ function DeleteAgentDialog({
   const mutation = useMutation({
     mutationFn: () => deleteAgent(agent.name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
       onOpenChange(false);
     },
   });
@@ -312,9 +313,7 @@ function DeleteAgentDialog({
           </AlertDialogAction>
         </AlertDialogFooter>
         {mutation.isError && (
-          <p className="text-sm text-destructive mt-2">
-            Error: {(mutation.error as Error).message}
-          </p>
+          <p className="text-sm text-destructive mt-2">Error: {mutation.error.message}</p>
         )}
       </AlertDialogContent>
     </AlertDialog>
@@ -448,7 +447,7 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      void queryClient.invalidateQueries({ queryKey: ['settings'] });
     },
   });
 
@@ -499,7 +498,7 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
           {saveMutation.isPending ? 'Saving...' : 'Save Changes'}
         </Button>
         {saveMutation.isError && (
-          <p className="text-sm text-destructive">Error: {(saveMutation.error as Error).message}</p>
+          <p className="text-sm text-destructive">Error: {saveMutation.error.message}</p>
         )}
       </div>
     </div>
@@ -653,7 +652,7 @@ export default function Agents() {
   // Auto-select first agent when list loads or selection becomes invalid
   useEffect(() => {
     if (sortedAgents.length > 0 && !sortedAgents.some((a) => a.name === selectedName)) {
-      setSelectedName(sortedAgents[0]!.name);
+      setSelectedName(sortedAgents[0].name);
     }
   }, [sortedAgents, selectedName]);
 
@@ -667,7 +666,7 @@ export default function Agents() {
     return (
       <div className="p-6">
         <div className="rounded-lg border border-destructive/50 p-4 text-sm text-destructive">
-          Failed to load agents: {(error as Error).message}
+          Failed to load agents: {error.message}
         </div>
       </div>
     );

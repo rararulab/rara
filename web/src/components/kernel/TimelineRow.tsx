@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-import { forwardRef, useState } from 'react';
 import { AlertCircle, Brain, ChevronRight } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import type { TimelineItem } from '@/api/kernel-types';
+import { forwardRef, useState } from 'react';
+
 import { KIND_PALETTE, eventLabel, eventSummary } from './timeline-colors';
+
+import type { TimelineItem } from '@/api/kernel-types';
+import { cn } from '@/lib/utils';
 
 const DETAIL_MAX_CHARS = 4000;
 

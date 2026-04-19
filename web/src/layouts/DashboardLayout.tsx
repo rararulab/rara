@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, LayoutDashboard, Settings } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useState } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router';
+
 import { settingsApi } from '@/api/client';
-import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
-import ThemeToggle from '@/components/ThemeToggle';
-import { useServerStatus } from '@/hooks/use-server-status';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import ThemeToggle from '@/components/ThemeToggle';
+import { Button } from '@/components/ui/button';
+import { useServerStatus } from '@/hooks/use-server-status';
+import { cn } from '@/lib/utils';
 
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);

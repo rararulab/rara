@@ -15,6 +15,7 @@
  */
 
 import { Activity, Clock, Cpu, Hash, Loader2, RefreshCw } from 'lucide-react';
+
 import { MetadataChip } from './MetadataChip';
 
 interface SystemStats {

@@ -15,9 +15,11 @@
  */
 
 import { useMemo } from 'react';
-import { cn } from '@/lib/utils';
-import type { EventKind, TimelineItem } from '@/api/kernel-types';
+
 import { KIND_PALETTE, eventLabel } from './timeline-colors';
+
+import type { EventKind, TimelineItem } from '@/api/kernel-types';
+import { cn } from '@/lib/utils';
 
 interface Segment {
   startIdx: number;
@@ -37,10 +39,10 @@ function buildSegments(items: TimelineItem[]): Segment[] {
   let start = 0;
   for (let i = 0; i < items.length; i++) {
     const prev = items[i - 1];
-    const curr = items[i]!;
+    const curr = items[i];
     const boundary = !prev || prev.kind !== curr.kind || prev.turn !== curr.turn;
     if (boundary && i !== 0) {
-      const head = items[start]!;
+      const head = items[start];
       segments.push({
         startIdx: start,
         endIdx: i - 1,
@@ -51,7 +53,7 @@ function buildSegments(items: TimelineItem[]): Segment[] {
     }
   }
   if (items.length > 0) {
-    const head = items[start]!;
+    const head = items[start];
     segments.push({
       startIdx: start,
       endIdx: items.length - 1,
@@ -94,7 +96,7 @@ export function TimelineBar({ items, selectedIdx, onSegmentClick }: TimelineBarP
         const isSelected =
           selectedIdx !== null && selectedIdx >= seg.startIdx && selectedIdx <= seg.endIdx;
         const palette = KIND_PALETTE[seg.kind];
-        const head = items[seg.startIdx]!;
+        const head = items[seg.startIdx];
         const widthPct = Math.max((seg.count / total) * 100, 0.5);
         const label = eventLabel(seg.kind, head.tool);
 

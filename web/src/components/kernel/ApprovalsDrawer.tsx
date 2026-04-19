@@ -16,7 +16,9 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { AlertCircle, ShieldCheck } from 'lucide-react';
+
 import { api } from '@/api/client';
+import { Badge } from '@/components/ui/badge';
 import {
   Sheet,
   SheetContent,
@@ -25,7 +27,6 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
 
 interface ApprovalRequest {
   id: string;

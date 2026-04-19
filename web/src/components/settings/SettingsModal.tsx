@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+
 import SettingsPanel, { type SettingsPage } from './SettingsPanel';
 
 interface SettingsModalProps {

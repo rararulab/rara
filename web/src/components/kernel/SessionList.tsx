@@ -15,8 +15,10 @@
  */
 
 import { Zap } from 'lucide-react';
-import { sessionGroup } from '@/api/kernel-types';
+
 import { SessionListItem } from './SessionListItem';
+
+import { sessionGroup } from '@/api/kernel-types';
 
 export interface SessionEntry {
   agent_id: string;

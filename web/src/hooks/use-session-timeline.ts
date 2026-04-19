@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
 import { api } from '@/api/client';
 import {
   isLiveState,
@@ -298,7 +299,7 @@ export function useSessionTimeline(
           // Trigger an immediate refetch so the just-completed turn
           // appears as historical items before we clear live rows.
           // This avoids a 5s blank/stale window after every turn.
-          refetchTurnsRef.current().then(() => setLiveItems([]));
+          void refetchTurnsRef.current().then(() => setLiveItems([]));
           break;
 
         default:
@@ -328,6 +329,8 @@ export function useSessionTimeline(
     turns,
     isLoading: turnsQuery.isLoading,
     isError: turnsQuery.isError,
-    refetch: turnsQuery.refetch,
+    refetch: () => {
+      void turnsQuery.refetch();
+    },
   };
 }

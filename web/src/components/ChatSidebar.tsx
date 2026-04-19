@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { useEffect, useState } from 'react';
 import { PanelLeftClose, PanelLeft, Plus, Settings, Trash2, MessageSquare } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useEffect, useState } from 'react';
+
 import { api } from '@/api/client';
 import type { ChatSession } from '@/api/types';
+import { cn } from '@/lib/utils';
 
 const COLLAPSED_STORAGE_KEY = 'rara.sidebar.collapsed';
 

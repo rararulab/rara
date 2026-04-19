@@ -14,37 +14,7 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/api/client';
-import type {
-  McpServerInfo,
-  McpToolView,
-  McpResourceView,
-  McpLogEntry,
-  CreateMcpServerRequest,
-} from '@/api/types';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   ChevronDown,
   ChevronRight,
@@ -60,6 +30,37 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+
+import { api } from '@/api/client';
+import type {
+  McpServerInfo,
+  McpToolView,
+  McpResourceView,
+  McpLogEntry,
+  CreateMcpServerRequest,
+} from '@/api/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 
 type ToastState = { kind: 'success' | 'error'; message: string } | null;
 
@@ -185,7 +186,7 @@ export default function McpServers() {
     mutationFn: (req: CreateMcpServerRequest) =>
       api.post<McpServerInfo>('/api/v1/mcp/servers', req),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       setDialogOpen(false);
       setForm({ ...EMPTY_FORM });
       showToast('success', 'Server added successfully.');
@@ -198,7 +199,7 @@ export default function McpServers() {
     mutationFn: ({ name, req }: { name: string; req: CreateMcpServerRequest }) =>
       api.put<McpServerInfo>(`/api/v1/mcp/servers/${name}`, req),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       setDialogOpen(false);
       setEditingServer(null);
       setForm({ ...EMPTY_FORM });
@@ -211,7 +212,7 @@ export default function McpServers() {
   const deleteMutation = useMutation({
     mutationFn: (name: string) => api.del<void>(`/api/v1/mcp/servers/${name}`),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       showToast('success', 'Server deleted.');
     },
     onError: (e: unknown) =>
@@ -221,7 +222,7 @@ export default function McpServers() {
   const startMutation = useMutation({
     mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/start`),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       showToast('success', 'Server started.');
     },
     onError: (e: unknown) =>
@@ -231,7 +232,7 @@ export default function McpServers() {
   const stopMutation = useMutation({
     mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/stop`),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       showToast('success', 'Server stopped.');
     },
     onError: (e: unknown) =>
@@ -241,7 +242,7 @@ export default function McpServers() {
   const restartMutation = useMutation({
     mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/restart`),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       showToast('success', 'Server restarted.');
     },
     onError: (e: unknown) =>
@@ -251,7 +252,7 @@ export default function McpServers() {
   const enableMutation = useMutation({
     mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/enable`),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       showToast('success', 'Server enabled.');
     },
     onError: (e: unknown) =>
@@ -261,7 +262,7 @@ export default function McpServers() {
   const disableMutation = useMutation({
     mutationFn: (name: string) => api.post<void>(`/api/v1/mcp/servers/${name}/disable`),
     onSuccess: () => {
-      invalidate();
+      void invalidate();
       showToast('success', 'Server disabled.');
     },
     onError: (e: unknown) =>

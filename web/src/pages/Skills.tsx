@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Trash2, Code, ExternalLink, CheckCircle, XCircle } from 'lucide-react';
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+
 import { listSkills, getSkill, createSkill, deleteSkill } from '@/api/skills';
 import type { SkillSummary, CreateSkillRequest } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Separator } from '@/components/ui/separator';
 import {
   Dialog,
   DialogContent,
@@ -34,8 +34,9 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Trash2, Code, ExternalLink, CheckCircle, XCircle } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Skill Form Dialog (create only)
@@ -79,7 +80,7 @@ function SkillFormDialog({
       return createSkill(req);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      void queryClient.invalidateQueries({ queryKey: ['skills'] });
       onOpenChange(false);
     },
   });
@@ -154,7 +155,7 @@ function SkillFormDialog({
             </Button>
           </DialogFooter>
           {mutation.isError && (
-            <p className="text-sm text-destructive">Error: {(mutation.error as Error).message}</p>
+            <p className="text-sm text-destructive">Error: {mutation.error.message}</p>
           )}
         </form>
       </DialogContent>
@@ -180,7 +181,7 @@ function DeleteDialog({
   const mutation = useMutation({
     mutationFn: () => deleteSkill(skill.name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      void queryClient.invalidateQueries({ queryKey: ['skills'] });
       onOpenChange(false);
     },
   });
@@ -208,9 +209,7 @@ function DeleteDialog({
           </Button>
         </DialogFooter>
         {mutation.isError && (
-          <p className="text-sm text-destructive mt-2">
-            Error: {(mutation.error as Error).message}
-          </p>
+          <p className="text-sm text-destructive mt-2">Error: {mutation.error.message}</p>
         )}
       </DialogContent>
     </Dialog>
@@ -372,7 +371,7 @@ export default function Skills() {
 
       {isError && (
         <div className="rounded-lg border border-destructive/50 p-4 text-sm text-destructive">
-          Failed to load skills: {(error as Error).message}
+          Failed to load skills: {error.message}
         </div>
       )}
 

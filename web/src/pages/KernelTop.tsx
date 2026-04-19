@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ShieldCheck, Zap } from 'lucide-react';
+import { useState } from 'react';
+
 import { api } from '@/api/client';
-import { KernelStatsBar } from '@/components/kernel/KernelStatsBar';
-import { SessionList } from '@/components/kernel/SessionList';
-import { SessionDetail } from '@/components/kernel/SessionDetail';
 import { ApprovalsDrawer } from '@/components/kernel/ApprovalsDrawer';
+import { KernelStatsBar } from '@/components/kernel/KernelStatsBar';
+import { SessionDetail } from '@/components/kernel/SessionDetail';
+import { SessionList } from '@/components/kernel/SessionList';
 import { Badge } from '@/components/ui/badge';
 
 // ---------------------------------------------------------------------------
@@ -102,9 +103,9 @@ export default function KernelTop() {
   const selectedStats = sessions.find((s) => s.agent_id === selectedSession);
 
   const handleRefresh = () => {
-    statsQuery.refetch();
-    sessionsQuery.refetch();
-    approvalsQuery.refetch();
+    void statsQuery.refetch();
+    void sessionsQuery.refetch();
+    void approvalsQuery.refetch();
   };
 
   return (

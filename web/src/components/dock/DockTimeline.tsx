@@ -15,8 +15,9 @@
  */
 
 import { Clock } from 'lucide-react';
-import { cn } from '@/lib/utils';
+
 import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockTimelineProps {
   store: DockStore;

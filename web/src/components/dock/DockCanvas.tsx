@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, Plus } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import type { DockStore } from '@/hooks/use-dock-store';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
 import DockBlockRenderer from './DockBlockRenderer';
+
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockCanvasProps {
   store: DockStore;

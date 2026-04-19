@@ -9,6 +9,7 @@
  */
 
 import { useState, useRef, useCallback } from 'react';
+
 import { buildWsUrl } from '@/adapters/rara-stream';
 
 type VoiceRecorderProps = {
@@ -155,7 +156,7 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
     if (recording) {
       stopRecording();
     } else {
-      startRecording();
+      void startRecording();
     }
   }, [recording, startRecording, stopRecording]);
 

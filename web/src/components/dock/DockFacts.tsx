@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { BookOpenCheck, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
 import { Button } from '@/components/ui/button';
 import type { DockStore } from '@/hooks/use-dock-store';
 

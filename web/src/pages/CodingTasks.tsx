@@ -14,30 +14,7 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/api/client';
-import type {
-  CodingTaskSummary,
-  CodingTaskDetail,
-  CreateCodingTaskRequest,
-  CodingTaskStatus,
-} from '@/api/types';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   Plus,
   RefreshCw,
@@ -50,6 +27,30 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
+import { useState } from 'react';
+
+import { api } from '@/api/client';
+import type {
+  CodingTaskSummary,
+  CodingTaskDetail,
+  CreateCodingTaskRequest,
+  CodingTaskStatus,
+} from '@/api/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 
 const STATUS_CONFIG: Record<CodingTaskStatus, { label: string; variant: string; emoji: string }> = {
   Pending: { label: 'Pending', variant: 'bg-gray-100 text-gray-700', emoji: '\u23F3' },
@@ -124,7 +125,7 @@ export default function CodingTasks() {
       {isLoading && <TaskListSkeleton />}
       {isError && (
         <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-          Failed to load tasks: {(error as Error)?.message ?? 'Unknown error'}
+          Failed to load tasks: {error?.message ?? 'Unknown error'}
         </div>
       )}
 
@@ -221,16 +222,16 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
   const mergeMutation = useMutation({
     mutationFn: () => api.post(`/api/v1/coding-tasks/${taskId}/merge`, {}),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
     },
   });
 
   const cancelMutation = useMutation({
     mutationFn: () => api.post(`/api/v1/coding-tasks/${taskId}/cancel`, {}),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
     },
   });
 
@@ -351,7 +352,7 @@ function CreateTaskDialog({
     mutationFn: (data: CreateCodingTaskRequest) =>
       api.post<CodingTaskDetail>('/api/v1/coding-tasks', data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
       onOpenChange(false);
       setPrompt('');
       setRepoUrl('');

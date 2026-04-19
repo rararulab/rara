@@ -24,6 +24,7 @@
  */
 
 import { BashRenderer, registerToolRenderer } from '@mariozechner/pi-web-ui';
+
 import { CompactToolRenderer } from './CompactToolRenderer';
 
 /**
