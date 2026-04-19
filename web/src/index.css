@@ -315,9 +315,7 @@
  * first message flips us out of welcome mode.
  */
 .rara-chat[data-welcome="true"] agent-interface .flex-col.bg-background > *:last-child,
-.rara-chat[data-welcome="true"] > button[title*="Record" i],
-.rara-chat[data-welcome="true"] > button[title*="recording" i],
-.rara-chat[data-welcome="true"] > button[title*="Sending" i] {
+.rara-chat[data-welcome="true"] .voice-float {
   /* Lifts the composer centre close to viewport centre. Natural bottom
      is ~8-10rem from the edge (padding + composer body), so ~40vh up
      lands the centre near 50vh with some headroom for the wordmark. */
@@ -325,9 +323,7 @@
   transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .rara-chat agent-interface .flex-col.bg-background > *:last-child,
-.rara-chat > button[title*="Record" i],
-.rara-chat > button[title*="recording" i],
-.rara-chat > button[title*="Sending" i] {
+.rara-chat .voice-float {
   transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
