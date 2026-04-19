@@ -15,7 +15,7 @@
  */
 
 import { forwardRef, useState } from "react";
-import { AlertCircle, Brain, ChevronRight } from "lucide-react";
+import { AlertCircle, Brain, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TimelineItem } from "@/api/kernel-types";
 import { KIND_PALETTE, eventLabel, eventSummary } from "./timeline-colors";
@@ -64,6 +64,9 @@ export const TimelineRow = forwardRef<HTMLDivElement, TimelineRowProps>(
           >
             {item.kind === "thinking" && (
               <Brain className="mr-1 h-3 w-3 shrink-0" />
+            )}
+            {item.kind === "in_progress" && (
+              <Loader2 className="mr-1 h-3 w-3 shrink-0 animate-spin" />
             )}
             {item.kind === "error" && (
               <AlertCircle className="mr-1 h-3 w-3 shrink-0" />
@@ -144,6 +147,9 @@ function rowHasDetail(item: TimelineItem): boolean {
       return !!item.content && item.content.length > 0;
     case "agent":
       return !!item.content && item.content.split("\n").length > 1;
+    case "in_progress":
+      // Placeholder is purely decorative — never expandable.
+      return false;
   }
 }
 
@@ -174,6 +180,9 @@ function RowDetail({ item }: { item: TimelineItem }) {
           {item.content ?? ""}
         </pre>
       );
+    case "in_progress":
+      // Never rendered — `rowHasDetail` returns false for this kind.
+      return null;
   }
 }
 

@@ -24,6 +24,7 @@ import {
   type TimelineItem,
   type TurnTrace,
 } from "@/api/kernel-types";
+import { randomLoadingHint } from "./loading-hints";
 
 const TURNS_REFETCH_MS = 5_000;
 
@@ -110,6 +111,20 @@ export function useSessionTimeline(
     let currentThinkSeq: number | null = null;
     const toolSeqById = new Map<string, number>();
 
+    // Placeholder "thinking…" row inserted as soon as the WS opens so the
+    // user gets immediate feedback while the kernel is bootstrapping the
+    // turn (LLM dispatch can take 2-30s for cold runs). Cleared on the
+    // first real delta/tool call, on `done`, or when the WS closes.
+    let placeholderSeq: number | null = null;
+    const clearPlaceholder = () => {
+      if (placeholderSeq === null) return;
+      const target = placeholderSeq;
+      placeholderSeq = null;
+      setLiveItems((prev) =>
+        prev.filter((it) => !(it.seq === target && it.kind === "in_progress")),
+      );
+    };
+
     // Live events belong to the turn after the last one already recorded.
     // Captured at WS-open time; not refreshed mid-stream. `done` clears
     // live state, so drift between this value and turnsQuery is bounded.
@@ -117,7 +132,17 @@ export function useSessionTimeline(
 
     ws.onopen = () => {
       setIsStreaming(true);
-      setLiveItems([]);
+      const seq = nextSeq();
+      placeholderSeq = seq;
+      setLiveItems([
+        {
+          seq,
+          turn: liveTurnIdx,
+          kind: "in_progress",
+          content: randomLoadingHint(),
+          streaming: true,
+        },
+      ]);
     };
 
     ws.onmessage = (ev) => {
@@ -132,6 +157,7 @@ export function useSessionTimeline(
         case "text_delta": {
           const delta = (event as { text?: string }).text ?? "";
           if (!delta) break;
+          clearPlaceholder();
           setLiveItems((prev) => {
             if (currentTextSeq !== null) {
               const target = currentTextSeq;
@@ -160,6 +186,7 @@ export function useSessionTimeline(
         case "reasoning_delta": {
           const delta = (event as { text?: string }).text ?? "";
           if (!delta) break;
+          clearPlaceholder();
           setLiveItems((prev) => {
             if (currentThinkSeq !== null) {
               const target = currentThinkSeq;
@@ -199,6 +226,7 @@ export function useSessionTimeline(
         }
 
         case "tool_call_start": {
+          clearPlaceholder();
           const e = event as {
             name: string;
             id: string;
@@ -298,6 +326,11 @@ export function useSessionTimeline(
 
         case "done":
           setIsStreaming(false);
+          // Drop the placeholder unconditionally — turns that produced
+          // zero deltas (e.g. a tool-only turn that errored before any
+          // streaming) would otherwise leave the spinner row hanging
+          // until the historical refetch overwrote `liveItems`.
+          clearPlaceholder();
           // Trigger an immediate refetch so the just-completed turn
           // appears as historical items before we clear live rows.
           // This avoids a 5s blank/stale window after every turn.
@@ -311,8 +344,14 @@ export function useSessionTimeline(
       }
     };
 
-    ws.onclose = () => setIsStreaming(false);
-    ws.onerror = () => setIsStreaming(false);
+    ws.onclose = () => {
+      setIsStreaming(false);
+      clearPlaceholder();
+    };
+    ws.onerror = () => {
+      setIsStreaming(false);
+      clearPlaceholder();
+    };
 
     return () => {
       ws.close();
