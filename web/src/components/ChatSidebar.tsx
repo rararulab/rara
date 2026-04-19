@@ -200,34 +200,30 @@ export function ChatSidebar({
               sessions.map((s) => (
                 <div
                   key={s.key}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelect(s)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onSelect(s);
-                    }
-                  }}
                   className={cn(
-                    'group mx-2 flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                    'group mx-2 flex items-start gap-2 rounded-md text-sm transition-colors',
                     s.key === activeSessionKey
                       ? 'bg-secondary/70 text-foreground'
                       : 'text-foreground/80 hover:bg-secondary/50 hover:text-foreground',
                   )}
                 >
-                  <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(s)}
+                    className="min-w-0 flex-1 cursor-pointer text-left px-2 py-1.5 bg-transparent"
+                  >
                     <div className="truncate text-[13px] leading-tight">
                       {stripForPreview(s.title || s.preview || '新对话')}
                     </div>
                     <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
                       {formatRelativeDate(s.updated_at)}
                     </div>
-                  </div>
+                  </button>
                   <button
                     type="button"
                     onClick={(e) => handleDelete(s.key, e)}
-                    className="shrink-0 rounded p-1 text-muted-foreground/0 transition-[color,opacity] hover:bg-destructive/10 hover:text-destructive group-hover:text-muted-foreground group-hover:opacity-100"
+                    aria-label={`删除 ${s.title ?? '会话'}`}
+                    className="shrink-0 rounded p-1 mr-1 mt-1 text-muted-foreground/0 transition-[color,opacity] hover:bg-destructive/10 hover:text-destructive group-hover:text-muted-foreground group-hover:opacity-100"
                     title="删除"
                   >
                     <Trash2 className="h-3 w-3" />

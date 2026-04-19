@@ -76,8 +76,10 @@ describe('ChatSidebar', () => {
     // Wait for the async list to load.
     await waitFor(() => expect(screen.getByText('Beta')).toBeInTheDocument());
 
-    const alphaRow = screen.getByText('Alpha').closest('[role="button"]');
-    const betaRow = screen.getByText('Beta').closest('[role="button"]');
+    // Each session row renders inside a group container; walk up to the
+    // outer `group` div which carries the active-highlight class.
+    const alphaRow = screen.getByText('Alpha').closest('.group');
+    const betaRow = screen.getByText('Beta').closest('.group');
 
     // The active row carries the selected surface color; the inactive
     // row keeps the hover-only style. We assert on the distinctive
@@ -105,7 +107,7 @@ describe('ChatSidebar', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
-    const row = screen.getByText('Alpha').closest('[role="button"]');
+    const row = screen.getByText('Alpha').closest('.group');
     expect(row?.className).not.toContain('bg-secondary/70');
   });
 });
