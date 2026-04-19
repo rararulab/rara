@@ -19,13 +19,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatSession } from '@/api/types';
 
+// Pinned so `formatRelativeDate` output stays stable across day/hour
+// boundaries — otherwise CI occasionally flips between e.g. "1 hour
+// ago" and "2 hours ago" and flakes the snapshot.
+const FIXED_ISO = '2025-06-15T12:00:00Z';
+
 // Minimal stub sessions — enough fields to render the history list.
 const sessionFixture = (key: string, title: string): ChatSession => ({
   key,
   title,
   preview: '',
-  updated_at: new Date().toISOString(),
-  created_at: new Date().toISOString(),
+  updated_at: FIXED_ISO,
+  created_at: FIXED_ISO,
   message_count: 1,
   model_provider: null,
   model: null,
