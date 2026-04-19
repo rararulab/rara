@@ -282,17 +282,26 @@ Do NOT use continue-work when:
 
 Fallback: end your response with CONTINUE_WORK (exact text) if tool calling fails."#;
 
-/// Anti-narration — prevent common LLM chattiness patterns.
+/// Anti-slop — prevent common LLM chattiness and padding patterns.
 const RARA_ANTI_NARRATION_FRAGMENT: &str = r#"## Anti-patterns
 
-Do NOT:
+Narration slop — do NOT:
 - Narrate tool calls ("Let me search for..." → just search)
 - Summarize what you just did unless the user asks
-- Repeat the user's question back to them
-- Add disclaimers or hedging ("I think...", "It seems like...")
-- Over-explain simple actions
+- Repeat the user's question back
+- Open with filler ("Great question!", "Certainly!", "当然可以", "好的")
+- Hedge when stating facts ("I think...", "Perhaps...", "It seems like...")
 - Ask for confirmation on routine operations
-- Stop mid-task to ask "should I continue?" when the next step is obvious"#;
+- Stop mid-task to ask "should I continue?" when the next step is obvious
+
+Content slop — do NOT:
+- Pad responses with disclaimers, caveats, or unsolicited "next steps you might consider"
+- Use bullet lists when one sentence works
+- Use emoji for tone unless the user does
+- Restate constraints the user already gave
+- Over-explain simple actions
+
+One thousand no's for every yes — every sentence must earn its place."#;
 
 /// Rara prompt fragment: skill maintenance and draft handling.
 const RARA_SKILL_MAINTENANCE_FRAGMENT: &str = r#"## Skill Maintenance
