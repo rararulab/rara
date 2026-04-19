@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult, StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -29,6 +29,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { calculateCost, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import type { Attachment } from "@mariozechner/pi-web-ui";
 
 import { BASE_URL } from "@/api/client";
@@ -245,6 +246,68 @@ function extractUserPayload(
 }
 
 // ---------------------------------------------------------------------------
+// Kernel-authoritative tool results
+//
+// The rara backend runs its own agent loop in Rust — when the LLM emits
+// tool calls we receive `tool_call_start` followed by `tool_call_end`
+// carrying the real result. pi-agent-core, however, has its own frontend
+// loop (`agent-loop.js`) that inspects the final assistant message for
+// `toolCall` blocks and, finding none of our tools in `context.tools`,
+// synthesises `Tool ${name} not found` error results that stomp the real
+// kernel output (see issue #1601).
+//
+// The fix is to hand pi-agent-core `AgentTool` entries whose `execute`
+// function *awaits* the kernel's already-dispatched result. Each
+// `tool_call_start` seeds a pending entry; the matching `tool_call_end`
+// resolves it; the pi-agent-core loop then treats our relay as the
+// authoritative executor and threads the real result back into the
+// message list under the correct `toolCallId`.
+// ---------------------------------------------------------------------------
+
+/** Pending result slot awaiting the matching `tool_call_end` frame. */
+interface PendingToolResult {
+  promise:  Promise<AgentToolResult<unknown>>;
+  resolve:  (result: AgentToolResult<unknown>) => void;
+  reject:   (error: Error) => void;
+  /** Cached after resolution so late `execute()` calls still get a value. */
+  resolved: AgentToolResult<unknown> | null;
+}
+
+/** Shared promise schema exposed by pi-ai's TypeBox parameters. */
+const OPAQUE_PARAMETERS = Type.Record(Type.String(), Type.Unknown());
+
+/**
+ * Build an `AgentTool` shim whose `execute` resolves from the kernel's
+ * `tool_call_end` payload tracked in {@link pending}. The shim is
+ * installed into `context.tools` on demand so pi-agent-core's loop finds
+ * it by name and never falls back to the `Tool ${name} not found` path.
+ */
+function makeRelayTool(
+  name: string,
+  pending: Map<string, PendingToolResult>,
+): AgentTool {
+  return {
+    name,
+    label: name,
+    description: `Kernel-executed tool ${name}. Results are relayed by rara-stream.`,
+    parameters: OPAQUE_PARAMETERS,
+    execute: async (toolCallId) => {
+      const slot = pending.get(toolCallId);
+      if (!slot) {
+        // Defensive: the `tool_call_start` frame should always arrive
+        // before pi-agent-core reaches the execute step, but if the
+        // stream ends abnormally we surface a clear diagnostic instead
+        // of hanging the loop forever.
+        throw new Error(
+          `No kernel result registered for tool call ${toolCallId} (${name})`,
+        );
+      }
+      return slot.promise;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Stream function factory
 // ---------------------------------------------------------------------------
 
@@ -290,6 +353,20 @@ export function createRaraStreamFn(
 
     // Accumulated content blocks for building partial messages
     const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+    // Per-turn registry of kernel-authoritative tool results keyed by
+    // `toolCallId`. The companion `AgentTool` shims installed into
+    // `context.tools` await these promises so pi-agent-core's loop
+    // threads the real result through without the "Tool X not found"
+    // fallback (see #1601).
+    const pendingToolResults = new Map<string, PendingToolResult>();
+    // Deduplicate shim installation — one `AgentTool` per distinct name.
+    const installedTools = new Set<string>();
+    // Ensure `context.tools` is an array we can mutate in place so the
+    // shims are visible when pi-agent-core's loop reads `currentContext.tools`
+    // after this stream ends.
+    if (!context.tools) context.tools = [];
+    const contextTools = context.tools;
+    const installedNamesFromContext = new Set(contextTools.map((t) => t.name));
     // Running usage — starts empty, replaced when the backend emits its
     // final `usage` event. Cost is computed against the session model's
     // pricing table so per-session model overrides are honoured.
@@ -400,6 +477,28 @@ export function createRaraStreamFn(
             };
             content.push(toolCall);
             const idx = content.length - 1;
+            // Register the pending result slot BEFORE pi-agent-core's
+            // post-stream loop looks up executors. Also install a shim
+            // entry in `context.tools` so the lookup resolves.
+            let resolveFn: (value: AgentToolResult<unknown>) => void = () => {};
+            let rejectFn: (err: Error) => void = () => {};
+            const promise = new Promise<AgentToolResult<unknown>>((res, rej) => {
+              resolveFn = res;
+              rejectFn = rej;
+            });
+            pendingToolResults.set(event.id, {
+              promise,
+              resolve:  resolveFn,
+              reject:   rejectFn,
+              resolved: null,
+            });
+            if (
+              !installedTools.has(event.name) &&
+              !installedNamesFromContext.has(event.name)
+            ) {
+              contextTools.push(makeRelayTool(event.name, pendingToolResults));
+              installedTools.add(event.name);
+            }
             safePush({
               type: "toolcall_start",
               contentIndex: idx,
@@ -420,6 +519,25 @@ export function createRaraStreamFn(
                 toolCall,
                 partial: buildPartial(model, content, currentUsage),
               });
+            }
+            // Resolve the pending slot with the kernel's authoritative
+            // result so the relay `AgentTool.execute` returns the real
+            // text content (or a structured error) to pi-agent-core's
+            // loop. `result_preview` is the backend-truncated form of
+            // the tool output — good enough for UI rendering, which is
+            // the only consumer (pi-agent-core feeds it back into the
+            // message list as a `toolResult` message; the LLM never
+            // sees this client-side copy, the server re-injects the
+            // untruncated version on the next turn via tape memory).
+            const slot = pendingToolResults.get(event.id);
+            if (slot) {
+              const text = event.error ?? event.result_preview;
+              const result: AgentToolResult<unknown> = {
+                content: [{ type: "text", text }],
+                details: {},
+              };
+              slot.resolved = result;
+              slot.resolve(result);
             }
             break;
           }
@@ -493,6 +611,7 @@ export function createRaraStreamFn(
         errorMsg.errorMessage = "WebSocket connection error";
         safePush({ type: "error", reason: "error", error: errorMsg });
         safeEnd(errorMsg);
+        rejectPendingToolResults(pendingToolResults, "WebSocket connection error");
       };
 
       ws.onclose = () => {
@@ -508,6 +627,10 @@ export function createRaraStreamFn(
           }
           safeEnd(finalMsg);
         }
+        rejectPendingToolResults(
+          pendingToolResults,
+          "WebSocket closed before tool result",
+        );
       };
     } catch (err) {
       const errorMsg = buildPartial(model, content, currentUsage);
@@ -520,6 +643,20 @@ export function createRaraStreamFn(
 
     return stream;
   };
+}
+
+/**
+ * Fail any tool-result promises the kernel never finished. Called from
+ * `ws.onerror` / `ws.onclose` so pi-agent-core's loop sees a concrete
+ * rejection rather than hanging on an abandoned `tool_call_start`.
+ */
+function rejectPendingToolResults(
+  pending: Map<string, PendingToolResult>,
+  reason: string,
+): void {
+  for (const slot of pending.values()) {
+    if (slot.resolved === null) slot.reject(new Error(reason));
+  }
 }
 
 /**
