@@ -252,6 +252,33 @@
  * in `@layer components {}` (as the first attempt did) made it invisible.
  */
 /*
+ * Avatar for Rara's assistant messages. Pi-web-ui renders each reply as
+ * a bare `<assistant-message>` custom element with no visual marker for
+ * who is speaking; a small round portrait on the left gives the reply
+ * an identity. Served from `web/public/rara.png` (see issue #1585) so
+ * the URL stays stable across deploys. A thin info-blue ring echoes
+ * the user-bubble glass palette so the two participants read as one
+ * coherent design.
+ */
+.rara-chat assistant-message {
+  display: block;
+  position: relative;
+  padding-left: 2.75rem;
+  min-height: 2rem;
+}
+.rara-chat assistant-message::before {
+  content: "";
+  position: absolute;
+  left: 0.75rem;
+  top: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  background: url("/rara.png") center / cover;
+  box-shadow: 0 0 0 2px color-mix(in oklab, oklch(0.62 0.18 250) 30%, transparent);
+}
+
+/*
  * Pi-web-ui left-aligns user messages (`class="flex justify-start"`
  * on the bubble's parent). Flip to the right side — the standard
  * chat convention of "my messages on the right". `:has()` gives us a
@@ -288,9 +315,7 @@
  * first message flips us out of welcome mode.
  */
 .rara-chat[data-welcome="true"] agent-interface .flex-col.bg-background > *:last-child,
-.rara-chat[data-welcome="true"] > button[title*="Record" i],
-.rara-chat[data-welcome="true"] > button[title*="recording" i],
-.rara-chat[data-welcome="true"] > button[title*="Sending" i] {
+.rara-chat[data-welcome="true"] .voice-float {
   /* Lifts the composer centre close to viewport centre. Natural bottom
      is ~8-10rem from the edge (padding + composer body), so ~40vh up
      lands the centre near 50vh with some headroom for the wordmark. */
@@ -298,13 +323,50 @@
   transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .rara-chat agent-interface .flex-col.bg-background > *:last-child,
-.rara-chat > button[title*="Record" i],
-.rara-chat > button[title*="recording" i],
-.rara-chat > button[title*="Sending" i] {
+.rara-chat .voice-float {
   transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
+/*
+ * Cap the composer width and centre it so a wide viewport doesn't
+ * stretch the input into an uncomfortably long strip. `max-width` +
+ * auto margins on the composer row; message list gets the same cap
+ * so replies line up with the composer below rather than drifting
+ * past its right edge.
+ */
+.rara-chat agent-interface .flex-col.bg-background > *:last-child {
+  max-width: 48rem;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+/*
+ * No cap on `user-message` / `assistant-message` themselves — pi-web-ui
+ * already wraps the list in `.max-w-3xl mx-auto p-4 pb-0` (48rem
+ * centred), and re-applying `max-width + margin: auto` here collapses
+ * short user bubbles to content-width and recentres them, defeating
+ * the right-alignment we want for "my messages".
+ */
+
+/*
+ * Voice button horizontal alignment. Paperclip sits at ~17px inside
+ * the composer's left edge; when the composer is capped at 48rem and
+ * centred, that edge is at `50% - 24rem`. `max()` clamps the voice
+ * button to 17px on narrow viewports where the composer fills the
+ * full width and the calc would go negative.
+ */
+.rara-chat .voice-float {
+  /* 17px inside-composer padding + 32px paperclip width + 8px gap. */
+  left: max(57px, calc(50% - 24rem + 57px));
+}
+
 .user-message-container {
+  /* Content-size the bubble so justify-end actually pushes it right.
+     In a flex container `display: block` resolves to "stretch" along
+     the main axis, which was making short user messages span the full
+     column width. */
+  width: fit-content;
+  max-width: 80%;
   background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
   border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);
   /* `sm` in tailwind ≈ 4px; overrides pi-web-ui's heavier blur(10px). */
