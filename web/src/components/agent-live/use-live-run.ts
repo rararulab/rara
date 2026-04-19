@@ -19,6 +19,15 @@ import { useSyncExternalStore } from 'react';
 import { liveRunStore, type SessionSlice } from './live-run-store';
 
 /**
+ * Stable empty slice returned when no session key is set. `useSyncExternalStore`
+ * bails out of re-rendering only when `getSnapshot` returns a referentially
+ * equal value, so we MUST NOT construct a fresh `{ active: null, history: [] }`
+ * on every call — that produced React error #185 (maximum update depth
+ * exceeded) at the welcome screen, where `sessionKey` is briefly undefined.
+ */
+const EMPTY_SLICE: SessionSlice = { active: null, history: [] };
+
+/**
  * Subscribe to the {@link liveRunStore} slice for a given session key.
  * Returns the current snapshot; re-renders on every publish.
  */
@@ -28,6 +37,6 @@ export function useLiveRun(sessionKey: string | undefined): SessionSlice {
     return liveRunStore.subscribe(sessionKey, listener);
   };
   const getSnapshot = (): SessionSlice =>
-    sessionKey ? liveRunStore.snapshot(sessionKey) : { active: null, history: [] };
+    sessionKey ? liveRunStore.snapshot(sessionKey) : EMPTY_SLICE;
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
