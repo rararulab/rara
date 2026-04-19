@@ -63,6 +63,7 @@ import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
+import { decidePostDeleteAction } from '@/lib/session-fallback';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
 
@@ -730,17 +731,23 @@ export default function PiChat() {
   /** Handle session deletion from the sidebar. */
   const handleSessionDeleted = useCallback(
     (deletedKey: string, fallback: ChatSession | null) => {
-      // Leave the user on whatever they were viewing when an
-      // unrelated row was deleted.
-      if (activeSession?.key !== deletedKey) return;
-      // Deleted the active session: switch into the sidebar's next
-      // neighbour. Only spin up a brand-new chat when the whole
-      // history is gone, otherwise we'd trap the user in an
-      // "auto-regenerated empty session" loop.
-      if (fallback) {
-        void switchSession(fallback);
-      } else {
-        void newSession();
+      // Delegated to a pure decision helper so the "don't
+      // regenerate a session while neighbours still exist"
+      // invariant is covered by a unit test.
+      const action = decidePostDeleteAction({
+        activeSessionKey: activeSession?.key,
+        deletedKey,
+        fallback,
+      });
+      switch (action.kind) {
+        case 'noop':
+          return;
+        case 'switch':
+          void switchSession(action.session);
+          return;
+        case 'create-new':
+          void newSession();
+          return;
       }
     },
     [activeSession, newSession, switchSession],

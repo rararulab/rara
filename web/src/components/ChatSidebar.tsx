@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 
 import { api } from '@/api/client';
 import type { ChatSession } from '@/api/types';
+import { pickSessionFallback } from '@/lib/session-fallback';
 import { cn } from '@/lib/utils';
 
 const COLLAPSED_STORAGE_KEY = 'rara.sidebar.collapsed';
@@ -113,8 +114,7 @@ export function ChatSidebar({
       // Pick the neighbour *before* the list mutation so the
       // parent can switch into a still-cached row rather than
       // spinning up a fresh session.
-      const idx = sessions.findIndex((s) => s.key === key);
-      const fallback = idx >= 0 ? (sessions[idx + 1] ?? sessions[idx - 1] ?? null) : null;
+      const fallback = pickSessionFallback(sessions, key);
       setSessions((prev) => prev.filter((s) => s.key !== key));
       onDeleteSession(key, fallback);
     } catch {
