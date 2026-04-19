@@ -66,11 +66,24 @@ export interface TurnTrace {
 }
 
 /**
+ * Structured per-step status carried by `plan_progress` events.
+ *
+ * Mirrors `rara_kernel::io::PlanStepStatus` (snake_case serde tag).
+ * `failed` / `needs_replan` carry a human-readable reason that the UI
+ * surfaces on the corresponding step row.
+ */
+export type PlanStepStatusEvent =
+  | "running"
+  | "done"
+  | { failed: { reason: string } }
+  | { needs_replan: { reason: string } };
+
+/**
  * Narrow subset of kernel `StreamEvent` the UI consumes today.
  *
- * The kernel emits more variants (PlanCreated, UsageUpdate,
- * BackgroundTaskStarted, etc.); we parse defensively — unknown variants
- * are ignored by the hook.
+ * The kernel emits more variants (UsageUpdate, BackgroundTaskStarted,
+ * etc.); we parse defensively — unknown variants are ignored by the
+ * hook.
  */
 export type StreamEvent =
   | { type: "text_delta"; text: string }
@@ -96,6 +109,22 @@ export type StreamEvent =
       model: string;
       rara_message_id: string;
     }
+  | {
+      type: "plan_created";
+      goal: string;
+      total_steps: number;
+      compact_summary: string;
+      estimated_duration_secs: number | null;
+    }
+  | {
+      type: "plan_progress";
+      current_step: number;
+      total_steps: number;
+      step_status: PlanStepStatusEvent;
+      status_text: string;
+    }
+  | { type: "plan_replan"; reason: string }
+  | { type: "plan_completed"; summary: string }
   | { type: "done" }
   | { type: string; [k: string]: unknown };
 
@@ -117,7 +146,48 @@ export type EventKind =
    * the first real delta / tool call arrives, or when the turn ends.
    * Never appears in historical turn projections.
    */
-  | "in_progress";
+  | "in_progress"
+  /**
+   * Live-only multi-step plan progress widget. Created on the first
+   * `plan_created` event and mutated in place by `plan_progress` /
+   * `plan_replan` / `plan_completed`. Self-contained — renders its own
+   * step list rather than going through the standard row layout.
+   */
+  | "plan_card";
+
+/** Per-step status for the live `plan_card` row. */
+export type PlanStepUiStatus =
+  | "pending"
+  | "running"
+  | "done"
+  | "failed"
+  | "needs_replan";
+
+/** Single step within a plan card row. */
+export interface PlanStep {
+  /** 1-based step number for display (matches kernel's `current_step + 1`). */
+  index: number;
+  /** Free-form task description, parsed from the event's `status_text`. */
+  task: string;
+  status: PlanStepUiStatus;
+  /** Failure / replan reason (only set when status is failed/needs_replan). */
+  reason?: string;
+}
+
+/** State for an in-flight `plan_card` timeline row. */
+export interface PlanState {
+  goal: string;
+  totalSteps: number;
+  steps: PlanStep[];
+  /** 0-based index of the most recent step that received an update. */
+  currentStepIdx: number | null;
+  /** Optional reason from the most recent `plan_replan`. */
+  replanReason?: string;
+  /** Final summary set by `plan_completed`. */
+  summary?: string;
+  /** True once `plan_completed` fires. */
+  completed: boolean;
+}
 
 /**
  * One renderable row in the session timeline.
@@ -145,6 +215,8 @@ export interface TimelineItem {
   success?: boolean;
   /** Still receiving WS deltas — callers may show a cursor/pulse. */
   streaming?: boolean;
+  /** Plan widget state for `kind === "plan_card"`. */
+  plan?: PlanState;
 }
 
 /**

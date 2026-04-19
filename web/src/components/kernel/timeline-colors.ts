@@ -80,6 +80,15 @@ export const KIND_PALETTE: Record<EventKind, KindPalette> = {
       "bg-violet-500/15 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300",
     text: "…",
   },
+  plan_card: {
+    // Amber distinguishes "directive / structured plan" from the other
+    // kinds while staying within the existing tonal range.
+    bar: "bg-amber-400/60",
+    barActive: "bg-amber-500",
+    label:
+      "bg-amber-500/20 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+    text: "Plan",
+  },
 };
 
 /** Short label to show inside a row's type badge. */
@@ -99,6 +108,7 @@ export function eventSummary(item: {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
+  plan?: { goal: string };
 }): string {
   switch (item.kind) {
     case "agent":
@@ -110,6 +120,8 @@ export function eventSummary(item: {
       return toolInputSummary(item.input);
     case "tool_result":
       return item.output?.trim().slice(0, 200) ?? "";
+    case "plan_card":
+      return item.plan?.goal ?? "";
   }
 }
 
