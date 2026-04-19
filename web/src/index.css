@@ -331,6 +331,26 @@
   transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
+/*
+ * Cap the composer width and centre it so a wide viewport doesn't
+ * stretch the input into an uncomfortably long strip. `max-width` +
+ * auto margins on the composer row; message list gets the same cap
+ * so replies line up with the composer below rather than drifting
+ * past its right edge.
+ */
+.rara-chat agent-interface .flex-col.bg-background > *:last-child {
+  max-width: 48rem;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+.rara-chat assistant-message,
+.rara-chat user-message {
+  max-width: 48rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .user-message-container {
   background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
   border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);
