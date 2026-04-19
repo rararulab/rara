@@ -211,7 +211,7 @@ export interface PlanStep {
   task: string;
   status: PlanStepUiStatus;
   /** Failure / replan reason (only set when status is failed/needs_replan). */
-  reason?: string;
+  reason?: string | undefined;
 }
 
 /** Settled per-turn token totals for a `token_footer` row. */
@@ -259,25 +259,25 @@ export interface TimelineItem {
   turn: number;
   kind: EventKind;
   /** Tool name for `tool_use` / `tool_result`. */
-  tool?: string;
+  tool?: string | undefined;
   /** Body for `agent` / `thinking` / `error`. */
-  content?: string;
+  content?: string | undefined;
   /** Tool call arguments for `tool_use`. */
-  input?: Record<string, unknown>;
+  input?: Record<string, unknown> | undefined;
   /** Tool result preview for `tool_result`. */
-  output?: string;
+  output?: string | undefined;
   /** Tool execution duration (historical only). */
-  durationMs?: number;
+  durationMs?: number | undefined;
   /** Tool success flag (`tool_use` / `tool_result`). */
-  success?: boolean;
+  success?: boolean | undefined;
   /** Still receiving WS deltas — callers may show a cursor/pulse. */
-  streaming?: boolean;
+  streaming?: boolean | undefined;
   /** Plan widget state for `kind === "plan_card"`. */
-  plan?: PlanState;
+  plan?: PlanState | undefined;
   /** Settled token totals for `kind === "token_footer"`. */
-  usage?: TurnUsage;
+  usage?: TurnUsage | undefined;
   /** Active background tasks for `kind === "background_tasks"`. */
-  bgTasks?: BackgroundTaskInfo[];
+  bgTasks?: BackgroundTaskInfo[] | undefined;
 }
 
 /**

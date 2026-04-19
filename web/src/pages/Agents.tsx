@@ -651,8 +651,9 @@ export default function Agents() {
 
   // Auto-select first agent when list loads or selection becomes invalid
   useEffect(() => {
-    if (sortedAgents.length > 0 && !sortedAgents.some((a) => a.name === selectedName)) {
-      setSelectedName(sortedAgents[0].name);
+    const first = sortedAgents[0];
+    if (first && !sortedAgents.some((a) => a.name === selectedName)) {
+      setSelectedName(first.name);
     }
   }, [sortedAgents, selectedName]);
 

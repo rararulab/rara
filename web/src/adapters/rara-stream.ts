@@ -181,7 +181,7 @@ type RaraBlock =
 function extractUserPayload(context: Context, attachments: Attachment[]): string {
   for (let i = context.messages.length - 1; i >= 0; i--) {
     const msg = context.messages[i];
-    if (msg.role === 'user') {
+    if (msg && msg.role === 'user') {
       const hasImages =
         typeof msg.content !== 'string' && msg.content.some((c) => c.type === 'image');
       const documentAttachments = attachments.filter((a) => a.type === 'document');
@@ -644,6 +644,7 @@ function emitEndBlocks(
 ): void {
   for (let i = 0; i < content.length; i++) {
     const block = content[i];
+    if (!block) continue;
     if (block.type === 'text' && block.text) {
       safePush({
         type: 'text_end',

@@ -22,7 +22,7 @@ import SettingsPanel, { type SettingsPage } from './SettingsPanel';
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-  section?: SettingsPage;
+  section?: SettingsPage | undefined;
 }
 
 /**

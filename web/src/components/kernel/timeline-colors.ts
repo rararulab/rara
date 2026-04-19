@@ -116,10 +116,10 @@ export function eventLabel(kind: EventKind, tool?: string): string {
  */
 export function eventSummary(item: {
   kind: EventKind;
-  content?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-  plan?: { goal: string };
+  content?: string | undefined;
+  input?: Record<string, unknown> | undefined;
+  output?: string | undefined;
+  plan?: { goal: string } | undefined;
 }): string {
   switch (item.kind) {
     case 'agent':

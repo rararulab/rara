@@ -58,7 +58,7 @@ function docsBookPlugin() {
     configureServer(server: import('vite').ViteDevServer) {
       server.middlewares.use((req, res, next) => {
         const rawUrl = req.url ?? '/';
-        const pathname = rawUrl.split('?')[0];
+        const pathname = rawUrl.split('?')[0] ?? '/';
         if (!pathname.startsWith('/book')) return next();
 
         if (!fs.existsSync(bookDir)) return next();

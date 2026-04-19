@@ -287,7 +287,7 @@ export interface CodingTaskDetail {
 
 export interface CreateCodingTaskRequest {
   prompt: string;
-  agent_type?: AgentType;
-  repo_url?: string;
-  session_key?: string;
+  agent_type?: AgentType | undefined;
+  repo_url?: string | undefined;
+  session_key?: string | undefined;
 }

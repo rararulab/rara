@@ -63,6 +63,7 @@ import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
+import { useSessionDelete } from '@/hooks/use-session-delete';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
 
@@ -199,7 +200,7 @@ function parseAssistantContent(raw: string): (TextContent | ThinkingContent)[] {
     const before = raw.slice(cursor, match.index).trim();
     if (before) blocks.push({ type: 'text', text: before });
     // Thinking content
-    const thinking = match[1].trim();
+    const thinking = (match[1] ?? '').trim();
     if (thinking) blocks.push({ type: 'thinking', thinking });
     cursor = match.index + match[0].length;
   }
@@ -727,24 +728,16 @@ export default function PiChat() {
     setSidebarRefreshKey((k) => k + 1);
   }, [switchSession]);
 
-  /** Handle session deletion from the sidebar. */
-  const handleSessionDeleted = useCallback(
-    (deletedKey: string, fallback: ChatSession | null) => {
-      // Leave the user on whatever they were viewing when an
-      // unrelated row was deleted.
-      if (activeSession?.key !== deletedKey) return;
-      // Deleted the active session: switch into the sidebar's next
-      // neighbour. Only spin up a brand-new chat when the whole
-      // history is gone, otherwise we'd trap the user in an
-      // "auto-regenerated empty session" loop.
-      if (fallback) {
-        void switchSession(fallback);
-      } else {
-        void newSession();
-      }
-    },
-    [activeSession, newSession, switchSession],
-  );
+  /**
+   * Handle session deletion from the sidebar. The decision + dispatch
+   * wiring lives in `useSessionDelete` so both the pure decision and
+   * the switch/create-new side effects are covered by unit tests.
+   */
+  const handleSessionDeleted = useSessionDelete<ChatSession>({
+    activeSessionKey: activeSession?.key,
+    switchSession,
+    newSession,
+  });
 
   /**
    * Reset the session's pinned (model, provider, thinking) triple so the
@@ -912,8 +905,9 @@ export default function PiChat() {
               // extracted text.
               for (let i = agent.state.messages.length - 1; i >= 0; i--) {
                 const m = agent.state.messages[i];
+                if (!m) continue;
                 if (m.role === 'user-with-attachments') {
-                  return m.attachments;
+                  return m.attachments ?? [];
                 }
                 if (m.role === 'user') return [];
               }

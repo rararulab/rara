@@ -424,7 +424,7 @@ function FeedFormDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  editFeed?: DataFeedConfig;
+  editFeed?: DataFeedConfig | undefined;
 }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<FeedFormState>(editFeed ? feedToForm(editFeed) : INITIAL_FORM);

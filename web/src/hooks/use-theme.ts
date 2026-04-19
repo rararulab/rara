@@ -101,7 +101,8 @@ export function useTheme() {
   const toggleTheme = useCallback(() => {
     const order: Theme[] = ['light', 'dark', 'system'];
     const idx = order.indexOf(currentTheme);
-    setThemeInternal(order[(idx + 1) % order.length]);
+    const next = order[(idx + 1) % order.length] ?? 'system';
+    setThemeInternal(next);
   }, []);
 
   return { theme, isDark, setTheme, toggleTheme } as const;
