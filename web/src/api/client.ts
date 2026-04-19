@@ -84,7 +84,6 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  *  runtime doesn't expose it. */
 function composeSignals(internal: AbortSignal, external?: AbortSignal | null): AbortSignal {
   if (!external) return internal;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const any = (AbortSignal as any).any as ((signals: AbortSignal[]) => AbortSignal) | undefined;
   if (any) return any([internal, external]);
   const relay = new AbortController();

@@ -11,7 +11,7 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json,md}\"",
     "preview": "vite preview",
-    "test": "vitest run src --passWithNoTests",
+    "test": "vitest run src",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },

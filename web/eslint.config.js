@@ -32,10 +32,14 @@ import tseslint from 'typescript-eslint'
 //
 // Several type-aware rules from `recommendedTypeChecked` and several
 // `jsx-a11y` rules fire heavily on legacy pi-web-ui integration code.
-// We demote those to warnings so the CI gate enforces the rules that
-// catch real bugs (`no-floating-promises`, `no-misused-promises`,
-// `import/order`) without blocking on pre-existing code smells. PR 2
-// will tighten the ratchet as each warning category is cleaned up.
+// Those rules are turned OFF here (not `warn`) so that the CI gate
+// `eslint --max-warnings=0` can enforce everything else without
+// dragging in ~94 pre-existing violations. Each `off` rule carries a
+// TODO(#1606) pointer — #1606 tracks ratcheting these back to `error`
+// one rule at a time as the underlying violations are cleaned up.
+// Leaving rules at `warn` was tried first and rejected: warnings get
+// ignored, and `--max-warnings=0` would block every PR on unrelated
+// legacy code.
 
 export default defineConfig([
   globalIgnores(['dist', 'playwright-report', 'coverage', '.vite', 'e2e', 'playwright.config.ts']),
@@ -73,28 +77,33 @@ export default defineConfig([
           alphabetize: { order: 'asc', caseInsensitive: true },
         },
       ],
-      // Demote noisy type-aware / a11y / react rules to warnings — the
-      // real enforcement happens for the three `error` rules above. PR 2
-      // will ratchet these back up.
-      '@typescript-eslint/no-unsafe-assignment': 'warn',
-      '@typescript-eslint/no-unsafe-member-access': 'warn',
-      '@typescript-eslint/no-unsafe-argument': 'warn',
-      '@typescript-eslint/no-unsafe-return': 'warn',
-      '@typescript-eslint/no-unsafe-call': 'warn',
-      '@typescript-eslint/no-explicit-any': 'warn',
-      '@typescript-eslint/no-unused-vars': 'warn',
-      '@typescript-eslint/require-await': 'warn',
-      '@typescript-eslint/no-base-to-string': 'warn',
-      '@typescript-eslint/unbound-method': 'warn',
-      '@typescript-eslint/restrict-template-expressions': 'warn',
-      '@typescript-eslint/no-redundant-type-constituents': 'warn',
-      '@typescript-eslint/only-throw-error': 'warn',
-      'jsx-a11y/click-events-have-key-events': 'warn',
-      'jsx-a11y/no-static-element-interactions': 'warn',
-      'jsx-a11y/no-noninteractive-element-interactions': 'warn',
-      'jsx-a11y/no-autofocus': 'warn',
-      'react-refresh/only-export-components': 'warn',
-      'react-hooks/set-state-in-effect': 'warn',
+      // Rules turned OFF and tracked in #1606 — noisy on legacy code,
+      // ratchet back to `error` one rule at a time.
+      // TODO(#1606): ratchet these to error once violations are cleaned up.
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/no-base-to-string': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+      '@typescript-eslint/restrict-template-expressions': 'off',
+      '@typescript-eslint/no-redundant-type-constituents': 'off',
+      '@typescript-eslint/only-throw-error': 'off',
+      'jsx-a11y/click-events-have-key-events': 'off',
+      'jsx-a11y/no-static-element-interactions': 'off',
+      'jsx-a11y/no-noninteractive-element-interactions': 'off',
+      'jsx-a11y/no-autofocus': 'off',
+      'react-refresh/only-export-components': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+      // Fixed in-place rather than deferred: leading-underscore convention
+      // is used project-wide to mark intentionally-unused params.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
     },
   },
 ])

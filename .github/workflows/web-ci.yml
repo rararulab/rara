@@ -35,10 +35,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
       - name: Lint
-        run: npm run lint
+        run: npm run lint -- --max-warnings=0
       - name: Format check
         run: npm run format:check
-      - name: Test
-        run: npm run test -- --run
+      # Test step intentionally absent until #1607 adds the first
+      # Vitest component test. Re-enable in that PR.
+      # - name: Test
+      #   run: npm run test -- --run
       - name: Build
         run: npm run build
