@@ -262,3 +262,50 @@ export function isLiveState(state: string | null): boolean {
   const s = state.toLowerCase();
   return s === "active" || s === "ready";
 }
+
+// ---------------------------------------------------------------------------
+// Cascade execution trace
+// ---------------------------------------------------------------------------
+// Mirrors `rara_kernel::cascade::CascadeTrace` (crates/kernel/src/cascade.rs).
+// Returned by `GET /api/v1/chat/sessions/{key}/trace?seq={seq}` and rendered
+// by `<CascadeModal>` when the user expands an assistant turn's "📊 详情"
+// button. Empty traces (no recorded ticks/entries) are surfaced explicitly so
+// the modal can show an empty state rather than a broken view.
+
+/** Classification of a single entry within a cascade tick. */
+export type CascadeEntryKind = "user_input" | "thought" | "action" | "observation";
+
+/** A single entry: user input, assistant thought, tool action, or observation. */
+export interface CascadeEntry {
+  /** Stable, human-readable identifier (`"{prefix}.{tick}-{short_id}-{seq}"`). */
+  id:        string;
+  kind:      CascadeEntryKind;
+  /** Display content — text, JSON-encoded tool args, or tool output. */
+  content:   string;
+  /** RFC3339 timestamp of the underlying tape entry. */
+  timestamp: string;
+  /** Optional structured metadata copied from the tape entry. */
+  metadata?: unknown;
+}
+
+/** One reasoning-action cycle (an LLM call + its emitted entries). */
+export interface CascadeTick {
+  /** Zero-based tick index within the trace. */
+  index:   number;
+  entries: CascadeEntry[];
+}
+
+/** High-level summary statistics for a cascade trace. */
+export interface CascadeSummary {
+  tick_count:      number;
+  tool_call_count: number;
+  total_entries:   number;
+}
+
+/** Top-level cascade trace for a single agent turn. */
+export interface CascadeTrace {
+  /** Opaque identifier — typically `"{session_key}-{seq}"`. */
+  message_id: string;
+  ticks:      CascadeTick[];
+  summary:    CascadeSummary;
+}

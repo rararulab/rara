@@ -25,9 +25,11 @@ import {
   ProviderKeysStore,
   CustomProvidersStore,
   defaultConvertToLlm,
+  registerMessageRenderer,
   type Attachment,
   type UserMessageWithAttachments,
 } from "@mariozechner/pi-web-ui";
+import { html } from "lit";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 // Importing the extract-document tool from pi-web-ui triggers the
@@ -57,8 +59,10 @@ import { VoiceRecorder } from "@/components/VoiceRecorder";
 import { RaraModelDialog } from "@/components/RaraModelDialog";
 import { AlmaCaret } from "@/components/AlmaCaret";
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { CascadeModal } from "@/components/chat/CascadeModal";
 import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
 import type { ProviderInfo } from "@/api/types";
+import type { CascadeTrace } from "@/api/kernel-types";
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
 const ACTIVE_SESSION_KEY = "rara.activeSessionKey";
@@ -207,9 +211,22 @@ function parseAssistantContent(
   return blocks;
 }
 
-/** Convert rara ChatMessageData to pi-agent-core AgentMessage for display. */
-function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
+/**
+ * Convert rara ChatMessageData to pi-agent-core AgentMessage for display.
+ *
+ * Also returns a map from each assistant message's `timestamp` (ms epoch)
+ * back to its persisted `seq`, so the cascade-trace button rendered by the
+ * custom Lit renderer can look up the seq required by the trace endpoint
+ * (`GET /chat/sessions/{key}/trace?seq=...`). Timestamps come from the
+ * backend's `created_at`, which is unique per-row at second resolution and
+ * unique per-row in practice for assistant turns within a session.
+ */
+function toAgentMessages(msgs: ChatMessageData[]): {
+  agentMessages:    AgentMessage[];
+  seqByTimestamp:   Map<number, number>;
+} {
   const result: AgentMessage[] = [];
+  const seqByTimestamp = new Map<number, number>();
   // Track the last assistant message so "tool" role messages can attach ToolCall items.
   let lastAssistant: AssistantMessage | null = null;
 
@@ -286,6 +303,7 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
         timestamp: ts,
       };
       lastAssistant = assistant;
+      seqByTimestamp.set(ts, m.seq);
       result.push(assistant);
     } else if (m.role === "tool") {
       // Tool call from the assistant — attach as ToolCall to the last AssistantMessage.
@@ -329,7 +347,100 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
       }
     }
   }
-  return result;
+  return { agentMessages: result, seqByTimestamp };
+}
+
+/**
+ * DOM event dispatched by the Lit assistant-message renderer when the
+ * user clicks the "📊 详情" button. The React layer listens for this on
+ * `document` and resolves the timestamp back to a persisted `seq` via
+ * the active session's `seqByTimestamp` map.
+ */
+const CASCADE_TRACE_EVENT = "rara:cascade-trace";
+
+interface CascadeTraceEventDetail {
+  timestamp: number;
+}
+
+/**
+ * Register a Lit message renderer that wraps pi-web-ui's built-in
+ * `<assistant-message>` element and appends a "📊 详情" button. The
+ * button dispatches a bubbling {@link CASCADE_TRACE_EVENT} carrying the
+ * assistant turn's timestamp; the React layer listens on `document` and
+ * looks up the matching `seq` via the active session's
+ * `seqByTimestampRef` map.
+ *
+ * The renderer must rebuild the same `toolResultsById` lookup that
+ * `MessageList` normally hands `<assistant-message>` — otherwise paired
+ * tool results would not render under the call. The `agentResolver`
+ * closure gives us that map at click time without re-registering on
+ * every message-list change.
+ *
+ * Skips placeholder turns whose timestamp is 0 (e.g. mid-stream
+ * assistant frames) — there's no persisted seq to ask the trace
+ * endpoint for, and showing a button that 404s would be misleading.
+ *
+ * Idempotent: calling this multiple times leaves only the latest
+ * registration in pi-web-ui's renderer map (a Map.set overwrite), which
+ * is what we want during HMR.
+ */
+function registerCascadeAssistantRenderer(
+  agentResolver: () => Agent | null,
+): void {
+  registerMessageRenderer("assistant", {
+    render(message) {
+      const ts = message.timestamp;
+      const showButton = ts > 0;
+      // Rebuild the toolResult lookup from current agent state. Cheap
+      // (a single linear scan) and avoids stale-closure bugs because the
+      // resolver always hits the live agent ref.
+      const agent = agentResolver();
+      const resultByCallId = new Map<string, import("@mariozechner/pi-ai").ToolResultMessage>();
+      if (agent) {
+        for (const m of agent.state.messages) {
+          if (m.role === "toolResult") {
+            const tr = m as import("@mariozechner/pi-ai").ToolResultMessage;
+            resultByCallId.set(tr.toolCallId, tr);
+          }
+        }
+      }
+      return html`
+        <div class="rara-assistant-with-trace">
+          <assistant-message
+            .message=${message}
+            .tools=${agent?.state.tools ?? []}
+            .isStreaming=${false}
+            .toolResultsById=${resultByCallId}
+            .hideToolCalls=${false}
+          ></assistant-message>
+          ${showButton
+            ? html`
+                <div class="mt-1 flex justify-start pl-1">
+                  <button
+                    type="button"
+                    class="rara-cascade-trigger inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                    title="查看本轮 cascade 执行详情"
+                    @click=${(e: Event) => {
+                      e.stopPropagation();
+                      const detail: CascadeTraceEventDetail = { timestamp: ts };
+                      document.dispatchEvent(
+                        new CustomEvent<CascadeTraceEventDetail>(
+                          CASCADE_TRACE_EVENT,
+                          { detail, bubbles: true },
+                        ),
+                      );
+                    }}
+                  >
+                    <span aria-hidden>📊</span>
+                    <span>详情</span>
+                  </button>
+                </div>
+              `
+            : null}
+        </div>
+      `;
+    },
+  });
 }
 
 // Session list now lives in `ChatSidebar`; legacy slide-over deleted
@@ -374,6 +485,20 @@ export default function PiChat() {
   // that land on a populated session.
   const [showWelcome, setShowWelcome] = useState(true);
   const { openSettings } = useSettingsModal();
+  // Cascade trace viewer state — opened when the user clicks the "📊 详情"
+  // button injected into each assistant message by the custom Lit renderer
+  // registered below. The seq → trace fetch is lazy: the kernel does not
+  // stream cascade data, the UI only assembles it via REST after a turn
+  // finishes (see `service.get_cascade_trace`).
+  const [cascadeOpen, setCascadeOpen] = useState(false);
+  const [cascadeTrace, setCascadeTrace] = useState<CascadeTrace | null>(null);
+  const [cascadeLoading, setCascadeLoading] = useState(false);
+  const [cascadeError, setCascadeError] = useState<string | null>(null);
+  // timestamp (ms) → assistant message seq for the active session. Rebuilt
+  // on every history load (switchSession / reloadMessages). The Lit
+  // renderer dispatches a CustomEvent carrying just the timestamp; this
+  // map turns it back into the `seq` the trace endpoint requires.
+  const seqByTimestampRef = useRef<Map<number, number>>(new Map());
 
   // Clear any stale reset-error banner whenever the model dialog is
   // closed — regardless of close path (backdrop click, successful
@@ -382,6 +507,45 @@ export default function PiChat() {
   useEffect(() => {
     if (!modelDialogOpen) setResetError(null);
   }, [modelDialogOpen]);
+
+  // Bridge between the Lit assistant-message renderer and React: when
+  // the user clicks a "📊 详情" button, the renderer dispatches a
+  // bubbling CustomEvent on `document` carrying the assistant turn's
+  // timestamp. Resolve it back to a `seq` and call the trace endpoint.
+  // A failed/empty fetch shows an inline state in the modal rather
+  // than swallowing the click silently — the button is always offered
+  // for completed assistant turns regardless of whether a trace ends
+  // up being present.
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const ce = ev as CustomEvent<CascadeTraceEventDetail>;
+      const ts = ce.detail?.timestamp;
+      const sessionKey = agentRef.current?.sessionId;
+      if (!ts || !sessionKey) return;
+      const seq = seqByTimestampRef.current.get(ts);
+      if (seq === undefined) return;
+      setCascadeOpen(true);
+      setCascadeTrace(null);
+      setCascadeError(null);
+      setCascadeLoading(true);
+      api
+        .get<CascadeTrace>(
+          `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/trace?seq=${seq}`,
+        )
+        .then((trace) => {
+          setCascadeTrace(trace);
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setCascadeError(msg);
+        })
+        .finally(() => {
+          setCascadeLoading(false);
+        });
+    };
+    document.addEventListener(CASCADE_TRACE_EVENT, handler);
+    return () => document.removeEventListener(CASCADE_TRACE_EVENT, handler);
+  }, []);
 
   /** Switch the agent to a different session, loading its history. */
   const switchSession = useCallback(async (session: ChatSession) => {
@@ -441,7 +605,8 @@ export default function PiChat() {
       const msgs = await api.get<ChatMessageData[]>(
         `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
       );
-      const agentMsgs = toAgentMessages(msgs);
+      const { agentMessages: agentMsgs, seqByTimestamp } = toAgentMessages(msgs);
+      seqByTimestampRef.current = seqByTimestamp;
       if (agentMsgs.length > 0) {
         agent.replaceMessages(agentMsgs);
       } else if (agentRef.current?.sessionId === session.key) {
@@ -478,7 +643,8 @@ export default function PiChat() {
       const msgs = await api.get<ChatMessageData[]>(
         `/api/v1/chat/sessions/${encodeURIComponent(agent.sessionId)}/messages?limit=200`,
       );
-      const agentMsgs = toAgentMessages(msgs);
+      const { agentMessages: agentMsgs, seqByTimestamp } = toAgentMessages(msgs);
+      seqByTimestampRef.current = seqByTimestamp;
       agent.replaceMessages(agentMsgs);
       await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
         agentMsgs,
@@ -593,6 +759,14 @@ export default function PiChat() {
       //    ChatPanel.setAgent() mounts any messages — the registry is
       //    consulted at render time with no retro-active update.
       registerRaraToolRenderers();
+      // Wrap pi-web-ui's built-in `<assistant-message>` so each completed
+      // assistant turn gets a "📊 详情" trigger that opens the cascade
+      // execution-trace modal. The renderer fires a CustomEvent on the
+      // host element (which bubbles up through the light DOM since
+      // pi-web-ui's components opt out of shadow DOM), and the React
+      // layer below resolves the timestamp back to a `seq` via
+      // `seqByTimestampRef` to call `GET /chat/sessions/{key}/trace`.
+      registerCascadeAssistantRenderer(() => agentRef.current);
 
       // 1. Create and initialize the rara storage backend
       const backend = new RaraStorageBackend();
@@ -912,6 +1086,13 @@ export default function PiChat() {
         }}
         resetError={resetError}
         onUseDefault={handleUseDefault}
+      />
+      <CascadeModal
+        open={cascadeOpen}
+        trace={cascadeTrace}
+        loading={cascadeLoading}
+        error={cascadeError}
+        onClose={() => setCascadeOpen(false)}
       />
     </div>
   );
