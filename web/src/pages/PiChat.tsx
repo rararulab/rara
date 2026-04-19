@@ -476,15 +476,23 @@ export default function PiChat() {
     setSidebarRefreshKey((k) => k + 1);
   }, [switchSession]);
 
-  /** Handle session deletion from the panel. */
+  /** Handle session deletion from the sidebar. */
   const handleSessionDeleted = useCallback(
-    (deletedKey: string) => {
-      const agent = agentRef.current;
-      if (agent && agent.sessionId === deletedKey) {
+    (deletedKey: string, fallback: ChatSession | null) => {
+      // Leave the user on whatever they were viewing when an
+      // unrelated row was deleted.
+      if (activeSession?.key !== deletedKey) return;
+      // Deleted the active session: switch into the sidebar's next
+      // neighbour. Only spin up a brand-new chat when the whole
+      // history is gone, otherwise we'd trap the user in an
+      // "auto-regenerated empty session" loop.
+      if (fallback) {
+        switchSession(fallback);
+      } else {
         newSession();
       }
     },
-    [newSession],
+    [activeSession, newSession, switchSession],
   );
 
   /**
@@ -786,7 +794,7 @@ export default function PiChat() {
       data-welcome={showWelcome && !isInitializing ? "true" : undefined}
     >
       <ChatSidebar
-        activeSessionKey={agentRef.current?.sessionId}
+        activeSessionKey={activeSession?.key}
         onSelect={switchSession}
         onNewSession={newSession}
         onOpenSettings={() => openSettings()}
