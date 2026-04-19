@@ -125,6 +125,38 @@ export type StreamEvent =
     }
   | { type: 'plan_replan'; reason: string }
   | { type: 'plan_completed'; summary: string }
+  /**
+   * Settled per-turn token usage. Emitted once near turn end by the web
+   * channel adapter, which maps `StreamEvent::TurnUsage` → `WebEvent::Usage`
+   * (see `crates/channels/src/web.rs`). `input` is the largest iteration's
+   * prompt size; `output` is cumulative completion tokens across the turn.
+   */
+  | {
+      type: 'usage';
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      total_tokens: number;
+      cost: number;
+      model: string;
+    }
+  /**
+   * A background agent has been spawned. The UI shows a chip with elapsed
+   * time until the matching `background_task_done` fires.
+   */
+  | {
+      type: 'background_task_started';
+      task_id: string;
+      agent_name: string;
+      description: string;
+    }
+  /** Background agent has finished (completed, failed, or cancelled). */
+  | {
+      type: 'background_task_done';
+      task_id: string;
+      status: 'completed' | 'failed' | 'cancelled';
+    }
   | { type: 'done' }
   | { type: string; [k: string]: unknown };
 
@@ -153,7 +185,20 @@ export type EventKind =
    * `plan_replan` / `plan_completed`. Self-contained — renders its own
    * step list rather than going through the standard row layout.
    */
-  | 'plan_card';
+  | 'plan_card'
+  /**
+   * Live-only per-turn token usage footer. Rendered as a small muted
+   * `↑12.5k ↓1.2k` line at the tail of the assistant turn. Populated
+   * from the web channel's `usage` event (mirrors
+   * `StreamEvent::TurnUsage`).
+   */
+  | 'token_footer'
+  /**
+   * Live-only chip list of currently-running background tasks. Inserted
+   * on the first `background_task_started` for a turn, mutated in place
+   * as tasks start/finish, and removed when the active set goes empty.
+   */
+  | 'background_tasks';
 
 /** Per-step status for the live `plan_card` row. */
 export type PlanStepUiStatus = 'pending' | 'running' | 'done' | 'failed' | 'needs_replan';
@@ -167,6 +212,23 @@ export interface PlanStep {
   status: PlanStepUiStatus;
   /** Failure / replan reason (only set when status is failed/needs_replan). */
   reason?: string;
+}
+
+/** Settled per-turn token totals for a `token_footer` row. */
+export interface TurnUsage {
+  /** Largest iteration's prompt size (kernel re-sends full context per iter). */
+  input: number;
+  /** Cumulative completion tokens across all iterations in the turn. */
+  output: number;
+}
+
+/** One active background task for a `background_tasks` row. */
+export interface BackgroundTaskInfo {
+  taskId: string;
+  name: string;
+  description: string;
+  /** `Date.now()` at insertion; used to compute the elapsed-time chip. */
+  startedAt: number;
 }
 
 /** State for an in-flight `plan_card` timeline row. */
@@ -212,6 +274,10 @@ export interface TimelineItem {
   streaming?: boolean;
   /** Plan widget state for `kind === "plan_card"`. */
   plan?: PlanState;
+  /** Settled token totals for `kind === "token_footer"`. */
+  usage?: TurnUsage;
+  /** Active background tasks for `kind === "background_tasks"`. */
+  bgTasks?: BackgroundTaskInfo[];
 }
 
 /**

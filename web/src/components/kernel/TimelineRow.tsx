@@ -15,11 +15,17 @@
  */
 
 import { AlertCircle, Brain, ChevronRight, Loader2 } from 'lucide-react';
-import { forwardRef, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 
 import { KIND_PALETTE, eventLabel, eventSummary } from './timeline-colors';
 
-import type { PlanState, PlanStepUiStatus, TimelineItem } from '@/api/kernel-types';
+import type {
+  BackgroundTaskInfo,
+  PlanState,
+  PlanStepUiStatus,
+  TimelineItem,
+  TurnUsage,
+} from '@/api/kernel-types';
 import { cn } from '@/lib/utils';
 
 const DETAIL_MAX_CHARS = 4000;
@@ -55,6 +61,26 @@ export const TimelineRow = forwardRef<HTMLDivElement, TimelineRowProps>(function
         onClick={onClick}
       >
         <PlanCardBody item={item} plan={item.plan} />
+      </div>
+    );
+  }
+
+  // Token footer is a terminal, decoration-only row — no badge, no
+  // expand affordance, just the settled per-turn totals.
+  if (item.kind === 'token_footer' && item.usage) {
+    return (
+      <div ref={ref} className="px-4 py-1.5">
+        <TokenFooterBody usage={item.usage} />
+      </div>
+    );
+  }
+
+  // Background-task chips render as a horizontal pill row with live
+  // elapsed timers; no badge / expand affordance.
+  if (item.kind === 'background_tasks' && item.bgTasks) {
+    return (
+      <div ref={ref} className="px-4 py-2">
+        <BackgroundTasksBody tasks={item.bgTasks} />
       </div>
     );
   }
@@ -157,7 +183,9 @@ function rowHasDetail(item: TimelineItem): boolean {
       // Placeholder is purely decorative — never expandable.
       return false;
     case 'plan_card':
-      // Self-contained widget — early-returned before this helper runs.
+    case 'token_footer':
+    case 'background_tasks':
+      // Self-contained widgets — early-returned before this helper runs.
       return false;
   }
 }
@@ -193,7 +221,9 @@ function RowDetail({ item }: { item: TimelineItem }) {
       // Never rendered — `rowHasDetail` returns false for this kind.
       return null;
     case 'plan_card':
-      // Self-contained widget — never renders via the shared detail pane.
+    case 'token_footer':
+    case 'background_tasks':
+      // Self-contained widgets — never render via the shared detail pane.
       return null;
   }
 }
@@ -288,4 +318,74 @@ function PlanCardBody({ item, plan }: { item: TimelineItem; plan: PlanState }) {
 function truncate(s: string): string {
   if (s.length <= DETAIL_MAX_CHARS) return s;
   return s.slice(0, DETAIL_MAX_CHARS) + '\n... (truncated)';
+}
+
+/**
+ * Compact a token count for the footer (`12500 → "12.5k"`,
+ * `1_200_000 → "1.2M"`). Numbers below 1k render raw.
+ */
+function compactTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const v = n / 1000;
+    return v >= 100 ? `${Math.round(v)}k` : `${v.toFixed(1)}k`;
+  }
+  const v = n / 1_000_000;
+  return v >= 100 ? `${Math.round(v)}M` : `${v.toFixed(1)}M`;
+}
+
+/** Per-turn token footer: `↑input ↓output` in small muted text. */
+function TokenFooterBody({ usage }: { usage: TurnUsage }) {
+  return (
+    <div className="ml-[72px] flex items-center gap-2 text-[10px] tabular-nums text-muted-foreground/70">
+      <span aria-label={`prompt ${usage.input} tokens`}>↑{compactTokens(usage.input)}</span>
+      <span aria-label={`completion ${usage.output} tokens`}>↓{compactTokens(usage.output)}</span>
+    </div>
+  );
+}
+
+/**
+ * Horizontal chip list of currently-running background tasks with live
+ * elapsed timers. A single 1Hz interval re-renders all chips while any
+ * task is active; it's cleared on unmount (i.e. when the row is removed
+ * after the active set goes empty).
+ */
+function BackgroundTasksBody({ tasks }: { tasks: BackgroundTaskInfo[] }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (tasks.length === 0) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [tasks.length]);
+
+  const palette = KIND_PALETTE.background_tasks;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span
+        className={cn(
+          'inline-flex min-w-[60px] shrink-0 items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-medium',
+          palette.label,
+        )}
+      >
+        <Loader2 className="mr-1 h-3 w-3 shrink-0 animate-spin" />
+        <span className="truncate">{palette.text}</span>
+      </span>
+      {tasks.map((t) => {
+        const elapsed = Math.max(0, Math.floor((now - t.startedAt) / 1000));
+        return (
+          <span
+            key={t.taskId}
+            title={t.description || t.name}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]',
+              palette.label,
+            )}
+          >
+            <span className="truncate max-w-[180px]">{t.name}</span>
+            <span className="tabular-nums opacity-70">{elapsed}s</span>
+          </span>
+        );
+      })}
+    </div>
+  );
 }

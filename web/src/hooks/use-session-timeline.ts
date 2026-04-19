@@ -23,6 +23,7 @@ import { api } from '@/api/client';
 import {
   isLiveState,
   turnsToTimeline,
+  type BackgroundTaskInfo,
   type PlanState,
   type PlanStep,
   type PlanStepStatusEvent,
@@ -120,6 +121,12 @@ export function useSessionTimeline(
     // plan; subsequent `plan_progress` / `plan_replan` / `plan_completed`
     // events mutate the same row in place.
     let planSeq: number | null = null;
+
+    // Active background-task chip row. One `background_tasks` row is
+    // inserted on the first `background_task_started` and mutated in
+    // place as tasks start / finish. When the active set goes empty we
+    // drop the row so completed turns don't carry an empty footer.
+    let bgTasksSeq: number | null = null;
 
     // Placeholder "thinking…" row inserted as soon as the WS opens so the
     // user gets immediate feedback while the kernel is bootstrapping the
@@ -413,6 +420,95 @@ export function useSessionTimeline(
           break;
         }
 
+        case 'usage': {
+          const e = event as Extract<StreamEvent, { type: 'usage' }>;
+          // Append a footer row once per turn. If one already exists
+          // (defensive — kernel emits TurnUsage once), overwrite it in
+          // place rather than stacking duplicates.
+          setLiveItems((prev) => {
+            const existing = prev.findIndex(
+              (it) => it.kind === 'token_footer' && it.turn === liveTurnIdx,
+            );
+            if (existing >= 0) {
+              const next = prev.slice();
+              next[existing] = {
+                ...next[existing],
+                usage: { input: e.input, output: e.output },
+              };
+              return next;
+            }
+            return [
+              ...prev,
+              {
+                seq: nextSeq(),
+                turn: liveTurnIdx,
+                kind: 'token_footer',
+                usage: { input: e.input, output: e.output },
+              },
+            ];
+          });
+          break;
+        }
+
+        case 'background_task_started': {
+          const e = event as Extract<StreamEvent, { type: 'background_task_started' }>;
+          const task: BackgroundTaskInfo = {
+            taskId: e.task_id,
+            name: e.agent_name,
+            description: e.description,
+            startedAt: Date.now(),
+          };
+          setLiveItems((prev) => {
+            if (bgTasksSeq !== null) {
+              const target = bgTasksSeq;
+              return prev.map((it) => {
+                if (it.seq !== target || it.kind !== 'background_tasks') {
+                  return it;
+                }
+                const existing = it.bgTasks ?? [];
+                if (existing.some((t) => t.taskId === task.taskId)) return it;
+                return { ...it, bgTasks: [...existing, task] };
+              });
+            }
+            const seq = nextSeq();
+            bgTasksSeq = seq;
+            return [
+              ...prev,
+              {
+                seq,
+                turn: liveTurnIdx,
+                kind: 'background_tasks',
+                bgTasks: [task],
+                streaming: true,
+              },
+            ];
+          });
+          break;
+        }
+
+        case 'background_task_done': {
+          const e = event as Extract<StreamEvent, { type: 'background_task_done' }>;
+          if (bgTasksSeq === null) break;
+          const target = bgTasksSeq;
+          setLiveItems((prev) => {
+            let emptied = false;
+            const next = prev.flatMap((it) => {
+              if (it.seq !== target || it.kind !== 'background_tasks') {
+                return [it];
+              }
+              const remaining = (it.bgTasks ?? []).filter((t) => t.taskId !== e.task_id);
+              if (remaining.length === 0) {
+                emptied = true;
+                return [];
+              }
+              return [{ ...it, bgTasks: remaining }];
+            });
+            if (emptied) bgTasksSeq = null;
+            return next;
+          });
+          break;
+        }
+
         case 'done':
           setIsStreaming(false);
           // Drop the placeholder unconditionally — turns that produced
@@ -427,9 +523,8 @@ export function useSessionTimeline(
           break;
 
         default:
-          // Unknown / unhandled event types (UsageUpdate,
-          // BackgroundTaskStarted, etc.) are ignored. Add cases here as
-          // UI coverage expands.
+          // Forward-compat: silently drop any kernel event the UI does
+          // not yet render. Add a case above to adopt a new event type.
           break;
       }
     };

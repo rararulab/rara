@@ -83,6 +83,23 @@ export const KIND_PALETTE: Record<EventKind, KindPalette> = {
     label: 'bg-amber-500/20 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
     text: 'Plan',
   },
+  token_footer: {
+    // Muted — the footer is metadata, not a distinct event-kind worth
+    // its own hue. Reuse the result palette so TimelineBar renders a
+    // slate segment when one appears.
+    bar: 'bg-slate-300/40 dark:bg-slate-600/40',
+    barActive: 'bg-slate-400 dark:bg-slate-500',
+    label: 'bg-muted text-muted-foreground',
+    text: 'Usage',
+  },
+  background_tasks: {
+    // Cyan reads as "ambient / side-effect" — distinct from tool_use
+    // blue so concurrent background work doesn't blend into tool calls.
+    bar: 'bg-cyan-400/60',
+    barActive: 'bg-cyan-500',
+    label: 'bg-cyan-500/20 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300',
+    text: 'BG',
+  },
 };
 
 /** Short label to show inside a row's type badge. */
@@ -116,6 +133,11 @@ export function eventSummary(item: {
       return item.output?.trim().slice(0, 200) ?? '';
     case 'plan_card':
       return item.plan?.goal ?? '';
+    case 'token_footer':
+    case 'background_tasks':
+      // Self-rendered rows — the badge+summary layout is bypassed in
+      // TimelineRow, so this branch is unreachable in practice.
+      return '';
   }
 }
 
