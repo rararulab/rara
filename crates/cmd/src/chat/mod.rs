@@ -1020,6 +1020,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::TurnStarted { model, .. } => CliEvent::Progress {
             text: format!("[{model}]"),
         },
+        StreamEvent::TraceReady { trace_id } => CliEvent::Progress {
+            text: format!("Trace saved: {trace_id}"),
+        },
     }
 }
 

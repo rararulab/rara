@@ -12,11 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Execution trace storage.
+//! Execution trace construction and storage.
 //!
 //! Each agent turn produces an [`ExecutionTrace`] summarizing duration, token
 //! usage, tool calls, and plan steps. Traces are persisted to SQLite so that
-//! any channel adapter can retrieve them later (e.g. Telegram inline buttons).
+//! any channel adapter can retrieve them later (e.g. Telegram inline buttons
+//! that open the full turn detail, or the web chat UI execution-trace pane).
+//!
+//! Submodules:
+//! - [`builder`] — incrementally assembles an [`ExecutionTrace`] while the
+//!   agent turn runs, by observing [`crate::io::StreamEvent`]s. The kernel turn
+//!   driver owns one builder per turn and attaches it to the
+//!   [`crate::io::StreamHandle`] so every `emit` both broadcasts to channel
+//!   adapters and feeds the trace accumulator.
+//! - [`tool_display`] — pure tool-name/argument formatting helpers shared by
+//!   the builder (to render persisted tool entries) and channel adapters (for
+//!   live progress displays).
 
 use std::sync::{
     Arc,
@@ -24,6 +35,11 @@ use std::sync::{
 };
 
 use sqlx::SqlitePool;
+
+pub mod builder;
+pub mod tool_display;
+
+pub use builder::TraceBuilder;
 
 /// Summary of a single agent turn execution.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

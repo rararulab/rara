@@ -26,8 +26,15 @@
 
 pub mod telegram;
 pub mod terminal;
-pub mod tool_display;
 pub mod web;
 pub mod wechat;
 
+/// Tool display formatting helpers.
+///
+/// Re-exported from [`rara_kernel::trace::tool_display`] for backward
+/// compatibility with in-tree callers (`rara_channels::tool_display::...`).
+/// The canonical home is the kernel because these helpers render data that
+/// is persisted in [`rara_kernel::trace::ExecutionTrace`], making them a
+/// trace-layer concern rather than a channel-presentation one.
+pub use rara_kernel::trace::tool_display;
 pub use wechat::WechatAdapter;

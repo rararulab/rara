@@ -358,9 +358,12 @@ struct PlanStepState {
 /// Progress message state for tool execution feedback.
 ///
 /// During streaming: renders live progress with tool activity + token footer.
-/// On stream close: converted into an [`ExecutionTrace`], and the Telegram
-/// message is edited to a compact summary with an inline "📊 详情" button
-/// that toggles the full trace view.
+/// On stream close: the kernel has already persisted the turn's
+/// [`ExecutionTrace`] and emitted
+/// [`rara_kernel::io::StreamEvent::TraceReady`] carrying the `trace_id`.
+/// This adapter fetches the trace via `TraceService::get` and
+/// edits the Telegram message to a compact summary with an inline "📊 详情"
+/// button that toggles the full trace view.
 ///
 /// ## Token semantics (from kernel `UsageUpdate`)
 /// - `input_tokens` = latest iteration's prompt tokens (current context size)
@@ -382,12 +385,6 @@ struct ProgressMessage {
     model:             String,
     /// Iteration count, populated from `StreamEvent::TurnMetrics`.
     iterations:        usize,
-    /// Rara internal message ID — the `InboundMessage.id` that triggered this
-    /// turn.
-    rara_message_id:   String,
-    /// Plan steps saved as display strings for the post-completion trace
-    /// detail view.
-    saved_plan_steps:  Vec<String>,
     /// Cached loading hint, sampled once per turn to avoid flicker on
     /// re-render.
     loading_hint:      String,
@@ -418,30 +415,28 @@ struct BackgroundTaskState {
 }
 
 impl ProgressMessage {
-    fn new(rara_message_id: String) -> Self {
+    fn new() -> Self {
         Self {
-            message_id: None,
-            tools: Vec::new(),
+            message_id:        None,
+            tools:             Vec::new(),
             // Prime `last_edit` so the first event triggers an immediate flush.
-            last_edit: Instant::now()
+            last_edit:         Instant::now()
                 .checked_sub(MIN_EDIT_FLOOR)
                 .unwrap_or_else(Instant::now),
-            turn_started: Instant::now(),
-            input_tokens: 0,
-            output_tokens: 0,
-            thinking_ms: 0,
+            turn_started:      Instant::now(),
+            input_tokens:      0,
+            output_tokens:     0,
+            thinking_ms:       0,
             reasoning_preview: String::new(),
-            model: String::new(),
-            iterations: 0,
-            rara_message_id,
-            saved_plan_steps: Vec::new(),
-            loading_hint: super::loading_hints::random_hint().to_string(),
-            plan_steps: None,
-            plan_goal: None,
+            model:             String::new(),
+            iterations:        0,
+            loading_hint:      super::loading_hints::random_hint().to_string(),
+            plan_steps:        None,
+            plan_goal:         None,
             plan_current_step: None,
-            turn_rationale: None,
-            thinking: false,
-            background_tasks: Vec::new(),
+            turn_rationale:    None,
+            thinking:          false,
+            background_tasks:  Vec::new(),
         }
     }
 
@@ -456,7 +451,7 @@ impl ProgressMessage {
     }
 }
 
-use rara_kernel::trace::{ExecutionTrace, ToolTraceEntry};
+use rara_kernel::trace::ExecutionTrace;
 
 /// Format a duration as a compact human-readable string.
 pub(super) fn format_duration_compact(d: std::time::Duration) -> String {
@@ -3792,7 +3787,6 @@ async fn handle_update(
     };
 
     let session_id = msg.session_key_opt().copied();
-    let rara_message_id = msg.id.to_string();
 
     // Route: group proactive candidates go through GroupMessage event for
     // lightweight LLM judgment; directly-addressed messages go through the
@@ -3820,7 +3814,6 @@ async fn handle_update(
                     tg_thread_id,
                     sid,
                     handle.trace_service().clone(),
-                    rara_message_id.clone(),
                     Arc::clone(settings),
                     Arc::clone(rate_limiter),
                 );
@@ -3938,7 +3931,6 @@ fn spawn_stream_forwarder(
     thread_id: Option<i64>,
     session_id: rara_kernel::session::SessionKey,
     trace_service: rara_kernel::trace::TraceService,
-    rara_message_id: String,
     settings: Arc<dyn SettingsProvider>,
     rate_limiter: Arc<super::rate_limit::ChatRateLimiter>,
 ) {
@@ -3993,8 +3985,14 @@ fn spawn_stream_forwarder(
         let mut typing_interval = tokio::time::interval(std::time::Duration::from_secs(4));
         typing_interval.tick().await; // skip immediate first tick
 
-        let mut progress = ProgressMessage::new(rara_message_id);
+        let mut progress = ProgressMessage::new();
         let mut progress_dirty = false;
+
+        // Captured from `StreamEvent::TraceReady`, emitted by the kernel
+        // after it persists the turn's `ExecutionTrace`. Used on stream
+        // close to render the compact summary (via `trace_service.get`)
+        // and to embed the trace ID in the inline-button callback data.
+        let mut completed_trace_id: Option<String> = None;
 
         // Map tool-call ID → file path for file-mutating tools, so we can
         // pair file path with diff stats when the tool completes.
@@ -4376,7 +4374,11 @@ fn spawn_stream_forwarder(
                                 progress.last_edit = Instant::now();
                             }
                         }
-                        Ok(StreamEvent::PlanCompleted { summary }) => {
+                        Ok(StreamEvent::PlanCompleted { summary: _ }) => {
+                            // Plan step assembly for the persisted trace now lives in
+                            // `rara_kernel::trace::TraceBuilder` (observes the same
+                            // `PlanCompleted` event). This arm only drives the live
+                            // Telegram render.
                             if progress.plan_steps.is_some() {
                                 // Mark running steps as done; leave pending steps as-is
                                 // (they were never started, so marking them "done" would
@@ -4386,23 +4388,6 @@ fn spawn_stream_forwarder(
                                         if matches!(step.status, StepStatus::Running) {
                                             step.status = StepStatus::Done;
                                         }
-                                    }
-                                    // Save plan steps for trace detail view.
-                                    progress.saved_plan_steps = steps
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(i, s)| {
-                                            let icon = match &s.status {
-                                                StepStatus::Done => "\u{2705}",
-                                                StepStatus::Failed(_) => "\u{274c}",
-                                                _ => "\u{2b1c}",
-                                            };
-                                            format!("{icon} \u{7b2c}{}\u{6b65}\u{ff1a}{}", i + 1, s.task)
-                                        })
-                                        .collect();
-                                    // Append completion summary.
-                                    if !summary.is_empty() {
-                                        progress.saved_plan_steps.push(format!("\u{2705} {summary}"));
                                     }
                                 }
 
@@ -4565,6 +4550,13 @@ fn spawn_stream_forwarder(
                                 progress_dirty = true;
                             }
                         }
+                        Ok(StreamEvent::TraceReady { trace_id }) => {
+                            // Kernel has persisted the turn's ExecutionTrace.
+                            // Stash the ID; the stream-close branch uses it to
+                            // fetch the trace for the compact summary render
+                            // and to embed in inline-button callback data.
+                            completed_trace_id = Some(trace_id);
+                        }
                         // Progress, DockTurnComplete, LoopBreakerTriggered
                         // — no Telegram UX for these.
                         Ok(_) => {}
@@ -4612,34 +4604,39 @@ fn spawn_stream_forwarder(
                             pinned.on_stream_close();
                             flush_if_dirty!();
 
-                            // ── Finalize: always create trace + compact summary ──
+                            // ── Finalize: fetch kernel-persisted trace + render summary ──
+                            // The kernel owns ExecutionTrace assembly and persistence
+                            // (see `rara_kernel::trace::TraceBuilder`); it emits
+                            // `StreamEvent::TraceReady { trace_id }` just before
+                            // stream close, which we stashed in `completed_trace_id`.
                             // Every agent turn (including pure text replies) gets a
                             // compact summary with trace/cascade buttons. If no
                             // progress message exists yet, send a new one.
+                            let fetched_trace = match &completed_trace_id {
+                                Some(tid) => match trace_service.get(tid).await {
+                                    Ok(Some(t)) => Some(t),
+                                    Ok(None) => {
+                                        warn!(trace_id = %tid, "kernel announced TraceReady but row not found");
+                                        None
+                                    }
+                                    Err(e) => {
+                                        warn!(error = %e, trace_id = %tid, "failed to fetch execution trace");
+                                        None
+                                    }
+                                },
+                                None => {
+                                    // Missing TraceReady means the kernel save step
+                                    // failed (logged kernel-side). We still want to
+                                    // close out the progress message rather than
+                                    // leaving a dangling "⏳" status.
+                                    None
+                                }
+                            };
+
+                            if let (Some(trace), Some(trace_id)) =
+                                (fetched_trace.as_ref(), completed_trace_id.as_ref())
                             {
-                                let plan_steps = std::mem::take(&mut progress.saved_plan_steps);
-
-                                let trace = ExecutionTrace {
-                                    duration_secs:    progress.turn_started.elapsed().as_secs(),
-                                    iterations:       progress.iterations,
-                                    model:            std::mem::take(&mut progress.model),
-                                    input_tokens:     progress.input_tokens,
-                                    output_tokens:    progress.output_tokens,
-                                    thinking_ms:      progress.thinking_ms,
-                                    thinking_preview: std::mem::take(&mut progress.reasoning_preview),
-                                    turn_rationale:   progress.turn_rationale.take(),
-                                    plan_steps,
-                                    tools:            progress.tools.iter().map(|t| ToolTraceEntry {
-                                        name:        t.name.clone(),
-                                        duration_ms: t.duration.map(|d| d.as_millis() as u64),
-                                        success:     t.success,
-                                        summary:     t.summary.clone(),
-                                        error:       t.error.clone(),
-                                    }).collect(),
-                                    rara_message_id:  progress.rara_message_id.clone(),
-                                };
-
-                                let compact = render_compact_summary(&trace);
+                                let compact = render_compact_summary(trace);
                                 // Reuse existing progress message or send a new one
                                 // (pure text replies have no progress message yet).
                                 let mid = if let Some(mid) = progress.message_id {
@@ -4649,8 +4646,7 @@ fn spawn_stream_forwarder(
                                     let req = with_thread_id!(bot
                                         .send_message(ChatId(chat_id), &compact)
                                         .parse_mode(ParseMode::Html), thread_id);
-                                    match req.await
-                                    {
+                                    match req.await {
                                         Ok(msg) => msg.id,
                                         Err(e) => {
                                             warn!(error = %e, "failed to send trace summary");
@@ -4659,118 +4655,97 @@ fn spawn_stream_forwarder(
                                     }
                                 };
 
-                                // Persist trace to SQLite, then show compact summary
-                                // with inline button containing the trace_id.
-                                let session_name = session_id.to_string();
-                                match trace_service.save(&session_name, &trace).await {
-                                    Ok(trace_id) => {
-                                        let callback_data = format!(
-                                            "trace:show:{}:{}:{trace_id}",
-                                            chat_id, mid.0,
-                                        );
-                                        let cascade_cb = format!(
-                                            "cas:show:{}:{}:{trace_id}",
-                                            chat_id, mid.0,
-                                        );
-                                        let mut buttons = vec![
-                                            InlineKeyboardButton::callback(
-                                                "\u{1f4ca} \u{8be6}\u{60c5}",
-                                                callback_data,
-                                            ),
-                                            InlineKeyboardButton::callback(
-                                                "\u{1f50d} Cascade",
-                                                cascade_cb,
-                                            ),
-                                        ];
-                                        // Show Dashboard button when background tasks exist.
-                                        // Include trace_id so the dashboard can offer a Back button.
-                                        if !progress.background_tasks.is_empty() {
-                                            let dash_cb = format!(
-                                                "dash:tasks:{}:{}:{trace_id}",
-                                                chat_id, mid.0,
-                                            );
-                                            buttons.push(InlineKeyboardButton::callback(
-                                                "\u{1f4f1} Dashboard",
-                                                dash_cb,
-                                            ));
-                                        }
-                                        let keyboard = InlineKeyboardMarkup::new(vec![buttons]);
+                                let callback_data = format!(
+                                    "trace:show:{}:{}:{trace_id}",
+                                    chat_id, mid.0,
+                                );
+                                let cascade_cb = format!(
+                                    "cas:show:{}:{}:{trace_id}",
+                                    chat_id, mid.0,
+                                );
+                                let mut buttons = vec![
+                                    InlineKeyboardButton::callback(
+                                        "\u{1f4ca} \u{8be6}\u{60c5}",
+                                        callback_data,
+                                    ),
+                                    InlineKeyboardButton::callback(
+                                        "\u{1f50d} Cascade",
+                                        cascade_cb,
+                                    ),
+                                ];
+                                // Show Dashboard button when background tasks exist.
+                                // Include trace_id so the dashboard can offer a Back button.
+                                if !progress.background_tasks.is_empty() {
+                                    let dash_cb = format!(
+                                        "dash:tasks:{}:{}:{trace_id}",
+                                        chat_id, mid.0,
+                                    );
+                                    buttons.push(InlineKeyboardButton::callback(
+                                        "\u{1f4f1} Dashboard",
+                                        dash_cb,
+                                    ));
+                                }
+                                let keyboard = InlineKeyboardMarkup::new(vec![buttons]);
 
-                                        // Retry once on 429 — forum topics
-                                        // exhaust the edit quota with progress
-                                        // updates, so the final edit often hits
-                                        // a rate-limit window.
+                                // Retry once on 429 — forum topics
+                                // exhaust the edit quota with progress
+                                // updates, so the final edit often hits
+                                // a rate-limit window.
+                                rate_limiter.acquire(chat_id).await;
+                                let edit_res = bot
+                                    .edit_message_text(ChatId(chat_id), mid, &compact)
+                                    .parse_mode(ParseMode::Html)
+                                    .reply_markup(keyboard.clone())
+                                    .await;
+                                if let Err(ref e) = edit_res {
+                                    if let Some(secs) = parse_retry_after(&e.to_string()) {
+                                        info!(chat_id, retry_after = secs, "compact summary edit rate-limited, retrying");
+                                        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                                         rate_limiter.acquire(chat_id).await;
-                                        let edit_res = bot
+                                        if let Err(ref re) = bot
                                             .edit_message_text(ChatId(chat_id), mid, &compact)
                                             .parse_mode(ParseMode::Html)
                                             .reply_markup(keyboard.clone())
-                                            .await;
-                                        if let Err(ref e) = edit_res {
-                                            if let Some(secs) = parse_retry_after(&e.to_string()) {
-                                                info!(chat_id, retry_after = secs, "compact summary edit rate-limited, retrying");
-                                                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                                                rate_limiter.acquire(chat_id).await;
-                                                if let Err(ref re) = bot
-                                                    .edit_message_text(ChatId(chat_id), mid, &compact)
+                                            .await
+                                        {
+                                            warn!(chat_id, error = %re, "compact summary edit retry failed — falling back to fresh send");
+                                            // Rate-limit window still closed for edits. A fresh send uses
+                                            // 1 msg from the 20/min group quota and is often available when
+                                            // edits are blocked — better than silently dropping the buttons.
+                                            rate_limiter.acquire(chat_id).await;
+                                            let fresh = with_thread_id!(
+                                                bot.send_message(ChatId(chat_id), &compact)
                                                     .parse_mode(ParseMode::Html)
-                                                    .reply_markup(keyboard.clone())
-                                                    .await
-                                                {
-                                                    warn!(chat_id, error = %re, "compact summary edit retry failed — falling back to fresh send");
-                                                    // Rate-limit window still closed for edits. A fresh send uses
-                                                    // 1 msg from the 20/min group quota and is often available when
-                                                    // edits are blocked — better than silently dropping the buttons.
-                                                    rate_limiter.acquire(chat_id).await;
-                                                    let fresh = with_thread_id!(
-                                                        bot.send_message(ChatId(chat_id), &compact)
-                                                            .parse_mode(ParseMode::Html)
-                                                            .reply_markup(keyboard.clone()),
-                                                        thread_id
-                                                    );
-                                                    if let Err(ref send_err) = fresh.await {
-                                                        warn!(chat_id, error = %send_err, "compact summary fallback send also failed — buttons truly lost");
-                                                    }
-                                                }
-                                            } else if !e.to_string().contains("message is not modified") {
-                                                warn!(chat_id, error = %e, "compact summary edit failed — falling back to fresh send");
-                                                rate_limiter.acquire(chat_id).await;
-                                                let fresh = with_thread_id!(
-                                                    bot.send_message(ChatId(chat_id), &compact)
-                                                        .parse_mode(ParseMode::Html)
-                                                        .reply_markup(keyboard.clone()),
-                                                    thread_id
-                                                );
-                                                if let Err(ref send_err) = fresh.await {
-                                                    warn!(chat_id, error = %send_err, "compact summary fallback send also failed — buttons truly lost");
-                                                }
+                                                    .reply_markup(keyboard.clone()),
+                                                thread_id
+                                            );
+                                            if let Err(ref send_err) = fresh.await {
+                                                warn!(chat_id, error = %send_err, "compact summary fallback send also failed — buttons truly lost");
                                             }
                                         }
-                                    }
-                                    Err(e) => {
-                                        warn!(error = %e, "failed to persist execution trace");
-                                        // For progress messages, edit to show compact
-                                        // without buttons. For newly sent messages the
-                                        // compact text is already visible.
-                                        if progress.message_id.is_some() {
-                                            rate_limiter.acquire(chat_id).await;
-                                            let edit_res = bot
-                                                .edit_message_text(ChatId(chat_id), mid, &compact)
+                                    } else if !e.to_string().contains("message is not modified") {
+                                        warn!(chat_id, error = %e, "compact summary edit failed — falling back to fresh send");
+                                        rate_limiter.acquire(chat_id).await;
+                                        let fresh = with_thread_id!(
+                                            bot.send_message(ChatId(chat_id), &compact)
                                                 .parse_mode(ParseMode::Html)
-                                                .await;
-                                            if let Err(ref e) = edit_res {
-                                                if let Some(secs) = parse_retry_after(&e.to_string()) {
-                                                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                                                    rate_limiter.acquire(chat_id).await;
-                                                    let _ = bot
-                                                        .edit_message_text(ChatId(chat_id), mid, &compact)
-                                                        .parse_mode(ParseMode::Html)
-                                                        .await;
-                                                }
-                                            }
+                                                .reply_markup(keyboard.clone()),
+                                            thread_id
+                                        );
+                                        if let Err(ref send_err) = fresh.await {
+                                            warn!(chat_id, error = %send_err, "compact summary fallback send also failed — buttons truly lost");
                                         }
                                     }
                                 }
+                            } else if let Some(mid) = progress.message_id {
+                                // No trace available (kernel save failed). Leave
+                                // the current progress text in place but drop any
+                                // pending buttons — detail view has nothing to show.
+                                rate_limiter.acquire(chat_id).await;
+                                let text = progress.render_text();
+                                let _ = bot
+                                    .edit_message_text(ChatId(chat_id), mid, &text)
+                                    .await;
                             }
 
                             break;
@@ -5534,7 +5509,7 @@ mod render_progress_tests {
 
     /// Helper: build a minimal `ProgressMessage` for rendering tests.
     fn test_progress(turn_rationale: Option<&str>) -> ProgressMessage {
-        let mut pm = ProgressMessage::new("test-msg-id".into());
+        let mut pm = ProgressMessage::new();
         pm.turn_rationale = turn_rationale.map(String::from);
         pm
     }

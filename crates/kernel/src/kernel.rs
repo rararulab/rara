@@ -2373,7 +2373,17 @@ impl Kernel {
         // client (e.g. SSE for web, chunked updates for Telegram). The
         // stream_handle is passed into the agent loop so it can emit tokens
         // as they arrive from the LLM.
-        let stream_handle = self.io.stream_hub().open(session_key.clone());
+        // Attach a TraceBuilder so every `stream_handle.emit` feeds the
+        // per-turn trace accumulator in addition to broadcasting to
+        // subscribers. Ownership stays with the turn task so it can call
+        // `finalize` after the agent loop returns (see Phase 7f).
+        let trace_builder = Arc::new(crate::trace::TraceBuilder::new());
+        let stream_handle = self
+            .io
+            .stream_hub()
+            .open(session_key.clone())
+            .with_trace_builder(Arc::clone(&trace_builder));
+        let trace_service = self.trace_service.clone();
 
         // Clone dependencies for the spawned task. The task outlives this
         // method call, so it needs owned copies of everything it uses.
@@ -2661,6 +2671,33 @@ impl Kernel {
                             .saturating_add(result.output_tokens),
                         model:         result.model.clone(),
                     });
+                }
+
+                // -- 7f: Persist execution trace --
+                // Why: Every agent turn — success or failure — gets its trace
+                // persisted to SQLite so that any channel can later retrieve
+                // it (Telegram "📊 详情" inline button, web chat
+                // execution-trace modal). Before #1613 this was TG-adapter
+                // responsibility and only TG turns had rows; now trace
+                // construction + save is a single kernel-owned concern.
+                //
+                // `finalize` takes `&self` because the `TraceBuilder` is
+                // shared with `stream_handle` via `Arc`; the handle is still
+                // alive at this point (we emit `TraceReady` through it just
+                // below), so ownership cannot be transferred out.
+                let trace = trace_builder.finalize(msg_id.to_string());
+                match trace_service.save(&session_key.to_string(), &trace).await {
+                    Ok(trace_id) => {
+                        stream_handle
+                            .emit(crate::io::StreamEvent::TraceReady { trace_id });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            session_key = %session_key,
+                            error = %e,
+                            "failed to persist execution trace",
+                        );
+                    }
                 }
 
                 // Close stream.
