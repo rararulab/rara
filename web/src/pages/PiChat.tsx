@@ -555,6 +555,11 @@ export default function PiChat() {
       const agentMsgs = toAgentMessages(msgs);
       if (agentMsgs.length > 0) {
         agent.replaceMessages(agentMsgs);
+        // Belt-and-suspenders: the listing's `message_count` is sometimes
+        // stale (e.g. older sessions whose counter never caught up), so
+        // reconcile against the actual loaded messages before showing a
+        // welcome overlay over a populated thread.
+        setShowWelcome(false);
       }
       // Rebuild the artifacts panel from the same message list so switching
       // back to a session restores every previously-created artifact.

@@ -344,12 +344,13 @@
   margin-right: auto;
   width: 100%;
 }
-.rara-chat assistant-message,
-.rara-chat user-message {
-  max-width: 48rem;
-  margin-left: auto;
-  margin-right: auto;
-}
+/*
+ * No cap on `user-message` / `assistant-message` themselves — pi-web-ui
+ * already wraps the list in `.max-w-3xl mx-auto p-4 pb-0` (48rem
+ * centred), and re-applying `max-width + margin: auto` here collapses
+ * short user bubbles to content-width and recentres them, defeating
+ * the right-alignment we want for "my messages".
+ */
 
 /*
  * Voice button horizontal alignment. Paperclip sits at ~17px inside
@@ -364,6 +365,12 @@
 }
 
 .user-message-container {
+  /* Content-size the bubble so justify-end actually pushes it right.
+     In a flex container `display: block` resolves to "stretch" along
+     the main axis, which was making short user messages span the full
+     column width. */
+  width: fit-content;
+  max-width: 80%;
   background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
   border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);
   /* `sm` in tailwind ≈ 4px; overrides pi-web-ui's heavier blur(10px). */
