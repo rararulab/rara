@@ -17,10 +17,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { randomLoadingHint } from './loading-hints';
+
 import { api } from '@/api/client';
 import {
   isLiveState,
   turnsToTimeline,
+  type PlanState,
+  type PlanStep,
+  type PlanStepStatusEvent,
+  type PlanStepUiStatus,
   type StreamEvent,
   type TimelineItem,
   type TurnTrace,
@@ -110,6 +116,25 @@ export function useSessionTimeline(
     let currentThinkSeq: number | null = null;
     const toolSeqById = new Map<string, number>();
 
+    // The active plan widget for this turn. A single `plan_card` row per
+    // plan; subsequent `plan_progress` / `plan_replan` / `plan_completed`
+    // events mutate the same row in place.
+    let planSeq: number | null = null;
+
+    // Placeholder "thinking…" row inserted as soon as the WS opens so the
+    // user gets immediate feedback while the kernel is bootstrapping the
+    // turn (LLM dispatch can take 2-30s for cold runs). Cleared on the
+    // first real delta/tool call, on `done`, or when the WS closes.
+    let placeholderSeq: number | null = null;
+    const clearPlaceholder = () => {
+      if (placeholderSeq === null) return;
+      const target = placeholderSeq;
+      placeholderSeq = null;
+      setLiveItems((prev) =>
+        prev.filter((it) => !(it.seq === target && it.kind === 'in_progress')),
+      );
+    };
+
     // Live events belong to the turn after the last one already recorded.
     // Captured at WS-open time; not refreshed mid-stream. `done` clears
     // live state, so drift between this value and turnsQuery is bounded.
@@ -117,7 +142,17 @@ export function useSessionTimeline(
 
     ws.onopen = () => {
       setIsStreaming(true);
-      setLiveItems([]);
+      const seq = nextSeq();
+      placeholderSeq = seq;
+      setLiveItems([
+        {
+          seq,
+          turn: liveTurnIdx,
+          kind: 'in_progress',
+          content: randomLoadingHint(),
+          streaming: true,
+        },
+      ]);
     };
 
     ws.onmessage = (ev) => {
@@ -132,6 +167,7 @@ export function useSessionTimeline(
         case 'text_delta': {
           const delta = (event as { text?: string }).text ?? '';
           if (!delta) break;
+          clearPlaceholder();
           setLiveItems((prev) => {
             if (currentTextSeq !== null) {
               const target = currentTextSeq;
@@ -160,6 +196,7 @@ export function useSessionTimeline(
         case 'reasoning_delta': {
           const delta = (event as { text?: string }).text ?? '';
           if (!delta) break;
+          clearPlaceholder();
           setLiveItems((prev) => {
             if (currentThinkSeq !== null) {
               const target = currentThinkSeq;
@@ -199,6 +236,7 @@ export function useSessionTimeline(
         }
 
         case 'tool_call_start': {
+          clearPlaceholder();
           const e = event as {
             name: string;
             id: string;
@@ -294,8 +332,94 @@ export function useSessionTimeline(
           break;
         }
 
+        case 'plan_created': {
+          clearPlaceholder();
+          const e = event as Extract<StreamEvent, { type: 'plan_created' }>;
+          const steps: PlanStep[] = Array.from({ length: e.total_steps }, (_, i) => ({
+            index: i + 1,
+            task: '',
+            status: 'pending',
+          }));
+          const plan: PlanState = {
+            goal: e.goal,
+            totalSteps: e.total_steps,
+            steps,
+            currentStepIdx: null,
+            completed: false,
+          };
+          const seq = nextSeq();
+          planSeq = seq;
+          setLiveItems((prev) => [
+            ...prev,
+            {
+              seq,
+              turn: liveTurnIdx,
+              kind: 'plan_card',
+              plan,
+              streaming: true,
+            },
+          ]);
+          break;
+        }
+
+        case 'plan_progress': {
+          clearPlaceholder();
+          if (planSeq === null) break;
+          const e = event as Extract<StreamEvent, { type: 'plan_progress' }>;
+          const target = planSeq;
+          setLiveItems((prev) =>
+            prev.map((it) => {
+              if (it.seq !== target || it.kind !== 'plan_card' || !it.plan) {
+                return it;
+              }
+              return { ...it, plan: applyPlanProgress(it.plan, e) };
+            }),
+          );
+          break;
+        }
+
+        case 'plan_replan': {
+          if (planSeq === null) break;
+          const e = event as Extract<StreamEvent, { type: 'plan_replan' }>;
+          const target = planSeq;
+          setLiveItems((prev) =>
+            prev.map((it) => {
+              if (it.seq !== target || it.kind !== 'plan_card' || !it.plan) {
+                return it;
+              }
+              return { ...it, plan: applyPlanReplan(it.plan, e.reason) };
+            }),
+          );
+          break;
+        }
+
+        case 'plan_completed': {
+          if (planSeq === null) break;
+          const e = event as Extract<StreamEvent, { type: 'plan_completed' }>;
+          const target = planSeq;
+          planSeq = null;
+          setLiveItems((prev) =>
+            prev.map((it) => {
+              if (it.seq !== target || it.kind !== 'plan_card' || !it.plan) {
+                return it;
+              }
+              return {
+                ...it,
+                streaming: false,
+                plan: { ...it.plan, summary: e.summary, completed: true },
+              };
+            }),
+          );
+          break;
+        }
+
         case 'done':
           setIsStreaming(false);
+          // Drop the placeholder unconditionally — turns that produced
+          // zero deltas (e.g. a tool-only turn that errored before any
+          // streaming) would otherwise leave the spinner row hanging
+          // until the historical refetch overwrote `liveItems`.
+          clearPlaceholder();
           // Trigger an immediate refetch so the just-completed turn
           // appears as historical items before we clear live rows.
           // This avoids a 5s blank/stale window after every turn.
@@ -303,14 +427,21 @@ export function useSessionTimeline(
           break;
 
         default:
-          // Unknown / unhandled event types (PlanCreated, UsageUpdate, etc.)
-          // are ignored. Add cases here as UI coverage expands.
+          // Unknown / unhandled event types (UsageUpdate,
+          // BackgroundTaskStarted, etc.) are ignored. Add cases here as
+          // UI coverage expands.
           break;
       }
     };
 
-    ws.onclose = () => setIsStreaming(false);
-    ws.onerror = () => setIsStreaming(false);
+    ws.onclose = () => {
+      setIsStreaming(false);
+      clearPlaceholder();
+    };
+    ws.onerror = () => {
+      setIsStreaming(false);
+      clearPlaceholder();
+    };
 
     return () => {
       ws.close();
@@ -333,4 +464,88 @@ export function useSessionTimeline(
       void turnsQuery.refetch();
     },
   };
+}
+
+/** Map kernel `PlanStepStatus` JSON onto the UI-facing status enum. */
+function mapStepStatus(status: PlanStepStatusEvent): {
+  ui: PlanStepUiStatus;
+  reason?: string;
+} {
+  if (status === 'running') return { ui: 'running' };
+  if (status === 'done') return { ui: 'done' };
+  if ('failed' in status) {
+    return { ui: 'failed', reason: status.failed.reason };
+  }
+  return { ui: 'needs_replan', reason: status.needs_replan.reason };
+}
+
+/**
+ * Extract the task description from kernel `status_text`.
+ *
+ * Kernel formats status_text as `第N步：{task}…`; the TG adapter splits
+ * on the full-width colon (U+FF1A) and trims the trailing ellipsis. We
+ * mirror that logic so step rows render the same task text across
+ * channels.
+ */
+function extractTask(statusText: string): string {
+  const colon = statusText.indexOf('\uFF1A');
+  const tail = colon >= 0 ? statusText.slice(colon + 1) : statusText;
+  return tail.replace(/\u2026$/, '').trim();
+}
+
+/** Apply a `plan_progress` event to the current plan state. */
+function applyPlanProgress(
+  plan: PlanState,
+  event: Extract<StreamEvent, { type: 'plan_progress' }>,
+): PlanState {
+  const { current_step: idx, total_steps: total, step_status, status_text } = event;
+  const { ui, reason } = mapStepStatus(step_status);
+
+  const steps = plan.steps.slice();
+  // Replan can dynamically extend the plan beyond the original length.
+  while (steps.length <= idx) {
+    steps.push({ index: steps.length + 1, task: '', status: 'pending' });
+  }
+  // When the active step advances, finalize any prior `running` step that
+  // never received an explicit `done` (kernel emits Done for the prior
+  // step before Running for the next, but be defensive against drops).
+  if (plan.currentStepIdx !== null && plan.currentStepIdx !== idx) {
+    const prev = steps[plan.currentStepIdx];
+    if (prev && prev.status === 'running') {
+      steps[plan.currentStepIdx] = { ...prev, status: 'done' };
+    }
+  }
+
+  const existing = steps[idx];
+  const task = existing.task || extractTask(status_text);
+  steps[idx] = { ...existing, task, status: ui, reason };
+
+  return {
+    ...plan,
+    totalSteps: Math.max(plan.totalSteps, total, steps.length),
+    steps,
+    currentStepIdx: idx,
+  };
+}
+
+/**
+ * Apply a `plan_replan` event: mark the current step failed and drop
+ * trailing pending steps. Replacement steps arrive via subsequent
+ * `plan_progress` events at higher indices and dynamically extend the
+ * plan in {@link applyPlanProgress}.
+ */
+function applyPlanReplan(plan: PlanState, reason: string): PlanState {
+  const steps = plan.steps.slice();
+  if (plan.currentStepIdx !== null) {
+    const cur = steps[plan.currentStepIdx];
+    if (cur) {
+      steps[plan.currentStepIdx] = {
+        ...cur,
+        status: 'needs_replan',
+        reason,
+      };
+    }
+  }
+  const trimmed = steps.filter((s) => s.status !== 'pending');
+  return { ...plan, steps: trimmed, replanReason: reason };
 }

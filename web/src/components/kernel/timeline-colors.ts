@@ -67,6 +67,22 @@ export const KIND_PALETTE: Record<EventKind, KindPalette> = {
     label: 'bg-red-500/20 text-red-700 dark:bg-red-500/15 dark:text-red-300',
     text: 'Error',
   },
+  in_progress: {
+    // Reuse the thinking violet hue so the placeholder visually belongs
+    // to the "pre-output" phase of the turn.
+    bar: 'bg-violet-300/50',
+    barActive: 'bg-violet-400',
+    label: 'bg-violet-500/15 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300',
+    text: '…',
+  },
+  plan_card: {
+    // Amber distinguishes "directive / structured plan" from the other
+    // kinds while staying within the existing tonal range.
+    bar: 'bg-amber-400/60',
+    barActive: 'bg-amber-500',
+    label: 'bg-amber-500/20 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+    text: 'Plan',
+  },
 };
 
 /** Short label to show inside a row's type badge. */
@@ -86,16 +102,20 @@ export function eventSummary(item: {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
+  plan?: { goal: string };
 }): string {
   switch (item.kind) {
     case 'agent':
     case 'thinking':
     case 'error':
+    case 'in_progress':
       return item.content?.trim() ?? '';
     case 'tool_use':
       return toolInputSummary(item.input);
     case 'tool_result':
       return item.output?.trim().slice(0, 200) ?? '';
+    case 'plan_card':
+      return item.plan?.goal ?? '';
   }
 }
 

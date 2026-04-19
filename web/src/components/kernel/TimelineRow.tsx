@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import { AlertCircle, Brain, ChevronRight } from 'lucide-react';
+import { AlertCircle, Brain, ChevronRight, Loader2 } from 'lucide-react';
 import { forwardRef, useState } from 'react';
 
 import { KIND_PALETTE, eventLabel, eventSummary } from './timeline-colors';
 
-import type { TimelineItem } from '@/api/kernel-types';
+import type { PlanState, PlanStepUiStatus, TimelineItem } from '@/api/kernel-types';
 import { cn } from '@/lib/utils';
 
 const DETAIL_MAX_CHARS = 4000;
@@ -45,6 +45,20 @@ export const TimelineRow = forwardRef<HTMLDivElement, TimelineRowProps>(function
 ) {
   const [expanded, setExpanded] = useState(false);
 
+  // Plan cards render a self-contained widget (goal header, step list,
+  // footer) rather than the standard badge+summary row layout.
+  if (item.kind === 'plan_card' && item.plan) {
+    return (
+      <div
+        ref={ref}
+        className={cn('group transition-colors', isSelected && 'bg-accent/50')}
+        onClick={onClick}
+      >
+        <PlanCardBody item={item} plan={item.plan} />
+      </div>
+    );
+  }
+
   const palette = KIND_PALETTE[item.kind];
   const label = eventLabel(item.kind, item.tool);
   const summary = eventSummary(item);
@@ -64,6 +78,9 @@ export const TimelineRow = forwardRef<HTMLDivElement, TimelineRowProps>(function
           )}
         >
           {item.kind === 'thinking' && <Brain className="mr-1 h-3 w-3 shrink-0" />}
+          {item.kind === 'in_progress' && (
+            <Loader2 className="mr-1 h-3 w-3 shrink-0 animate-spin" />
+          )}
           {item.kind === 'error' && <AlertCircle className="mr-1 h-3 w-3 shrink-0" />}
           <span className="truncate">{label}</span>
         </span>
@@ -136,6 +153,12 @@ function rowHasDetail(item: TimelineItem): boolean {
       return !!item.content && item.content.length > 0;
     case 'agent':
       return !!item.content && item.content.split('\n').length > 1;
+    case 'in_progress':
+      // Placeholder is purely decorative — never expandable.
+      return false;
+    case 'plan_card':
+      // Self-contained widget — early-returned before this helper runs.
+      return false;
   }
 }
 
@@ -166,7 +189,100 @@ function RowDetail({ item }: { item: TimelineItem }) {
           {item.content ?? ''}
         </pre>
       );
+    case 'in_progress':
+      // Never rendered — `rowHasDetail` returns false for this kind.
+      return null;
+    case 'plan_card':
+      // Self-contained widget — never renders via the shared detail pane.
+      return null;
   }
+}
+
+const STEP_STATUS_ICON: Record<PlanStepUiStatus, string> = {
+  pending: '\u{26AA}',
+  running: '\u{1F504}',
+  done: '\u{2705}',
+  failed: '\u{274C}',
+  needs_replan: '\u{1F501}',
+};
+
+/**
+ * Self-contained plan widget: goal header, step list with status icons,
+ * nested active tool calls, optional replan/summary footer.
+ */
+function PlanCardBody({ item, plan }: { item: TimelineItem; plan: PlanState }) {
+  const palette = KIND_PALETTE.plan_card;
+  const completed = plan.steps.filter((s) => s.status === 'done').length;
+
+  return (
+    <div className="px-4 py-2">
+      <div className="flex items-start gap-2">
+        <span
+          className={cn(
+            'mt-0.5 inline-flex min-w-[60px] shrink-0 items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-medium',
+            palette.label,
+          )}
+        >
+          <span className="truncate">📋 {palette.text}</span>
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="truncate text-xs font-medium text-foreground">{plan.goal}</span>
+            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
+              {completed}/{plan.totalSteps}
+            </span>
+            {item.streaming && !plan.completed && (
+              <span className="inline-block h-3 w-0.5 translate-y-0.5 animate-pulse bg-current align-middle" />
+            )}
+          </div>
+
+          <ul className="mt-1.5 space-y-0.5">
+            {plan.steps.map((step) => (
+              <li key={step.index} className="flex items-start gap-1.5 text-[11px] leading-relaxed">
+                <span className="shrink-0" aria-hidden>
+                  {STEP_STATUS_ICON[step.status]}
+                </span>
+                <span
+                  className={cn(
+                    'min-w-0 flex-1',
+                    step.status === 'done' &&
+                      'text-muted-foreground line-through decoration-muted-foreground/40',
+                    step.status === 'pending' && 'text-muted-foreground/70',
+                    (step.status === 'failed' || step.status === 'needs_replan') &&
+                      'text-destructive',
+                  )}
+                >
+                  <span className="mr-1 tabular-nums text-muted-foreground/60">{step.index}.</span>
+                  {step.task || <span className="italic opacity-60">(pending)</span>}
+                  {step.reason && (
+                    <span className="ml-1 text-muted-foreground">— {step.reason}</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          {plan.replanReason && !plan.completed && (
+            <div className="mt-1.5 text-[11px] text-muted-foreground">
+              <span aria-hidden>🔁 </span>
+              Replan: {plan.replanReason}
+            </div>
+          )}
+          {plan.completed && plan.summary && (
+            <div className="mt-1.5 text-[11px] text-muted-foreground">
+              <span aria-hidden>✅ </span>
+              {plan.summary}
+            </div>
+          )}
+        </div>
+
+        <span className="mt-1 shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
+          #{item.seq}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function truncate(s: string): string {

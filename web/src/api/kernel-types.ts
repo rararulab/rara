@@ -66,11 +66,24 @@ export interface TurnTrace {
 }
 
 /**
+ * Structured per-step status carried by `plan_progress` events.
+ *
+ * Mirrors `rara_kernel::io::PlanStepStatus` (snake_case serde tag).
+ * `failed` / `needs_replan` carry a human-readable reason that the UI
+ * surfaces on the corresponding step row.
+ */
+export type PlanStepStatusEvent =
+  | 'running'
+  | 'done'
+  | { failed: { reason: string } }
+  | { needs_replan: { reason: string } };
+
+/**
  * Narrow subset of kernel `StreamEvent` the UI consumes today.
  *
- * The kernel emits more variants (PlanCreated, UsageUpdate,
- * BackgroundTaskStarted, etc.); we parse defensively — unknown variants
- * are ignored by the hook.
+ * The kernel emits more variants (UsageUpdate, BackgroundTaskStarted,
+ * etc.); we parse defensively — unknown variants are ignored by the
+ * hook.
  */
 export type StreamEvent =
   | { type: 'text_delta'; text: string }
@@ -96,6 +109,22 @@ export type StreamEvent =
       model: string;
       rara_message_id: string;
     }
+  | {
+      type: 'plan_created';
+      goal: string;
+      total_steps: number;
+      compact_summary: string;
+      estimated_duration_secs: number | null;
+    }
+  | {
+      type: 'plan_progress';
+      current_step: number;
+      total_steps: number;
+      step_status: PlanStepStatusEvent;
+      status_text: string;
+    }
+  | { type: 'plan_replan'; reason: string }
+  | { type: 'plan_completed'; summary: string }
   | { type: 'done' }
   | { type: string; [k: string]: unknown };
 
@@ -104,7 +133,56 @@ export type StreamEvent =
 // ---------------------------------------------------------------------------
 
 /** Semantic category of a timeline item — drives icon/color/layout. */
-export type EventKind = 'agent' | 'thinking' | 'tool_use' | 'tool_result' | 'error';
+export type EventKind =
+  | 'agent'
+  | 'thinking'
+  | 'tool_use'
+  | 'tool_result'
+  | 'error'
+  /**
+   * Live-only placeholder inserted right after the user submits a
+   * message so the UI gives immediate feedback while the kernel is
+   * setting up the turn / dispatching the LLM call. Cleared as soon as
+   * the first real delta / tool call arrives, or when the turn ends.
+   * Never appears in historical turn projections.
+   */
+  | 'in_progress'
+  /**
+   * Live-only multi-step plan progress widget. Created on the first
+   * `plan_created` event and mutated in place by `plan_progress` /
+   * `plan_replan` / `plan_completed`. Self-contained — renders its own
+   * step list rather than going through the standard row layout.
+   */
+  | 'plan_card';
+
+/** Per-step status for the live `plan_card` row. */
+export type PlanStepUiStatus = 'pending' | 'running' | 'done' | 'failed' | 'needs_replan';
+
+/** Single step within a plan card row. */
+export interface PlanStep {
+  /** 1-based step number for display (matches kernel's `current_step + 1`). */
+  index: number;
+  /** Free-form task description, parsed from the event's `status_text`. */
+  task: string;
+  status: PlanStepUiStatus;
+  /** Failure / replan reason (only set when status is failed/needs_replan). */
+  reason?: string;
+}
+
+/** State for an in-flight `plan_card` timeline row. */
+export interface PlanState {
+  goal: string;
+  totalSteps: number;
+  steps: PlanStep[];
+  /** 0-based index of the most recent step that received an update. */
+  currentStepIdx: number | null;
+  /** Optional reason from the most recent `plan_replan`. */
+  replanReason?: string;
+  /** Final summary set by `plan_completed`. */
+  summary?: string;
+  /** True once `plan_completed` fires. */
+  completed: boolean;
+}
 
 /**
  * One renderable row in the session timeline.
@@ -132,6 +210,8 @@ export interface TimelineItem {
   success?: boolean;
   /** Still receiving WS deltas — callers may show a cursor/pulse. */
   streaming?: boolean;
+  /** Plan widget state for `kind === "plan_card"`. */
+  plan?: PlanState;
 }
 
 /**
@@ -248,4 +328,51 @@ export function isLiveState(state: string | null): boolean {
   if (!state) return false;
   const s = state.toLowerCase();
   return s === 'active' || s === 'ready';
+}
+
+// ---------------------------------------------------------------------------
+// Cascade execution trace
+// ---------------------------------------------------------------------------
+// Mirrors `rara_kernel::cascade::CascadeTrace` (crates/kernel/src/cascade.rs).
+// Returned by `GET /api/v1/chat/sessions/{key}/trace?seq={seq}` and rendered
+// by `<CascadeModal>` when the user expands an assistant turn's "📊 详情"
+// button. Empty traces (no recorded ticks/entries) are surfaced explicitly so
+// the modal can show an empty state rather than a broken view.
+
+/** Classification of a single entry within a cascade tick. */
+export type CascadeEntryKind = 'user_input' | 'thought' | 'action' | 'observation';
+
+/** A single entry: user input, assistant thought, tool action, or observation. */
+export interface CascadeEntry {
+  /** Stable, human-readable identifier (`"{prefix}.{tick}-{short_id}-{seq}"`). */
+  id: string;
+  kind: CascadeEntryKind;
+  /** Display content — text, JSON-encoded tool args, or tool output. */
+  content: string;
+  /** RFC3339 timestamp of the underlying tape entry. */
+  timestamp: string;
+  /** Optional structured metadata copied from the tape entry. */
+  metadata?: unknown;
+}
+
+/** One reasoning-action cycle (an LLM call + its emitted entries). */
+export interface CascadeTick {
+  /** Zero-based tick index within the trace. */
+  index: number;
+  entries: CascadeEntry[];
+}
+
+/** High-level summary statistics for a cascade trace. */
+export interface CascadeSummary {
+  tick_count: number;
+  tool_call_count: number;
+  total_entries: number;
+}
+
+/** Top-level cascade trace for a single agent turn. */
+export interface CascadeTrace {
+  /** Opaque identifier — typically `"{session_key}-{seq}"`. */
+  message_id: string;
+  ticks: CascadeTick[];
+  summary: CascadeSummary;
 }
