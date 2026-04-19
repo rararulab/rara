@@ -440,6 +440,14 @@ export default function PiChat() {
     // Always trigger re-render after switching — even for empty sessions
     // so cleared messages are reflected in the UI.
     chatPanelRef.current?.agentInterface?.requestUpdate();
+    // Drop focus into the composer so the user can start typing
+    // immediately without a mouse click. Pi-web-ui's textarea mounts
+    // lazily so we defer to the next frame and, for added belt, again
+    // after the lit element completes its update pass.
+    requestAnimationFrame(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>("textarea");
+      ta?.focus();
+    });
   }, []);
 
   /** Reload current session messages (e.g. after voice message completes). */
@@ -757,6 +765,12 @@ export default function PiChat() {
         // Clear the loading overlay even if init fails (network/CORS/etc.)
         // so the user sees the empty chat panel rather than a spinner forever.
         setIsInitializing(false);
+        // Focus the composer on first mount so the caret is live
+        // immediately; subsequent session switches do the same via
+        // the `switchSession` callback.
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+        });
       }
     })();
 
