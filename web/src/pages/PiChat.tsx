@@ -371,7 +371,13 @@ export default function PiChat() {
     agent.clearMessages();
     agent.sessionId = session.key;
     setActiveSession(session);
-    setShowWelcome((session.message_count ?? 0) === 0);
+    // Optimistically hide the welcome overlay during the switch: the
+    // backend's `message_count` is unreliable (always 0 in the listing
+    // for older sessions, see #1585 round-2 notes), so trusting it
+    // here would flash the RARA overlay on every click before the
+    // messages arrive. We flip it back on after `list_messages` if
+    // the session really is empty.
+    setShowWelcome(false);
 
     // Restore the session's persisted model + thinking-level so the
     // model pill in the composer reflects the last settings used for
@@ -418,11 +424,10 @@ export default function PiChat() {
       const agentMsgs = toAgentMessages(msgs);
       if (agentMsgs.length > 0) {
         agent.replaceMessages(agentMsgs);
-        // Belt-and-suspenders: the listing's `message_count` is sometimes
-        // stale (e.g. older sessions whose counter never caught up), so
-        // reconcile against the actual loaded messages before showing a
-        // welcome overlay over a populated thread.
-        setShowWelcome(false);
+      } else if (agentRef.current?.sessionId === session.key) {
+        // Really an empty session (not just a stale backend count) —
+        // reveal the welcome overlay now that we know for sure.
+        setShowWelcome(true);
       }
       // Rebuild the artifacts panel from the same message list so switching
       // back to a session restores every previously-created artifact.
