@@ -1,0 +1,55 @@
+{
+  "extends": ["stylelint-config-standard"],
+  "plugins": ["stylelint-order"],
+  "rules": {
+    "at-rule-no-unknown": [
+      true,
+      {
+        "ignoreAtRules": [
+          "apply",
+          "config",
+          "custom-variant",
+          "layer",
+          "plugin",
+          "reference",
+          "screen",
+          "source",
+          "tailwind",
+          "theme",
+          "utility",
+          "variant",
+          "variants"
+        ]
+      }
+    ],
+    "order/properties-alphabetical-order": null,
+    "order/order": ["custom-properties", "declarations"],
+    "no-descending-specificity": null,
+    "selector-class-pattern": null,
+    "custom-property-pattern": null,
+    "media-feature-range-notation": null,
+    "declaration-block-no-redundant-longhand-properties": null,
+    "no-duplicate-selectors": null,
+    "color-function-notation": null,
+    "alpha-value-notation": null,
+    "value-keyword-case": null,
+    "hue-degree-notation": null,
+    "comment-empty-line-before": null,
+    "rule-empty-line-before": null,
+    "at-rule-empty-line-before": null,
+    "declaration-empty-line-before": null,
+    "function-no-unknown": [
+      true,
+      {
+        "ignoreFunctions": ["theme"]
+      }
+    ],
+    "import-notation": null,
+    "no-invalid-position-at-import-rule": null,
+    "lightness-notation": null,
+    "color-hex-length": null,
+    "color-function-alias-notation": null,
+    "property-no-vendor-prefix": null
+  },
+  "ignoreFiles": ["dist/**/*", "node_modules/**/*"]
+}

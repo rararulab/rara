@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "test": "vitest run src",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:live": "playwright test --config=playwright.config.live.ts",
+    "lint:css": "stylelint \"src/**/*.css\""
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
