@@ -56,6 +56,8 @@ import { api, settingsApi } from '@/api/client';
 import type { CascadeTrace, ExecutionTrace } from '@/api/kernel-types';
 import type { ProviderInfo } from '@/api/types';
 import type { ChatSession, ChatMessageData, ThinkingLevel } from '@/api/types';
+import { AgentLiveCard } from '@/components/agent-live/AgentLiveCard';
+import { liveRunStore } from '@/components/agent-live/live-run-store';
 import { AlmaCaret } from '@/components/AlmaCaret';
 import { CascadeModal } from '@/components/chat/CascadeModal';
 import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
@@ -624,6 +626,11 @@ export default function PiChat() {
     const agent = agentRef.current;
     if (!agent) return;
     agent.clearMessages();
+    // Drop the agent-live card's in-memory runs for the previous session
+    // so the sticky card doesn't leak across session switches.
+    if (agent.sessionId && agent.sessionId !== session.key) {
+      liveRunStore.reset(agent.sessionId);
+    }
     agent.sessionId = session.key;
     setActiveSession(session);
     writeStoredSessionKey(session.key);
@@ -913,6 +920,10 @@ export default function PiChat() {
               }
               return [];
             },
+            // Feed the agent-live store with every WS frame so the card
+            // can render in parallel to pi-chat-panel without opening a
+            // second WebSocket (see #1615).
+            (sessionKey, event) => liveRunStore.publish(sessionKey, event),
           ),
           convertToLlm: defaultConvertToLlm,
           sessionId: initialSession.key,
@@ -1082,6 +1093,10 @@ export default function PiChat() {
             </span>
           </div>
         )}
+        {/* Live agent card — sticky above the chat transcript while a
+            turn is streaming. Hidden when there is no active run and no
+            history for the current session (see AgentLiveCard). */}
+        <AgentLiveCard sessionKey={activeSession?.key} />
         {/* Chat panel container — takes remaining vertical space. */}
         <div ref={containerRef} className="min-h-0 flex-1 w-full" />
         {/*

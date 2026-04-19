@@ -48,6 +48,16 @@
   --color-pop-hover: #d4606f;
   --color-subtle: #b8a0a4;
 
+  /*
+   * Additional semantic aliases used by the agent-live card. `success`
+   * echoes the existing `ok` emerald so status badges don't invent a new
+   * hue; `info` is a restrained blue in the same tonal family as the
+   * multi-ca glass bubble (oklch-based) for neutral informational
+   * surfaces. Neither replaces `ok` — both are pure aliases.
+   */
+  --color-success: #7bc4a0;
+  --color-info: oklch(0.6 0.14 250);
+
   /* Motion */
   --motion-fast: 150ms;
   --motion-normal: 250ms;

@@ -128,7 +128,7 @@ export function eventSummary(item: {
     case 'in_progress':
       return item.content?.trim() ?? '';
     case 'tool_use':
-      return toolInputSummary(item.input);
+      return toolSummary(item.input);
     case 'tool_result':
       return item.output?.trim().slice(0, 200) ?? '';
     case 'plan_card':
@@ -144,34 +144,51 @@ export function eventSummary(item: {
 /**
  * Extract a short human-readable description from tool arguments.
  *
- * Picks the most-informative string field in priority order
- * (query / file_path / pattern / command / prompt / skill). Returns
- * empty string when nothing suitable is found.
+ * Spec priority (issue #1615): `description` → `query` →
+ * `file_path`/`path` (shortened) → `command`. Falls through to legacy
+ * kernel-timeline keys (`pattern`, `prompt`, `skill`) and finally any
+ * non-trivial string value, so the kernel Timeline panel keeps surfacing
+ * something useful for tools that don't carry any of the spec keys.
+ *
+ * `description` is allowed a slightly higher cap (120) because it tends
+ * to be a short human sentence; everything else is capped at 100.
+ *
+ * Exported for the agent-live card so both surfaces share one source of
+ * truth.
  */
-function toolInputSummary(input?: Record<string, unknown>): string {
+export function toolSummary(input: Record<string, unknown> | null | undefined): string {
   if (!input) return '';
-  const keys = [
-    'query',
-    'file_path',
-    'path',
-    'pattern',
-    'description',
-    'command',
-    'prompt',
-    'skill',
-  ];
-  for (const k of keys) {
-    const v = input[k];
-    if (typeof v === 'string' && v.length > 0) {
-      if (k === 'file_path' || k === 'path') return shortenPath(v);
-      if (v.length > 120) return v.slice(0, 120) + '...';
-      return v;
-    }
+
+  const description = readString(input, 'description');
+  if (description) return cap(description, 120);
+
+  const query = readString(input, 'query');
+  if (query) return cap(query, 100);
+
+  const filePath = readString(input, 'file_path') ?? readString(input, 'path');
+  if (filePath) return shortenPath(filePath);
+
+  const command = readString(input, 'command');
+  if (command) return cap(command, 100);
+
+  // Legacy fallbacks for kernel tools that don't surface the spec keys.
+  for (const k of ['pattern', 'prompt', 'skill']) {
+    const v = readString(input, k);
+    if (v) return cap(v, 100);
   }
   for (const v of Object.values(input)) {
     if (typeof v === 'string' && v.length > 0 && v.length < 120) return v;
   }
   return '';
+}
+
+function readString(obj: Record<string, unknown>, key: string): string | null {
+  const v = obj[key];
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+function cap(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}...` : s;
 }
 
 function shortenPath(p: string): string {
