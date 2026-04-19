@@ -53,13 +53,32 @@ export interface LiveRun {
   error: string | null;
 }
 
-/** Snapshot of the store's per-session slice. */
+/**
+ * Snapshot of the store's per-session slice.
+ *
+ * Fields are `readonly` so consumers cannot accidentally mutate the
+ * store's internal state (e.g. `slice.history.push(...)` would be a
+ * type error). The reducer always produces a brand new slice via
+ * spread, so this costs nothing at runtime.
+ */
 export interface SessionSlice {
-  active: LiveRun | null;
-  history: LiveRun[];
+  readonly active: LiveRun | null;
+  readonly history: readonly LiveRun[];
 }
 
-const EMPTY_SLICE: SessionSlice = { active: null, history: [] };
+/**
+ * Shared frozen empty slice.
+ *
+ * Exported so `useLiveRun` can return the same referentially stable
+ * value when `sessionKey` is undefined — `useSyncExternalStore` relies
+ * on snapshot identity to bail out of re-renders (React error #185
+ * otherwise). Both the outer object and the inner array are frozen so
+ * runtime mutation throws in strict mode.
+ */
+export const EMPTY_SLICE: SessionSlice = Object.freeze({
+  active: null,
+  history: Object.freeze([] as LiveRun[]),
+});
 
 /** Listener callback fired after a mutation. */
 type Listener = () => void;
@@ -74,12 +93,27 @@ export function timelineKey(source: string, seq: number): string {
   return `${source}-${seq}`;
 }
 
-/** Build a deterministic runId counter so snapshots are stable in tests. */
-let runCounter = 0;
-function nextRunId(sessionKey: string): string {
-  runCounter += 1;
-  return `${sessionKey}-${runCounter}`;
+/**
+ * Factory for a per-store run-id generator. Counter lives inside each
+ * store instance so parallel test stores don't share global state (and
+ * neither does the production singleton leak into tests that construct
+ * their own `new LiveRunStore()`).
+ */
+function makeRunIdFactory(): (sessionKey: string) => string {
+  let counter = 0;
+  return (sessionKey) => {
+    counter += 1;
+    return `${sessionKey}-${counter}`;
+  };
 }
+
+/**
+ * Default run-id generator for ad-hoc `reduce` calls (e.g. unit tests
+ * that exercise the pure reducer directly without constructing a
+ * store). Production code always goes through `LiveRunStore`, which
+ * owns its own factory.
+ */
+const defaultRunId = makeRunIdFactory();
 
 /**
  * Tiny vanilla store. External API is deliberately narrow:
@@ -91,6 +125,7 @@ function nextRunId(sessionKey: string): string {
 export class LiveRunStore {
   private readonly slices = new Map<string, SessionSlice>();
   private readonly listeners = new Map<string, Set<Listener>>();
+  private readonly nextRunId = makeRunIdFactory();
 
   /** Read the current immutable slice for a session. */
   snapshot(sessionKey: string): SessionSlice {
@@ -112,8 +147,8 @@ export class LiveRunStore {
 
   /** Feed a raw WebEvent frame. */
   publish(sessionKey: string, event: PublicWebEvent): void {
-    const current = this.slices.get(sessionKey) ?? { active: null, history: [] };
-    const next = reduce(current, sessionKey, event);
+    const current = this.slices.get(sessionKey) ?? EMPTY_SLICE;
+    const next = reduce(current, sessionKey, event, this.nextRunId);
     if (next === current) return;
     this.slices.set(sessionKey, next);
     this.emit(sessionKey);
@@ -152,6 +187,7 @@ export function reduce(
   slice: SessionSlice,
   sessionKey: string,
   event: PublicWebEvent,
+  nextRunId: (sessionKey: string) => string = defaultRunId,
 ): SessionSlice {
   const type = event.type;
 
@@ -341,6 +377,14 @@ function readRecord(obj: object, key: string): Record<string, unknown> | null {
 // TimelineItem intentionally does not carry the backend `tool_call_id`
 // (see kernel-types.ts). For live-run correlation we tag items via a
 // WeakMap so the id never leaks into the public TimelineItem surface.
+//
+// Lifecycle: tags are only meaningful while a `tool_use` is still
+// running — `finalize()` and `tool_call_end` both create new item
+// objects via `{ ...it, ... }`, which intentionally drops the tag on
+// the replacement. That is fine because the id is only needed to pair
+// a `tool_call_end` with its still-streaming `tool_use`; once the pair
+// resolves, the tag serves no purpose and the old entry is eligible
+// for GC together with the old item reference.
 
 const ID_TAGS = new WeakMap<TimelineItem, string>();
 

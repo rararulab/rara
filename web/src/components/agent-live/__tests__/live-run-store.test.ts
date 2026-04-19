@@ -21,11 +21,11 @@ import { LiveRunStore, mergeBySourceSeq, timelineKey } from '../live-run-store';
 import type { PublicWebEvent } from '@/adapters/rara-stream';
 import type { TimelineItem } from '@/api/kernel-types';
 
-const startEvent = { type: '__stream_started' } as unknown as PublicWebEvent;
-const closeEvent = { type: '__stream_closed' } as unknown as PublicWebEvent;
+const startEvent = { type: '__stream_started' } satisfies PublicWebEvent;
+const closeEvent = { type: '__stream_closed' } satisfies PublicWebEvent;
 
 function toolStart(id: string, name: string, args: Record<string, unknown> = {}): PublicWebEvent {
-  return { type: 'tool_call_start', id, name, arguments: args } as PublicWebEvent;
+  return { type: 'tool_call_start', id, name, arguments: args } satisfies PublicWebEvent;
 }
 
 function toolEnd(
@@ -39,7 +39,7 @@ function toolEnd(
     result_preview: preview,
     success: opts.success ?? true,
     error: opts.error ?? null,
-  } as PublicWebEvent;
+  } satisfies PublicWebEvent;
 }
 
 describe('LiveRunStore', () => {
@@ -83,7 +83,7 @@ describe('LiveRunStore', () => {
     store.publish(sk, startEvent);
     store.publish(sk, toolStart('a', 'Grep'));
     store.publish(sk, toolEnd('a', 'done'));
-    store.publish(sk, { type: 'done' } as PublicWebEvent);
+    store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
     const slice = store.snapshot(sk);
     expect(slice.active).toBeNull();
     expect(slice.history).toHaveLength(1);

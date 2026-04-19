@@ -33,7 +33,7 @@ import { redactObject } from '@/lib/redact';
 import { cn } from '@/lib/utils';
 
 interface Props {
-  runs: LiveRun[];
+  runs: readonly LiveRun[];
   onOpenTranscript: (run: LiveRun) => void;
 }
 
