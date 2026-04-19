@@ -252,6 +252,33 @@
  * in `@layer components {}` (as the first attempt did) made it invisible.
  */
 /*
+ * Avatar for Rara's assistant messages. Pi-web-ui renders each reply as
+ * a bare `<assistant-message>` custom element with no visual marker for
+ * who is speaking; a small round portrait on the left gives the reply
+ * an identity. Served from `web/public/rara.png` (see issue #1585) so
+ * the URL stays stable across deploys. A thin info-blue ring echoes
+ * the user-bubble glass palette so the two participants read as one
+ * coherent design.
+ */
+.rara-chat assistant-message {
+  display: block;
+  position: relative;
+  padding-left: 2.75rem;
+  min-height: 2rem;
+}
+.rara-chat assistant-message::before {
+  content: "";
+  position: absolute;
+  left: 0.75rem;
+  top: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  background: url("/rara.png") center / cover;
+  box-shadow: 0 0 0 2px color-mix(in oklab, oklch(0.62 0.18 250) 30%, transparent);
+}
+
+/*
  * Pi-web-ui left-aligns user messages (`class="flex justify-start"`
  * on the bubble's parent). Flip to the right side — the standard
  * chat convention of "my messages on the right". `:has()` gives us a
