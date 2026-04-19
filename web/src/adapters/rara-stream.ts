@@ -87,6 +87,31 @@ type WebEvent =
 export type SessionKeyFn = () => string | undefined;
 
 /**
+ * Synthetic lifecycle frames the stream injects before opening / after
+ * closing the WebSocket. They cannot collide with backend events because
+ * the double-underscore prefix is reserved here.
+ */
+type StreamLifecycleEvent = { type: '__stream_started' } | { type: '__stream_closed' };
+
+/**
+ * Shape of events the stream can publish to an external observer (e.g.
+ * the agent-live card's store). The raw WebSocket frame plus the two
+ * synthetic lifecycle frames — observers can correlate `tool_call_start`
+ * / `tool_call_end` pairs without duplicating the WebSocket connection,
+ * and distinguish run boundaries from the synthetic frames.
+ */
+export type PublicWebEvent = WebEvent | StreamLifecycleEvent;
+
+/**
+ * Observer callback invoked on every WebSocket frame received from the
+ * kernel. Fires in the same order as frames arrive; exceptions thrown
+ * here are caught and logged so an observer bug cannot break pi-agent-core's
+ * own loop. `sessionKey` mirrors the session the stream was opened for so
+ * a single observer can service multiple sessions.
+ */
+export type WebEventObserver = (sessionKey: string, event: PublicWebEvent) => void;
+
+/**
  * Callback that returns raw attachments associated with the pending user
  * turn. Documents (PDF/DOCX/XLSX/PPTX) are serialized as `file_base64`
  * blocks so the backend can forward the raw bytes to tools / multimodal
@@ -311,6 +336,7 @@ function makeRelayTool(name: string, pending: Map<string, PendingToolResult>): A
 export function createRaraStreamFn(
   getSessionKey: SessionKeyFn,
   getPendingAttachments?: PendingAttachmentsFn,
+  onWebEvent?: WebEventObserver,
 ): StreamFn {
   return (
     model: Model<any>,
@@ -395,6 +421,15 @@ export function createRaraStreamFn(
       ws.onopen = () => {
         // Emit start event
         safePush({ type: 'start', partial: buildPartial(model, content, currentUsage) });
+        // Synthetic stream-open frame for observers; see ws.onclose below
+        // for the matching close frame.
+        if (onWebEvent) {
+          try {
+            onWebEvent(sessionKey, { type: '__stream_started' });
+          } catch (err) {
+            console.warn('rara-stream: observer threw on open', err);
+          }
+        }
         // Send user message
         ws.send(userPayload);
       };
@@ -405,6 +440,17 @@ export function createRaraStreamFn(
           event = JSON.parse(ev.data as string) as WebEvent;
         } catch {
           return; // Ignore non-JSON frames
+        }
+
+        // Publish the raw frame to any external observer (agent-live
+        // store) before the pi-ai projection below consumes it. Wrapped
+        // so a buggy observer cannot break pi-agent-core's own loop.
+        if (onWebEvent) {
+          try {
+            onWebEvent(sessionKey, event);
+          } catch (err) {
+            console.warn('rara-stream: observer threw', err);
+          }
         }
 
         switch (event.type) {
@@ -595,6 +641,16 @@ export function createRaraStreamFn(
       };
 
       ws.onclose = () => {
+        // Synthetic stream-close frame so observers can finalize without
+        // an extra lifecycle callback. `__stream_closed` is namespaced
+        // so it cannot collide with a real backend-emitted event type.
+        if (onWebEvent) {
+          try {
+            onWebEvent(sessionKey, { type: '__stream_closed' });
+          } catch (err) {
+            console.warn('rara-stream: observer threw on close', err);
+          }
+        }
         // Ensure stream is ended if WS closes unexpectedly
         if (!streamEnded) {
           const finalMsg = buildPartial(model, content, currentUsage);
