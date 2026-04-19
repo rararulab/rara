@@ -17,10 +17,13 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from '@playwright/test';
 
-import { primeBackendUrl, stubApi } from './helpers';
+import { freezePageClock, primeBackendUrl, stubApi } from './helpers';
 
 test.describe('chat page with seeded sessions', () => {
   test.beforeEach(async ({ page }) => {
+    // Freeze before `stubApi` / `page.goto` so the app's first render
+    // sees the pinned clock and `formatRelativeDate` output is stable.
+    await freezePageClock(page);
     await stubApi(page, {
       sessions: [
         {

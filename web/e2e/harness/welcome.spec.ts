@@ -17,10 +17,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from '@playwright/test';
 
-import { primeBackendUrl, stubApi } from './helpers';
+import { freezePageClock, primeBackendUrl, stubApi } from './helpers';
 
 test.describe('welcome page', () => {
   test.beforeEach(async ({ page }) => {
+    await freezePageClock(page);
     await stubApi(page, { sessions: [] });
     await primeBackendUrl(page);
   });

@@ -33,6 +33,27 @@ export async function primeBackendUrl(page: Page, url = 'http://localhost:25555'
 }
 
 /**
+ * Pinned "now" the harness renders against. Fixture `updated_at`
+ * values in `stubApi` are anchored to this moment, and
+ * `freezePageClock` installs the same instant into the page's JS
+ * clock. Together they keep `formatRelativeDate` output byte-stable
+ * across days so screenshot baselines don't drift against wall clock.
+ */
+export const HARNESS_NOW_ISO = '2025-06-15T12:00:00Z';
+
+/**
+ * Freeze the page's `Date.now()` / `new Date()` to `HARNESS_NOW_ISO`.
+ * Must be called before `page.goto(...)` so the app's first render
+ * sees the pinned clock.
+ */
+export async function freezePageClock(
+  page: Page,
+  isoTime: string = HARNESS_NOW_ISO,
+): Promise<void> {
+  await page.clock.install({ time: new Date(isoTime) });
+}
+
+/**
  * Intercept every /api/** request and serve a minimal deterministic
  * payload so the harness renders without a real backend. Only the
  * routes the tests care about need concrete data; everything else
@@ -42,12 +63,15 @@ export async function stubApi(
   page: Page,
   options: { sessions?: StubSession[]; settings?: Record<string, string> } = {},
 ): Promise<void> {
+  // Default fixture dates align with the pinned page clock
+  // (`HARNESS_NOW_ISO`) so `formatRelativeDate` resolves to a stable
+  // string ("just now") instead of drifting with wall clock.
   const sessions = (options.sessions ?? []).map((s) => ({
     key: s.key,
     title: s.title,
     preview: s.preview ?? '',
-    updated_at: s.updated_at ?? '2025-01-01T00:00:00Z',
-    created_at: s.created_at ?? '2025-01-01T00:00:00Z',
+    updated_at: s.updated_at ?? HARNESS_NOW_ISO,
+    created_at: s.created_at ?? HARNESS_NOW_ISO,
     message_count: s.message_count ?? 0,
     model: null,
     model_provider: null,
