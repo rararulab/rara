@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-import { Clock } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { DockStore } from "@/hooks/use-dock-store";
+import { Clock } from 'lucide-react';
+
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockTimelineProps {
   store: DockStore;
@@ -43,10 +44,8 @@ export default function DockTimeline({ store }: DockTimelineProps) {
           <div
             key={entry.id}
             className={cn(
-              "cursor-pointer border-b border-border/30 px-3 py-2.5 transition-colors",
-              isSelected
-                ? "bg-accent/40"
-                : "hover:bg-accent/20",
+              'cursor-pointer border-b border-border/30 px-3 py-2.5 transition-colors',
+              isSelected ? 'bg-accent/40' : 'hover:bg-accent/20',
             )}
             onClick={() => store.selectHistoryAnchor(entry.anchor_name)}
           >

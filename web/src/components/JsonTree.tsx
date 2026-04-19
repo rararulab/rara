@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
 
 /** Threshold beyond which string values are truncated. */
 const STRING_TRUNCATE_LEN = 200;
@@ -25,9 +25,8 @@ function StringValue({ value }: { value: string }) {
   const [expanded, setExpanded] = useState(false);
   const needsTruncation = value.length > STRING_TRUNCATE_LEN;
 
-  const display = needsTruncation && !expanded
-    ? value.slice(0, STRING_TRUNCATE_LEN) + "..."
-    : value;
+  const display =
+    needsTruncation && !expanded ? value.slice(0, STRING_TRUNCATE_LEN) + '...' : value;
 
   return (
     <span className="text-green-400">
@@ -40,7 +39,7 @@ function StringValue({ value }: { value: string }) {
             setExpanded(!expanded);
           }}
         >
-          {expanded ? "Show less" : "Show more"}
+          {expanded ? 'Show less' : 'Show more'}
         </button>
       )}
     </span>
@@ -53,7 +52,7 @@ function ObjectNode({ data, depth }: { data: Record<string, unknown>; depth: num
   const [expanded, setExpanded] = useState(depth < 2);
 
   if (keys.length === 0) {
-    return <span className="text-zinc-500">{"{}"}</span>;
+    return <span className="text-zinc-500">{'{}'}</span>;
   }
 
   return (
@@ -62,9 +61,11 @@ function ObjectNode({ data, depth }: { data: Record<string, unknown>; depth: num
         className="inline-flex items-center text-zinc-500 hover:text-zinc-300"
         onClick={() => setExpanded(!expanded)}
       >
-        {expanded
-          ? <ChevronDown className="inline h-3 w-3" />
-          : <ChevronRight className="inline h-3 w-3" />}
+        {expanded ? (
+          <ChevronDown className="inline h-3 w-3" />
+        ) : (
+          <ChevronRight className="inline h-3 w-3" />
+        )}
         <span className="text-zinc-500">{`{${keys.length}}`}</span>
       </button>
       {expanded && (
@@ -87,7 +88,7 @@ function ArrayNode({ data, depth }: { data: unknown[]; depth: number }) {
   const [expanded, setExpanded] = useState(depth < 2);
 
   if (data.length === 0) {
-    return <span className="text-zinc-500">{"[]"}</span>;
+    return <span className="text-zinc-500">{'[]'}</span>;
   }
 
   return (
@@ -96,9 +97,11 @@ function ArrayNode({ data, depth }: { data: unknown[]; depth: number }) {
         className="inline-flex items-center text-zinc-500 hover:text-zinc-300"
         onClick={() => setExpanded(!expanded)}
       >
-        {expanded
-          ? <ChevronDown className="inline h-3 w-3" />
-          : <ChevronRight className="inline h-3 w-3" />}
+        {expanded ? (
+          <ChevronDown className="inline h-3 w-3" />
+        ) : (
+          <ChevronRight className="inline h-3 w-3" />
+        )}
         <span className="text-zinc-500">{`[${data.length}]`}</span>
       </button>
       {expanded && (
@@ -121,15 +124,15 @@ export function JsonTree({ data, depth = 0 }: { data: unknown; depth?: number })
     return <span className="text-zinc-500">null</span>;
   }
 
-  if (typeof data === "string") {
+  if (typeof data === 'string') {
     return <StringValue value={data} />;
   }
 
-  if (typeof data === "number") {
+  if (typeof data === 'number') {
     return <span className="text-cyan-400">{String(data)}</span>;
   }
 
-  if (typeof data === "boolean") {
+  if (typeof data === 'boolean') {
     return <span className="text-amber-400">{String(data)}</span>;
   }
 
@@ -137,7 +140,7 @@ export function JsonTree({ data, depth = 0 }: { data: unknown; depth?: number })
     return <ArrayNode data={data} depth={depth} />;
   }
 
-  if (typeof data === "object") {
+  if (typeof data === 'object') {
     return <ObjectNode data={data as Record<string, unknown>} depth={depth} />;
   }
 

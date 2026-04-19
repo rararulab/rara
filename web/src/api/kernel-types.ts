@@ -73,8 +73,8 @@ export interface TurnTrace {
  * surfaces on the corresponding step row.
  */
 export type PlanStepStatusEvent =
-  | "running"
-  | "done"
+  | 'running'
+  | 'done'
   | { failed: { reason: string } }
   | { needs_replan: { reason: string } };
 
@@ -86,23 +86,23 @@ export type PlanStepStatusEvent =
  * hook.
  */
 export type StreamEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "reasoning_delta"; text: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'reasoning_delta'; text: string }
   | {
-      type: "tool_call_start";
+      type: 'tool_call_start';
       name: string;
       id: string;
       arguments: Record<string, unknown>;
     }
   | {
-      type: "tool_call_end";
+      type: 'tool_call_end';
       id: string;
       result_preview: string;
       success: boolean;
       error: string | null;
     }
   | {
-      type: "turn_metrics";
+      type: 'turn_metrics';
       duration_ms: number;
       iterations: number;
       tool_calls: number;
@@ -110,21 +110,21 @@ export type StreamEvent =
       rara_message_id: string;
     }
   | {
-      type: "plan_created";
+      type: 'plan_created';
       goal: string;
       total_steps: number;
       compact_summary: string;
       estimated_duration_secs: number | null;
     }
   | {
-      type: "plan_progress";
+      type: 'plan_progress';
       current_step: number;
       total_steps: number;
       step_status: PlanStepStatusEvent;
       status_text: string;
     }
-  | { type: "plan_replan"; reason: string }
-  | { type: "plan_completed"; summary: string }
+  | { type: 'plan_replan'; reason: string }
+  | { type: 'plan_completed'; summary: string }
   /**
    * Settled per-turn token usage. Emitted once near turn end by the web
    * channel adapter, which maps `StreamEvent::TurnUsage` → `WebEvent::Usage`
@@ -132,7 +132,7 @@ export type StreamEvent =
    * prompt size; `output` is cumulative completion tokens across the turn.
    */
   | {
-      type: "usage";
+      type: 'usage';
       input: number;
       output: number;
       cache_read: number;
@@ -146,18 +146,18 @@ export type StreamEvent =
    * time until the matching `background_task_done` fires.
    */
   | {
-      type: "background_task_started";
+      type: 'background_task_started';
       task_id: string;
       agent_name: string;
       description: string;
     }
   /** Background agent has finished (completed, failed, or cancelled). */
   | {
-      type: "background_task_done";
+      type: 'background_task_done';
       task_id: string;
-      status: "completed" | "failed" | "cancelled";
+      status: 'completed' | 'failed' | 'cancelled';
     }
-  | { type: "done" }
+  | { type: 'done' }
   | { type: string; [k: string]: unknown };
 
 // ---------------------------------------------------------------------------
@@ -166,11 +166,11 @@ export type StreamEvent =
 
 /** Semantic category of a timeline item — drives icon/color/layout. */
 export type EventKind =
-  | "agent"
-  | "thinking"
-  | "tool_use"
-  | "tool_result"
-  | "error"
+  | 'agent'
+  | 'thinking'
+  | 'tool_use'
+  | 'tool_result'
+  | 'error'
   /**
    * Live-only placeholder inserted right after the user submits a
    * message so the UI gives immediate feedback while the kernel is
@@ -178,35 +178,30 @@ export type EventKind =
    * the first real delta / tool call arrives, or when the turn ends.
    * Never appears in historical turn projections.
    */
-  | "in_progress"
+  | 'in_progress'
   /**
    * Live-only multi-step plan progress widget. Created on the first
    * `plan_created` event and mutated in place by `plan_progress` /
    * `plan_replan` / `plan_completed`. Self-contained — renders its own
    * step list rather than going through the standard row layout.
    */
-  | "plan_card"
+  | 'plan_card'
   /**
    * Live-only per-turn token usage footer. Rendered as a small muted
    * `↑12.5k ↓1.2k` line at the tail of the assistant turn. Populated
    * from the web channel's `usage` event (mirrors
    * `StreamEvent::TurnUsage`).
    */
-  | "token_footer"
+  | 'token_footer'
   /**
    * Live-only chip list of currently-running background tasks. Inserted
    * on the first `background_task_started` for a turn, mutated in place
    * as tasks start/finish, and removed when the active set goes empty.
    */
-  | "background_tasks";
+  | 'background_tasks';
 
 /** Per-step status for the live `plan_card` row. */
-export type PlanStepUiStatus =
-  | "pending"
-  | "running"
-  | "done"
-  | "failed"
-  | "needs_replan";
+export type PlanStepUiStatus = 'pending' | 'running' | 'done' | 'failed' | 'needs_replan';
 
 /** Single step within a plan card row. */
 export interface PlanStep {
@@ -301,7 +296,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
         items.push({
           seq: seq++,
           turn: turnIdx,
-          kind: "thinking",
+          kind: 'thinking',
           content: iter.reasoning_text,
         });
       }
@@ -310,7 +305,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
         items.push({
           seq: seq++,
           turn: turnIdx,
-          kind: "tool_use",
+          kind: 'tool_use',
           tool: tc.name,
           input: tc.arguments,
           durationMs: tc.duration_ms,
@@ -320,7 +315,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
           items.push({
             seq: seq++,
             turn: turnIdx,
-            kind: "error",
+            kind: 'error',
             tool: tc.name,
             content: tc.error,
           });
@@ -328,7 +323,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
           items.push({
             seq: seq++,
             turn: turnIdx,
-            kind: "tool_result",
+            kind: 'tool_result',
             tool: tc.name,
             output: tc.result_preview,
             success: tc.success,
@@ -340,7 +335,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
         items.push({
           seq: seq++,
           turn: turnIdx,
-          kind: "agent",
+          kind: 'agent',
           content: iter.text_preview,
         });
       }
@@ -350,7 +345,7 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
       items.push({
         seq: seq++,
         turn: turnIdx,
-        kind: "error",
+        kind: 'error',
         content: turn.error,
       });
     }
@@ -370,10 +365,10 @@ export function turnsToTimeline(turns: TurnTrace[]): TimelineItem[] {
  * terminal** (`is_terminal()` always returns false), so `Completed`,
  * `Failed`, or `Cancelled` never appear — do not branch on them.
  */
-export type KernelSessionState = "Active" | "Ready" | "Suspended" | "Paused";
+export type KernelSessionState = 'Active' | 'Ready' | 'Suspended' | 'Paused';
 
 /** UI grouping for the session list. */
-export type SessionGroup = "active" | "dormant";
+export type SessionGroup = 'active' | 'dormant';
 
 /**
  * Bucket a kernel session state into an IA group.
@@ -383,11 +378,11 @@ export type SessionGroup = "active" | "dormant";
  */
 export function sessionGroup(state: string): SessionGroup {
   switch (state.toLowerCase()) {
-    case "active":
-    case "ready":
-      return "active";
+    case 'active':
+    case 'ready':
+      return 'active';
     default:
-      return "dormant";
+      return 'dormant';
   }
 }
 
@@ -398,7 +393,7 @@ export function sessionGroup(state: string): SessionGroup {
 export function isLiveState(state: string | null): boolean {
   if (!state) return false;
   const s = state.toLowerCase();
-  return s === "active" || s === "ready";
+  return s === 'active' || s === 'ready';
 }
 
 // ---------------------------------------------------------------------------
@@ -411,15 +406,15 @@ export function isLiveState(state: string | null): boolean {
 // the modal can show an empty state rather than a broken view.
 
 /** Classification of a single entry within a cascade tick. */
-export type CascadeEntryKind = "user_input" | "thought" | "action" | "observation";
+export type CascadeEntryKind = 'user_input' | 'thought' | 'action' | 'observation';
 
 /** A single entry: user input, assistant thought, tool action, or observation. */
 export interface CascadeEntry {
   /** Stable, human-readable identifier (`"{prefix}.{tick}-{short_id}-{seq}"`). */
-  id:        string;
-  kind:      CascadeEntryKind;
+  id: string;
+  kind: CascadeEntryKind;
   /** Display content — text, JSON-encoded tool args, or tool output. */
-  content:   string;
+  content: string;
   /** RFC3339 timestamp of the underlying tape entry. */
   timestamp: string;
   /** Optional structured metadata copied from the tape entry. */
@@ -429,23 +424,23 @@ export interface CascadeEntry {
 /** One reasoning-action cycle (an LLM call + its emitted entries). */
 export interface CascadeTick {
   /** Zero-based tick index within the trace. */
-  index:   number;
+  index: number;
   entries: CascadeEntry[];
 }
 
 /** High-level summary statistics for a cascade trace. */
 export interface CascadeSummary {
-  tick_count:      number;
+  tick_count: number;
   tool_call_count: number;
-  total_entries:   number;
+  total_entries: number;
 }
 
 /** Top-level cascade trace for a single agent turn. */
 export interface CascadeTrace {
   /** Opaque identifier — typically `"{session_key}-{seq}"`. */
   message_id: string;
-  ticks:      CascadeTick[];
-  summary:    CascadeSummary;
+  ticks: CascadeTick[];
+  summary: CascadeSummary;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,29 +453,29 @@ export interface CascadeTrace {
 
 /** Record of a single tool invocation within a turn. */
 export interface ToolTraceEntry {
-  name:        string;
+  name: string;
   /** Duration in milliseconds, when the invocation completed. */
   duration_ms: number | null;
-  success:     boolean;
-  summary:     string;
-  error:       string | null;
+  success: boolean;
+  summary: string;
+  error: string | null;
 }
 
 /** Summary of a single agent turn execution. */
 export interface ExecutionTrace {
-  duration_secs:    number;
-  iterations:       number;
-  model:            string;
-  input_tokens:     number;
-  output_tokens:    number;
-  thinking_ms:      number;
+  duration_secs: number;
+  iterations: number;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  thinking_ms: number;
   /** Truncated reasoning text (first ~500 chars). */
   thinking_preview: string;
   /** Plan steps with status. */
-  plan_steps:       string[];
+  plan_steps: string[];
   /** High-level rationale the LLM stated for this turn, when any. */
-  turn_rationale?:  string;
-  tools:            ToolTraceEntry[];
+  turn_rationale?: string;
+  tools: ToolTraceEntry[];
   /** Rara internal message ID for end-to-end correlation. */
-  rara_message_id:  string;
+  rara_message_id: string;
 }

@@ -14,24 +14,25 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import type { DockStore } from "@/hooks/use-dock-store";
+import { ArrowUp, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { Button } from '@/components/ui/button';
+import type { DockStore } from '@/hooks/use-dock-store';
 
 interface DockConsoleProps {
   store: DockStore;
 }
 
 export default function DockConsole({ store }: DockConsoleProps) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
+    el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
 
@@ -39,14 +40,14 @@ export default function DockConsole({ store }: DockConsoleProps) {
     const text = input.trim();
     if (!text || store.isRunning) return;
 
-    const isCommand = text.startsWith(",");
-    store.sendMessage(text, isCommand);
-    setInput("");
+    const isCommand = text.startsWith(',');
+    void store.sendMessage(text, isCommand);
+    setInput('');
   }, [input, store]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
@@ -69,9 +70,7 @@ export default function DockConsole({ store }: DockConsoleProps) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={
-            store.activeSessionId
-              ? "Message or ,command..."
-              : "Create a session to start"
+            store.activeSessionId ? 'Message or ,command...' : 'Create a session to start'
           }
           disabled={store.isRunning || !store.activeSessionId}
           rows={1}

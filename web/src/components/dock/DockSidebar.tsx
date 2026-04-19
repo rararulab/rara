@@ -14,21 +14,23 @@
  * limitations under the License.
  */
 
-import { MessageSquare, BookOpen, Clock } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { DockStore } from "@/hooks/use-dock-store";
-import DockAnnotations from "./DockAnnotations";
-import DockFacts from "./DockFacts";
-import DockTimeline from "./DockTimeline";
+import { MessageSquare, BookOpen, Clock } from 'lucide-react';
+
+import DockAnnotations from './DockAnnotations';
+import DockFacts from './DockFacts';
+import DockTimeline from './DockTimeline';
+
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockSidebarProps {
   store: DockStore;
 }
 
 const tabs = [
-  { key: "annotations" as const, label: "Notes", icon: MessageSquare },
-  { key: "facts" as const, label: "Facts", icon: BookOpen },
-  { key: "history" as const, label: "History", icon: Clock },
+  { key: 'annotations' as const, label: 'Notes', icon: MessageSquare },
+  { key: 'facts' as const, label: 'Facts', icon: BookOpen },
+  { key: 'history' as const, label: 'History', icon: Clock },
 ] as const;
 
 export default function DockSidebar({ store }: DockSidebarProps) {
@@ -43,10 +45,10 @@ export default function DockSidebar({ store }: DockSidebarProps) {
             <button
               key={tab.key}
               className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors",
+                'flex flex-1 items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors',
                 isActive
-                  ? "border-b-2 border-primary text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? 'border-b-2 border-primary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
               onClick={() => store.setActiveTab(tab.key)}
             >
@@ -58,9 +60,9 @@ export default function DockSidebar({ store }: DockSidebarProps) {
       </div>
 
       {/* Tab content */}
-      {store.activeTab === "annotations" && <DockAnnotations store={store} />}
-      {store.activeTab === "facts" && <DockFacts store={store} />}
-      {store.activeTab === "history" && <DockTimeline store={store} />}
+      {store.activeTab === 'annotations' && <DockAnnotations store={store} />}
+      {store.activeTab === 'facts' && <DockFacts store={store} />}
+      {store.activeTab === 'history' && <DockTimeline store={store} />}
     </div>
   );
 }

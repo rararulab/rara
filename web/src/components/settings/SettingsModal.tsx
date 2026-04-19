@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-import { useEffect, useRef } from "react";
-import { X } from "lucide-react";
-import SettingsPanel, { type SettingsPage } from "./SettingsPanel";
+import { X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+
+import SettingsPanel, { type SettingsPage } from './SettingsPanel';
 
 interface SettingsModalProps {
   open: boolean;
@@ -44,15 +45,15 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
     if (!open) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === 'Escape') onClose();
     };
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener('keydown', onKeyDown);
 
     const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    document.body.style.overflow = 'hidden';
 
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = prevOverflow;
     };
   }, [open, onClose]);
@@ -76,9 +77,7 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
         mousedownOnBackdrop.current = false;
       }}
     >
-      <div
-        className="relative mx-auto my-[5vh] flex h-[90vh] w-[min(1200px,90vw)] flex-col overflow-hidden rounded-xl border border-border/60 bg-background shadow-2xl"
-      >
+      <div className="relative mx-auto my-[5vh] flex h-[90vh] w-[min(1200px,90vw)] flex-col overflow-hidden rounded-xl border border-border/60 bg-background shadow-2xl">
         <button
           type="button"
           onClick={onClose}
@@ -88,7 +87,7 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
           <X className="h-4 w-4" />
         </button>
         <div className="min-h-0 flex-1 overflow-hidden">
-          <SettingsPanel key={section ?? "general"} initialSection={section} />
+          <SettingsPanel key={section ?? 'general'} initialSection={section} />
         </div>
       </div>
     </div>

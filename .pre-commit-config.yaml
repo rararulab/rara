@@ -40,6 +40,13 @@ repos:
         pass_filenames: false
         files: ^crates/
 
+      - id: web-lint-staged
+        name: web lint-staged
+        entry: bash -c 'cd web && npx lint-staged'
+        language: system
+        files: ^web/.*\.(ts|tsx|css|json|md)$
+        pass_filenames: false
+
       - id: conventional-commit
         name: conventional commit message
         entry: scripts/check-conventional-commit.sh

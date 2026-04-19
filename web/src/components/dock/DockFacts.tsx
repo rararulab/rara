@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BookOpenCheck, Plus, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import type { DockStore } from "@/hooks/use-dock-store";
+import { BookOpenCheck, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { Button } from '@/components/ui/button';
+import type { DockStore } from '@/hooks/use-dock-store';
 
 interface DockFactsProps {
   store: DockStore;
@@ -26,9 +27,9 @@ interface DockFactsProps {
 export default function DockFacts({ store }: DockFactsProps) {
   const { facts } = store;
   const [isAdding, setIsAdding] = useState(false);
-  const [newContent, setNewContent] = useState("");
+  const [newContent, setNewContent] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState("");
+  const [editText, setEditText] = useState('');
   const addRef = useRef<HTMLTextAreaElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
 
@@ -37,7 +38,7 @@ export default function DockFacts({ store }: DockFactsProps) {
     if (text) {
       store.addFact(text);
     }
-    setNewContent("");
+    setNewContent('');
     setIsAdding(false);
   }, [newContent, store]);
 
@@ -51,7 +52,7 @@ export default function DockFacts({ store }: DockFactsProps) {
       store.updateFact(editingId, editText.trim());
     }
     setEditingId(null);
-    setEditText("");
+    setEditText('');
   }, [editingId, editText, store]);
 
   // Focus textarea when adding/editing starts
@@ -79,13 +80,13 @@ export default function DockFacts({ store }: DockFactsProps) {
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   handleAdd();
                 }
-                if (e.key === "Escape") {
+                if (e.key === 'Escape') {
                   setIsAdding(false);
-                  setNewContent("");
+                  setNewContent('');
                 }
               }}
               placeholder="Enter a fact..."
@@ -107,7 +108,7 @@ export default function DockFacts({ store }: DockFactsProps) {
                 className="h-6 px-2 text-[11px]"
                 onClick={() => {
                   setIsAdding(false);
-                  setNewContent("");
+                  setNewContent('');
                 }}
               >
                 Cancel
@@ -149,13 +150,13 @@ export default function DockFacts({ store }: DockFactsProps) {
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
+                        if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
                           commitEdit();
                         }
-                        if (e.key === "Escape") {
+                        if (e.key === 'Escape') {
                           setEditingId(null);
-                          setEditText("");
+                          setEditText('');
                         }
                       }}
                       onBlur={commitEdit}
@@ -180,9 +181,7 @@ export default function DockFacts({ store }: DockFactsProps) {
                   )}
                   {!isEditing && (
                     <p className="mt-1 text-[10px] text-muted-foreground">
-                      {fact.source === "human"
-                        ? "You confirmed"
-                        : "Agent inferred"}
+                      {fact.source === 'human' ? 'You confirmed' : 'Agent inferred'}
                     </p>
                   )}
                 </div>

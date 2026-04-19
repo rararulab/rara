@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { createContext, useContext } from "react";
+import { createContext, useContext } from 'react';
 
 export interface ServerStatusContextValue {
   isOnline: boolean;

@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { useDockStore } from "@/hooks/use-dock-store";
-import DockHeader from "@/components/dock/DockHeader";
-import DockCanvas from "@/components/dock/DockCanvas";
-import DockConsole from "@/components/dock/DockConsole";
-import DockSidebar from "@/components/dock/DockSidebar";
+import { useCallback, useEffect, useState } from 'react';
+
+import DockCanvas from '@/components/dock/DockCanvas';
+import DockConsole from '@/components/dock/DockConsole';
+import DockHeader from '@/components/dock/DockHeader';
+import DockSidebar from '@/components/dock/DockSidebar';
+import { useDockStore } from '@/hooks/use-dock-store';
 
 export default function Dock() {
   const store = useDockStore();
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
   useEffect(() => {
-    store.bootstrap();
+    void store.bootstrap();
     // Run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

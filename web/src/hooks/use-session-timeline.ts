@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/client";
+import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { randomLoadingHint } from './loading-hints';
+
+import { api } from '@/api/client';
 import {
   isLiveState,
   turnsToTimeline,
@@ -28,8 +31,7 @@ import {
   type StreamEvent,
   type TimelineItem,
   type TurnTrace,
-} from "@/api/kernel-types";
-import { randomLoadingHint } from "./loading-hints";
+} from '@/api/kernel-types';
 
 const TURNS_REFETCH_MS = 5_000;
 
@@ -67,9 +69,8 @@ export function useSessionTimeline(
   autoRefresh = true,
 ): SessionTimelineState {
   const turnsQuery = useQuery({
-    queryKey: ["session-turns", sessionKey],
-    queryFn: () =>
-      api.get<TurnTrace[]>(`/api/v1/kernel/sessions/${sessionKey}/turns`),
+    queryKey: ['session-turns', sessionKey],
+    queryFn: () => api.get<TurnTrace[]>(`/api/v1/kernel/sessions/${sessionKey}/turns`),
     enabled: !!sessionKey,
     refetchInterval: autoRefresh ? TURNS_REFETCH_MS : false,
   });
@@ -98,8 +99,8 @@ export function useSessionTimeline(
     }
 
     const host = window.location.host;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = localStorage.getItem("access_token") ?? "";
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const token = localStorage.getItem('access_token') ?? '';
     const ws = new WebSocket(
       `${protocol}//${host}/api/v1/kernel/sessions/${sessionKey}/stream?token=${token}`,
     );
@@ -137,7 +138,7 @@ export function useSessionTimeline(
       const target = placeholderSeq;
       placeholderSeq = null;
       setLiveItems((prev) =>
-        prev.filter((it) => !(it.seq === target && it.kind === "in_progress")),
+        prev.filter((it) => !(it.seq === target && it.kind === 'in_progress')),
       );
     };
 
@@ -154,7 +155,7 @@ export function useSessionTimeline(
         {
           seq,
           turn: liveTurnIdx,
-          kind: "in_progress",
+          kind: 'in_progress',
           content: randomLoadingHint(),
           streaming: true,
         },
@@ -170,16 +171,16 @@ export function useSessionTimeline(
       }
 
       switch (event.type) {
-        case "text_delta": {
-          const delta = (event as { text?: string }).text ?? "";
+        case 'text_delta': {
+          const delta = (event as { text?: string }).text ?? '';
           if (!delta) break;
           clearPlaceholder();
           setLiveItems((prev) => {
             if (currentTextSeq !== null) {
               const target = currentTextSeq;
               return prev.map((it) =>
-                it.seq === target && it.kind === "agent"
-                  ? { ...it, content: (it.content ?? "") + delta }
+                it.seq === target && it.kind === 'agent'
+                  ? { ...it, content: (it.content ?? '') + delta }
                   : it,
               );
             }
@@ -190,7 +191,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "agent",
+                kind: 'agent',
                 content: delta,
                 streaming: true,
               },
@@ -199,16 +200,16 @@ export function useSessionTimeline(
           break;
         }
 
-        case "reasoning_delta": {
-          const delta = (event as { text?: string }).text ?? "";
+        case 'reasoning_delta': {
+          const delta = (event as { text?: string }).text ?? '';
           if (!delta) break;
           clearPlaceholder();
           setLiveItems((prev) => {
             if (currentThinkSeq !== null) {
               const target = currentThinkSeq;
               return prev.map((it) =>
-                it.seq === target && it.kind === "thinking"
-                  ? { ...it, content: (it.content ?? "") + delta }
+                it.seq === target && it.kind === 'thinking'
+                  ? { ...it, content: (it.content ?? '') + delta }
                   : it,
               );
             }
@@ -219,7 +220,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "thinking",
+                kind: 'thinking',
                 content: delta,
                 streaming: true,
               },
@@ -228,20 +229,20 @@ export function useSessionTimeline(
           break;
         }
 
-        case "text_clear": {
+        case 'text_clear': {
           // Kernel emits text_clear before tool_call_start to discard
           // intermediate narration. Remove the in-flight agent row.
           if (currentTextSeq !== null) {
             const target = currentTextSeq;
             setLiveItems((prev) =>
-              prev.filter((it) => !(it.seq === target && it.kind === "agent")),
+              prev.filter((it) => !(it.seq === target && it.kind === 'agent')),
             );
             currentTextSeq = null;
           }
           break;
         }
 
-        case "tool_call_start": {
+        case 'tool_call_start': {
           clearPlaceholder();
           const e = event as {
             name: string;
@@ -271,7 +272,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "tool_use",
+                kind: 'tool_use',
                 tool: e.name,
                 input: e.arguments,
                 streaming: true,
@@ -281,7 +282,7 @@ export function useSessionTimeline(
           break;
         }
 
-        case "tool_call_end": {
+        case 'tool_call_end': {
           const e = event as {
             id: string;
             result_preview: string;
@@ -295,7 +296,7 @@ export function useSessionTimeline(
             const finalized =
               usedSeq !== undefined
                 ? prev.map((it) =>
-                    it.seq === usedSeq && it.kind === "tool_use"
+                    it.seq === usedSeq && it.kind === 'tool_use'
                       ? { ...it, streaming: false, success: e.success }
                       : it,
                   )
@@ -307,7 +308,7 @@ export function useSessionTimeline(
                 {
                   seq: nextSeq(),
                   turn: liveTurnIdx,
-                  kind: "error",
+                  kind: 'error',
                   content: e.error,
                 },
               ];
@@ -318,7 +319,7 @@ export function useSessionTimeline(
                 {
                   seq: nextSeq(),
                   turn: liveTurnIdx,
-                  kind: "tool_result",
+                  kind: 'tool_result',
                   output: e.result_preview,
                   success: e.success,
                 },
@@ -329,24 +330,23 @@ export function useSessionTimeline(
           break;
         }
 
-        case "turn_metrics": {
+        case 'turn_metrics': {
           // Turn boundary — flush streaming flags; keep items so the
           // just-completed turn stays visible until turnsQuery refetches.
           currentTextSeq = null;
           currentThinkSeq = null;
-          setLiveItems((prev) =>
-            prev.map((it) => ({ ...it, streaming: false })),
-          );
+          setLiveItems((prev) => prev.map((it) => ({ ...it, streaming: false })));
           break;
         }
 
-        case "plan_created": {
+        case 'plan_created': {
           clearPlaceholder();
-          const e = event as Extract<StreamEvent, { type: "plan_created" }>;
-          const steps: PlanStep[] = Array.from(
-            { length: e.total_steps },
-            (_, i) => ({ index: i + 1, task: "", status: "pending" }),
-          );
+          const e = event as Extract<StreamEvent, { type: 'plan_created' }>;
+          const steps: PlanStep[] = Array.from({ length: e.total_steps }, (_, i) => ({
+            index: i + 1,
+            task: '',
+            status: 'pending',
+          }));
           const plan: PlanState = {
             goal: e.goal,
             totalSteps: e.total_steps,
@@ -361,7 +361,7 @@ export function useSessionTimeline(
             {
               seq,
               turn: liveTurnIdx,
-              kind: "plan_card",
+              kind: 'plan_card',
               plan,
               streaming: true,
             },
@@ -369,14 +369,14 @@ export function useSessionTimeline(
           break;
         }
 
-        case "plan_progress": {
+        case 'plan_progress': {
           clearPlaceholder();
           if (planSeq === null) break;
-          const e = event as Extract<StreamEvent, { type: "plan_progress" }>;
+          const e = event as Extract<StreamEvent, { type: 'plan_progress' }>;
           const target = planSeq;
           setLiveItems((prev) =>
             prev.map((it) => {
-              if (it.seq !== target || it.kind !== "plan_card" || !it.plan) {
+              if (it.seq !== target || it.kind !== 'plan_card' || !it.plan) {
                 return it;
               }
               return { ...it, plan: applyPlanProgress(it.plan, e) };
@@ -385,13 +385,13 @@ export function useSessionTimeline(
           break;
         }
 
-        case "plan_replan": {
+        case 'plan_replan': {
           if (planSeq === null) break;
-          const e = event as Extract<StreamEvent, { type: "plan_replan" }>;
+          const e = event as Extract<StreamEvent, { type: 'plan_replan' }>;
           const target = planSeq;
           setLiveItems((prev) =>
             prev.map((it) => {
-              if (it.seq !== target || it.kind !== "plan_card" || !it.plan) {
+              if (it.seq !== target || it.kind !== 'plan_card' || !it.plan) {
                 return it;
               }
               return { ...it, plan: applyPlanReplan(it.plan, e.reason) };
@@ -400,14 +400,14 @@ export function useSessionTimeline(
           break;
         }
 
-        case "plan_completed": {
+        case 'plan_completed': {
           if (planSeq === null) break;
-          const e = event as Extract<StreamEvent, { type: "plan_completed" }>;
+          const e = event as Extract<StreamEvent, { type: 'plan_completed' }>;
           const target = planSeq;
           planSeq = null;
           setLiveItems((prev) =>
             prev.map((it) => {
-              if (it.seq !== target || it.kind !== "plan_card" || !it.plan) {
+              if (it.seq !== target || it.kind !== 'plan_card' || !it.plan) {
                 return it;
               }
               return {
@@ -420,19 +420,19 @@ export function useSessionTimeline(
           break;
         }
 
-        case "usage": {
-          const e = event as Extract<StreamEvent, { type: "usage" }>;
+        case 'usage': {
+          const e = event as Extract<StreamEvent, { type: 'usage' }>;
           // Append a footer row once per turn. If one already exists
           // (defensive — kernel emits TurnUsage once), overwrite it in
           // place rather than stacking duplicates.
           setLiveItems((prev) => {
             const existing = prev.findIndex(
-              (it) => it.kind === "token_footer" && it.turn === liveTurnIdx,
+              (it) => it.kind === 'token_footer' && it.turn === liveTurnIdx,
             );
             if (existing >= 0) {
               const next = prev.slice();
               next[existing] = {
-                ...next[existing]!,
+                ...next[existing],
                 usage: { input: e.input, output: e.output },
               };
               return next;
@@ -442,7 +442,7 @@ export function useSessionTimeline(
               {
                 seq: nextSeq(),
                 turn: liveTurnIdx,
-                kind: "token_footer",
+                kind: 'token_footer',
                 usage: { input: e.input, output: e.output },
               },
             ];
@@ -450,11 +450,8 @@ export function useSessionTimeline(
           break;
         }
 
-        case "background_task_started": {
-          const e = event as Extract<
-            StreamEvent,
-            { type: "background_task_started" }
-          >;
+        case 'background_task_started': {
+          const e = event as Extract<StreamEvent, { type: 'background_task_started' }>;
           const task: BackgroundTaskInfo = {
             taskId: e.task_id,
             name: e.agent_name,
@@ -465,7 +462,7 @@ export function useSessionTimeline(
             if (bgTasksSeq !== null) {
               const target = bgTasksSeq;
               return prev.map((it) => {
-                if (it.seq !== target || it.kind !== "background_tasks") {
+                if (it.seq !== target || it.kind !== 'background_tasks') {
                   return it;
                 }
                 const existing = it.bgTasks ?? [];
@@ -480,7 +477,7 @@ export function useSessionTimeline(
               {
                 seq,
                 turn: liveTurnIdx,
-                kind: "background_tasks",
+                kind: 'background_tasks',
                 bgTasks: [task],
                 streaming: true,
               },
@@ -489,22 +486,17 @@ export function useSessionTimeline(
           break;
         }
 
-        case "background_task_done": {
-          const e = event as Extract<
-            StreamEvent,
-            { type: "background_task_done" }
-          >;
+        case 'background_task_done': {
+          const e = event as Extract<StreamEvent, { type: 'background_task_done' }>;
           if (bgTasksSeq === null) break;
           const target = bgTasksSeq;
           setLiveItems((prev) => {
             let emptied = false;
             const next = prev.flatMap((it) => {
-              if (it.seq !== target || it.kind !== "background_tasks") {
+              if (it.seq !== target || it.kind !== 'background_tasks') {
                 return [it];
               }
-              const remaining = (it.bgTasks ?? []).filter(
-                (t) => t.taskId !== e.task_id,
-              );
+              const remaining = (it.bgTasks ?? []).filter((t) => t.taskId !== e.task_id);
               if (remaining.length === 0) {
                 emptied = true;
                 return [];
@@ -517,7 +509,7 @@ export function useSessionTimeline(
           break;
         }
 
-        case "done":
+        case 'done':
           setIsStreaming(false);
           // Drop the placeholder unconditionally — turns that produced
           // zero deltas (e.g. a tool-only turn that errored before any
@@ -527,7 +519,7 @@ export function useSessionTimeline(
           // Trigger an immediate refetch so the just-completed turn
           // appears as historical items before we clear live rows.
           // This avoids a 5s blank/stale window after every turn.
-          refetchTurnsRef.current().then(() => setLiveItems([]));
+          void refetchTurnsRef.current().then(() => setLiveItems([]));
           break;
 
         default:
@@ -553,10 +545,7 @@ export function useSessionTimeline(
     };
   }, [sessionKey, sessionState]);
 
-  const items = useMemo(
-    () => [...historicalItems, ...liveItems],
-    [historicalItems, liveItems],
-  );
+  const items = useMemo(() => [...historicalItems, ...liveItems], [historicalItems, liveItems]);
 
   return {
     items,
@@ -566,7 +555,9 @@ export function useSessionTimeline(
     turns,
     isLoading: turnsQuery.isLoading,
     isError: turnsQuery.isError,
-    refetch: turnsQuery.refetch,
+    refetch: () => {
+      void turnsQuery.refetch();
+    },
   };
 }
 
@@ -575,12 +566,12 @@ function mapStepStatus(status: PlanStepStatusEvent): {
   ui: PlanStepUiStatus;
   reason?: string;
 } {
-  if (status === "running") return { ui: "running" };
-  if (status === "done") return { ui: "done" };
-  if ("failed" in status) {
-    return { ui: "failed", reason: status.failed.reason };
+  if (status === 'running') return { ui: 'running' };
+  if (status === 'done') return { ui: 'done' };
+  if ('failed' in status) {
+    return { ui: 'failed', reason: status.failed.reason };
   }
-  return { ui: "needs_replan", reason: status.needs_replan.reason };
+  return { ui: 'needs_replan', reason: status.needs_replan.reason };
 }
 
 /**
@@ -592,36 +583,35 @@ function mapStepStatus(status: PlanStepStatusEvent): {
  * channels.
  */
 function extractTask(statusText: string): string {
-  const colon = statusText.indexOf("\uFF1A");
+  const colon = statusText.indexOf('\uFF1A');
   const tail = colon >= 0 ? statusText.slice(colon + 1) : statusText;
-  return tail.replace(/\u2026$/, "").trim();
+  return tail.replace(/\u2026$/, '').trim();
 }
 
 /** Apply a `plan_progress` event to the current plan state. */
 function applyPlanProgress(
   plan: PlanState,
-  event: Extract<StreamEvent, { type: "plan_progress" }>,
+  event: Extract<StreamEvent, { type: 'plan_progress' }>,
 ): PlanState {
-  const { current_step: idx, total_steps: total, step_status, status_text } =
-    event;
+  const { current_step: idx, total_steps: total, step_status, status_text } = event;
   const { ui, reason } = mapStepStatus(step_status);
 
   const steps = plan.steps.slice();
   // Replan can dynamically extend the plan beyond the original length.
   while (steps.length <= idx) {
-    steps.push({ index: steps.length + 1, task: "", status: "pending" });
+    steps.push({ index: steps.length + 1, task: '', status: 'pending' });
   }
   // When the active step advances, finalize any prior `running` step that
   // never received an explicit `done` (kernel emits Done for the prior
   // step before Running for the next, but be defensive against drops).
   if (plan.currentStepIdx !== null && plan.currentStepIdx !== idx) {
     const prev = steps[plan.currentStepIdx];
-    if (prev && prev.status === "running") {
-      steps[plan.currentStepIdx] = { ...prev, status: "done" };
+    if (prev && prev.status === 'running') {
+      steps[plan.currentStepIdx] = { ...prev, status: 'done' };
     }
   }
 
-  const existing = steps[idx]!;
+  const existing = steps[idx];
   const task = existing.task || extractTask(status_text);
   steps[idx] = { ...existing, task, status: ui, reason };
 
@@ -646,11 +636,11 @@ function applyPlanReplan(plan: PlanState, reason: string): PlanState {
     if (cur) {
       steps[plan.currentStepIdx] = {
         ...cur,
-        status: "needs_replan",
+        status: 'needs_replan',
         reason,
       };
     }
   }
-  const trimmed = steps.filter((s) => s.status !== "pending");
+  const trimmed = steps.filter((s) => s.status !== 'pending');
   return { ...plan, steps: trimmed, replanReason: reason };
 }

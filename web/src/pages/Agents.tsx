@@ -14,25 +14,13 @@
  * limitations under the License.
  */
 
-import { useState, useEffect, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchAgents, createAgent, deleteAgent } from "@/api/agents";
-import { settingsApi } from "@/api/client";
-import type { AgentResponse, CreateAgentRequest } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Bot, Lock, Plus, Settings2, Trash2, FileText } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+
+import { fetchAgents, createAgent, deleteAgent } from '@/api/agents';
+import { settingsApi } from '@/api/client';
+import type { AgentResponse, CreateAgentRequest } from '@/api/types';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,40 +30,44 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+} from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import {
-  Bot,
-  Lock,
-  Plus,
-  Settings2,
-  Trash2,
-  FileText,
-} from "lucide-react";
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 
 // ---------------------------------------------------------------------------
 // Role badge variant helper
 // ---------------------------------------------------------------------------
 
-function roleBadgeVariant(
-  role: string | null
-): "default" | "secondary" | "outline" {
+function roleBadgeVariant(role: string | null): 'default' | 'secondary' | 'outline' {
   switch (role) {
-    case "Chat":
-      return "default";
-    case "Scout":
-    case "Planner":
-      return "secondary";
-    case "Worker":
-      return "outline";
+    case 'Chat':
+      return 'default';
+    case 'Scout':
+    case 'Planner':
+      return 'secondary';
+    case 'Worker':
+      return 'outline';
     default:
-      return "outline";
+      return 'outline';
   }
 }
 
@@ -95,14 +87,14 @@ interface AgentFormData {
 }
 
 const EMPTY_FORM: AgentFormData = {
-  name: "",
-  description: "",
-  model: "",
-  system_prompt: "",
-  soul_prompt: "",
-  provider_hint: "",
-  max_iterations: "",
-  tools: "",
+  name: '',
+  description: '',
+  model: '',
+  system_prompt: '',
+  soul_prompt: '',
+  provider_hint: '',
+  max_iterations: '',
+  tools: '',
 };
 
 function CreateAgentDialog({
@@ -134,7 +126,7 @@ function CreateAgentDialog({
         req.max_iterations = maxIter;
       }
       const tools = data.tools
-        .split(",")
+        .split(',')
         .map((t) => t.trim())
         .filter(Boolean);
       if (tools.length > 0) {
@@ -143,7 +135,7 @@ function CreateAgentDialog({
       return createAgent(req);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
       setForm({ ...EMPTY_FORM });
       onOpenChange(false);
     },
@@ -154,10 +146,7 @@ function CreateAgentDialog({
     mutation.mutate(form);
   }
 
-  function updateField<K extends keyof AgentFormData>(
-    key: K,
-    value: AgentFormData[K]
-  ) {
+  function updateField<K extends keyof AgentFormData>(key: K, value: AgentFormData[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -170,16 +159,13 @@ function CreateAgentDialog({
             Define a new custom agent with its own model, prompts, and tools.
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={handleSubmit}
-          className="grid gap-4 py-4 overflow-y-auto"
-        >
+        <form onSubmit={handleSubmit} className="grid gap-4 py-4 overflow-y-auto">
           <div className="grid gap-2">
             <Label htmlFor="agent-name">Name *</Label>
             <Input
               id="agent-name"
               value={form.name}
-              onChange={(e) => updateField("name", e.target.value)}
+              onChange={(e) => updateField('name', e.target.value)}
               placeholder="e.g. code-reviewer"
               required
             />
@@ -189,7 +175,7 @@ function CreateAgentDialog({
             <Input
               id="agent-description"
               value={form.description}
-              onChange={(e) => updateField("description", e.target.value)}
+              onChange={(e) => updateField('description', e.target.value)}
               placeholder="e.g. Reviews code changes for quality"
               required
             />
@@ -199,7 +185,7 @@ function CreateAgentDialog({
             <Input
               id="agent-model"
               value={form.model}
-              onChange={(e) => updateField("model", e.target.value)}
+              onChange={(e) => updateField('model', e.target.value)}
               placeholder="e.g. openai/gpt-4o"
               required
             />
@@ -209,7 +195,7 @@ function CreateAgentDialog({
             <Textarea
               id="agent-system-prompt"
               value={form.system_prompt}
-              onChange={(e) => updateField("system_prompt", e.target.value)}
+              onChange={(e) => updateField('system_prompt', e.target.value)}
               placeholder="You are a helpful assistant that..."
               rows={4}
               required
@@ -220,7 +206,7 @@ function CreateAgentDialog({
             <Textarea
               id="agent-soul-prompt"
               value={form.soul_prompt}
-              onChange={(e) => updateField("soul_prompt", e.target.value)}
+              onChange={(e) => updateField('soul_prompt', e.target.value)}
               placeholder="Optional personality / behavioral guidelines..."
               rows={3}
             />
@@ -232,9 +218,7 @@ function CreateAgentDialog({
             <Label htmlFor="agent-provider">Provider Hint</Label>
             <Select
               value={form.provider_hint}
-              onValueChange={(v) =>
-                updateField("provider_hint", v === "__none__" ? "" : v)
-              }
+              onValueChange={(v) => updateField('provider_hint', v === '__none__' ? '' : v)}
             >
               <SelectTrigger id="agent-provider">
                 <SelectValue placeholder="Use default provider" />
@@ -254,7 +238,7 @@ function CreateAgentDialog({
               type="number"
               min={1}
               value={form.max_iterations}
-              onChange={(e) => updateField("max_iterations", e.target.value)}
+              onChange={(e) => updateField('max_iterations', e.target.value)}
               placeholder="e.g. 10"
             />
           </div>
@@ -263,29 +247,21 @@ function CreateAgentDialog({
             <Input
               id="agent-tools"
               value={form.tools}
-              onChange={(e) => updateField("tools", e.target.value)}
+              onChange={(e) => updateField('tools', e.target.value)}
               placeholder="e.g. Read, Write, Bash (comma-separated)"
             />
-            <p className="text-xs text-muted-foreground">
-              Comma-separated list of tool names.
-            </p>
+            <p className="text-xs text-muted-foreground">Comma-separated list of tool names.</p>
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Creating..." : "Create"}
+              {mutation.isPending ? 'Creating...' : 'Create'}
             </Button>
           </DialogFooter>
           {mutation.isError && (
-            <p className="text-sm text-destructive">
-              Error: {(mutation.error as Error).message}
-            </p>
+            <p className="text-sm text-destructive">Error: {mutation.error.message}</p>
           )}
         </form>
       </DialogContent>
@@ -311,7 +287,7 @@ function DeleteAgentDialog({
   const mutation = useMutation({
     mutationFn: () => deleteAgent(agent.name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
       onOpenChange(false);
     },
   });
@@ -322,8 +298,8 @@ function DeleteAgentDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete Agent</AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete the agent{" "}
-            <strong>{agent.name}</strong>? This action cannot be undone.
+            Are you sure you want to delete the agent <strong>{agent.name}</strong>? This action
+            cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -333,13 +309,11 @@ function DeleteAgentDialog({
             disabled={mutation.isPending}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {mutation.isPending ? "Deleting..." : "Delete"}
+            {mutation.isPending ? 'Deleting...' : 'Delete'}
           </AlertDialogAction>
         </AlertDialogFooter>
         {mutation.isError && (
-          <p className="text-sm text-destructive mt-2">
-            Error: {(mutation.error as Error).message}
-          </p>
+          <p className="text-sm text-destructive mt-2">Error: {mutation.error.message}</p>
         )}
       </AlertDialogContent>
     </AlertDialog>
@@ -363,7 +337,7 @@ function AgentListItem({
     <button
       onClick={onClick}
       className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
-        isSelected ? "bg-accent" : "hover:bg-accent/50"
+        isSelected ? 'bg-accent' : 'hover:bg-accent/50'
       }`}
     >
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -372,14 +346,10 @@ function AgentListItem({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{agent.name}</span>
-          {agent.builtin && (
-            <Lock className="h-3 w-3 text-muted-foreground shrink-0" />
-          )}
+          {agent.builtin && <Lock className="h-3 w-3 text-muted-foreground shrink-0" />}
         </div>
         <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-xs text-muted-foreground">
-            {agent.role ?? "Agent"}
-          </span>
+          <span className="text-xs text-muted-foreground">{agent.role ?? 'Agent'}</span>
         </div>
       </div>
     </button>
@@ -395,22 +365,18 @@ function OverviewTab({ agent }: { agent: AgentResponse }) {
     <div className="space-y-6">
       <div className="space-y-1.5">
         <h3 className="text-sm font-medium">Description</h3>
-        <p className="text-sm text-muted-foreground">
-          {agent.description || "No description"}
-        </p>
+        <p className="text-sm text-muted-foreground">{agent.description || 'No description'}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <h3 className="text-sm font-medium">Model</h3>
-          <p className="text-sm text-muted-foreground font-mono">
-            {agent.model ?? "Default"}
-          </p>
+          <p className="text-sm text-muted-foreground font-mono">{agent.model ?? 'Default'}</p>
         </div>
         <div className="space-y-1.5">
           <h3 className="text-sm font-medium">Provider</h3>
           <p className="text-sm text-muted-foreground font-mono">
-            {agent.provider_hint ?? "Default"}
+            {agent.provider_hint ?? 'Default'}
           </p>
         </div>
       </div>
@@ -418,9 +384,7 @@ function OverviewTab({ agent }: { agent: AgentResponse }) {
       {agent.max_iterations != null && (
         <div className="space-y-1.5">
           <h3 className="text-sm font-medium">Max Iterations</h3>
-          <p className="text-sm text-muted-foreground">
-            {agent.max_iterations}
-          </p>
+          <p className="text-sm text-muted-foreground">{agent.max_iterations}</p>
         </div>
       )}
 
@@ -452,15 +416,15 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
   const modelKey = `llm.agents.${agent.name}.model`;
 
   const settingsQuery = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: () => settingsApi.list(),
   });
 
-  const currentProvider = settingsQuery.data?.[providerKey] ?? "";
-  const currentModel = settingsQuery.data?.[modelKey] ?? "";
+  const currentProvider = settingsQuery.data?.[providerKey] ?? '';
+  const currentModel = settingsQuery.data?.[modelKey] ?? '';
 
-  const [provider, setProvider] = useState("");
-  const [model, setModel] = useState("");
+  const [provider, setProvider] = useState('');
+  const [model, setModel] = useState('');
   const [initialized, setInitialized] = useState(false);
 
   if (settingsQuery.data && !initialized) {
@@ -483,7 +447,7 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      void queryClient.invalidateQueries({ queryKey: ['settings'] });
     },
   });
 
@@ -494,16 +458,15 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
       <div>
         <h3 className="text-sm font-medium">Provider / Model Override</h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Override the provider and model for this agent. Leave empty to use the
-          global default.
+          Override the provider and model for this agent. Leave empty to use the global default.
         </p>
       </div>
       <div className="space-y-4 max-w-md">
         <div className="space-y-1.5">
           <Label htmlFor="cfg-provider">Provider Override</Label>
           <Select
-            value={provider || "__none__"}
-            onValueChange={(v) => setProvider(v === "__none__" ? "" : v)}
+            value={provider || '__none__'}
+            onValueChange={(v) => setProvider(v === '__none__' ? '' : v)}
           >
             <SelectTrigger id="cfg-provider">
               <SelectValue placeholder="Use default provider" />
@@ -515,9 +478,7 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
               <SelectItem value="codex">codex</SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground font-mono">
-            {providerKey}
-          </p>
+          <p className="text-xs text-muted-foreground font-mono">{providerKey}</p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="cfg-model">Model Override</Label>
@@ -534,12 +495,10 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
           onClick={() => saveMutation.mutate()}
           disabled={!hasChanges || saveMutation.isPending}
         >
-          {saveMutation.isPending ? "Saving..." : "Save Changes"}
+          {saveMutation.isPending ? 'Saving...' : 'Save Changes'}
         </Button>
         {saveMutation.isError && (
-          <p className="text-sm text-destructive">
-            Error: {(saveMutation.error as Error).message}
-          </p>
+          <p className="text-sm text-destructive">Error: {saveMutation.error.message}</p>
         )}
       </div>
     </div>
@@ -550,21 +509,15 @@ function ConfigureTab({ agent }: { agent: AgentResponse }) {
 // Agent Detail (right panel)
 // ---------------------------------------------------------------------------
 
-type DetailTab = "overview" | "configure";
+type DetailTab = 'overview' | 'configure';
 
 const detailTabs: { id: DetailTab; label: string; icon: typeof FileText }[] = [
-  { id: "overview", label: "Overview", icon: FileText },
-  { id: "configure", label: "Configure", icon: Settings2 },
+  { id: 'overview', label: 'Overview', icon: FileText },
+  { id: 'configure', label: 'Configure', icon: Settings2 },
 ];
 
-function AgentDetail({
-  agent,
-  onDelete,
-}: {
-  agent: AgentResponse;
-  onDelete: () => void;
-}) {
-  const [activeTab, setActiveTab] = useState<DetailTab>("overview");
+function AgentDetail({ agent, onDelete }: { agent: AgentResponse; onDelete: () => void }) {
+  const [activeTab, setActiveTab] = useState<DetailTab>('overview');
 
   return (
     <div className="flex h-full flex-col">
@@ -583,10 +536,7 @@ function AgentDetail({
               </Badge>
             )}
             {agent.role && (
-              <Badge
-                variant={roleBadgeVariant(agent.role)}
-                className="text-xs"
-              >
+              <Badge variant={roleBadgeVariant(agent.role)} className="text-xs">
                 {agent.role}
               </Badge>
             )}
@@ -613,8 +563,8 @@ function AgentDetail({
             onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
               activeTab === tab.id
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
             <tab.icon className="h-3.5 w-3.5" />
@@ -625,10 +575,8 @@ function AgentDetail({
 
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {activeTab === "overview" && <OverviewTab agent={agent} />}
-        {activeTab === "configure" && (
-          <ConfigureTab key={agent.name} agent={agent} />
-        )}
+        {activeTab === 'overview' && <OverviewTab agent={agent} />}
+        {activeTab === 'configure' && <ConfigureTab key={agent.name} agent={agent} />}
       </div>
     </div>
   );
@@ -677,9 +625,8 @@ function AgentsSkeleton() {
 
 export default function Agents() {
   const [createOpen, setCreateOpen] = useState(false);
-  const [selectedName, setSelectedName] = useState<string>("");
-  const [deleteAgentItem, setDeleteAgentItem] =
-    useState<AgentResponse | null>(null);
+  const [selectedName, setSelectedName] = useState<string>('');
+  const [deleteAgentItem, setDeleteAgentItem] = useState<AgentResponse | null>(null);
 
   const {
     data: agents,
@@ -687,7 +634,7 @@ export default function Agents() {
     isError,
     error,
   } = useQuery({
-    queryKey: ["agents"],
+    queryKey: ['agents'],
     queryFn: fetchAgents,
   });
 
@@ -699,16 +646,13 @@ export default function Agents() {
             return a.name.localeCompare(b.name);
           })
         : [],
-    [agents]
+    [agents],
   );
 
   // Auto-select first agent when list loads or selection becomes invalid
   useEffect(() => {
-    if (
-      sortedAgents.length > 0 &&
-      !sortedAgents.some((a) => a.name === selectedName)
-    ) {
-      setSelectedName(sortedAgents[0]!.name);
+    if (sortedAgents.length > 0 && !sortedAgents.some((a) => a.name === selectedName)) {
+      setSelectedName(sortedAgents[0].name);
     }
   }, [sortedAgents, selectedName]);
 
@@ -722,7 +666,7 @@ export default function Agents() {
     return (
       <div className="p-6">
         <div className="rounded-lg border border-destructive/50 p-4 text-sm text-destructive">
-          Failed to load agents: {(error as Error).message}
+          Failed to load agents: {error.message}
         </div>
       </div>
     );
@@ -748,11 +692,7 @@ export default function Agents() {
           <div className="flex flex-col items-center justify-center px-4 py-12">
             <Bot className="h-8 w-8 text-muted-foreground/40" />
             <p className="mt-3 text-sm text-muted-foreground">No agents yet</p>
-            <Button
-              onClick={() => setCreateOpen(true)}
-              size="sm"
-              className="mt-3"
-            >
+            <Button onClick={() => setCreateOpen(true)} size="sm" className="mt-3">
               <Plus className="h-3 w-3" />
               Create Agent
             </Button>
@@ -783,11 +723,7 @@ export default function Agents() {
           <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
             <Bot className="h-10 w-10 text-muted-foreground/30" />
             <p className="mt-3 text-sm">Select an agent to view details</p>
-            <Button
-              onClick={() => setCreateOpen(true)}
-              size="sm"
-              className="mt-3"
-            >
+            <Button onClick={() => setCreateOpen(true)} size="sm" className="mt-3">
               <Plus className="h-3 w-3" />
               Create Agent
             </Button>
@@ -797,10 +733,7 @@ export default function Agents() {
 
       {/* Dialogs */}
       {createOpen && (
-        <CreateAgentDialog
-          open={createOpen}
-          onOpenChange={(open) => setCreateOpen(open)}
-        />
+        <CreateAgentDialog open={createOpen} onOpenChange={(open) => setCreateOpen(open)} />
       )}
 
       {deleteAgentItem && (

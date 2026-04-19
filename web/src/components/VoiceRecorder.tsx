@@ -8,8 +8,9 @@
  *      http://www.apache.org/licenses/LICENSE-2.0
  */
 
-import { useState, useRef, useCallback } from "react";
-import { buildWsUrl } from "@/adapters/rara-stream";
+import { useState, useRef, useCallback } from 'react';
+
+import { buildWsUrl } from '@/adapters/rara-stream';
 
 type VoiceRecorderProps = {
   /** Returns the current session key. */
@@ -29,7 +30,7 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.onloadend = () => {
       const result = reader.result as string;
       // Strip "data:...;base64," prefix
-      const base64 = result.split(",")[1] ?? "";
+      const base64 = result.split(',')[1] ?? '';
       resolve(base64);
     };
     reader.onerror = reject;
@@ -57,13 +58,13 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
       let recorder: MediaRecorder;
       try {
         recorder = new MediaRecorder(stream, {
-          mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-            ? "audio/webm;codecs=opus"
-            : "audio/webm",
+          mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : 'audio/webm',
         });
       } catch (err) {
         stream.getTracks().forEach((t) => t.stop());
-        console.error("MediaRecorder creation failed:", err);
+        console.error('MediaRecorder creation failed:', err);
         return;
       }
       chunksRef.current = [];
@@ -86,13 +87,13 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
         setSending(true);
         try {
           const audioBase64 = await blobToBase64(blob);
-          const mimeType = recorder.mimeType.split(";")[0] ?? "audio/webm";
+          const mimeType = recorder.mimeType.split(';')[0] ?? 'audio/webm';
 
           // Build JSON payload matching backend InboundPayload with AudioBase64 block.
           const payload = JSON.stringify({
             content: [
               {
-                type: "audio_base64",
+                type: 'audio_base64',
                 media_type: mimeType,
                 data: audioBase64,
               },
@@ -112,7 +113,7 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
           ws.onmessage = (ev: MessageEvent) => {
             try {
               const event = JSON.parse(ev.data as string);
-              if (event.type === "done" || event.type === "error" || event.type === "message") {
+              if (event.type === 'done' || event.type === 'error' || event.type === 'message') {
                 ws.close();
               }
             } catch {
@@ -121,7 +122,7 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
           };
 
           ws.onerror = () => {
-            console.error("Voice WebSocket error");
+            console.error('Voice WebSocket error');
             setSending(false);
           };
 
@@ -130,7 +131,7 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
             onComplete?.();
           };
         } catch (err) {
-          console.error("Voice send error:", err);
+          console.error('Voice send error:', err);
           setSending(false);
         }
       };
@@ -139,12 +140,12 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
       recorderRef.current = recorder;
       setRecording(true);
     } catch (err) {
-      console.error("Microphone access denied:", err);
+      console.error('Microphone access denied:', err);
     }
   }, [getSessionKey, onComplete]);
 
   const stopRecording = useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state === "recording") {
+    if (recorderRef.current && recorderRef.current.state === 'recording') {
       recorderRef.current.stop();
       recorderRef.current = null;
       setRecording(false);
@@ -155,7 +156,7 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
     if (recording) {
       stopRecording();
     } else {
-      startRecording();
+      void startRecording();
     }
   }, [recording, startRecording, stopRecording]);
 
@@ -165,16 +166,22 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
       disabled={sending}
       className={`flex h-11 w-11 items-center justify-center rounded-full shadow-md transition-all cursor-pointer ${
         recording
-          ? "bg-red-500 text-white animate-pulse hover:bg-red-600"
+          ? 'bg-red-500 text-white animate-pulse hover:bg-red-600'
           : sending
-            ? "bg-muted text-muted-foreground cursor-wait"
-            : "bg-background/80 text-muted-foreground backdrop-blur hover:bg-secondary hover:text-foreground"
-      } ${className ?? ""}`}
-      title={recording ? "Stop recording" : sending ? "Sending..." : "Record voice message"}
+            ? 'bg-muted text-muted-foreground cursor-wait'
+            : 'bg-background/80 text-muted-foreground backdrop-blur hover:bg-secondary hover:text-foreground'
+      } ${className ?? ''}`}
+      title={recording ? 'Stop recording' : sending ? 'Sending...' : 'Record voice message'}
     >
       {sending ? (
         /* Spinner */
-        <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg
+          className="h-5 w-5 animate-spin"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        >
           <circle cx="12" cy="12" r="10" strokeDasharray="60" strokeDashoffset="20" />
         </svg>
       ) : recording ? (
@@ -184,7 +191,14 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
         </svg>
       ) : (
         /* Mic icon */
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        >
           <rect x="9" y="2" width="6" height="12" rx="3" />
           <path d="M5 10a7 7 0 0 0 14 0" />
           <line x1="12" y1="19" x2="12" y2="22" />

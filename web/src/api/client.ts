@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-const STORAGE_KEY = "rara_backend_url";
+const STORAGE_KEY = 'rara_backend_url';
 
 /** Derive a sensible default backend URL from the current page hostname. */
 function defaultBackendUrl(): string {
-  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   return `http://${host}:25555`;
 }
 
 /** Read the backend URL from localStorage, env, or fallback to default. */
 export function getBackendUrl(): string {
-  if (typeof window !== "undefined") {
+  if (typeof window !== 'undefined') {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) return stored;
   }
@@ -39,7 +39,7 @@ export function setBackendUrl(url: string) {
 
 /** True when the user has explicitly set a custom backend URL. */
 function hasCustomBackendUrl(): boolean {
-  return typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY) !== null;
+  return typeof window !== 'undefined' && localStorage.getItem(STORAGE_KEY) !== null;
 }
 
 /**
@@ -82,12 +82,8 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  *  aborting either cancels the underlying fetch. `AbortSignal.any` is
  *  available in modern browsers; we fall back to a manual relay when the
  *  runtime doesn't expose it. */
-function composeSignals(
-  internal: AbortSignal,
-  external?: AbortSignal | null,
-): AbortSignal {
+function composeSignals(internal: AbortSignal, external?: AbortSignal | null): AbortSignal {
   if (!external) return internal;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const any = (AbortSignal as any).any as ((signals: AbortSignal[]) => AbortSignal) | undefined;
   if (any) return any([internal, external]);
   const relay = new AbortController();
@@ -101,7 +97,10 @@ function composeSignals(
   return relay.signal;
 }
 
-async function request<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...fetchOptions } = options ?? {};
   const timeoutController = new AbortController();
   const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
@@ -138,7 +137,10 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
   }
 }
 
-async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<Blob> {
+async function requestBlob(
+  path: string,
+  options?: RequestInit & { timeoutMs?: number },
+): Promise<Blob> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -163,9 +165,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type {
-  SettingsMap, SettingValue, SettingsPatch,
-} from './types';
+import type { SettingsMap, SettingValue, SettingsPatch } from './types';
 
 /** Callers can pass an `AbortSignal` to cancel in-flight requests
  *  (e.g. a React effect cleanup or a user-triggered dialog close). */
@@ -208,8 +208,7 @@ export const settingsApi = {
       method: 'PUT',
       body: JSON.stringify({ value }),
     }),
-  delete: (key: string) =>
-    request<void>(`/api/v1/settings/${key}`, { method: 'DELETE' }),
+  delete: (key: string) => request<void>(`/api/v1/settings/${key}`, { method: 'DELETE' }),
   batchUpdate: (patches: SettingsPatch) =>
     request<void>('/api/v1/settings', {
       method: 'PATCH',

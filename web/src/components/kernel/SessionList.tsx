@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-import { Zap } from "lucide-react";
-import { sessionGroup } from "@/api/kernel-types";
-import { SessionListItem } from "./SessionListItem";
+import { Zap } from 'lucide-react';
+
+import { SessionListItem } from './SessionListItem';
+
+import { sessionGroup } from '@/api/kernel-types';
 
 export interface SessionEntry {
   agent_id: string;
@@ -38,14 +40,9 @@ export interface SessionListProps {
  * Active = sessions whose state is `Active` or `Ready`.
  * Dormant = `Suspended` or `Paused`.
  */
-export function SessionList({
-  sessions,
-  selectedId,
-  onSelect,
-  isLoading,
-}: SessionListProps) {
-  const active = sessions.filter((s) => sessionGroup(s.state) === "active");
-  const dormant = sessions.filter((s) => sessionGroup(s.state) === "dormant");
+export function SessionList({ sessions, selectedId, onSelect, isLoading }: SessionListProps) {
+  const active = sessions.filter((s) => sessionGroup(s.state) === 'active');
+  const dormant = sessions.filter((s) => sessionGroup(s.state) === 'dormant');
 
   if (isLoading) {
     return (

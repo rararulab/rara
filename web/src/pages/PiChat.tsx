@@ -14,7 +14,16 @@
  * limitations under the License.
  */
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { Agent } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type {
+  UserMessage,
+  AssistantMessage,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  ToolResultMessage,
+} from '@mariozechner/pi-ai';
 import {
   AppStorage,
   setAppStorage,
@@ -26,47 +35,38 @@ import {
   CustomProvidersStore,
   defaultConvertToLlm,
   registerMessageRenderer,
+  // Importing the extract-document tool triggers a module-level
+  // `registerToolRenderer("extract_document", ...)` side effect so
+  // pi-mono can render server-triggered document-extraction tool calls.
+  extractDocumentTool,
   type Attachment,
   type UserMessageWithAttachments,
-} from "@mariozechner/pi-web-ui";
-import { html } from "lit";
-import { Agent } from "@mariozechner/pi-agent-core";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-// Importing the extract-document tool from pi-web-ui triggers the
-// module-level `registerToolRenderer("extract_document", ...)` side
-// effect so pi-mono can render server-triggered document-extraction tool
-// calls in chat.
-import { extractDocumentTool } from "@mariozechner/pi-web-ui";
+} from '@mariozechner/pi-web-ui';
+import { html } from 'lit';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 // Reference the tool so Vite's tree-shaker keeps the module (and its
 // `registerToolRenderer` side effect) in the bundle. The actual tool
 // object is executed server-side; the renderer is what matters here.
 void extractDocumentTool;
-import type {
-  UserMessage,
-  AssistantMessage,
-  TextContent,
-  ThinkingContent,
-  ToolCall,
-  ToolResultMessage,
-} from "@mariozechner/pi-ai";
-import { RaraStorageBackend } from "@/adapters/rara-storage";
-import { createRaraStreamFn } from "@/adapters/rara-stream";
-import { registerRaraToolRenderers } from "@/tools/rara-tool-renderers";
-import { api, settingsApi } from "@/api/client";
-import type { ChatSession, ChatMessageData, ThinkingLevel } from "@/api/types";
-import { VoiceRecorder } from "@/components/VoiceRecorder";
-import { RaraModelDialog } from "@/components/RaraModelDialog";
-import { AlmaCaret } from "@/components/AlmaCaret";
-import { ChatSidebar } from "@/components/ChatSidebar";
-import { CascadeModal } from "@/components/chat/CascadeModal";
-import { ExecutionTraceModal } from "@/components/chat/ExecutionTraceModal";
-import { useSettingsModal } from "@/components/settings/SettingsModalProvider";
-import type { ProviderInfo } from "@/api/types";
-import type { CascadeTrace, ExecutionTrace } from "@/api/kernel-types";
-import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from "@/lib/synthetic-model";
 
-const ACTIVE_SESSION_KEY = "rara.activeSessionKey";
+import { RaraStorageBackend } from '@/adapters/rara-storage';
+import { createRaraStreamFn } from '@/adapters/rara-stream';
+import { api, settingsApi } from '@/api/client';
+import type { CascadeTrace, ExecutionTrace } from '@/api/kernel-types';
+import type { ProviderInfo } from '@/api/types';
+import type { ChatSession, ChatMessageData, ThinkingLevel } from '@/api/types';
+import { AlmaCaret } from '@/components/AlmaCaret';
+import { CascadeModal } from '@/components/chat/CascadeModal';
+import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
+import { ChatSidebar } from '@/components/ChatSidebar';
+import { RaraModelDialog } from '@/components/RaraModelDialog';
+import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import { VoiceRecorder } from '@/components/VoiceRecorder';
+import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
+import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
+
+const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
 
 function readStoredSessionKey(): string | null {
   try {
@@ -115,7 +115,7 @@ async function resolveAdminDefaultModel(): Promise<{
 } | null> {
   try {
     const settings = await settingsApi.list();
-    const provider = settings["llm.default_provider"]?.trim();
+    const provider = settings['llm.default_provider']?.trim();
     if (!provider) return null;
     const model = settings[`llm.providers.${provider}.default_model`]?.trim();
     if (!model) {
@@ -126,7 +126,7 @@ async function resolveAdminDefaultModel(): Promise<{
     }
     return { provider, model };
   } catch (e: unknown) {
-    console.warn("Failed to resolve admin default provider:", e);
+    console.warn('Failed to resolve admin default provider:', e);
     return null;
   }
 }
@@ -138,12 +138,12 @@ async function resolveAdminDefaultModel(): Promise<{
  */
 function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
   switch (level) {
-    case "off":
-    case "minimal":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
+    case 'off':
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
       return level;
     default:
       return null;
@@ -158,14 +158,11 @@ function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
  */
 function isToolFailure(text: string): boolean {
   const trimmed = text.trimStart();
-  if (trimmed.startsWith("Error:")) return true;
+  if (trimmed.startsWith('Error:')) return true;
   try {
     const parsed = JSON.parse(trimmed);
     return (
-      typeof parsed === "object"
-      && parsed !== null
-      && !Array.isArray(parsed)
-      && "error" in parsed
+      typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && 'error' in parsed
     );
   } catch {
     return false;
@@ -173,13 +170,17 @@ function isToolFailure(text: string): boolean {
 }
 
 function mimeToFilename(mimeType: string, index: number): string {
-  const ext = mimeType.split("/")[1] || "bin";
+  const ext = mimeType.split('/')[1] || 'bin';
   return `session-image-${index + 1}.${ext}`;
 }
 
 /** Zeroed usage — rara tracks usage server-side. */
 const EMPTY_USAGE = {
-  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
@@ -187,9 +188,7 @@ const EMPTY_USAGE = {
  * Parse assistant text into ThinkingContent + TextContent blocks.
  * `<think>reasoning</think>answer` → [{type:"thinking",...}, {type:"text",...}]
  */
-function parseAssistantContent(
-  raw: string,
-): (TextContent | ThinkingContent)[] {
+function parseAssistantContent(raw: string): (TextContent | ThinkingContent)[] {
   const blocks: (TextContent | ThinkingContent)[] = [];
   const re = /<think>([\s\S]*?)<\/think>/g;
   let cursor = 0;
@@ -198,16 +197,16 @@ function parseAssistantContent(
   while ((match = re.exec(raw)) !== null) {
     // Text before this <think> block
     const before = raw.slice(cursor, match.index).trim();
-    if (before) blocks.push({ type: "text", text: before });
+    if (before) blocks.push({ type: 'text', text: before });
     // Thinking content
     const thinking = match[1].trim();
-    if (thinking) blocks.push({ type: "thinking", thinking });
+    if (thinking) blocks.push({ type: 'thinking', thinking });
     cursor = match.index + match[0].length;
   }
 
   // Remaining text after the last </think>
   const tail = raw.slice(cursor).trim();
-  if (tail) blocks.push({ type: "text", text: tail });
+  if (tail) blocks.push({ type: 'text', text: tail });
 
   return blocks;
 }
@@ -241,59 +240,60 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
   for (const m of msgs) {
     const ts = new Date(m.created_at).getTime();
 
-    if (m.role === "user") {
+    if (m.role === 'user') {
       lastAssistant = null;
-      if (typeof m.content === "string") {
-        result.push({ role: "user", content: m.content, timestamp: ts } as UserMessage);
+      if (typeof m.content === 'string') {
+        result.push({ role: 'user', content: m.content, timestamp: ts } as UserMessage);
       } else {
         const text = m.content
-          .filter((b): b is { type: "text"; text: string } => b.type === "text")
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
           .map((b) => b.text)
-          .join("\n");
+          .join('\n');
         const attachments: Attachment[] = m.content.flatMap((b, index): Attachment[] => {
-          if (b.type !== "image_base64") return [];
-          return [{
-            id: `${m.seq}-image-${index}`,
-            type: "image",
-            fileName: mimeToFilename(b.media_type, index),
-            mimeType: b.media_type,
-            size: Math.floor((b.data.length * 3) / 4),
-            content: b.data,
-            preview: b.data,
-          }];
+          if (b.type !== 'image_base64') return [];
+          return [
+            {
+              id: `${m.seq}-image-${index}`,
+              type: 'image',
+              fileName: mimeToFilename(b.media_type, index),
+              mimeType: b.media_type,
+              size: Math.floor((b.data.length * 3) / 4),
+              content: b.data,
+              preview: b.data,
+            },
+          ];
         });
 
         if (attachments.length > 0) {
           result.push({
-            role: "user-with-attachments",
+            role: 'user-with-attachments',
             content: text,
             attachments,
             timestamp: ts,
           } as UserMessageWithAttachments as AgentMessage);
         } else {
-          result.push({ role: "user", content: text, timestamp: ts } as UserMessage);
+          result.push({ role: 'user', content: text, timestamp: ts } as UserMessage);
         }
       }
-    } else if (m.role === "assistant") {
+    } else if (m.role === 'assistant') {
       const raw =
-        typeof m.content === "string"
+        typeof m.content === 'string'
           ? m.content
           : m.content
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
               .map((b) => b.text)
-              .join("\n");
-      const content: (TextContent | ThinkingContent | ToolCall)[] =
-        parseAssistantContent(raw);
+              .join('\n');
+      const content: (TextContent | ThinkingContent | ToolCall)[] = parseAssistantContent(raw);
       // Surface persisted tool-call requests so pi-web-ui reducers (and the
       // artifacts panel's reconstructFromMessages) can see them.
       if (m.tool_calls && m.tool_calls.length > 0) {
         for (const tc of m.tool_calls) {
           const args =
-            tc.arguments && typeof tc.arguments === "object"
+            tc.arguments && typeof tc.arguments === 'object'
               ? (tc.arguments as Record<string, unknown>)
               : {};
           content.push({
-            type: "toolCall",
+            type: 'toolCall',
             id: tc.id,
             name: tc.name,
             arguments: args,
@@ -301,35 +301,37 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
         }
       }
       const assistant: AssistantMessage = {
-        role: "assistant",
+        role: 'assistant',
         content,
-        api: "messages",
-        provider: "anthropic",
-        model: "unknown",
+        api: 'messages',
+        provider: 'anthropic',
+        model: 'unknown',
         usage: EMPTY_USAGE,
-        stopReason: "stop",
+        stopReason: 'stop',
         timestamp: ts,
       };
       lastAssistant = assistant;
       assistantSeqByRef.set(assistant, m.seq);
       result.push(assistant);
-    } else if (m.role === "tool") {
+    } else if (m.role === 'tool') {
       // Tool call from the assistant — attach as ToolCall to the last AssistantMessage.
       if (lastAssistant && m.tool_call_id && m.tool_name) {
         let args: Record<string, unknown> = {};
         try {
-          const raw = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+          const raw = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
           args = JSON.parse(raw);
-        } catch { /* use empty args */ }
+        } catch {
+          /* use empty args */
+        }
         const toolCall: ToolCall = {
-          type: "toolCall",
+          type: 'toolCall',
           id: m.tool_call_id,
           name: m.tool_name,
           arguments: args,
         };
-        (lastAssistant.content as (TextContent | ThinkingContent | ToolCall)[]).push(toolCall);
+        lastAssistant.content.push(toolCall);
       }
-    } else if (m.role === "tool_result") {
+    } else if (m.role === 'tool_result') {
       // Tool result — emit as a separate ToolResultMessage. Preserve the
       // backend's failure markers so ArtifactsPanel.reconstructFromMessages
       // (which only replays successful ops) skips failed calls on reload.
@@ -337,17 +339,18 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
       // with "Error:" (pi-mono convention) and JSON objects with an `error`
       // key (produced by the anyhow -> ToolOutput path).
       if (m.tool_call_id && m.tool_name) {
-        const text = typeof m.content === "string"
-          ? m.content
-          : m.content
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
-              .map((b) => b.text)
-              .join("\n");
+        const text =
+          typeof m.content === 'string'
+            ? m.content
+            : m.content
+                .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+                .map((b) => b.text)
+                .join('\n');
         const toolResult: ToolResultMessage = {
-          role: "toolResult",
+          role: 'toolResult',
           toolCallId: m.tool_call_id,
           toolName: m.tool_name,
-          content: text ? [{ type: "text", text }] : [],
+          content: text ? [{ type: 'text', text }] : [],
           isError: isToolFailure(text),
           timestamp: ts,
         };
@@ -367,8 +370,8 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
  * Two separate events rather than one discriminated payload so each
  * handler can own its own modal state without switching on a tag.
  */
-const CASCADE_TRACE_EVENT = "rara:cascade-trace";
-const EXECUTION_TRACE_EVENT = "rara:execution-trace";
+const CASCADE_TRACE_EVENT = 'rara:cascade-trace';
+const EXECUTION_TRACE_EVENT = 'rara:execution-trace';
 
 interface TraceEventDetail {
   seq: number;
@@ -408,10 +411,8 @@ interface TraceEventDetail {
  * registration in pi-web-ui's renderer map (a Map.set overwrite), which
  * is what we want during HMR.
  */
-function registerCascadeAssistantRenderer(
-  agentResolver: () => Agent | null,
-): void {
-  registerMessageRenderer("assistant", {
+function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): void {
+  registerMessageRenderer('assistant', {
     render(message) {
       const seq = assistantSeqByRef.get(message);
       const showButtons = seq !== undefined;
@@ -419,11 +420,11 @@ function registerCascadeAssistantRenderer(
       // (a single linear scan) and avoids stale-closure bugs because the
       // resolver always hits the live agent ref.
       const agent = agentResolver();
-      const resultByCallId = new Map<string, import("@mariozechner/pi-ai").ToolResultMessage>();
+      const resultByCallId = new Map<string, import('@mariozechner/pi-ai').ToolResultMessage>();
       if (agent) {
         for (const m of agent.state.messages) {
-          if (m.role === "toolResult") {
-            const tr = m as import("@mariozechner/pi-ai").ToolResultMessage;
+          if (m.role === 'toolResult') {
+            const tr = m as import('@mariozechner/pi-ai').ToolResultMessage;
             resultByCallId.set(tr.toolCallId, tr);
           }
         }
@@ -488,10 +489,14 @@ export default function PiChat() {
   const containerRef = useRef<HTMLDivElement>(null);
   const initRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
-  const chatPanelRef = useRef<import("@mariozechner/pi-web-ui").ChatPanel | null>(null);
+  const chatPanelRef = useRef<import('@mariozechner/pi-web-ui').ChatPanel | null>(null);
   // Tracks the last successfully-persisted (model, provider, thinking)
   // triple so onBeforeSend can skip no-op PATCHes on every send.
-  const lastPersistedRef = useRef<{ model: string | null; provider: string | null; thinking: string | null } | null>(null);
+  const lastPersistedRef = useRef<{
+    model: string | null;
+    provider: string | null;
+    thinking: string | null;
+  } | null>(null);
   // Snapshot of rara-side provider ids currently routable by the kernel.
   // Used to reject stale `model_provider` values persisted before the
   // provider catalog shrank (e.g. leftover pi-mono `google` selections
@@ -662,7 +667,7 @@ export default function PiChat() {
     // away from the restored values, and skips the identity write
     // otherwise.
     lastPersistedRef.current = {
-      model:    session.model ?? null,
+      model: session.model ?? null,
       provider: session.model_provider ?? null,
       thinking: session.thinking_level ?? null,
     };
@@ -681,9 +686,7 @@ export default function PiChat() {
       }
       // Rebuild the artifacts panel from the same message list so switching
       // back to a session restores every previously-created artifact.
-      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
-        agentMsgs,
-      );
+      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(agentMsgs);
     } catch {
       /* session may have no messages yet */
     }
@@ -695,7 +698,7 @@ export default function PiChat() {
     // lazily so we defer to the next frame and, for added belt, again
     // after the lit element completes its update pass.
     requestAnimationFrame(() => {
-      const ta = document.querySelector<HTMLTextAreaElement>("textarea");
+      const ta = document.querySelector<HTMLTextAreaElement>('textarea');
       ta?.focus();
     });
   }, []);
@@ -710,9 +713,7 @@ export default function PiChat() {
       );
       const agentMsgs = toAgentMessages(msgs);
       agent.replaceMessages(agentMsgs);
-      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
-        agentMsgs,
-      );
+      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(agentMsgs);
       chatPanelRef.current?.agentInterface?.requestUpdate();
     } catch {
       /* ignore */
@@ -721,8 +722,8 @@ export default function PiChat() {
 
   /** Create a new empty session and switch to it. */
   const newSession = useCallback(async () => {
-    const created = await api.post<ChatSession>("/api/v1/chat/sessions", {});
-    switchSession(created);
+    const created = await api.post<ChatSession>('/api/v1/chat/sessions', {});
+    void switchSession(created);
     setSidebarRefreshKey((k) => k + 1);
   }, [switchSession]);
 
@@ -737,9 +738,9 @@ export default function PiChat() {
       // history is gone, otherwise we'd trap the user in an
       // "auto-regenerated empty session" loop.
       if (fallback) {
-        switchSession(fallback);
+        void switchSession(fallback);
       } else {
-        newSession();
+        void newSession();
       }
     },
     [activeSession, newSession, switchSession],
@@ -774,7 +775,7 @@ export default function PiChat() {
     // and the user can retry without chasing a dismissed toast.
     try {
       await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
-        model:          null,
+        model: null,
         model_provider: null,
         thinking_level: null,
       });
@@ -803,7 +804,7 @@ export default function PiChat() {
       chatPanelRef.current?.agentInterface?.requestUpdate();
       setModelDialogOpen(false);
     } catch (e: unknown) {
-      console.warn("Failed to clear session model override:", e);
+      console.warn('Failed to clear session model override:', e);
       const msg = e instanceof Error ? e.message : String(e);
       setResetError(`Failed to reset model: ${msg}`);
     } finally {
@@ -817,232 +818,232 @@ export default function PiChat() {
 
     const container = containerRef.current;
 
-    (async () => {
+    void (async () => {
       try {
-      // 0. Register rara → pi-mono tool renderer aliases. Must happen before
-      //    ChatPanel.setAgent() mounts any messages — the registry is
-      //    consulted at render time with no retro-active update.
-      registerRaraToolRenderers();
-      // Wrap pi-web-ui's built-in `<assistant-message>` so each completed
-      // assistant turn gets a "📊 详情" trigger that opens the cascade
-      // execution-trace modal. The renderer fires a CustomEvent on the
-      // host element (which bubbles up through the light DOM since
-      // pi-web-ui's components opt out of shadow DOM) carrying the
-      // persisted `seq` (resolved via `assistantSeqByRef`) so the React
-      // layer below can call `GET /chat/sessions/{key}/trace` directly.
-      registerCascadeAssistantRenderer(() => agentRef.current);
+        // 0. Register rara → pi-mono tool renderer aliases. Must happen before
+        //    ChatPanel.setAgent() mounts any messages — the registry is
+        //    consulted at render time with no retro-active update.
+        registerRaraToolRenderers();
+        // Wrap pi-web-ui's built-in `<assistant-message>` so each completed
+        // assistant turn gets a "📊 详情" trigger that opens the cascade
+        // execution-trace modal. The renderer fires a CustomEvent on the
+        // host element (which bubbles up through the light DOM since
+        // pi-web-ui's components opt out of shadow DOM) carrying the
+        // persisted `seq` (resolved via `assistantSeqByRef`) so the React
+        // layer below can call `GET /chat/sessions/{key}/trace` directly.
+        registerCascadeAssistantRenderer(() => agentRef.current);
 
-      // 1. Create and initialize the rara storage backend
-      const backend = new RaraStorageBackend();
-      await backend.init();
+        // 1. Create and initialize the rara storage backend
+        const backend = new RaraStorageBackend();
+        await backend.init();
 
-      // 2. Create store instances and wire up the backend
-      const settings = new SettingsStore();
-      settings.setBackend(backend);
+        // 2. Create store instances and wire up the backend
+        const settings = new SettingsStore();
+        settings.setBackend(backend);
 
-      const providerKeys = new ProviderKeysStore();
-      providerKeys.setBackend(backend);
+        const providerKeys = new ProviderKeysStore();
+        providerKeys.setBackend(backend);
 
-      const sessions = new SessionsStore();
-      sessions.setBackend(backend);
+        const sessions = new SessionsStore();
+        sessions.setBackend(backend);
 
-      const customProviders = new CustomProvidersStore();
-      customProviders.setBackend(backend);
+        const customProviders = new CustomProvidersStore();
+        customProviders.setBackend(backend);
 
-      // 3. Create AppStorage and set it as the global instance
-      const storage = new AppStorage(
-        settings,
-        providerKeys,
-        sessions,
-        customProviders,
-        backend,
-      );
-      setAppStorage(storage);
+        // 3. Create AppStorage and set it as the global instance
+        const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
+        setAppStorage(storage);
 
-      // 4a. Pull the routable provider catalog in parallel with the
-      //     session fetch. Used to reject stale `model_provider` values
-      //     persisted by older builds before we touch `agent.state.model`.
-      //     Non-fatal if it fails: downstream guards fail-open.
-      const providersPromise = api
-        .get<ProviderInfo[]>("/api/v1/chat/providers")
-        .then((list) => {
-          validProvidersRef.current = new Set(list.map((p) => p.id));
-        })
-        .catch((e: unknown) => {
-          console.warn("Failed to load provider catalog for restore guard:", e);
+        // 4a. Pull the routable provider catalog in parallel with the
+        //     session fetch. Used to reject stale `model_provider` values
+        //     persisted by older builds before we touch `agent.state.model`.
+        //     Non-fatal if it fails: downstream guards fail-open.
+        const providersPromise = api
+          .get<ProviderInfo[]>('/api/v1/chat/providers')
+          .then((list) => {
+            validProvidersRef.current = new Set(list.map((p) => p.id));
+          })
+          .catch((e: unknown) => {
+            console.warn('Failed to load provider catalog for restore guard:', e);
+          });
+
+        // 4b. Resolve the active session key before creating the agent.
+        //     Prefer the last-active session from localStorage so a
+        //     reload lands the user back on whatever they were reading,
+        //     falling back to the most recent session, finally creating
+        //     a fresh one when nothing exists.
+        const storedKey = readStoredSessionKey();
+        let initialSession: ChatSession | null = null;
+        if (storedKey) {
+          try {
+            initialSession = await api.get<ChatSession>(
+              `/api/v1/chat/sessions/${encodeURIComponent(storedKey)}`,
+            );
+          } catch {
+            // Session was deleted or the key is stale — fall through.
+            writeStoredSessionKey(null);
+          }
+        }
+        if (!initialSession) {
+          const existingSessions = await api.get<ChatSession[]>(
+            '/api/v1/chat/sessions?limit=1&offset=0',
+          );
+          initialSession = existingSessions[0] ?? null;
+        }
+        // Block on provider catalog here so the pre-mount restore step has
+        // an authoritative allowlist. It's one cheap request; running it
+        // serially after the sessions fetch keeps the code simple.
+        await providersPromise;
+        if (!initialSession) {
+          initialSession = await api.post<ChatSession>('/api/v1/chat/sessions', {});
+        }
+        setActiveSession(initialSession);
+        writeStoredSessionKey(initialSession.key);
+        setShowWelcome((initialSession.message_count ?? 0) === 0);
+        // 5. Create the Agent with rara's WebSocket-backed stream function.
+        //    The streamFn reads agent.sessionId at call time to get the active session key.
+        const agent: Agent = new Agent({
+          streamFn: createRaraStreamFn(
+            () => agent.sessionId,
+            () => {
+              // Surface raw attachments from the latest user turn so the
+              // rara-stream adapter can forward document bytes as
+              // `file_base64` blocks in addition to pi-mono's client-side
+              // extracted text.
+              for (let i = agent.state.messages.length - 1; i >= 0; i--) {
+                const m = agent.state.messages[i];
+                if (m.role === 'user-with-attachments') {
+                  return m.attachments;
+                }
+                if (m.role === 'user') return [];
+              }
+              return [];
+            },
+          ),
+          convertToLlm: defaultConvertToLlm,
+          sessionId: initialSession.key,
+        });
+        agentRef.current = agent;
+
+        // Restore the initial session's persisted model + thinking-level
+        // BEFORE mounting the chat panel, so the composer pill reflects
+        // the real selection and `onBeforeSend` does not see pi-agent-core's
+        // "unknown" default as the first thing to persist.
+        if (
+          initialSession.model &&
+          initialSession.model_provider &&
+          isRoutableProvider(validProvidersRef.current, initialSession.model_provider)
+        ) {
+          agent.state.model = syntheticModel(initialSession.model_provider, initialSession.model);
+          lastPersistedRef.current = {
+            model: initialSession.model,
+            provider: initialSession.model_provider,
+            thinking: initialSession.thinking_level ?? null,
+          };
+        } else {
+          // Unpinned session — seed the composer pill with rara's admin
+          // default so it reads "minimax: MiniMax-M2.7" rather than
+          // pi-web-ui's hard-coded catalog fallback (`gemini-2.5-*`).
+          const resolved = await resolveAdminDefaultModel();
+          if (resolved) {
+            agent.state.model = syntheticModel(resolved.provider, resolved.model);
+          }
+        }
+        if (initialSession.thinking_level) {
+          agent.state.thinkingLevel = initialSession.thinking_level;
+        }
+
+        // 6. Mount the ChatPanel custom element
+        const chatPanel = document.createElement(
+          'pi-chat-panel',
+        ) as import('@mariozechner/pi-web-ui').ChatPanel;
+        chatPanelRef.current = chatPanel;
+        container.appendChild(chatPanel);
+
+        // 7. Wire agent into the panel — skip API key prompt since rara manages
+        //    keys server-side, and sync the current model/thinking override to
+        //    the backend before every send so the kernel sees the user's
+        //    selection for this turn. Overriding `onModelSelect` replaces
+        //    pi-mono's `ModelSelector` (which only knows its own hard-coded
+        //    `MODELS` catalog) with rara's native dialog sourced from
+        //    `/api/v1/settings` — the only place provider ids (`openrouter`,
+        //    `kimi`, `minimax`, `glm`, `scnet`, ...) align with rara's kernel
+        //    `DriverRegistry`.
+        await chatPanel.setAgent(agent, {
+          onApiKeyRequired: async () => true,
+          onModelSelect: () => setModelDialogOpen(true),
+          onBeforeSend: async () => {
+            const key = agent.sessionId;
+            if (!key) return;
+            // The user just committed their first message — no more welcome.
+            setShowWelcome(false);
+            // Nudge the sidebar to refetch so the fresh session's new
+            // title and preview surface in the history list.
+            setSidebarRefreshKey((k) => k + 1);
+            // Refetch the active session so the backend-assigned title
+            // lands in the header above the messages. Fire-and-forget;
+            // a retry happens on the next send if the backend hadn't
+            // finished assigning a title yet.
+            api
+              .get<ChatSession>(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
+              .then((fresh) => {
+                if (agentRef.current?.sessionId === key) setActiveSession(fresh);
+              })
+              .catch(() => {
+                /* non-fatal */
+              });
+
+            // Skip the PATCH when `agent.state.model` is pi-agent-core's
+            // placeholder default (id/provider = "unknown"). Persisting it
+            // would overwrite any previously saved rara provider with a
+            // sentinel the kernel's DriverRegistry cannot route to, which
+            // caused the original "LLM provider not configured" failure
+            // (see #1554). `isUnknownModel` returns true for null/undefined
+            // too, so the subsequent reads are safe without the `?.` guard.
+            const picked = !isUnknownModel(agent.state.model);
+            const model = picked ? agent.state.model.id : null;
+            const provider = picked ? agent.state.model.provider : null;
+            const thinking = asThinkingLevel(agent.state.thinkingLevel);
+
+            // Nothing worth persisting.
+            if (!model && !thinking) return;
+
+            // Dedup consecutive identical writes — the chat UI round-trips
+            // every send through this hook even when the selection hasn't
+            // changed, and the PATCH wakes up the session index for nothing.
+            const last = lastPersistedRef.current;
+            if (
+              last &&
+              last.model === model &&
+              last.provider === provider &&
+              last.thinking === thinking
+            ) {
+              return;
+            }
+
+            try {
+              await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+                model,
+                model_provider: provider,
+                thinking_level: thinking,
+              });
+              lastPersistedRef.current = { model, provider, thinking };
+            } catch (e) {
+              console.warn('Failed to persist session LLM override:', e);
+            }
+          },
         });
 
-      // 4b. Resolve the active session key before creating the agent.
-      //     Prefer the last-active session from localStorage so a
-      //     reload lands the user back on whatever they were reading,
-      //     falling back to the most recent session, finally creating
-      //     a fresh one when nothing exists.
-      const storedKey = readStoredSessionKey();
-      let initialSession: ChatSession | null = null;
-      if (storedKey) {
-        try {
-          initialSession = await api.get<ChatSession>(
-            `/api/v1/chat/sessions/${encodeURIComponent(storedKey)}`,
-          );
-        } catch {
-          // Session was deleted or the key is stale — fall through.
-          writeStoredSessionKey(null);
+        // Model and thinking selectors are enabled by default in ChatPanel.setAgent().
+        // Rara delegates model/thinking selection to the user via pi-chat-panel's
+        // built-in UI — the chosen model is passed to the backend at stream time.
+        //
+        // Surface pi-mono's built-in theme toggle in the chat header. Rara's
+        // own <ThemeToggle /> is scoped to DashboardLayout (admin pages), so
+        // there's no duplicate on the chat page.
+        if (chatPanel.agentInterface) {
+          chatPanel.agentInterface.showThemeToggle = true;
         }
-      }
-      if (!initialSession) {
-        const existingSessions = await api.get<ChatSession[]>(
-          "/api/v1/chat/sessions?limit=1&offset=0",
-        );
-        initialSession = existingSessions[0] ?? null;
-      }
-      // Block on provider catalog here so the pre-mount restore step has
-      // an authoritative allowlist. It's one cheap request; running it
-      // serially after the sessions fetch keeps the code simple.
-      await providersPromise;
-      if (!initialSession) {
-        initialSession = await api.post<ChatSession>("/api/v1/chat/sessions", {});
-      }
-      setActiveSession(initialSession);
-      writeStoredSessionKey(initialSession.key);
-      setShowWelcome((initialSession.message_count ?? 0) === 0);
-      // 5. Create the Agent with rara's WebSocket-backed stream function.
-      //    The streamFn reads agent.sessionId at call time to get the active session key.
-      const agent: Agent = new Agent({
-        streamFn: createRaraStreamFn(
-          () => agent.sessionId,
-          () => {
-            // Surface raw attachments from the latest user turn so the
-            // rara-stream adapter can forward document bytes as
-            // `file_base64` blocks in addition to pi-mono's client-side
-            // extracted text.
-            for (let i = agent.state.messages.length - 1; i >= 0; i--) {
-              const m = agent.state.messages[i];
-              if (m.role === "user-with-attachments") {
-                return (m as UserMessageWithAttachments).attachments;
-              }
-              if (m.role === "user") return [];
-            }
-            return [];
-          },
-        ),
-        convertToLlm: defaultConvertToLlm,
-        sessionId: initialSession.key,
-      });
-      agentRef.current = agent;
-
-      // Restore the initial session's persisted model + thinking-level
-      // BEFORE mounting the chat panel, so the composer pill reflects
-      // the real selection and `onBeforeSend` does not see pi-agent-core's
-      // "unknown" default as the first thing to persist.
-      if (
-        initialSession.model &&
-        initialSession.model_provider &&
-        isRoutableProvider(validProvidersRef.current, initialSession.model_provider)
-      ) {
-        agent.state.model = syntheticModel(
-          initialSession.model_provider,
-          initialSession.model,
-        );
-        lastPersistedRef.current = {
-          model:    initialSession.model,
-          provider: initialSession.model_provider,
-          thinking: initialSession.thinking_level ?? null,
-        };
-      } else {
-        // Unpinned session — seed the composer pill with rara's admin
-        // default so it reads "minimax: MiniMax-M2.7" rather than
-        // pi-web-ui's hard-coded catalog fallback (`gemini-2.5-*`).
-        const resolved = await resolveAdminDefaultModel();
-        if (resolved) {
-          agent.state.model = syntheticModel(resolved.provider, resolved.model);
-        }
-      }
-      if (initialSession.thinking_level) {
-        agent.state.thinkingLevel = initialSession.thinking_level;
-      }
-
-      // 6. Mount the ChatPanel custom element
-      const chatPanel = document.createElement("pi-chat-panel") as import("@mariozechner/pi-web-ui").ChatPanel;
-      chatPanelRef.current = chatPanel;
-      container.appendChild(chatPanel);
-
-      // 7. Wire agent into the panel — skip API key prompt since rara manages
-      //    keys server-side, and sync the current model/thinking override to
-      //    the backend before every send so the kernel sees the user's
-      //    selection for this turn. Overriding `onModelSelect` replaces
-      //    pi-mono's `ModelSelector` (which only knows its own hard-coded
-      //    `MODELS` catalog) with rara's native dialog sourced from
-      //    `/api/v1/settings` — the only place provider ids (`openrouter`,
-      //    `kimi`, `minimax`, `glm`, `scnet`, ...) align with rara's kernel
-      //    `DriverRegistry`.
-      await chatPanel.setAgent(agent, {
-        onApiKeyRequired: async () => true,
-        onModelSelect: () => setModelDialogOpen(true),
-        onBeforeSend: async () => {
-          const key = agent.sessionId;
-          if (!key) return;
-          // The user just committed their first message — no more welcome.
-          setShowWelcome(false);
-          // Nudge the sidebar to refetch so the fresh session's new
-          // title and preview surface in the history list.
-          setSidebarRefreshKey((k) => k + 1);
-          // Refetch the active session so the backend-assigned title
-          // lands in the header above the messages. Fire-and-forget;
-          // a retry happens on the next send if the backend hadn't
-          // finished assigning a title yet.
-          api
-            .get<ChatSession>(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
-            .then((fresh) => {
-              if (agentRef.current?.sessionId === key) setActiveSession(fresh);
-            })
-            .catch(() => { /* non-fatal */ });
-
-          // Skip the PATCH when `agent.state.model` is pi-agent-core's
-          // placeholder default (id/provider = "unknown"). Persisting it
-          // would overwrite any previously saved rara provider with a
-          // sentinel the kernel's DriverRegistry cannot route to, which
-          // caused the original "LLM provider not configured" failure
-          // (see #1554). `isUnknownModel` returns true for null/undefined
-          // too, so the subsequent reads are safe without the `?.` guard.
-          const picked = !isUnknownModel(agent.state.model);
-          const model = picked ? agent.state.model!.id : null;
-          const provider = picked ? agent.state.model!.provider : null;
-          const thinking = asThinkingLevel(agent.state.thinkingLevel);
-
-          // Nothing worth persisting.
-          if (!model && !thinking) return;
-
-          // Dedup consecutive identical writes — the chat UI round-trips
-          // every send through this hook even when the selection hasn't
-          // changed, and the PATCH wakes up the session index for nothing.
-          const last = lastPersistedRef.current;
-          if (last && last.model === model && last.provider === provider && last.thinking === thinking) {
-            return;
-          }
-
-          try {
-            await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
-              model,
-              model_provider: provider,
-              thinking_level: thinking,
-            });
-            lastPersistedRef.current = { model, provider, thinking };
-          } catch (e) {
-            console.warn("Failed to persist session LLM override:", e);
-          }
-        },
-      });
-
-      // Model and thinking selectors are enabled by default in ChatPanel.setAgent().
-      // Rara delegates model/thinking selection to the user via pi-chat-panel's
-      // built-in UI — the chosen model is passed to the backend at stream time.
-      //
-      // Surface pi-mono's built-in theme toggle in the chat header. Rara's
-      // own <ThemeToggle /> is scoped to DashboardLayout (admin pages), so
-      // there's no duplicate on the chat page.
-      if (chatPanel.agentInterface) {
-        chatPanel.agentInterface.showThemeToggle = true;
-      }
       } finally {
         // Clear the loading overlay even if init fails (network/CORS/etc.)
         // so the user sees the empty chat panel rather than a spinner forever.
@@ -1051,21 +1052,21 @@ export default function PiChat() {
         // immediately; subsequent session switches do the same via
         // the `switchSession` callback.
         requestAnimationFrame(() => {
-          document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+          document.querySelector<HTMLTextAreaElement>('textarea')?.focus();
         });
       }
     })();
 
     return () => {
       // Cleanup: remove the Web Component on unmount
-      container.innerHTML = "";
+      container.innerHTML = '';
     };
   }, []);
 
   return (
     <div
       className="rara-chat flex h-screen w-screen"
-      data-welcome={showWelcome && !isInitializing ? "true" : undefined}
+      data-welcome={showWelcome && !isInitializing ? 'true' : undefined}
     >
       <ChatSidebar
         activeSessionKey={activeSession?.key}
@@ -1083,7 +1084,7 @@ export default function PiChat() {
         {activeSession && !showWelcome && !isInitializing && (
           <div className="flex h-11 shrink-0 items-center border-b border-border/30 bg-background/30 px-5 backdrop-blur-sm">
             <span className="truncate text-sm font-medium text-foreground/85">
-              {activeSession.title || activeSession.preview || "新对话"}
+              {activeSession.title || activeSession.preview || '新对话'}
             </span>
           </div>
         )}
@@ -1119,7 +1120,7 @@ export default function PiChat() {
           an internal DOM query since the textarea is owned by a Lit
           custom element we don't ref directly.
         */}
-        {!isInitializing && <AlmaCaret measureKey={showWelcome ? "welcome" : "chat"} />}
+        {!isInitializing && <AlmaCaret measureKey={showWelcome ? 'welcome' : 'chat'} />}
         {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
         {isInitializing && (
           <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">

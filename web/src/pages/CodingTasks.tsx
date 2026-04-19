@@ -14,30 +14,7 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/api/client';
-import type {
-  CodingTaskSummary,
-  CodingTaskDetail,
-  CreateCodingTaskRequest,
-  CodingTaskStatus,
-} from '@/api/types';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   Plus,
   RefreshCw,
@@ -50,15 +27,43 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
+import { useState } from 'react';
+
+import { api } from '@/api/client';
+import type {
+  CodingTaskSummary,
+  CodingTaskDetail,
+  CreateCodingTaskRequest,
+  CodingTaskStatus,
+} from '@/api/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 
 const STATUS_CONFIG: Record<CodingTaskStatus, { label: string; variant: string; emoji: string }> = {
-  Pending:     { label: 'Pending',      variant: 'bg-gray-100 text-gray-700',   emoji: '\u23F3' },
-  Cloning:     { label: 'Cloning',      variant: 'bg-blue-100 text-blue-700',   emoji: '\uD83D\uDCE6' },
-  Running:     { label: 'Running',      variant: 'bg-yellow-100 text-yellow-700', emoji: '\uD83C\uDFC3' },
-  Completed:   { label: 'Completed',    variant: 'bg-green-100 text-green-700', emoji: '\u2705' },
-  Failed:      { label: 'Failed',       variant: 'bg-red-100 text-red-700',       emoji: '\u274C' },
-  Merged:      { label: 'Merged',       variant: 'bg-purple-100 text-purple-700', emoji: '\uD83C\uDF89' },
-  MergeFailed: { label: 'Merge Failed', variant: 'bg-orange-100 text-orange-700', emoji: '\u26A0\uFE0F' },
+  Pending: { label: 'Pending', variant: 'bg-gray-100 text-gray-700', emoji: '\u23F3' },
+  Cloning: { label: 'Cloning', variant: 'bg-blue-100 text-blue-700', emoji: '\uD83D\uDCE6' },
+  Running: { label: 'Running', variant: 'bg-yellow-100 text-yellow-700', emoji: '\uD83C\uDFC3' },
+  Completed: { label: 'Completed', variant: 'bg-green-100 text-green-700', emoji: '\u2705' },
+  Failed: { label: 'Failed', variant: 'bg-red-100 text-red-700', emoji: '\u274C' },
+  Merged: { label: 'Merged', variant: 'bg-purple-100 text-purple-700', emoji: '\uD83C\uDF89' },
+  MergeFailed: {
+    label: 'Merge Failed',
+    variant: 'bg-orange-100 text-orange-700',
+    emoji: '\u26A0\uFE0F',
+  },
 };
 
 function StatusBadge({ status }: { status: CodingTaskStatus }) {
@@ -84,7 +89,12 @@ export default function CodingTasks() {
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { data: tasks, isLoading, isError, error } = useQuery({
+  const {
+    data: tasks,
+    isLoading,
+    isError,
+    error,
+  } = useQuery({
     queryKey: ['coding-tasks'],
     queryFn: () => api.get<CodingTaskSummary[]>('/api/v1/coding-tasks'),
     refetchInterval: 5000,
@@ -95,9 +105,7 @@ export default function CodingTasks() {
       <div className="data-panel flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Coding Tasks</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Dispatch and manage CLI agent tasks
-          </p>
+          <p className="mt-1 text-sm text-muted-foreground">Dispatch and manage CLI agent tasks</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -117,7 +125,7 @@ export default function CodingTasks() {
       {isLoading && <TaskListSkeleton />}
       {isError && (
         <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-          Failed to load tasks: {(error as Error)?.message ?? 'Unknown error'}
+          Failed to load tasks: {error?.message ?? 'Unknown error'}
         </div>
       )}
 
@@ -214,16 +222,16 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
   const mergeMutation = useMutation({
     mutationFn: () => api.post(`/api/v1/coding-tasks/${taskId}/merge`, {}),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
     },
   });
 
   const cancelMutation = useMutation({
     mutationFn: () => api.post(`/api/v1/coding-tasks/${taskId}/cancel`, {}),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-task', taskId] });
     },
   });
 
@@ -264,7 +272,9 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
 
       <div>
         <span className="text-sm text-muted-foreground">Prompt:</span>
-        <p className="mt-1 whitespace-pre-wrap rounded-xl border border-border/60 bg-background/60 p-3 text-sm">{task.prompt}</p>
+        <p className="mt-1 whitespace-pre-wrap rounded-xl border border-border/60 bg-background/60 p-3 text-sm">
+          {task.prompt}
+        </p>
       </div>
 
       {task.error && (
@@ -342,7 +352,7 @@ function CreateTaskDialog({
     mutationFn: (data: CreateCodingTaskRequest) =>
       api.post<CodingTaskDetail>('/api/v1/coding-tasks', data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
+      void queryClient.invalidateQueries({ queryKey: ['coding-tasks'] });
       onOpenChange(false);
       setPrompt('');
       setRepoUrl('');
@@ -364,7 +374,8 @@ function CreateTaskDialog({
         <DialogHeader>
           <DialogTitle>Dispatch Coding Task</DialogTitle>
           <DialogDescription>
-            Send a prompt to a CLI agent. It will run in a tmux session with an isolated git worktree.
+            Send a prompt to a CLI agent. It will run in a tmux session with an isolated git
+            worktree.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">

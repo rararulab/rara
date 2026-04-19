@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { api, apiHeaders, BASE_URL } from "@/api/client";
+import { api, apiHeaders, BASE_URL } from '@/api/client';
 
 // ---------------------------------------------------------------------------
 // Types matching rara-dock models
 // ---------------------------------------------------------------------------
 
-export type Actor = "human" | "agent";
+export type Actor = 'human' | 'agent';
 
 export interface DockBlock {
   id: string;
@@ -136,7 +136,7 @@ export interface DockSessionDocument {
 // ---------------------------------------------------------------------------
 
 export function dockBootstrap(): Promise<DockBootstrapResponse> {
-  return api.get<DockBootstrapResponse>("/api/dock/bootstrap");
+  return api.get<DockBootstrapResponse>('/api/dock/bootstrap');
 }
 
 export function dockGetSession(
@@ -145,43 +145,36 @@ export function dockGetSession(
 ): Promise<DockSessionResponse> {
   const params = new URLSearchParams({ session_id: sessionId });
   if (selectedAnchor) {
-    params.set("selected_anchor", selectedAnchor);
+    params.set('selected_anchor', selectedAnchor);
   }
-  return api.get<DockSessionResponse>(
-    `/api/dock/session?${params.toString()}`,
-  );
+  return api.get<DockSessionResponse>(`/api/dock/session?${params.toString()}`);
 }
 
-export function dockCreateSession(
-  title?: string,
-): Promise<DockSessionMeta> {
-  return api.post<DockSessionMeta>("/api/dock/sessions", { title });
+export function dockCreateSession(title?: string): Promise<DockSessionMeta> {
+  return api.post<DockSessionMeta>('/api/dock/sessions', { title });
 }
 
 export function dockMutateSession(
   sessionId: string,
   mutations: DockMutation[],
 ): Promise<DockSessionDocument> {
-  return api.post<DockSessionDocument>(
-    `/api/dock/sessions/${sessionId}/mutate`,
-    { mutations },
-  );
+  return api.post<DockSessionDocument>(`/api/dock/sessions/${sessionId}/mutate`, { mutations });
 }
 
 /** SSE event received during a dock turn. */
 export type DockTurnEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "tool_call_start"; name: string; id: string; arguments: unknown }
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_call_start'; name: string; id: string; arguments: unknown }
   | {
-      type: "tool_call_end";
+      type: 'tool_call_end';
       id: string;
       result_preview: string;
       success: boolean;
       error?: string | null;
     }
-  | { type: "dock_turn_complete"; data: DockTurnResponse }
-  | { type: "error"; error: string }
-  | { type: "done" };
+  | { type: 'dock_turn_complete'; data: DockTurnResponse }
+  | { type: 'error'; error: string }
+  | { type: 'done' };
 
 /**
  * Execute a dock turn via SSE streaming.
@@ -195,17 +188,17 @@ export async function dockTurnStream(
   onEvent: (event: DockTurnEvent) => void,
 ): Promise<void> {
   const response = await fetch(`${BASE_URL}/api/dock/turn`, {
-    method: "POST",
+    method: 'POST',
     headers: apiHeaders(),
     body: JSON.stringify(request),
   });
 
   if (response.status === 401) {
-    localStorage.removeItem("access_token");
-    if (window.location.pathname !== "/login") {
-      window.location.href = "/login";
+    localStorage.removeItem('access_token');
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login';
     }
-    throw new Error("Unauthorized");
+    throw new Error('Unauthorized');
   }
 
   if (!response.ok) {
@@ -214,11 +207,11 @@ export async function dockTurnStream(
   }
 
   // If the response is not SSE (e.g. test mode returns JSON), handle it.
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
     const data = (await response.json()) as DockTurnResponse;
-    onEvent({ type: "dock_turn_complete", data });
-    onEvent({ type: "done" });
+    onEvent({ type: 'dock_turn_complete', data });
+    onEvent({ type: 'done' });
     return;
   }
 
@@ -227,78 +220,74 @@ export async function dockTurnStream(
   if (!reader) return;
 
   const decoder = new TextDecoder();
-  let buffer = "";
+  let buffer = '';
   // SSE parse state persisted across read() chunks so that events
   // spanning multiple chunks are not silently dropped.
-  let currentEvent = "";
-  let currentData = "";
+  let currentEvent = '';
+  let currentData = '';
 
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
 
     for (const line of lines) {
-      if (line.startsWith("event: ")) {
+      if (line.startsWith('event: ')) {
         currentEvent = line.slice(7).trim();
-      } else if (line.startsWith("data: ")) {
+      } else if (line.startsWith('data: ')) {
         currentData += line.slice(6);
-      } else if (line === "" && currentEvent) {
+      } else if (line === '' && currentEvent) {
         // Empty line = end of SSE event
         try {
-          if (currentEvent === "done") {
-            onEvent({ type: "done" });
-          } else if (currentEvent === "text_delta") {
+          if (currentEvent === 'done') {
+            onEvent({ type: 'done' });
+          } else if (currentEvent === 'text_delta') {
             const parsed = JSON.parse(currentData);
-            onEvent({ type: "text_delta", text: parsed.text });
-          } else if (currentEvent === "tool_call_start") {
+            onEvent({ type: 'text_delta', text: parsed.text });
+          } else if (currentEvent === 'tool_call_start') {
             const parsed = JSON.parse(currentData);
             onEvent({
-              type: "tool_call_start",
+              type: 'tool_call_start',
               name: parsed.name,
               id: parsed.id,
               arguments: parsed.arguments,
             });
-          } else if (currentEvent === "tool_call_end") {
+          } else if (currentEvent === 'tool_call_end') {
             const parsed = JSON.parse(currentData);
             onEvent({
-              type: "tool_call_end",
+              type: 'tool_call_end',
               id: parsed.id,
               result_preview: parsed.result_preview,
               success: parsed.success,
               error: parsed.error,
             });
-          } else if (currentEvent === "dock_turn_complete") {
+          } else if (currentEvent === 'dock_turn_complete') {
             const parsed = JSON.parse(currentData) as DockTurnResponse;
-            onEvent({ type: "dock_turn_complete", data: parsed });
-          } else if (currentEvent === "error") {
+            onEvent({ type: 'dock_turn_complete', data: parsed });
+          } else if (currentEvent === 'error') {
             const parsed = JSON.parse(currentData);
-            onEvent({ type: "error", error: parsed.error ?? "unknown error" });
+            onEvent({ type: 'error', error: parsed.error ?? 'unknown error' });
           }
         } catch {
           // Skip malformed events
         }
-        currentEvent = "";
-        currentData = "";
+        currentEvent = '';
+        currentData = '';
       }
     }
   }
 }
 
 /** Non-streaming dock turn (kept for backwards compatibility in tests). */
-export function dockTurn(
-  request: DockTurnRequest,
-): Promise<DockTurnResponse> {
-  return api.post<DockTurnResponse>("/api/dock/turn", request);
+export function dockTurn(request: DockTurnRequest): Promise<DockTurnResponse> {
+  return api.post<DockTurnResponse>('/api/dock/turn', request);
 }
 
-export function dockUpdateWorkspace(
-  activeSessionId: string,
-): Promise<void> {
-  return api.patch<void>("/api/dock/workspace", {
+export function dockUpdateWorkspace(activeSessionId: string): Promise<void> {
+  return api.patch<void>('/api/dock/workspace', {
     active_session_id: activeSessionId,
   });
 }

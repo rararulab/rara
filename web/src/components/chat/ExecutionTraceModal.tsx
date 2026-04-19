@@ -14,15 +14,16 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
+import { useState } from 'react';
+
+import type { ExecutionTrace, ToolTraceEntry } from '@/api/kernel-types';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import type { ExecutionTrace, ToolTraceEntry } from "@/api/kernel-types";
+} from '@/components/ui/dialog';
 
 /**
  * Execution-trace viewer — opened from the "📊 详情" button on a
@@ -44,28 +45,29 @@ import type { ExecutionTrace, ToolTraceEntry } from "@/api/kernel-types";
 const COLLAPSE_THRESHOLD = 600;
 
 interface Props {
-  open:    boolean;
-  trace:   ExecutionTrace | null;
+  open: boolean;
+  trace: ExecutionTrace | null;
   loading: boolean;
-  error:   string | null;
+  error: string | null;
   onClose: () => void;
 }
 
 /** Modal wrapper + status switching (loading / error / empty / trace). */
 export function ExecutionTraceModal({ open, trace, loading, error, onClose }: Props) {
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onClose();
+      }}
+    >
       <DialogContent className="flex max-h-[85vh] w-[95vw] max-w-3xl flex-col gap-3 overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span aria-hidden>📊</span>
             <span>Execution Trace</span>
           </DialogTitle>
-          {trace && (
-            <DialogDescription>
-              {formatSummary(trace)}
-            </DialogDescription>
-          )}
+          {trace && <DialogDescription>{formatSummary(trace)}</DialogDescription>}
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           {loading && (
@@ -89,9 +91,8 @@ export function ExecutionTraceModal({ open, trace, loading, error, onClose }: Pr
 function formatSummary(trace: ExecutionTrace): string {
   const dur = `${trace.duration_secs}s`;
   const tok = `↑${trace.input_tokens} ↓${trace.output_tokens}`;
-  const thinking = trace.thinking_ms > 0
-    ? ` · thought ${(trace.thinking_ms / 1000).toFixed(1)}s`
-    : "";
+  const thinking =
+    trace.thinking_ms > 0 ? ` · thought ${(trace.thinking_ms / 1000).toFixed(1)}s` : '';
   return `${dur} · ${tok}${thinking}`;
 }
 
@@ -107,10 +108,7 @@ function TraceBody({ trace }: { trace: ExecutionTrace }) {
       )}
 
       {trace.thinking_preview.trim().length > 0 && (
-        <Section
-          emoji="🧠"
-          title={`Thinking (${(trace.thinking_ms / 1000).toFixed(1)}s)`}
-        >
+        <Section emoji="🧠" title={`Thinking (${(trace.thinking_ms / 1000).toFixed(1)}s)`}>
           <Collapsible text={trace.thinking_preview} />
         </Section>
       )}
@@ -119,7 +117,9 @@ function TraceBody({ trace }: { trace: ExecutionTrace }) {
         <Section emoji="📋" title="Plan">
           <ol className="ml-5 list-decimal space-y-1 text-foreground/85">
             {trace.plan_steps.map((step, i) => (
-              <li key={i} className="whitespace-pre-wrap break-words">{step}</li>
+              <li key={i} className="whitespace-pre-wrap break-words">
+                {step}
+              </li>
             ))}
           </ol>
         </Section>
@@ -128,7 +128,9 @@ function TraceBody({ trace }: { trace: ExecutionTrace }) {
       {trace.tools.length > 0 && (
         <Section emoji="🔧" title="Tools">
           <ul className="flex flex-col gap-1.5 border-l-2 border-border/60 pl-3">
-            {trace.tools.map((t, i) => <ToolRow key={i} tool={t} />)}
+            {trace.tools.map((t, i) => (
+              <ToolRow key={i} tool={t} />
+            ))}
           </ul>
         </Section>
       )}
@@ -136,9 +138,16 @@ function TraceBody({ trace }: { trace: ExecutionTrace }) {
       <Section emoji="📊" title="Usage">
         <div className="text-foreground/85">
           {trace.iterations} iterations
-          {" · "}↑{trace.input_tokens}
-          {" "}↓{trace.output_tokens} tokens
-          {trace.model && <> · <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-xs">{trace.model}</code></>}
+          {' · '}↑{trace.input_tokens} ↓{trace.output_tokens} tokens
+          {trace.model && (
+            <>
+              {' '}
+              ·{' '}
+              <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-xs">
+                {trace.model}
+              </code>
+            </>
+          )}
         </div>
       </Section>
 
@@ -156,8 +165,8 @@ function Section({
   title,
   children,
 }: {
-  emoji:    string;
-  title:    string;
+  emoji: string;
+  title: string;
   children: React.ReactNode;
 }) {
   return (
@@ -172,8 +181,8 @@ function Section({
 }
 
 function ToolRow({ tool }: { tool: ToolTraceEntry }) {
-  const icon = tool.success ? "✓" : "✗";
-  const iconCls = tool.success ? "text-emerald-600" : "text-destructive";
+  const icon = tool.success ? '✓' : '✗';
+  const iconCls = tool.success ? 'text-emerald-600' : 'text-destructive';
   const dur =
     tool.duration_ms !== null && tool.duration_ms !== undefined
       ? formatDuration(tool.duration_ms)
@@ -181,16 +190,16 @@ function ToolRow({ tool }: { tool: ToolTraceEntry }) {
   return (
     <li className="flex flex-col gap-0.5">
       <div className="flex flex-wrap items-center gap-x-2 text-foreground/90">
-        <span className={`font-mono text-sm ${iconCls}`} aria-hidden>{icon}</span>
+        <span className={`font-mono text-sm ${iconCls}`} aria-hidden>
+          {icon}
+        </span>
         <code className="font-mono text-xs font-semibold">{tool.name}</code>
         {dur && (
           <span className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
             {dur}
           </span>
         )}
-        {tool.summary && (
-          <span className="text-foreground/80">— {tool.summary}</span>
-        )}
+        {tool.summary && <span className="text-foreground/80">— {tool.summary}</span>}
       </div>
       {tool.error && (
         <div className="ml-5 rounded border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive whitespace-pre-wrap break-words">
@@ -204,9 +213,7 @@ function ToolRow({ tool }: { tool: ToolTraceEntry }) {
 function Collapsible({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const collapsible = text.length > COLLAPSE_THRESHOLD;
-  const body = !collapsible || expanded
-    ? text
-    : text.slice(0, COLLAPSE_THRESHOLD) + "…";
+  const body = !collapsible || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD) + '…';
   return (
     <div>
       <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/85">
@@ -218,7 +225,7 @@ function Collapsible({ text }: { text: string }) {
           onClick={() => setExpanded((v) => !v)}
           className="mt-1 text-xs text-primary hover:underline"
         >
-          {expanded ? "收起" : `展开（共 ${text.length} 字符）`}
+          {expanded ? '收起' : `展开（共 ${text.length} 字符）`}
         </button>
       )}
     </div>

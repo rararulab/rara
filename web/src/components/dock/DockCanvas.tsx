@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { LayoutDashboard, Plus } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { DockStore } from "@/hooks/use-dock-store";
-import DockBlockRenderer from "./DockBlockRenderer";
+import { LayoutDashboard, Plus } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import DockBlockRenderer from './DockBlockRenderer';
+
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockCanvasProps {
   store: DockStore;
@@ -35,16 +37,14 @@ interface SelectionPopup {
 export default function DockCanvas({ store }: DockCanvasProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevBlockCount = useRef(store.blocks.length);
-  const [selectionPopup, setSelectionPopup] = useState<SelectionPopup | null>(
-    null,
-  );
+  const [selectionPopup, setSelectionPopup] = useState<SelectionPopup | null>(null);
 
   // Auto-scroll when new blocks are added
   useEffect(() => {
     if (store.blocks.length > prevBlockCount.current && scrollRef.current) {
       scrollRef.current.scrollTo({
         top: scrollRef.current.scrollHeight,
-        behavior: "smooth",
+        behavior: 'smooth',
       });
     }
     prevBlockCount.current = store.blocks.length;
@@ -67,12 +67,11 @@ export default function DockCanvas({ store }: DockCanvasProps) {
 
       // Find the closest dock-block ancestor
       const node = range.startContainer;
-      const el =
-        node instanceof HTMLElement ? node : node.parentElement;
-      const blockEl = el?.closest(".dock-block");
+      const el = node instanceof HTMLElement ? node : node.parentElement;
+      const blockEl = el?.closest('.dock-block');
       if (!blockEl) return;
 
-      const blockId = blockEl.getAttribute("data-block-id") ?? "";
+      const blockId = blockEl.getAttribute('data-block-id') ?? '';
       const scrollEl = scrollRef.current;
       if (!scrollEl) return;
 
@@ -93,10 +92,10 @@ export default function DockCanvas({ store }: DockCanvasProps) {
     const dismiss = () => setSelectionPopup(null);
     const scrollEl = scrollRef.current;
     if (scrollEl) {
-      scrollEl.addEventListener("scroll", dismiss, { passive: true });
+      scrollEl.addEventListener('scroll', dismiss, { passive: true });
     }
     return () => {
-      scrollEl?.removeEventListener("scroll", dismiss);
+      scrollEl?.removeEventListener('scroll', dismiss);
     };
   }, []);
 
@@ -105,7 +104,7 @@ export default function DockCanvas({ store }: DockCanvasProps) {
 
     store.addAnnotation({
       block_id: selectionPopup.blockId,
-      content: "",
+      content: '',
       anchor_y: selectionPopup.anchorY,
       selection: {
         start: 0,
@@ -115,7 +114,7 @@ export default function DockCanvas({ store }: DockCanvasProps) {
     });
 
     // Switch to annotations tab
-    store.setActiveTab("annotations");
+    store.setActiveTab('annotations');
     window.getSelection()?.removeAllRanges();
     setSelectionPopup(null);
   }, [selectionPopup, store]);
@@ -127,11 +126,9 @@ export default function DockCanvas({ store }: DockCanvasProps) {
         <div className="text-center">
           <p className="text-sm font-medium">Canvas is empty</p>
           <p className="mt-1 text-xs opacity-70">
-            Send a message or use a{" "}
-            <span className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
-              ,command
-            </span>{" "}
-            to get started
+            Send a message or use a{' '}
+            <span className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">,command</span> to
+            get started
           </p>
         </div>
       </div>
@@ -149,18 +146,12 @@ export default function DockCanvas({ store }: DockCanvasProps) {
             className="dock-block relative"
             onMouseUp={handleMouseUp}
           >
-            <DockBlockRenderer
-              block={block}
-              onDismissDiff={store.dismissDiff}
-            />
+            <DockBlockRenderer block={block} onDismissDiff={store.dismissDiff} />
 
             {/* Active annotation highlight overlay */}
             {store.activeAnnotation &&
               store.annotations
-                .filter(
-                  (a) =>
-                    a.block_id === block.id && a.id === store.activeAnnotation,
-                )
+                .filter((a) => a.block_id === block.id && a.id === store.activeAnnotation)
                 .map((a) => (
                   <div
                     key={`highlight-${a.id}`}
@@ -179,18 +170,16 @@ export default function DockCanvas({ store }: DockCanvasProps) {
             <button
               key={ann.id}
               className={cn(
-                "absolute right-0 h-2.5 w-2.5 rounded-full border transition-all",
+                'absolute right-0 h-2.5 w-2.5 rounded-full border transition-all',
                 ann.id === store.activeAnnotation
-                  ? "border-primary bg-primary scale-125"
-                  : "border-muted-foreground/30 bg-muted-foreground/20 hover:border-primary/60 hover:bg-primary/40",
+                  ? 'border-primary bg-primary scale-125'
+                  : 'border-muted-foreground/30 bg-muted-foreground/20 hover:border-primary/60 hover:bg-primary/40',
               )}
               style={{ top: ann.anchor_y }}
               onClick={() =>
-                store.setActiveAnnotation(
-                  ann.id === store.activeAnnotation ? null : ann.id,
-                )
+                store.setActiveAnnotation(ann.id === store.activeAnnotation ? null : ann.id)
               }
-              title={ann.content || "Annotation"}
+              title={ann.content || 'Annotation'}
             />
           ))}
         </div>
@@ -203,7 +192,7 @@ export default function DockCanvas({ store }: DockCanvasProps) {
           style={{
             left: selectionPopup.x,
             top: selectionPopup.y,
-            transform: "translate(-50%, -100%)",
+            transform: 'translate(-50%, -100%)',
           }}
           onMouseDown={(e) => e.preventDefault()}
           onClick={handleAddNote}

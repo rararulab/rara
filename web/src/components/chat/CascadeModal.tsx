@@ -14,19 +14,16 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
+import { useState } from 'react';
+
+import type { CascadeEntry, CascadeEntryKind, CascadeTrace } from '@/api/kernel-types';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import type {
-  CascadeEntry,
-  CascadeEntryKind,
-  CascadeTrace,
-} from "@/api/kernel-types";
+} from '@/components/ui/dialog';
 
 /**
  * Cascade execution-trace viewer — opened from the "📊 详情" button on a
@@ -40,10 +37,10 @@ import type {
  */
 
 const ENTRY_LABELS: Record<CascadeEntryKind, { emoji: string; label: string }> = {
-  user_input:  { emoji: "💬", label: "User Input" },
-  thought:     { emoji: "🧠", label: "Thought" },
-  action:      { emoji: "⚡", label: "Action" },
-  observation: { emoji: "👁", label: "Observation" },
+  user_input: { emoji: '💬', label: 'User Input' },
+  thought: { emoji: '🧠', label: 'Thought' },
+  action: { emoji: '⚡', label: 'Action' },
+  observation: { emoji: '👁', label: 'Observation' },
 };
 
 /**
@@ -56,17 +53,22 @@ const ENTRY_LABELS: Record<CascadeEntryKind, { emoji: string; label: string }> =
 const COLLAPSE_THRESHOLD = 600;
 
 interface Props {
-  open:    boolean;
-  trace:   CascadeTrace | null;
+  open: boolean;
+  trace: CascadeTrace | null;
   loading: boolean;
-  error:   string | null;
+  error: string | null;
   onClose: () => void;
 }
 
 /** Modal wrapper + status switching (loading / error / empty / trace). */
 export function CascadeModal({ open, trace, loading, error, onClose }: Props) {
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onClose();
+      }}
+    >
       <DialogContent className="flex max-h-[85vh] w-[95vw] max-w-3xl flex-col gap-3 overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -75,7 +77,8 @@ export function CascadeModal({ open, trace, loading, error, onClose }: Props) {
           </DialogTitle>
           {trace && (
             <DialogDescription>
-              {trace.summary.tick_count} ticks · {trace.summary.tool_call_count} tool calls · {trace.summary.total_entries} entries
+              {trace.summary.tick_count} ticks · {trace.summary.tool_call_count} tool calls ·{' '}
+              {trace.summary.total_entries} entries
             </DialogDescription>
           )}
         </DialogHeader>
@@ -96,9 +99,7 @@ export function CascadeModal({ open, trace, loading, error, onClose }: Props) {
               该轮未记录任何 cascade 条目。
             </div>
           )}
-          {!loading && !error && trace && trace.ticks.length > 0 && (
-            <TraceBody trace={trace} />
-          )}
+          {!loading && !error && trace && trace.ticks.length > 0 && <TraceBody trace={trace} />}
         </div>
       </DialogContent>
     </Dialog>
@@ -132,14 +133,15 @@ function EntryCard({ entry }: { entry: CascadeEntry }) {
   const [expanded, setExpanded] = useState(false);
   const meta = ENTRY_LABELS[entry.kind];
   const collapsible = entry.content.length > COLLAPSE_THRESHOLD;
-  const body = !collapsible || expanded
-    ? entry.content
-    : entry.content.slice(0, COLLAPSE_THRESHOLD) + "…";
+  const body =
+    !collapsible || expanded ? entry.content : entry.content.slice(0, COLLAPSE_THRESHOLD) + '…';
 
   return (
     <article className="rounded-md border border-border/60 bg-muted/20 p-3">
       <header className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-        <span className="text-base leading-none" aria-hidden>{meta.emoji}</span>
+        <span className="text-base leading-none" aria-hidden>
+          {meta.emoji}
+        </span>
         <span className="font-semibold text-foreground/90">{meta.label}</span>
         <code className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
           {entry.id}
@@ -158,7 +160,7 @@ function EntryCard({ entry }: { entry: CascadeEntry }) {
           onClick={() => setExpanded((v) => !v)}
           className="mt-2 text-xs text-primary hover:underline"
         >
-          {expanded ? "收起" : `展开（共 ${entry.content.length} 字符）`}
+          {expanded ? '收起' : `展开（共 ${entry.content.length} 字符）`}
         </button>
       )}
     </article>

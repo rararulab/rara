@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import DOMPurify from "dompurify";
-import { X } from "lucide-react";
-import type { DockBlock } from "@/api/dock";
-import { Button } from "@/components/ui/button";
+import DOMPurify from 'dompurify';
+import { X } from 'lucide-react';
+
+import type { DockBlock } from '@/api/dock';
+import { Button } from '@/components/ui/button';
 
 /**
  * Sanitize HTML using DOMPurify with an explicit allowlist.
@@ -26,21 +27,61 @@ import { Button } from "@/components/ui/button";
 function sanitizeHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
-      "h1", "h2", "h3", "h4", "h5", "h6",
-      "p", "br", "hr", "blockquote",
-      "ul", "ol", "li",
-      "strong", "em", "b", "i", "u", "s", "del", "ins",
-      "code", "pre", "kbd", "var", "samp",
-      "a", "img",
-      "table", "thead", "tbody", "tr", "th", "td",
-      "div", "span", "figure", "figcaption",
-      "chart",
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+      'p',
+      'br',
+      'hr',
+      'blockquote',
+      'ul',
+      'ol',
+      'li',
+      'strong',
+      'em',
+      'b',
+      'i',
+      'u',
+      's',
+      'del',
+      'ins',
+      'code',
+      'pre',
+      'kbd',
+      'var',
+      'samp',
+      'a',
+      'img',
+      'table',
+      'thead',
+      'tbody',
+      'tr',
+      'th',
+      'td',
+      'div',
+      'span',
+      'figure',
+      'figcaption',
+      'chart',
     ],
     ALLOWED_ATTR: [
-      "href", "src", "alt", "title", "class", "id",
-      "width", "height", "colspan", "rowspan",
+      'href',
+      'src',
+      'alt',
+      'title',
+      'class',
+      'id',
+      'width',
+      'height',
+      'colspan',
+      'rowspan',
       // chart-specific attributes
-      "type", "labels", "values",
+      'type',
+      'labels',
+      'values',
     ],
   });
 }
@@ -60,20 +101,18 @@ interface ChartData {
  * Returns `null` when no chart data is found.
  */
 function parseChart(block: DockBlock): ChartData | null {
-  if (block.block_type === "chart" || /<chart[\s>]/i.test(block.html)) {
-    const doc = new DOMParser().parseFromString(block.html, "text/html");
-    const el = doc.querySelector("chart");
+  if (block.block_type === 'chart' || /<chart[\s>]/i.test(block.html)) {
+    const doc = new DOMParser().parseFromString(block.html, 'text/html');
+    const el = doc.querySelector('chart');
     if (!el) return null;
 
-    const title = el.getAttribute("title") ?? "";
-    const labelsRaw = el.getAttribute("labels") ?? "";
-    const valuesRaw = el.getAttribute("values") ?? "";
-    const type = el.getAttribute("type") || "bar";
+    const title = el.getAttribute('title') ?? '';
+    const labelsRaw = el.getAttribute('labels') ?? '';
+    const valuesRaw = el.getAttribute('values') ?? '';
+    const type = el.getAttribute('type') || 'bar';
 
-    const labels = labelsRaw ? labelsRaw.split(",").map((s) => s.trim()) : [];
-    const values = valuesRaw
-      ? valuesRaw.split(",").map((s) => Number(s.trim()))
-      : [];
+    const labels = labelsRaw ? labelsRaw.split(',').map((s) => s.trim()) : [];
+    const values = valuesRaw ? valuesRaw.split(',').map((s) => Number(s.trim())) : [];
 
     return { title, labels, values, type };
   }
@@ -86,9 +125,7 @@ function DockChart({ data }: { data: ChartData }) {
   if (data.labels.length === 0 || data.values.length === 0) {
     return (
       <div className="rounded-lg bg-muted/30 p-4 text-xs text-muted-foreground">
-        {data.title && (
-          <h6 className="mb-1 font-semibold text-foreground">{data.title}</h6>
-        )}
+        {data.title && <h6 className="mb-1 font-semibold text-foreground">{data.title}</h6>}
         <span>n/a</span>
       </div>
     );
@@ -96,10 +133,8 @@ function DockChart({ data }: { data: ChartData }) {
 
   return (
     <div className="rounded-lg bg-muted/30 p-4 text-xs">
-      {data.title && (
-        <h6 className="mb-1 font-semibold text-foreground">{data.title}</h6>
-      )}
-      {data.type !== "bar" && (
+      {data.title && <h6 className="mb-1 font-semibold text-foreground">{data.title}</h6>}
+      {data.type !== 'bar' && (
         <p className="mb-2 text-[11px] text-muted-foreground">
           Displayed as bar ({data.type} not supported)
         </p>
@@ -137,8 +172,8 @@ interface DockDiffViewProps {
 }
 
 function DockDiffView({ original, modified, onDismiss }: DockDiffViewProps) {
-  const origLines = original.split("\n");
-  const modLines = modified.split("\n");
+  const origLines = original.split('\n');
+  const modLines = modified.split('\n');
 
   return (
     <div className="mt-2 rounded-lg border border-border/60 bg-muted/30 text-xs font-mono overflow-hidden">
@@ -146,12 +181,7 @@ function DockDiffView({ original, modified, onDismiss }: DockDiffViewProps) {
         <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">
           Diff
         </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-5 w-5"
-          onClick={onDismiss}
-        >
+        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={onDismiss}>
           <X className="h-3 w-3" />
         </Button>
       </div>
@@ -165,10 +195,7 @@ function DockDiffView({ original, modified, onDismiss }: DockDiffViewProps) {
           </div>
         ))}
         {modLines.map((line, i) => (
-          <div
-            key={`add-${i}`}
-            className="rounded px-2 py-0.5 bg-green-500/10 text-green-700"
-          >
+          <div key={`add-${i}`} className="rounded px-2 py-0.5 bg-green-500/10 text-green-700">
             + {line}
           </div>
         ))}
@@ -182,10 +209,7 @@ interface DockBlockRendererProps {
   onDismissDiff: (id: string) => void;
 }
 
-export default function DockBlockRenderer({
-  block,
-  onDismissDiff,
-}: DockBlockRendererProps) {
+export default function DockBlockRenderer({ block, onDismissDiff }: DockBlockRendererProps) {
   const chartData = parseChart(block);
 
   return (

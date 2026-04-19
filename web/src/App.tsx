@@ -14,35 +14,36 @@
  * limitations under the License.
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ServerStatusProvider } from '@/components/ServerStatusProvider';
+
 import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
-import DashboardLayout from '@/layouts/DashboardLayout';
-import PiChat from '@/pages/PiChat';
-import Docs from '@/pages/Docs';
-import KernelTop from '@/pages/KernelTop';
-import Dock from '@/pages/Dock';
+import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import {
   SettingsModalProvider,
   useSettingsModal,
 } from '@/components/settings/SettingsModalProvider';
 import type { SettingsPage } from '@/components/settings/SettingsPanel';
+import DashboardLayout from '@/layouts/DashboardLayout';
+import Dock from '@/pages/Dock';
+import Docs from '@/pages/Docs';
+import KernelTop from '@/pages/KernelTop';
+import PiChat from '@/pages/PiChat';
 
-const STORAGE_KEY = "rara_backend_url";
+const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
 
 const SETTINGS_PAGES: readonly SettingsPage[] = [
-  "general",
-  "providers",
-  "agents",
-  "skills",
-  "mcp",
-  "channels",
-  "tools",
-  "security",
-  "data-feeds",
+  'general',
+  'providers',
+  'agents',
+  'skills',
+  'mcp',
+  'channels',
+  'tools',
+  'security',
+  'data-feeds',
 ];
 
 function isSettingsPage(value: string | null): value is SettingsPage {
@@ -59,27 +60,22 @@ function SettingsRoute() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const raw = new URLSearchParams(window.location.search).get("section");
+    const raw = new URLSearchParams(window.location.search).get('section');
     openSettings(isSettingsPage(raw) ? raw : undefined);
-    navigate("/", { replace: true });
+    void navigate('/', { replace: true });
   }, [openSettings, navigate]);
 
   return null;
 }
 
 export default function App() {
-  const [needsSetup, setNeedsSetup] = useState(
-    () => !localStorage.getItem(STORAGE_KEY),
-  );
+  const [needsSetup, setNeedsSetup] = useState(() => !localStorage.getItem(STORAGE_KEY));
 
   return (
     <QueryClientProvider client={queryClient}>
       <ServerStatusProvider>
         {needsSetup && (
-          <ConnectionSetupDialog
-            open={needsSetup}
-            onConnect={() => setNeedsSetup(false)}
-          />
+          <ConnectionSetupDialog open={needsSetup} onConnect={() => setNeedsSetup(false)} />
         )}
         <BrowserRouter>
           <SettingsModalProvider>

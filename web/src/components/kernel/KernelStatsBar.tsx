@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { Activity, Clock, Cpu, Hash, Loader2, RefreshCw } from "lucide-react";
-import { MetadataChip } from "./MetadataChip";
+import { Activity, Clock, Cpu, Hash, Loader2, RefreshCw } from 'lucide-react';
+
+import { MetadataChip } from './MetadataChip';
 
 interface SystemStats {
   active_sessions: number;
@@ -109,9 +110,7 @@ export function KernelStatsBar({
           className="flex items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50"
           title="Refresh"
         >
-          <RefreshCw
-            className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`}
-          />
+          <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
       </div>
     </div>

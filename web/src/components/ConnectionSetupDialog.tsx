@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
-import { setBackendUrl, getBackendUrl } from "@/api/client";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useState } from 'react';
+
+import { setBackendUrl, getBackendUrl } from '@/api/client';
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 interface ConnectionSetupDialogProps {
   open: boolean;
@@ -59,15 +60,10 @@ export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialog
 
   return (
     <Dialog open={open}>
-      <DialogContent
-        className="sm:max-w-md"
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent className="sm:max-w-md" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>Connect to Rara</DialogTitle>
-          <DialogDescription>
-            Enter the URL of your rara backend server.
-          </DialogDescription>
+          <DialogDescription>Enter the URL of your rara backend server.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <Input
@@ -76,18 +72,12 @@ export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialog
             placeholder="http://hostname:25555"
             className="font-mono text-sm"
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !testing) testConnection();
+              if (e.key === 'Enter' && !testing) void testConnection();
             }}
           />
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
-          <Button
-            onClick={testConnection}
-            disabled={testing || !url.trim()}
-            className="w-full"
-          >
-            {testing ? "Testing..." : "Connect"}
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button onClick={testConnection} disabled={testing || !url.trim()} className="w-full">
+            {testing ? 'Testing...' : 'Connect'}
           </Button>
         </div>
       </DialogContent>

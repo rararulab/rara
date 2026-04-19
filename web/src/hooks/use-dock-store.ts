@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState } from 'react';
+
 import type {
   Actor,
   DockAnnotation,
@@ -24,7 +25,7 @@ import type {
   DockMutation,
   DockSessionMeta,
   DockTurnResponse,
-} from "@/api/dock";
+} from '@/api/dock';
 import {
   dockBootstrap,
   dockCreateSession,
@@ -32,7 +33,7 @@ import {
   dockMutateSession,
   dockTurnStream,
   dockUpdateWorkspace,
-} from "@/api/dock";
+} from '@/api/dock';
 
 // ---------------------------------------------------------------------------
 // Public store interface
@@ -57,10 +58,10 @@ export interface DockStore {
   isRunning: boolean;
   error: string | null;
   rightPanelOpen: boolean;
-  activeTab: "annotations" | "facts" | "history";
+  activeTab: 'annotations' | 'facts' | 'history';
 
   // UI actions
-  setActiveTab(tab: "annotations" | "facts" | "history"): void;
+  setActiveTab(tab: 'annotations' | 'facts' | 'history'): void;
   setActiveAnnotation(id: string | null): void;
 
   // Actions
@@ -104,19 +105,28 @@ function generateId(): string {
 }
 
 function formatTime(value: string | number): string {
-  const ts =
-    typeof value === "string" ? new Date(value).getTime() : value;
+  const ts = typeof value === 'string' ? new Date(value).getTime() : value;
   const now = Date.now();
   const diffSec = Math.floor((now - ts) / 1000);
 
-  if (diffSec < 60) return "just now";
+  if (diffSec < 60) return 'just now';
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
 
   const d = new Date(ts);
   const months = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   return `${months[d.getMonth()]} ${d.getDate()}`;
 }
@@ -140,7 +150,7 @@ export function useDockStore(): DockStore {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rightPanelOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"annotations" | "facts" | "history">("annotations");
+  const [activeTab, setActiveTab] = useState<'annotations' | 'facts' | 'history'>('annotations');
 
   // Refs to provide stable access to latest state inside callbacks
   const blocksRef = useRef(blocks);
@@ -162,48 +172,44 @@ export function useDockStore(): DockStore {
     const { op } = mutation;
 
     switch (op) {
-      case "block.add":
+      case 'block.add':
         if (mutation.block) {
           setBlocks((prev) => [...prev, mutation.block!]);
         }
         break;
-      case "block.update":
+      case 'block.update':
         if (mutation.block) {
           const updated = mutation.block;
-          setBlocks((prev) =>
-            prev.map((b) => (b.id === updated.id ? { ...b, ...updated } : b)),
-          );
+          setBlocks((prev) => prev.map((b) => (b.id === updated.id ? { ...b, ...updated } : b)));
         }
         break;
-      case "block.remove":
+      case 'block.remove':
         if (mutation.id) {
           setBlocks((prev) => prev.filter((b) => b.id !== mutation.id));
         }
         break;
-      case "fact.add":
+      case 'fact.add':
         if (mutation.fact) {
           setFacts((prev) => [...prev, mutation.fact!]);
         }
         break;
-      case "fact.update":
+      case 'fact.update':
         if (mutation.fact) {
           const updated = mutation.fact;
-          setFacts((prev) =>
-            prev.map((f) => (f.id === updated.id ? { ...f, ...updated } : f)),
-          );
+          setFacts((prev) => prev.map((f) => (f.id === updated.id ? { ...f, ...updated } : f)));
         }
         break;
-      case "fact.remove":
+      case 'fact.remove':
         if (mutation.id) {
           setFacts((prev) => prev.filter((f) => f.id !== mutation.id));
         }
         break;
-      case "annotation.add":
+      case 'annotation.add':
         if (mutation.annotation) {
           setAnnotations((prev) => [...prev, mutation.annotation!]);
         }
         break;
-      case "annotation.update":
+      case 'annotation.update':
         if (mutation.annotation) {
           const updated = mutation.annotation;
           setAnnotations((prev) =>
@@ -211,7 +217,7 @@ export function useDockStore(): DockStore {
           );
         }
         break;
-      case "annotation.remove":
+      case 'annotation.remove':
         if (mutation.id) {
           setAnnotations((prev) => prev.filter((a) => a.id !== mutation.id));
         }
@@ -246,9 +252,7 @@ export function useDockStore(): DockStore {
       }
       if (payload.session) {
         setSessions((prev) =>
-          prev.map((s) =>
-            s.id === payload.session!.id ? payload.session! : s,
-          ),
+          prev.map((s) => (s.id === payload.session!.id ? payload.session! : s)),
         );
       }
     },
@@ -259,23 +263,20 @@ export function useDockStore(): DockStore {
   // Session actions
   // -----------------------------------------------------------------------
 
-  const loadSession = useCallback(
-    async (id: string, anchor?: string) => {
-      try {
-        const resp = await dockGetSession(id, anchor);
-        setBlocks(resp.blocks);
-        setAnnotations(resp.annotations);
-        setFacts(resp.facts);
-        setHistory(resp.history);
-        setSelectedAnchor(resp.selected_anchor ?? null);
-        setActiveAnnotation(null);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load session");
-      }
-    },
-    [],
-  );
+  const loadSession = useCallback(async (id: string, anchor?: string) => {
+    try {
+      const resp = await dockGetSession(id, anchor);
+      setBlocks(resp.blocks);
+      setAnnotations(resp.annotations);
+      setFacts(resp.facts);
+      setHistory(resp.history);
+      setSelectedAnchor(resp.selected_anchor ?? null);
+      setActiveAnnotation(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load session');
+    }
+  }, []);
 
   const bootstrap = useCallback(async () => {
     try {
@@ -292,7 +293,7 @@ export function useDockStore(): DockStore {
         await loadSession(first.id);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to bootstrap dock");
+      setError(err instanceof Error ? err.message : 'Failed to bootstrap dock');
     }
   }, [loadSession]);
 
@@ -319,7 +320,7 @@ export function useDockStore(): DockStore {
       setActiveAnnotation(null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create session");
+      setError(err instanceof Error ? err.message : 'Failed to create session');
     }
   }, []);
 
@@ -348,20 +349,20 @@ export function useDockStore(): DockStore {
           },
           (event) => {
             switch (event.type) {
-              case "dock_turn_complete":
+              case 'dock_turn_complete':
                 applyDockPayload(event.data);
                 break;
-              case "error":
+              case 'error':
                 setError(event.error);
                 break;
-              case "done":
+              case 'done':
                 setIsRunning(false);
                 break;
             }
           },
         );
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Turn failed");
+        setError(err instanceof Error ? err.message : 'Turn failed');
       } finally {
         setIsRunning(false);
       }
@@ -383,78 +384,65 @@ export function useDockStore(): DockStore {
   // Block operations
   // -----------------------------------------------------------------------
 
-  const addBlock = useCallback(
-    (type: string, html: string, id?: string): string => {
-      const blockId = id ?? generateId();
-      const block: DockBlock = { id: blockId, block_type: type, html };
-      setBlocks((prev) => [...prev, block]);
-      return blockId;
-    },
-    [],
-  );
+  const addBlock = useCallback((type: string, html: string, id?: string): string => {
+    const blockId = id ?? generateId();
+    const block: DockBlock = { id: blockId, block_type: type, html };
+    setBlocks((prev) => [...prev, block]);
+    return blockId;
+  }, []);
 
-  const updateBlock = useCallback(
-    (id: string, html: string, author?: Actor) => {
-      setBlocks((prev) =>
-        prev.map((b) => {
-          if (b.id !== id) return b;
-          const diff: DockBlock["diff"] = author
-            ? { original: b.html, modified: html, author }
-            : b.diff;
-          return { ...b, html, diff };
-        }),
-      );
-    },
-    [],
-  );
+  const updateBlock = useCallback((id: string, html: string, author?: Actor) => {
+    setBlocks((prev) =>
+      prev.map((b) => {
+        if (b.id !== id) return b;
+        const diff: DockBlock['diff'] = author
+          ? { original: b.html, modified: html, author }
+          : b.diff;
+        return { ...b, html, diff };
+      }),
+    );
+  }, []);
 
   const removeBlock = useCallback((id: string) => {
     setBlocks((prev) => prev.filter((b) => b.id !== id));
   }, []);
 
   const dismissDiff = useCallback((id: string) => {
-    setBlocks((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, diff: undefined } : b)),
-    );
+    setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, diff: undefined } : b)));
   }, []);
 
   // -----------------------------------------------------------------------
   // Annotation operations
   // -----------------------------------------------------------------------
 
-  const addAnnotation = useCallback(
-    (partial: Partial<DockAnnotation>): DockAnnotation => {
-      const annotation: DockAnnotation = {
-        id: partial.id ?? generateId(),
-        block_id: partial.block_id ?? "",
-        content: partial.content ?? "",
-        author: partial.author ?? "human",
-        anchor_y: partial.anchor_y ?? 0,
-        timestamp: partial.timestamp ?? Date.now(),
-        selection: partial.selection ?? null,
-      };
-      setAnnotations((prev) => [...prev, annotation]);
-      const sid = activeSessionIdRef.current;
-      if (sid) {
-        dockMutateSession(sid, [
-          { op: "annotation.add", actor: "human", annotation },
-        ]).catch(() => {});
-      }
-      return annotation;
-    },
-    [],
-  );
+  const addAnnotation = useCallback((partial: Partial<DockAnnotation>): DockAnnotation => {
+    const annotation: DockAnnotation = {
+      id: partial.id ?? generateId(),
+      block_id: partial.block_id ?? '',
+      content: partial.content ?? '',
+      author: partial.author ?? 'human',
+      anchor_y: partial.anchor_y ?? 0,
+      timestamp: partial.timestamp ?? Date.now(),
+      selection: partial.selection ?? null,
+    };
+    setAnnotations((prev) => [...prev, annotation]);
+    const sid = activeSessionIdRef.current;
+    if (sid) {
+      dockMutateSession(sid, [{ op: 'annotation.add', actor: 'human', annotation }]).catch(
+        () => {},
+      );
+    }
+    return annotation;
+  }, []);
 
   const updateAnnotation = useCallback((id: string, content: string) => {
-    setAnnotations((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, content } : a)),
-    );
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, content } : a)));
     const sid = activeSessionIdRef.current;
     if (sid) {
       const ann = annotationsRef.current.find((a) => a.id === id);
       if (ann) {
         dockMutateSession(sid, [
-          { op: "annotation.update", actor: "human", annotation: { ...ann, content } },
+          { op: 'annotation.update', actor: 'human', annotation: { ...ann, content } },
         ]).catch(() => {});
       }
     }
@@ -464,9 +452,7 @@ export function useDockStore(): DockStore {
     setAnnotations((prev) => prev.filter((a) => a.id !== id));
     const sid = activeSessionIdRef.current;
     if (sid) {
-      dockMutateSession(sid, [
-        { op: "annotation.remove", actor: "human", id },
-      ]).catch(() => {});
+      dockMutateSession(sid, [{ op: 'annotation.remove', actor: 'human', id }]).catch(() => {});
     }
   }, []);
 
@@ -474,30 +460,23 @@ export function useDockStore(): DockStore {
   // Fact operations
   // -----------------------------------------------------------------------
 
-  const addFact = useCallback(
-    (content: string, source: Actor = "human") => {
-      const fact: DockFact = { id: generateId(), content, source };
-      setFacts((prev) => [...prev, fact]);
-      const sid = activeSessionIdRef.current;
-      if (sid) {
-        dockMutateSession(sid, [
-          { op: "fact.add", actor: "human", fact },
-        ]).catch(() => {});
-      }
-    },
-    [],
-  );
+  const addFact = useCallback((content: string, source: Actor = 'human') => {
+    const fact: DockFact = { id: generateId(), content, source };
+    setFacts((prev) => [...prev, fact]);
+    const sid = activeSessionIdRef.current;
+    if (sid) {
+      dockMutateSession(sid, [{ op: 'fact.add', actor: 'human', fact }]).catch(() => {});
+    }
+  }, []);
 
   const updateFact = useCallback((id: string, content: string) => {
-    setFacts((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, content } : f)),
-    );
+    setFacts((prev) => prev.map((f) => (f.id === id ? { ...f, content } : f)));
     const sid = activeSessionIdRef.current;
     if (sid) {
       const f = factsRef.current.find((f) => f.id === id);
       if (f) {
         dockMutateSession(sid, [
-          { op: "fact.update", actor: "human", fact: { ...f, content } },
+          { op: 'fact.update', actor: 'human', fact: { ...f, content } },
         ]).catch(() => {});
       }
     }
@@ -507,9 +486,7 @@ export function useDockStore(): DockStore {
     setFacts((prev) => prev.filter((f) => f.id !== id));
     const sid = activeSessionIdRef.current;
     if (sid) {
-      dockMutateSession(sid, [
-        { op: "fact.remove", actor: "human", id },
-      ]).catch(() => {});
+      dockMutateSession(sid, [{ op: 'fact.remove', actor: 'human', id }]).catch(() => {});
     }
   }, []);
 

@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { MessageSquareDashed, X } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { DockStore } from "@/hooks/use-dock-store";
+import { MessageSquareDashed, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockAnnotationsProps {
   store: DockStore;
@@ -26,7 +27,7 @@ interface DockAnnotationsProps {
 export default function DockAnnotations({ store }: DockAnnotationsProps) {
   const { annotations, activeAnnotation } = store;
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState("");
+  const [editText, setEditText] = useState('');
   const editRef = useRef<HTMLTextAreaElement>(null);
 
   const sorted = [...annotations].sort((a, b) => a.anchor_y - b.anchor_y);
@@ -46,12 +47,12 @@ export default function DockAnnotations({ store }: DockAnnotationsProps) {
       store.updateAnnotation(editingId, editText.trim());
     }
     setEditingId(null);
-    setEditText("");
+    setEditText('');
   }, [editingId, editText, store]);
 
   const cancelEdit = useCallback(() => {
     setEditingId(null);
-    setEditText("");
+    setEditText('');
   }, []);
 
   // Focus textarea when editing starts
@@ -81,10 +82,8 @@ export default function DockAnnotations({ store }: DockAnnotationsProps) {
           <div
             key={ann.id}
             className={cn(
-              "group cursor-pointer border-b border-border/30 px-3 py-2.5 transition-colors",
-              isActive
-                ? "bg-accent/40"
-                : "hover:bg-accent/20",
+              'group cursor-pointer border-b border-border/30 px-3 py-2.5 transition-colors',
+              isActive ? 'bg-accent/40' : 'hover:bg-accent/20',
             )}
             onClick={() => store.setActiveAnnotation(isActive ? null : ann.id)}
           >
@@ -92,8 +91,8 @@ export default function DockAnnotations({ store }: DockAnnotationsProps) {
               {/* Dot indicator */}
               <div
                 className={cn(
-                  "mt-1.5 h-2 w-2 shrink-0 rounded-full transition-colors",
-                  isActive ? "bg-primary" : "bg-muted-foreground/40",
+                  'mt-1.5 h-2 w-2 shrink-0 rounded-full transition-colors',
+                  isActive ? 'bg-primary' : 'bg-muted-foreground/40',
                 )}
               />
 
@@ -104,11 +103,11 @@ export default function DockAnnotations({ store }: DockAnnotationsProps) {
                     value={editText}
                     onChange={(e) => setEditText(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
+                      if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         commitEdit();
                       }
-                      if (e.key === "Escape") {
+                      if (e.key === 'Escape') {
                         cancelEdit();
                       }
                     }}
@@ -119,8 +118,8 @@ export default function DockAnnotations({ store }: DockAnnotationsProps) {
                 ) : (
                   <p
                     className={cn(
-                      "text-xs leading-relaxed",
-                      isActive ? "text-foreground" : "text-foreground/80 line-clamp-2",
+                      'text-xs leading-relaxed',
+                      isActive ? 'text-foreground' : 'text-foreground/80 line-clamp-2',
                     )}
                     onClick={(e) => {
                       if (isActive) {
@@ -153,8 +152,8 @@ export default function DockAnnotations({ store }: DockAnnotationsProps) {
               {/* Delete button */}
               <button
                 className={cn(
-                  "mt-0.5 shrink-0 rounded p-0.5 text-muted-foreground/50 transition-colors hover:bg-destructive/10 hover:text-destructive",
-                  isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                  'mt-0.5 shrink-0 rounded p-0.5 text-muted-foreground/50 transition-colors hover:bg-destructive/10 hover:text-destructive',
+                  isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                 )}
                 onClick={(e) => {
                   e.stopPropagation();

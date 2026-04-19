@@ -36,7 +36,10 @@ export interface TaskRunRecord {
 
 // Flat KV Settings
 export type SettingsMap = Record<string, string>;
-export interface SettingValue { key: string; value: string; }
+export interface SettingValue {
+  key: string;
+  value: string;
+}
 export type SettingsPatch = Record<string, string | null>;
 
 // Chat Models
@@ -57,19 +60,12 @@ export interface ProviderInfo {
   enabled: boolean;
 }
 
-
 // Chat Sessions
 
 /** LLM thinking-level override persisted per session. Mirrors pi-mono's
  *  six-bucket scale so the chat-panel selector round-trips without any
  *  lossy mapping. */
-export type ThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface ChatSession {
   key: string;
@@ -87,7 +83,7 @@ export interface ChatSession {
 
 export interface ChatMessageData {
   seq: number;
-  role: "system" | "user" | "assistant" | "tool" | "tool_result";
+  role: 'system' | 'user' | 'assistant' | 'tool' | 'tool_result';
   content: string | ChatContentBlock[];
   /** Tool calls requested by the assistant (only present on assistant-role
    *  messages that invoke tools). Matches the backend `ChatMessage.tool_calls`
@@ -108,12 +104,12 @@ export interface ChatToolCallData {
 }
 
 export type ChatContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image_url"; url: string }
-  | { type: "image_base64"; media_type: string; data: string }
-  | { type: "audio_base64"; media_type: string; data: string }
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; url: string }
+  | { type: 'image_base64'; media_type: string; data: string }
+  | { type: 'audio_base64'; media_type: string; data: string }
   | {
-      type: "file_base64";
+      type: 'file_base64';
       media_type: string;
       data: string;
       filename?: string;
@@ -125,15 +121,15 @@ export interface SendMessageResponse {
 
 // SSE stream event types (matches backend ChatStreamEvent)
 export type ChatStreamEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "reasoning_delta"; text: string }
-  | { type: "thinking" }
-  | { type: "thinking_done" }
-  | { type: "iteration"; index: number }
-  | { type: "tool_call_start"; id: string; name: string }
-  | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'reasoning_delta'; text: string }
+  | { type: 'thinking' }
+  | { type: 'thinking_done' }
+  | { type: 'iteration'; index: number }
+  | { type: 'tool_call_start'; id: string; name: string }
+  | { type: 'tool_call_end'; id: string; name: string; success: boolean; error?: string }
   | {
-      type: "usage";
+      type: 'usage';
       input: number;
       output: number;
       cache_read: number;
@@ -142,8 +138,8 @@ export type ChatStreamEvent =
       cost: number;
       model: string;
     }
-  | { type: "done"; text: string }
-  | { type: "error"; message: string };
+  | { type: 'done'; text: string }
+  | { type: 'error'; message: string };
 
 // Skills
 export interface SkillSummary {
@@ -166,7 +162,6 @@ export interface CreateSkillRequest {
   allowed_tools: string[];
   prompt: string;
 }
-
 
 // ── MCP Management ──────────────────────────────────────────
 
@@ -226,7 +221,6 @@ export interface CreateMcpServerRequest {
   tool_timeout_secs?: number;
 }
 
-
 // Agents
 export interface AgentResponse {
   name: string;
@@ -251,7 +245,14 @@ export interface CreateAgentRequest {
 }
 
 // Coding Tasks
-export type CodingTaskStatus = 'Pending' | 'Cloning' | 'Running' | 'Completed' | 'Failed' | 'Merged' | 'MergeFailed';
+export type CodingTaskStatus =
+  | 'Pending'
+  | 'Cloning'
+  | 'Running'
+  | 'Completed'
+  | 'Failed'
+  | 'Merged'
+  | 'MergeFailed';
 export type AgentType = 'Codex' | 'Claude';
 
 export interface CodingTaskSummary {
@@ -290,4 +291,3 @@ export interface CreateCodingTaskRequest {
   repo_url?: string;
   session_key?: string;
 }
-

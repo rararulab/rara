@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, LayoutDashboard, Settings } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useState } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router';
+
 import { settingsApi } from '@/api/client';
-import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
-import ThemeToggle from '@/components/ThemeToggle';
-import { useServerStatus } from '@/hooks/use-server-status';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import ThemeToggle from '@/components/ThemeToggle';
+import { Button } from '@/components/ui/button';
+import { useServerStatus } from '@/hooks/use-server-status';
+import { cn } from '@/lib/utils';
 
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);
@@ -77,13 +78,8 @@ function ConnectionStatus() {
   if (isChecking) return null;
   return (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <div
-        className={cn(
-          "h-2 w-2 rounded-full",
-          isOnline ? "bg-green-500" : "bg-red-500",
-        )}
-      />
-      <span>{isOnline ? "Connected" : "Disconnected"}</span>
+      <div className={cn('h-2 w-2 rounded-full', isOnline ? 'bg-green-500' : 'bg-red-500')} />
+      <span>{isOnline ? 'Connected' : 'Disconnected'}</span>
     </div>
   );
 }
@@ -92,7 +88,9 @@ export default function DashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { openSettings } = useSettingsModal();
-  const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
+  const isFullBleed =
+    FULL_BLEED_ROUTES.has(location.pathname) ||
+    FULL_BLEED_PREFIXES.some((p) => location.pathname.startsWith(p));
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
@@ -118,7 +116,12 @@ export default function DashboardLayout() {
         />
       )}
 
-      <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
+      <main
+        className={cn(
+          'relative flex min-w-0 flex-1 flex-col',
+          isFullBleed ? 'overflow-hidden' : 'overflow-auto',
+        )}
+      >
         {/* Top bar */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
           <ConnectionStatus />

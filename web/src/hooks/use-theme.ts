@@ -14,34 +14,34 @@
  * limitations under the License.
  */
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 
-export type Theme = "light" | "dark" | "system";
+export type Theme = 'light' | 'dark' | 'system';
 
-const STORAGE_KEY = "rara-theme";
+const STORAGE_KEY = 'rara-theme';
 
 /** Read persisted theme preference, defaulting to "system". */
 function getStoredTheme(): Theme {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === "light" || raw === "dark" || raw === "system") return raw;
+    if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
   } catch {
     // SSR or storage unavailable
   }
-  return "system";
+  return 'system';
 }
 
 /** Resolve the effective dark/light state from a Theme value. */
 function resolveIsDark(theme: Theme): boolean {
-  if (theme === "system") {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  if (theme === 'system') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
   }
-  return theme === "dark";
+  return theme === 'dark';
 }
 
 /** Apply or remove the .dark class on the root element. */
 function applyDarkClass(isDark: boolean) {
-  document.documentElement.classList.toggle("dark", isDark);
+  document.documentElement.classList.toggle('dark', isDark);
 }
 
 // ---------------------------------------------------------------------------
@@ -78,28 +78,28 @@ applyDarkClass(resolveIsDark(currentTheme));
 
 /** React hook providing theme state and controls. */
 export function useTheme() {
-  const theme = useSyncExternalStore(subscribe, getSnapshot, () => "system" as Theme);
+  const theme = useSyncExternalStore(subscribe, getSnapshot, () => 'system' as Theme);
 
   const isDark = useMemo(() => resolveIsDark(theme), [theme]);
 
   // Listen for OS theme changes when in "system" mode.
   useEffect(() => {
-    if (theme !== "system") return;
-    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    if (theme !== 'system') return;
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
     const handler = () => {
       applyDarkClass(mql.matches);
       // Notify listeners so isDark re-evaluates.
       listeners.forEach((cb) => cb());
     };
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
   }, [theme]);
 
   const setTheme = useCallback((t: Theme) => setThemeInternal(t), []);
 
   /** Cycle through light -> dark -> system. */
   const toggleTheme = useCallback(() => {
-    const order: Theme[] = ["light", "dark", "system"];
+    const order: Theme[] = ['light', 'dark', 'system'];
     const idx = order.indexOf(currentTheme);
     setThemeInternal(order[(idx + 1) % order.length]);
   }, []);

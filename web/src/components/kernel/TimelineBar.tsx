@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-import { useMemo } from "react";
-import { cn } from "@/lib/utils";
-import type { EventKind, TimelineItem } from "@/api/kernel-types";
-import { KIND_PALETTE, eventLabel } from "./timeline-colors";
+import { useMemo } from 'react';
+
+import { KIND_PALETTE, eventLabel } from './timeline-colors';
+
+import type { EventKind, TimelineItem } from '@/api/kernel-types';
+import { cn } from '@/lib/utils';
 
 interface Segment {
   startIdx: number;
@@ -37,11 +39,10 @@ function buildSegments(items: TimelineItem[]): Segment[] {
   let start = 0;
   for (let i = 0; i < items.length; i++) {
     const prev = items[i - 1];
-    const curr = items[i]!;
-    const boundary =
-      !prev || prev.kind !== curr.kind || prev.turn !== curr.turn;
+    const curr = items[i];
+    const boundary = !prev || prev.kind !== curr.kind || prev.turn !== curr.turn;
     if (boundary && i !== 0) {
-      const head = items[start]!;
+      const head = items[start];
       segments.push({
         startIdx: start,
         endIdx: i - 1,
@@ -52,7 +53,7 @@ function buildSegments(items: TimelineItem[]): Segment[] {
     }
   }
   if (items.length > 0) {
-    const head = items[start]!;
+    const head = items[start];
     segments.push({
       startIdx: start,
       endIdx: items.length - 1,
@@ -78,11 +79,7 @@ export interface TimelineBarProps {
  * {@link EventKind}; width is proportional to the count. Clicking a
  * segment selects its first item.
  */
-export function TimelineBar({
-  items,
-  selectedIdx,
-  onSegmentClick,
-}: TimelineBarProps) {
+export function TimelineBar({ items, selectedIdx, onSegmentClick }: TimelineBarProps) {
   const segments = useMemo(() => buildSegments(items), [items]);
 
   if (segments.length === 0) return null;
@@ -97,11 +94,9 @@ export function TimelineBar({
     >
       {segments.map((seg, segIdx) => {
         const isSelected =
-          selectedIdx !== null &&
-          selectedIdx >= seg.startIdx &&
-          selectedIdx <= seg.endIdx;
+          selectedIdx !== null && selectedIdx >= seg.startIdx && selectedIdx <= seg.endIdx;
         const palette = KIND_PALETTE[seg.kind];
-        const head = items[seg.startIdx]!;
+        const head = items[seg.startIdx];
         const widthPct = Math.max((seg.count / total) * 100, 0.5);
         const label = eventLabel(seg.kind, head.tool);
 
@@ -111,23 +106,17 @@ export function TimelineBar({
             type="button"
             onClick={() => onSegmentClick?.(seg.startIdx)}
             className={cn(
-              "group relative h-full min-w-[4px] transition-all duration-150 hover:opacity-80",
+              'group relative h-full min-w-[4px] transition-all duration-150 hover:opacity-80',
               isSelected ? palette.barActive : palette.bar,
             )}
             style={{ width: `${widthPct}%` }}
-            title={
-              seg.count > 1
-                ? `${label} (+${seg.count - 1} more)`
-                : label
-            }
+            title={seg.count > 1 ? `${label} (+${seg.count - 1} more)` : label}
           >
             <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 group-hover:block">
               <span className="block whitespace-nowrap rounded border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md">
                 {label}
                 {seg.count > 1 && (
-                  <span className="ml-1 text-muted-foreground">
-                    +{seg.count - 1}
-                  </span>
+                  <span className="ml-1 text-muted-foreground">+{seg.count - 1}</span>
                 )}
               </span>
             </span>

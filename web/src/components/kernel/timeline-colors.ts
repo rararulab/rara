@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { EventKind } from "@/api/kernel-types";
+import type { EventKind } from '@/api/kernel-types';
 
 /** Visual classes for one timeline event-kind, across 3 use sites. */
 export interface KindPalette {
@@ -38,80 +38,73 @@ export interface KindPalette {
  */
 export const KIND_PALETTE: Record<EventKind, KindPalette> = {
   agent: {
-    bar: "bg-emerald-400/60",
-    barActive: "bg-emerald-500",
-    label:
-      "bg-emerald-500/20 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
-    text: "Agent",
+    bar: 'bg-emerald-400/60',
+    barActive: 'bg-emerald-500',
+    label: 'bg-emerald-500/20 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+    text: 'Agent',
   },
   thinking: {
-    bar: "bg-violet-400/60",
-    barActive: "bg-violet-500",
-    label:
-      "bg-violet-500/20 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300",
-    text: "Think",
+    bar: 'bg-violet-400/60',
+    barActive: 'bg-violet-500',
+    label: 'bg-violet-500/20 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',
+    text: 'Think',
   },
   tool_use: {
-    bar: "bg-blue-400/60",
-    barActive: "bg-blue-500",
-    label:
-      "bg-blue-500/20 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
-    text: "Tool",
+    bar: 'bg-blue-400/60',
+    barActive: 'bg-blue-500',
+    label: 'bg-blue-500/20 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
+    text: 'Tool',
   },
   tool_result: {
-    bar: "bg-slate-300/60 dark:bg-slate-600/60",
-    barActive: "bg-slate-400 dark:bg-slate-500",
-    label: "bg-muted text-muted-foreground",
-    text: "Result",
+    bar: 'bg-slate-300/60 dark:bg-slate-600/60',
+    barActive: 'bg-slate-400 dark:bg-slate-500',
+    label: 'bg-muted text-muted-foreground',
+    text: 'Result',
   },
   error: {
-    bar: "bg-red-400/60",
-    barActive: "bg-red-500",
-    label:
-      "bg-red-500/20 text-red-700 dark:bg-red-500/15 dark:text-red-300",
-    text: "Error",
+    bar: 'bg-red-400/60',
+    barActive: 'bg-red-500',
+    label: 'bg-red-500/20 text-red-700 dark:bg-red-500/15 dark:text-red-300',
+    text: 'Error',
   },
   in_progress: {
     // Reuse the thinking violet hue so the placeholder visually belongs
     // to the "pre-output" phase of the turn.
-    bar: "bg-violet-300/50",
-    barActive: "bg-violet-400",
-    label:
-      "bg-violet-500/15 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300",
-    text: "…",
+    bar: 'bg-violet-300/50',
+    barActive: 'bg-violet-400',
+    label: 'bg-violet-500/15 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300',
+    text: '…',
   },
   plan_card: {
     // Amber distinguishes "directive / structured plan" from the other
     // kinds while staying within the existing tonal range.
-    bar: "bg-amber-400/60",
-    barActive: "bg-amber-500",
-    label:
-      "bg-amber-500/20 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
-    text: "Plan",
+    bar: 'bg-amber-400/60',
+    barActive: 'bg-amber-500',
+    label: 'bg-amber-500/20 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+    text: 'Plan',
   },
   token_footer: {
     // Muted — the footer is metadata, not a distinct event-kind worth
     // its own hue. Reuse the result palette so TimelineBar renders a
     // slate segment when one appears.
-    bar: "bg-slate-300/40 dark:bg-slate-600/40",
-    barActive: "bg-slate-400 dark:bg-slate-500",
-    label: "bg-muted text-muted-foreground",
-    text: "Usage",
+    bar: 'bg-slate-300/40 dark:bg-slate-600/40',
+    barActive: 'bg-slate-400 dark:bg-slate-500',
+    label: 'bg-muted text-muted-foreground',
+    text: 'Usage',
   },
   background_tasks: {
     // Cyan reads as "ambient / side-effect" — distinct from tool_use
     // blue so concurrent background work doesn't blend into tool calls.
-    bar: "bg-cyan-400/60",
-    barActive: "bg-cyan-500",
-    label:
-      "bg-cyan-500/20 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300",
-    text: "BG",
+    bar: 'bg-cyan-400/60',
+    barActive: 'bg-cyan-500',
+    label: 'bg-cyan-500/20 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300',
+    text: 'BG',
   },
 };
 
 /** Short label to show inside a row's type badge. */
 export function eventLabel(kind: EventKind, tool?: string): string {
-  if (kind === "tool_use" || kind === "tool_result") {
+  if (kind === 'tool_use' || kind === 'tool_result') {
     return tool ?? KIND_PALETTE[kind].text;
   }
   return KIND_PALETTE[kind].text;
@@ -129,22 +122,22 @@ export function eventSummary(item: {
   plan?: { goal: string };
 }): string {
   switch (item.kind) {
-    case "agent":
-    case "thinking":
-    case "error":
-    case "in_progress":
-      return item.content?.trim() ?? "";
-    case "tool_use":
+    case 'agent':
+    case 'thinking':
+    case 'error':
+    case 'in_progress':
+      return item.content?.trim() ?? '';
+    case 'tool_use':
       return toolInputSummary(item.input);
-    case "tool_result":
-      return item.output?.trim().slice(0, 200) ?? "";
-    case "plan_card":
-      return item.plan?.goal ?? "";
-    case "token_footer":
-    case "background_tasks":
+    case 'tool_result':
+      return item.output?.trim().slice(0, 200) ?? '';
+    case 'plan_card':
+      return item.plan?.goal ?? '';
+    case 'token_footer':
+    case 'background_tasks':
       // Self-rendered rows — the badge+summary layout is bypassed in
       // TimelineRow, so this branch is unreachable in practice.
-      return "";
+      return '';
   }
 }
 
@@ -156,33 +149,33 @@ export function eventSummary(item: {
  * empty string when nothing suitable is found.
  */
 function toolInputSummary(input?: Record<string, unknown>): string {
-  if (!input) return "";
+  if (!input) return '';
   const keys = [
-    "query",
-    "file_path",
-    "path",
-    "pattern",
-    "description",
-    "command",
-    "prompt",
-    "skill",
+    'query',
+    'file_path',
+    'path',
+    'pattern',
+    'description',
+    'command',
+    'prompt',
+    'skill',
   ];
   for (const k of keys) {
     const v = input[k];
-    if (typeof v === "string" && v.length > 0) {
-      if (k === "file_path" || k === "path") return shortenPath(v);
-      if (v.length > 120) return v.slice(0, 120) + "...";
+    if (typeof v === 'string' && v.length > 0) {
+      if (k === 'file_path' || k === 'path') return shortenPath(v);
+      if (v.length > 120) return v.slice(0, 120) + '...';
       return v;
     }
   }
   for (const v of Object.values(input)) {
-    if (typeof v === "string" && v.length > 0 && v.length < 120) return v;
+    if (typeof v === 'string' && v.length > 0 && v.length < 120) return v;
   }
-  return "";
+  return '';
 }
 
 function shortenPath(p: string): string {
-  const parts = p.split("/");
+  const parts = p.split('/');
   if (parts.length <= 3) return p;
-  return ".../" + parts.slice(-2).join("/");
+  return '.../' + parts.slice(-2).join('/');
 }

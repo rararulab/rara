@@ -14,18 +14,14 @@
  * limitations under the License.
  */
 
-import type {
-  StorageBackend,
-  StorageTransaction,
-  SessionMetadata,
-} from "@mariozechner/pi-web-ui";
+import type { StorageBackend, StorageTransaction, SessionMetadata } from '@mariozechner/pi-web-ui';
 
-import { api, settingsApi } from "@/api/client";
+import { api, settingsApi } from '@/api/client';
 // `settingsApi` is used for init()'s read-through pre-seed and for
 // write-back of pi-mono UI state under the `ui.pi.` prefix. Rara's own
 // admin settings (llm.*, telegram.*, etc.) are owned by the admin modal
 // (#1581) and are never round-tripped through this adapter.
-import type { ChatSession } from "@/api/types";
+import type { ChatSession } from '@/api/types';
 
 /**
  * Rara-owned setting key prefixes. Values under these prefixes are
@@ -33,17 +29,10 @@ import type { ChatSession } from "@/api/types";
  * never write to them, even if a future release adds UI that touches
  * keys in this namespace.
  */
-const RARA_KEY_PREFIXES = [
-  "llm.",
-  "telegram.",
-  "gmail.",
-  "composio.",
-  "memory.",
-  "fs.",
-] as const;
+const RARA_KEY_PREFIXES = ['llm.', 'telegram.', 'gmail.', 'composio.', 'memory.', 'fs.'] as const;
 
 /** Prefix applied to pi-mono UI state before round-tripping to the backend. */
-const PI_UI_PREFIX = "ui.pi.";
+const PI_UI_PREFIX = 'ui.pi.';
 
 function isRaraOwnedKey(key: string): boolean {
   return RARA_KEY_PREFIXES.some((p) => key.startsWith(p));
@@ -76,14 +65,14 @@ export class RaraStorageBackend implements StorageBackend {
    */
   async init(): Promise<void> {
     const [sessions, settings] = await Promise.all([
-      api.get<ChatSession[]>("/api/v1/chat/sessions?limit=100&offset=0"),
+      api.get<ChatSession[]>('/api/v1/chat/sessions?limit=100&offset=0'),
       settingsApi.list(),
     ]);
 
     // Populate both session stores — pi-web-ui uses "sessions" for full data
     // and "sessions-metadata" for the lightweight list (SessionListDialog reads the latter)
-    const sessionsStore = this.store("sessions");
-    const metaStore = this.store("sessions-metadata");
+    const sessionsStore = this.store('sessions');
+    const metaStore = this.store('sessions-metadata');
     for (const s of sessions) {
       const meta = chatSessionToMetadata(s);
       sessionsStore.set(s.key, meta);
@@ -101,7 +90,7 @@ export class RaraStorageBackend implements StorageBackend {
     // `<k>` from a pre-#1581 write alongside the newer `ui.pi.<k>`, the
     // admin-owned prefixed namespace must win — iteration order from
     // `Object.entries` is not a safe tie-breaker.
-    const settingsStore = this.store("settings");
+    const settingsStore = this.store('settings');
     const bare: Array<[string, string]> = [];
     const pinned: Array<[string, string]> = [];
     for (const [k, v] of Object.entries(settings)) {
@@ -128,19 +117,15 @@ export class RaraStorageBackend implements StorageBackend {
    * admin keys are ignored here — they are persisted exclusively by the
    * admin settings modal.
    */
-  async set<T = unknown>(
-    storeName: string,
-    key: string,
-    value: T,
-  ): Promise<void> {
+  async set<T = unknown>(storeName: string, key: string, value: T): Promise<void> {
     this.store(storeName).set(key, value);
 
     // Keep both session stores in sync
-    if (storeName === "sessions") {
-      this.store("sessions-metadata").set(key, value);
-    } else if (storeName === "sessions-metadata") {
-      this.store("sessions").set(key, value);
-    } else if (storeName === "settings") {
+    if (storeName === 'sessions') {
+      this.store('sessions-metadata').set(key, value);
+    } else if (storeName === 'sessions-metadata') {
+      this.store('sessions').set(key, value);
+    } else if (storeName === 'settings') {
       // Guard: rara-owned keys (llm.*, telegram.*, ...) must never be
       // round-tripped through the pi-mono adapter. The admin modal owns
       // persistence for those keys; any stray write here would corrupt
@@ -148,7 +133,7 @@ export class RaraStorageBackend implements StorageBackend {
       if (isRaraOwnedKey(key)) return;
       const namespaced = `${PI_UI_PREFIX}${key}`;
       settingsApi.set(namespaced, String(value)).catch((e) => {
-        console.warn("Background pi-mono settings sync failed:", e);
+        console.warn('Background pi-mono settings sync failed:', e);
       });
     }
   }
@@ -163,19 +148,17 @@ export class RaraStorageBackend implements StorageBackend {
     this.store(storeName).delete(key);
 
     // Keep both session stores in sync and fire-and-forget API deletion
-    if (storeName === "sessions" || storeName === "sessions-metadata") {
-      this.store("sessions").delete(key);
-      this.store("sessions-metadata").delete(key);
-      api
-        .del(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
-        .catch((e) => {
-          console.warn("Background session delete failed:", e);
-        });
-    } else if (storeName === "settings") {
+    if (storeName === 'sessions' || storeName === 'sessions-metadata') {
+      this.store('sessions').delete(key);
+      this.store('sessions-metadata').delete(key);
+      api.del(`/api/v1/chat/sessions/${encodeURIComponent(key)}`).catch((e) => {
+        console.warn('Background session delete failed:', e);
+      });
+    } else if (storeName === 'settings') {
       if (isRaraOwnedKey(key)) return;
       const namespaced = `${PI_UI_PREFIX}${key}`;
       settingsApi.delete(namespaced).catch((e) => {
-        console.warn("Background pi-mono settings delete failed:", e);
+        console.warn('Background pi-mono settings delete failed:', e);
       });
     }
   }
@@ -194,7 +177,7 @@ export class RaraStorageBackend implements StorageBackend {
   async getAllFromIndex<T = unknown>(
     storeName: string,
     indexName: string,
-    direction: "asc" | "desc" = "asc",
+    direction: 'asc' | 'desc' = 'asc',
   ): Promise<T[]> {
     const values = Array.from(this.store(storeName).values()) as T[];
     const sorted = values.sort((a, b) => {
@@ -205,7 +188,7 @@ export class RaraStorageBackend implements StorageBackend {
       if (bVal == null) return -1;
       return aVal < bVal ? -1 : 1;
     });
-    return direction === "desc" ? sorted.reverse() : sorted;
+    return direction === 'desc' ? sorted.reverse() : sorted;
   }
 
   /** Clear all data from a specific store. */
@@ -224,14 +207,12 @@ export class RaraStorageBackend implements StorageBackend {
    */
   async transaction<T>(
     _storeNames: string[],
-    _mode: "readonly" | "readwrite",
+    _mode: 'readonly' | 'readwrite',
     operation: (tx: StorageTransaction) => Promise<T>,
   ): Promise<T> {
     const tx: StorageTransaction = {
-      get: <V = unknown>(store: string, key: string) =>
-        this.get<V>(store, key),
-      set: <V = unknown>(store: string, key: string, value: V) =>
-        this.set(store, key, value),
+      get: <V = unknown>(store: string, key: string) => this.get<V>(store, key),
+      set: <V = unknown>(store: string, key: string, value: V) => this.set(store, key, value),
       delete: (store: string, key: string) => this.delete(store, key),
     };
     return operation(tx);
@@ -256,7 +237,7 @@ export class RaraStorageBackend implements StorageBackend {
 function chatSessionToMetadata(session: ChatSession): SessionMetadata {
   return {
     id: session.key,
-    title: session.title ?? "Untitled",
+    title: session.title ?? 'Untitled',
     createdAt: session.created_at,
     lastModified: session.updated_at,
     messageCount: session.message_count,
@@ -274,7 +255,7 @@ function chatSessionToMetadata(session: ChatSession): SessionMetadata {
         total: 0,
       },
     },
-    thinkingLevel: "off",
-    preview: session.preview ?? "",
+    thinkingLevel: 'off',
+    preview: session.preview ?? '',
   };
 }

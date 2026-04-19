@@ -14,20 +14,14 @@
  * limitations under the License.
  */
 
-import { useEffect, useState } from "react";
-import {
-  PanelLeftClose,
-  PanelLeft,
-  Plus,
-  Settings,
-  Trash2,
-  MessageSquare,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
-import { api } from "@/api/client";
-import type { ChatSession } from "@/api/types";
+import { PanelLeftClose, PanelLeft, Plus, Settings, Trash2, MessageSquare } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
-const COLLAPSED_STORAGE_KEY = "rara.sidebar.collapsed";
+import { api } from '@/api/client';
+import type { ChatSession } from '@/api/types';
+import { cn } from '@/lib/utils';
+
+const COLLAPSED_STORAGE_KEY = 'rara.sidebar.collapsed';
 
 interface ChatSidebarProps {
   activeSessionKey: string | undefined;
@@ -44,14 +38,14 @@ interface ChatSidebarProps {
 }
 
 function stripForPreview(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
 }
 
 function formatRelativeDate(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const days = Math.floor(diff / 86_400_000);
-  if (days === 0) return "今天";
-  if (days === 1) return "昨天";
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
   if (days < 7) return `${days} 天前`;
   return new Date(iso).toLocaleDateString();
 }
@@ -72,7 +66,7 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(COLLAPSED_STORAGE_KEY) === "1";
+      return localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1';
     } catch {
       return false;
     }
@@ -84,7 +78,7 @@ export function ChatSidebar({
     let alive = true;
     setLoading(true);
     api
-      .get<ChatSession[]>("/api/v1/chat/sessions?limit=100&offset=0")
+      .get<ChatSession[]>('/api/v1/chat/sessions?limit=100&offset=0')
       .then((list) => {
         if (alive) setSessions(list);
       })
@@ -103,7 +97,7 @@ export function ChatSidebar({
     setCollapsed((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem(COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+        localStorage.setItem(COLLAPSED_STORAGE_KEY, next ? '1' : '0');
       } catch {
         /* ignore */
       }
@@ -113,17 +107,14 @@ export function ChatSidebar({
 
   const handleDelete = async (key: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm("删除这个会话？")) return;
+    if (!confirm('删除这个会话？')) return;
     try {
       await api.del(`/api/v1/chat/sessions/${encodeURIComponent(key)}`);
       // Pick the neighbour *before* the list mutation so the
       // parent can switch into a still-cached row rather than
       // spinning up a fresh session.
       const idx = sessions.findIndex((s) => s.key === key);
-      const fallback =
-        idx >= 0
-          ? sessions[idx + 1] ?? sessions[idx - 1] ?? null
-          : null;
+      const fallback = idx >= 0 ? (sessions[idx + 1] ?? sessions[idx - 1] ?? null) : null;
       setSessions((prev) => prev.filter((s) => s.key !== key));
       onDeleteSession(key, fallback);
     } catch {
@@ -134,46 +125,45 @@ export function ChatSidebar({
   return (
     <aside
       className={cn(
-        "flex h-screen shrink-0 flex-col border-r border-border/50 bg-background/40 backdrop-blur-md transition-[width] duration-200 ease-out",
-        collapsed ? "w-14" : "w-64",
+        'flex h-screen shrink-0 flex-col border-r border-border/50 bg-background/40 backdrop-blur-md transition-[width] duration-200 ease-out',
+        collapsed ? 'w-14' : 'w-64',
       )}
     >
       {/* Top: logo + collapse toggle */}
       <div
         className={cn(
-          "flex h-12 shrink-0 items-center border-b border-border/40",
-          collapsed ? "justify-center" : "justify-between px-3",
+          'flex h-12 shrink-0 items-center border-b border-border/40',
+          collapsed ? 'justify-center' : 'justify-between px-3',
         )}
       >
         {!collapsed && (
-          <span className="text-sm font-semibold tracking-[0.15em] text-foreground/90">
-            RARA
-          </span>
+          <span className="text-sm font-semibold tracking-[0.15em] text-foreground/90">RARA</span>
         )}
         <button
           type="button"
           onClick={toggleCollapsed}
           className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors cursor-pointer"
-          title={collapsed ? "展开边栏" : "折叠边栏"}
+          title={collapsed ? '展开边栏' : '折叠边栏'}
         >
-          {collapsed ? (
-            <PanelLeft className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
+          {collapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </button>
       </div>
 
       {/* Actions: new session + settings */}
-      <div className={cn("flex shrink-0 flex-col gap-1", collapsed ? "items-center py-2" : "px-2 py-2")}>
+      <div
+        className={cn(
+          'flex shrink-0 flex-col gap-1',
+          collapsed ? 'items-center py-2' : 'px-2 py-2',
+        )}
+      >
         <button
           type="button"
           onClick={onNewSession}
           className={cn(
-            "flex h-9 items-center rounded-md text-sm font-medium transition-colors cursor-pointer",
+            'flex h-9 items-center rounded-md text-sm font-medium transition-colors cursor-pointer',
             collapsed
-              ? "w-9 justify-center text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-              : "w-full gap-2 px-3 text-foreground bg-secondary/40 hover:bg-secondary/70",
+              ? 'w-9 justify-center text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+              : 'w-full gap-2 px-3 text-foreground bg-secondary/40 hover:bg-secondary/70',
           )}
           title="新建会话"
         >
@@ -184,8 +174,8 @@ export function ChatSidebar({
           type="button"
           onClick={onOpenSettings}
           className={cn(
-            "flex h-9 items-center rounded-md text-sm text-muted-foreground transition-colors cursor-pointer hover:bg-secondary/60 hover:text-foreground",
-            collapsed ? "w-9 justify-center" : "w-full gap-2 px-3",
+            'flex h-9 items-center rounded-md text-sm text-muted-foreground transition-colors cursor-pointer hover:bg-secondary/60 hover:text-foreground',
+            collapsed ? 'w-9 justify-center' : 'w-full gap-2 px-3',
           )}
           title="设置"
         >
@@ -203,13 +193,9 @@ export function ChatSidebar({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
-              <div className="py-6 text-center text-xs text-muted-foreground">
-                加载中…
-              </div>
+              <div className="py-6 text-center text-xs text-muted-foreground">加载中…</div>
             ) : sessions.length === 0 ? (
-              <div className="py-6 text-center text-xs text-muted-foreground">
-                暂无会话
-              </div>
+              <div className="py-6 text-center text-xs text-muted-foreground">暂无会话</div>
             ) : (
               sessions.map((s) => (
                 <div
@@ -218,21 +204,21 @@ export function ChatSidebar({
                   tabIndex={0}
                   onClick={() => onSelect(s)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
+                    if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       onSelect(s);
                     }
                   }}
                   className={cn(
-                    "group mx-2 flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                    'group mx-2 flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
                     s.key === activeSessionKey
-                      ? "bg-secondary/70 text-foreground"
-                      : "text-foreground/80 hover:bg-secondary/50 hover:text-foreground",
+                      ? 'bg-secondary/70 text-foreground'
+                      : 'text-foreground/80 hover:bg-secondary/50 hover:text-foreground',
                   )}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] leading-tight">
-                      {stripForPreview(s.title || s.preview || "新对话")}
+                      {stripForPreview(s.title || s.preview || '新对话')}
                     </div>
                     <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
                       {formatRelativeDate(s.updated_at)}

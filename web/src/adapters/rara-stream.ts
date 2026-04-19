@@ -14,25 +14,24 @@
  * limitations under the License.
  */
 
-import type { AgentTool, AgentToolResult, StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult, StreamFn } from '@mariozechner/pi-agent-core';
+import { calculateCost, createAssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   TextContent,
   ThinkingContent,
   ToolCall,
   Usage,
-} from "@mariozechner/pi-ai";
-import { calculateCost, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
-import type { Attachment } from "@mariozechner/pi-web-ui";
+} from '@mariozechner/pi-ai';
+import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
+import type { Attachment } from '@mariozechner/pi-web-ui';
+import { Type } from '@sinclair/typebox';
 
-import { BASE_URL } from "@/api/client";
+import { BASE_URL } from '@/api/client';
 
 // ---------------------------------------------------------------------------
 // WebEvent — frames received from the rara WebSocket chat API
@@ -40,36 +39,36 @@ import { BASE_URL } from "@/api/client";
 
 /** Discriminated union of all WebSocket event types from the rara backend. */
 type WebEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "reasoning_delta"; text: string }
-  | { type: "typing" }
+  | { type: 'text_delta'; text: string }
+  | { type: 'reasoning_delta'; text: string }
+  | { type: 'typing' }
   | {
-      type: "tool_call_start";
+      type: 'tool_call_start';
       name: string;
       id: string;
       arguments: Record<string, unknown>;
     }
   | {
-      type: "tool_call_end";
+      type: 'tool_call_end';
       id: string;
       result_preview: string;
       success: boolean;
       error: string | null;
     }
-  | { type: "progress"; stage: string }
-  | { type: "done" }
-  | { type: "message"; content: string }
-  | { type: "error"; message: string }
-  | { type: "turn_rationale"; text: string }
+  | { type: 'progress'; stage: string }
+  | { type: 'done' }
+  | { type: 'message'; content: string }
+  | { type: 'error'; message: string }
+  | { type: 'turn_rationale'; text: string }
   | {
-      type: "turn_metrics";
+      type: 'turn_metrics';
       duration_ms: number;
       iterations: number;
       tool_calls: number;
       model: string;
     }
   | {
-      type: "usage";
+      type: 'usage';
       input: number;
       output: number;
       cache_read: number;
@@ -78,7 +77,7 @@ type WebEvent =
       cost: number;
       model: string;
     }
-  | { type: "phase"; phase: string };
+  | { type: 'phase'; phase: string };
 
 // ---------------------------------------------------------------------------
 // Session key — provided via callback at stream time
@@ -124,13 +123,13 @@ function buildPartial(
   usage: Usage,
 ): AssistantMessage {
   return {
-    role: "assistant",
+    role: 'assistant',
     content: [...content],
     api: model.api,
     provider: model.provider,
     model: model.id,
     usage,
-    stopReason: "stop",
+    stopReason: 'stop',
     timestamp: Date.now(),
   };
 }
@@ -145,14 +144,14 @@ export function buildWsUrl(sessionKey: string): string {
   // When BASE_URL is empty, derive from current page location
   if (!base) {
     const loc = window.location;
-    const proto = loc.protocol === "https:" ? "wss:" : "ws:";
+    const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
     base = `${proto}//${loc.host}`;
   } else {
-    base = base.replace(/^http/, "ws");
+    base = base.replace(/^http/, 'ws');
   }
 
   // Strip trailing slash
-  base = base.replace(/\/$/, "");
+  base = base.replace(/\/$/, '');
 
   return `${base}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web_ryan`;
 }
@@ -162,10 +161,10 @@ export function buildWsUrl(sessionKey: string): string {
  * Mirrors rara's `ChatContentBlock` (crates/kernel/src/channel/types.rs).
  */
 type RaraBlock =
-  | { type: "text"; text: string }
-  | { type: "image_base64"; media_type: string; data: string }
+  | { type: 'text'; text: string }
+  | { type: 'image_base64'; media_type: string; data: string }
   | {
-      type: "file_base64";
+      type: 'file_base64';
       media_type: string;
       data: string;
       filename?: string;
@@ -179,26 +178,20 @@ type RaraBlock =
  * JSON string matching the backend `InboundPayload` when images or raw
  * document bytes need to be forwarded.
  */
-function extractUserPayload(
-  context: Context,
-  attachments: Attachment[],
-): string {
+function extractUserPayload(context: Context, attachments: Attachment[]): string {
   for (let i = context.messages.length - 1; i >= 0; i--) {
     const msg = context.messages[i];
-    if (msg.role === "user") {
+    if (msg.role === 'user') {
       const hasImages =
-        typeof msg.content !== "string" &&
-        msg.content.some((c) => c.type === "image");
-      const documentAttachments = attachments.filter(
-        (a) => a.type === "document",
-      );
+        typeof msg.content !== 'string' && msg.content.some((c) => c.type === 'image');
+      const documentAttachments = attachments.filter((a) => a.type === 'document');
 
-      if (typeof msg.content === "string") {
+      if (typeof msg.content === 'string') {
         if (documentAttachments.length === 0) return msg.content;
-        const blocks: RaraBlock[] = [{ type: "text", text: msg.content }];
+        const blocks: RaraBlock[] = [{ type: 'text', text: msg.content }];
         for (const doc of documentAttachments) {
           blocks.push({
-            type: "file_base64",
+            type: 'file_base64',
             media_type: doc.mimeType,
             data: doc.content,
             filename: doc.fileName,
@@ -210,30 +203,30 @@ function extractUserPayload(
       if (!hasImages && documentAttachments.length === 0) {
         // Text-only — return plain string (backend parses as plain text)
         return msg.content
-          .filter((c): c is TextContent => c.type === "text")
+          .filter((c): c is TextContent => c.type === 'text')
           .map((c) => c.text)
-          .join("\n");
+          .join('\n');
       }
 
       // Multimodal — build JSON payload matching backend InboundPayload.
       // Backend's parse_inbound_text_frame() tries JSON first, so this
       // will be deserialized as InboundPayload { content: MessageContent }.
       const blocks: RaraBlock[] = msg.content.flatMap((c): RaraBlock[] => {
-        if (c.type === "text") {
-          return [{ type: "text", text: c.text }];
+        if (c.type === 'text') {
+          return [{ type: 'text', text: c.text }];
         }
-        if (c.type === "image") {
+        if (c.type === 'image') {
           // pi-ai uses { mimeType, data }, rara uses { media_type, data }
-          const img = c as ImageContent;
+          const img = c;
           if (img.mimeType && img.data) {
-            return [{ type: "image_base64", media_type: img.mimeType, data: img.data }];
+            return [{ type: 'image_base64', media_type: img.mimeType, data: img.data }];
           }
         }
         return [];
       });
       for (const doc of documentAttachments) {
         blocks.push({
-          type: "file_base64",
+          type: 'file_base64',
           media_type: doc.mimeType,
           data: doc.content,
           filename: doc.fileName,
@@ -242,7 +235,7 @@ function extractUserPayload(
       return JSON.stringify({ content: blocks });
     }
   }
-  return "";
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -266,9 +259,9 @@ function extractUserPayload(
 
 /** Pending result slot awaiting the matching `tool_call_end` frame. */
 interface PendingToolResult {
-  promise:  Promise<AgentToolResult<unknown>>;
-  resolve:  (result: AgentToolResult<unknown>) => void;
-  reject:   (error: Error) => void;
+  promise: Promise<AgentToolResult<unknown>>;
+  resolve: (result: AgentToolResult<unknown>) => void;
+  reject: (error: Error) => void;
   /** Cached after resolution so late `execute()` calls still get a value. */
   resolved: AgentToolResult<unknown> | null;
 }
@@ -282,10 +275,7 @@ const OPAQUE_PARAMETERS = Type.Record(Type.String(), Type.Unknown());
  * installed into `context.tools` on demand so pi-agent-core's loop finds
  * it by name and never falls back to the `Tool ${name} not found` path.
  */
-function makeRelayTool(
-  name: string,
-  pending: Map<string, PendingToolResult>,
-): AgentTool {
+function makeRelayTool(name: string, pending: Map<string, PendingToolResult>): AgentTool {
   return {
     name,
     label: name,
@@ -298,9 +288,7 @@ function makeRelayTool(
         // before pi-agent-core reaches the execute step, but if the
         // stream ends abnormally we surface a clear diagnostic instead
         // of hanging the loop forever.
-        throw new Error(
-          `No kernel result registered for tool call ${toolCallId} (${name})`,
-        );
+        throw new Error(`No kernel result registered for tool call ${toolCallId} (${name})`);
       }
       return slot.promise;
     },
@@ -335,20 +323,17 @@ export function createRaraStreamFn(
     if (!sessionKey) {
       const errorMsg = buildPartial(
         model,
-        [{ type: "text", text: "No active session key set." }],
+        [{ type: 'text', text: 'No active session key set.' }],
         emptyUsage(),
       );
-      errorMsg.stopReason = "error";
-      errorMsg.errorMessage = "No active session key set.";
-      stream.push({ type: "error", reason: "error", error: errorMsg });
+      errorMsg.stopReason = 'error';
+      errorMsg.errorMessage = 'No active session key set.';
+      stream.push({ type: 'error', reason: 'error', error: errorMsg });
       stream.end(errorMsg);
       return stream;
     }
 
-    const userPayload = extractUserPayload(
-      context,
-      getPendingAttachments?.() ?? [],
-    );
+    const userPayload = extractUserPayload(context, getPendingAttachments?.() ?? []);
     const wsUrl = buildWsUrl(sessionKey);
 
     // Accumulated content blocks for building partial messages
@@ -388,8 +373,8 @@ export function createRaraStreamFn(
     /** Find or create a text content block at the end of the content array. */
     function ensureTextBlock(): TextContent {
       const last = content[content.length - 1];
-      if (last && last.type === "text") return last;
-      const block: TextContent = { type: "text", text: "" };
+      if (last && last.type === 'text') return last;
+      const block: TextContent = { type: 'text', text: '' };
       content.push(block);
       return block;
     }
@@ -397,8 +382,8 @@ export function createRaraStreamFn(
     /** Find or create a thinking content block at the end of the content array. */
     function ensureThinkingBlock(): ThinkingContent {
       const last = content[content.length - 1];
-      if (last && last.type === "thinking") return last;
-      const block: ThinkingContent = { type: "thinking", thinking: "" };
+      if (last && last.type === 'thinking') return last;
+      const block: ThinkingContent = { type: 'thinking', thinking: '' };
       content.push(block);
       return block;
     }
@@ -409,7 +394,7 @@ export function createRaraStreamFn(
 
       ws.onopen = () => {
         // Emit start event
-        safePush({ type: "start", partial: buildPartial(model, content, currentUsage) });
+        safePush({ type: 'start', partial: buildPartial(model, content, currentUsage) });
         // Send user message
         ws.send(userPayload);
       };
@@ -423,14 +408,14 @@ export function createRaraStreamFn(
         }
 
         switch (event.type) {
-          case "text_delta": {
+          case 'text_delta': {
             const block = ensureTextBlock();
             const idx = content.indexOf(block);
-            if (block.text === "") {
+            if (block.text === '') {
               // First delta for this block — emit text_start
               block.text = event.text;
               safePush({
-                type: "text_start",
+                type: 'text_start',
                 contentIndex: idx,
                 partial: buildPartial(model, content, currentUsage),
               });
@@ -438,7 +423,7 @@ export function createRaraStreamFn(
               block.text += event.text;
             }
             safePush({
-              type: "text_delta",
+              type: 'text_delta',
               contentIndex: idx,
               delta: event.text,
               partial: buildPartial(model, content, currentUsage),
@@ -446,13 +431,13 @@ export function createRaraStreamFn(
             break;
           }
 
-          case "reasoning_delta": {
+          case 'reasoning_delta': {
             const block = ensureThinkingBlock();
             const idx = content.indexOf(block);
-            if (block.thinking === "") {
+            if (block.thinking === '') {
               block.thinking = event.text;
               safePush({
-                type: "thinking_start",
+                type: 'thinking_start',
                 contentIndex: idx,
                 partial: buildPartial(model, content, currentUsage),
               });
@@ -460,7 +445,7 @@ export function createRaraStreamFn(
               block.thinking += event.text;
             }
             safePush({
-              type: "thinking_delta",
+              type: 'thinking_delta',
               contentIndex: idx,
               delta: event.text,
               partial: buildPartial(model, content, currentUsage),
@@ -468,9 +453,9 @@ export function createRaraStreamFn(
             break;
           }
 
-          case "tool_call_start": {
+          case 'tool_call_start': {
             const toolCall: ToolCall = {
-              type: "toolCall",
+              type: 'toolCall',
               id: event.id,
               name: event.name,
               arguments: event.arguments,
@@ -488,33 +473,28 @@ export function createRaraStreamFn(
             });
             pendingToolResults.set(event.id, {
               promise,
-              resolve:  resolveFn,
-              reject:   rejectFn,
+              resolve: resolveFn,
+              reject: rejectFn,
               resolved: null,
             });
-            if (
-              !installedTools.has(event.name) &&
-              !installedNamesFromContext.has(event.name)
-            ) {
+            if (!installedTools.has(event.name) && !installedNamesFromContext.has(event.name)) {
               contextTools.push(makeRelayTool(event.name, pendingToolResults));
               installedTools.add(event.name);
             }
             safePush({
-              type: "toolcall_start",
+              type: 'toolcall_start',
               contentIndex: idx,
               partial: buildPartial(model, content, currentUsage),
             });
             break;
           }
 
-          case "tool_call_end": {
-            const idx = content.findIndex(
-              (c) => c.type === "toolCall" && c.id === event.id,
-            );
+          case 'tool_call_end': {
+            const idx = content.findIndex((c) => c.type === 'toolCall' && c.id === event.id);
             if (idx >= 0) {
               const toolCall = content[idx] as ToolCall;
               safePush({
-                type: "toolcall_end",
+                type: 'toolcall_end',
                 contentIndex: idx,
                 toolCall,
                 partial: buildPartial(model, content, currentUsage),
@@ -533,7 +513,7 @@ export function createRaraStreamFn(
             if (slot) {
               const text = event.error ?? event.result_preview;
               const result: AgentToolResult<unknown> = {
-                content: [{ type: "text", text }],
+                content: [{ type: 'text', text }],
                 details: {},
               };
               slot.resolved = result;
@@ -542,43 +522,43 @@ export function createRaraStreamFn(
             break;
           }
 
-          case "done": {
+          case 'done': {
             // Close any open text/thinking blocks
             emitEndBlocks(model, content, currentUsage, safePush);
 
             const finalMsg = buildPartial(model, content, currentUsage);
-            finalMsg.stopReason = "stop";
-            safePush({ type: "done", reason: "stop", message: finalMsg });
+            finalMsg.stopReason = 'stop';
+            safePush({ type: 'done', reason: 'stop', message: finalMsg });
             safeEnd(finalMsg);
             ws.close();
             break;
           }
 
-          case "message": {
+          case 'message': {
             // Complete message in a single frame — treat like text + done
             const block = ensureTextBlock();
             block.text += event.content;
             emitEndBlocks(model, content, currentUsage, safePush);
 
             const finalMsg = buildPartial(model, content, currentUsage);
-            finalMsg.stopReason = "stop";
-            safePush({ type: "done", reason: "stop", message: finalMsg });
+            finalMsg.stopReason = 'stop';
+            safePush({ type: 'done', reason: 'stop', message: finalMsg });
             safeEnd(finalMsg);
             ws.close();
             break;
           }
 
-          case "error": {
+          case 'error': {
             const errorMsg = buildPartial(model, content, currentUsage);
-            errorMsg.stopReason = "error";
+            errorMsg.stopReason = 'error';
             errorMsg.errorMessage = event.message;
-            safePush({ type: "error", reason: "error", error: errorMsg });
+            safePush({ type: 'error', reason: 'error', error: errorMsg });
             safeEnd(errorMsg);
             ws.close();
             break;
           }
 
-          case "usage": {
+          case 'usage': {
             // Backend reports raw token counts; cost comes from pi-ai's
             // pricing table for the session's model so per-session
             // overrides are honoured without duplicating pricing in Rust.
@@ -596,48 +576,44 @@ export function createRaraStreamFn(
           }
 
           // Informational events — ignored for now
-          case "typing":
-          case "progress":
-          case "turn_rationale":
-          case "turn_metrics":
-          case "phase":
+          case 'typing':
+          case 'progress':
+          case 'turn_rationale':
+          case 'turn_metrics':
+          case 'phase':
             break;
         }
       };
 
       ws.onerror = () => {
         const errorMsg = buildPartial(model, content, currentUsage);
-        errorMsg.stopReason = "error";
-        errorMsg.errorMessage = "WebSocket connection error";
-        safePush({ type: "error", reason: "error", error: errorMsg });
+        errorMsg.stopReason = 'error';
+        errorMsg.errorMessage = 'WebSocket connection error';
+        safePush({ type: 'error', reason: 'error', error: errorMsg });
         safeEnd(errorMsg);
-        rejectPendingToolResults(pendingToolResults, "WebSocket connection error");
+        rejectPendingToolResults(pendingToolResults, 'WebSocket connection error');
       };
 
       ws.onclose = () => {
         // Ensure stream is ended if WS closes unexpectedly
         if (!streamEnded) {
           const finalMsg = buildPartial(model, content, currentUsage);
-          finalMsg.stopReason = content.length > 0 ? "stop" : "error";
+          finalMsg.stopReason = content.length > 0 ? 'stop' : 'error';
           if (content.length > 0) {
-            safePush({ type: "done", reason: "stop", message: finalMsg });
+            safePush({ type: 'done', reason: 'stop', message: finalMsg });
           } else {
-            finalMsg.errorMessage = "WebSocket closed unexpectedly";
-            safePush({ type: "error", reason: "error", error: finalMsg });
+            finalMsg.errorMessage = 'WebSocket closed unexpectedly';
+            safePush({ type: 'error', reason: 'error', error: finalMsg });
           }
           safeEnd(finalMsg);
         }
-        rejectPendingToolResults(
-          pendingToolResults,
-          "WebSocket closed before tool result",
-        );
+        rejectPendingToolResults(pendingToolResults, 'WebSocket closed before tool result');
       };
     } catch (err) {
       const errorMsg = buildPartial(model, content, currentUsage);
-      errorMsg.stopReason = "error";
-      errorMsg.errorMessage =
-        err instanceof Error ? err.message : "Failed to connect";
-      stream.push({ type: "error", reason: "error", error: errorMsg });
+      errorMsg.stopReason = 'error';
+      errorMsg.errorMessage = err instanceof Error ? err.message : 'Failed to connect';
+      stream.push({ type: 'error', reason: 'error', error: errorMsg });
       stream.end(errorMsg);
     }
 
@@ -650,10 +626,7 @@ export function createRaraStreamFn(
  * `ws.onerror` / `ws.onclose` so pi-agent-core's loop sees a concrete
  * rejection rather than hanging on an abandoned `tool_call_start`.
  */
-function rejectPendingToolResults(
-  pending: Map<string, PendingToolResult>,
-  reason: string,
-): void {
+function rejectPendingToolResults(pending: Map<string, PendingToolResult>, reason: string): void {
   for (const slot of pending.values()) {
     if (slot.resolved === null) slot.reject(new Error(reason));
   }
@@ -671,16 +644,16 @@ function emitEndBlocks(
 ): void {
   for (let i = 0; i < content.length; i++) {
     const block = content[i];
-    if (block.type === "text" && block.text) {
+    if (block.type === 'text' && block.text) {
       safePush({
-        type: "text_end",
+        type: 'text_end',
         contentIndex: i,
         content: block.text,
         partial: buildPartial(model, content, usage),
       });
-    } else if (block.type === "thinking" && block.thinking) {
+    } else if (block.type === 'thinking' && block.thinking) {
       safePush({
-        type: "thinking_end",
+        type: 'thinking_end',
         contentIndex: i,
         content: block.thinking,
         partial: buildPartial(model, content, usage),

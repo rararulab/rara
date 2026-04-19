@@ -14,17 +14,12 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
-import {
-  ChevronDown,
-  Loader2,
-  PanelRightClose,
-  PanelRightOpen,
-  Plus,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import type { DockStore } from "@/hooks/use-dock-store";
+import { ChevronDown, Loader2, PanelRightClose, PanelRightOpen, Plus } from 'lucide-react';
+import { useState } from 'react';
+
+import { Button } from '@/components/ui/button';
+import type { DockStore } from '@/hooks/use-dock-store';
+import { cn } from '@/lib/utils';
 
 interface DockHeaderProps {
   store: DockStore;
@@ -32,16 +27,10 @@ interface DockHeaderProps {
   onToggleRightPanel: () => void;
 }
 
-export default function DockHeader({
-  store,
-  rightPanelOpen,
-  onToggleRightPanel,
-}: DockHeaderProps) {
+export default function DockHeader({ store, rightPanelOpen, onToggleRightPanel }: DockHeaderProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const activeSession = store.sessions.find(
-    (s) => s.id === store.activeSessionId,
-  );
+  const activeSession = store.sessions.find((s) => s.id === store.activeSessionId);
 
   return (
     <div className="flex shrink-0 items-center justify-between border-b border-border/40 bg-background/50 px-4 py-2 backdrop-blur-sm">
@@ -52,29 +41,23 @@ export default function DockHeader({
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium hover:bg-accent/50 transition-colors"
             onClick={() => setDropdownOpen(!dropdownOpen)}
           >
-            <span className="max-w-[200px] truncate">
-              {activeSession?.title || "No session"}
-            </span>
+            <span className="max-w-[200px] truncate">{activeSession?.title || 'No session'}</span>
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
           </button>
 
           {dropdownOpen && (
             <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setDropdownOpen(false)}
-              />
+              <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
               <div className="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-lg border border-border/60 bg-card p-1 shadow-lg">
                 {store.sessions.map((session) => (
                   <button
                     key={session.id}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50",
-                      session.id === store.activeSessionId &&
-                        "bg-accent/30 font-medium",
+                      'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50',
+                      session.id === store.activeSessionId && 'bg-accent/30 font-medium',
                     )}
                     onClick={() => {
-                      store.selectSession(session.id);
+                      void store.selectSession(session.id);
                       setDropdownOpen(false);
                     }}
                   >
@@ -88,7 +71,7 @@ export default function DockHeader({
                 <button
                   className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                   onClick={() => {
-                    store.newSession();
+                    void store.newSession();
                     setDropdownOpen(false);
                   }}
                 >
@@ -120,7 +103,7 @@ export default function DockHeader({
           size="icon"
           className="h-8 w-8"
           onClick={onToggleRightPanel}
-          title={rightPanelOpen ? "Close panel" : "Open panel"}
+          title={rightPanelOpen ? 'Close panel' : 'Open panel'}
         >
           {rightPanelOpen ? (
             <PanelRightClose className="h-4 w-4" />
