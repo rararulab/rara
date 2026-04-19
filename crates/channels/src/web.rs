@@ -174,6 +174,11 @@ pub enum WebEvent {
         history:         Vec<rara_dock::DockHistoryEntry>,
         selected_anchor: Option<String>,
     },
+    /// Kernel has persisted the turn's execution trace; the row is now
+    /// retrievable by `trace_id`. Forwarded so future frontend surfaces
+    /// (e.g. trace detail modal) can embed the ID without an extra
+    /// round-trip; the current web UI ignores unknown events gracefully.
+    TraceReady { trace_id: String },
     /// Stream completed (no more deltas).
     Done,
 }
@@ -347,6 +352,7 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::ToolCallLimitResolved { .. } => None, // informational only
         StreamEvent::LoopBreakerTriggered { .. } => None, // informational only
         StreamEvent::ToolOutput { .. } => None,    // live preview, not persisted
+        StreamEvent::TraceReady { trace_id } => Some(WebEvent::TraceReady { trace_id }),
     }
 }
 

@@ -1024,6 +1024,19 @@ pub enum StreamEvent {
         /// Cumulative tool calls made so far in this turn.
         tool_calls_made: usize,
     },
+    /// The kernel has persisted the turn's
+    /// [`ExecutionTrace`](crate::trace::ExecutionTrace) and the row is now
+    /// retrievable via [`TraceService::get`](crate::trace::TraceService::get).
+    ///
+    /// Emitted exactly once per turn, after `TurnMetrics`/`TurnUsage` and
+    /// before stream close. Channel adapters forward this to their UIs so
+    /// buttons / links can embed the `trace_id` without each channel
+    /// independently building and saving a trace.
+    TraceReady {
+        /// ULID assigned by
+        /// [`TraceService::save`](crate::trace::TraceService::save).
+        trace_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,18 +1058,50 @@ struct StreamEntry {
 /// Created by [`StreamHub::open`]. The agent emits events via
 /// [`emit`](Self::emit). Cloneable so it can be shared with tool
 /// implementations that need to emit real-time output.
+///
+/// The optional `trace_builder` field lets the kernel attach a
+/// [`TraceBuilder`](crate::trace::TraceBuilder) that observes every emitted
+/// event in addition to the broadcast fanout. This makes trace
+/// construction a kernel-owned concern — channel adapters never touch it.
 #[derive(Clone)]
 pub struct StreamHandle {
-    stream_id: StreamId,
-    tx:        broadcast::Sender<StreamEvent>,
+    stream_id:     StreamId,
+    tx:            broadcast::Sender<StreamEvent>,
+    trace_builder: Option<Arc<crate::trace::TraceBuilder>>,
 }
 
 impl StreamHandle {
     /// Get the stream ID.
     pub fn stream_id(&self) -> &StreamId { &self.stream_id }
 
-    /// Emit a stream event. Silently drops if no subscribers.
-    pub fn emit(&self, event: StreamEvent) { let _ = self.tx.send(event); }
+    /// Attach a trace builder. All subsequent [`emit`](Self::emit) calls
+    /// will feed the builder before broadcasting.
+    ///
+    /// Must be called before the agent loop starts; attaching mid-turn
+    /// would leave early events (e.g. `TurnStarted`) unobserved.
+    #[must_use]
+    pub fn with_trace_builder(mut self, builder: Arc<crate::trace::TraceBuilder>) -> Self {
+        self.trace_builder = Some(builder);
+        self
+    }
+
+    /// Emit a stream event.
+    ///
+    /// Order of effects:
+    /// 1. Attached [`TraceBuilder`](crate::trace::TraceBuilder) observes the
+    ///    event (synchronous, mutex-guarded, no I/O).
+    /// 2. Event is sent on the broadcast channel — silently dropped if there
+    ///    are no subscribers (fire-and-forget UX telemetry).
+    ///
+    /// The observer runs first so that a subscriber reacting to the
+    /// broadcast (e.g. the Telegram forwarder acting on `TurnMetrics`)
+    /// cannot race with a later `finalize` and see stale builder state.
+    pub fn emit(&self, event: StreamEvent) {
+        if let Some(ref b) = self.trace_builder {
+            b.observe(&event);
+        }
+        let _ = self.tx.send(event);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,7 +1181,11 @@ impl StreamHub {
             .entry(session_key)
             .or_default()
             .push(stream_id.clone());
-        StreamHandle { stream_id, tx }
+        StreamHandle {
+            stream_id,
+            tx,
+            trace_builder: None,
+        }
     }
 
     /// Close a stream by its ID.

@@ -315,3 +315,22 @@ Child/worker agents have continuation disabled (`max_continuations: Some(0)`).
 - Do NOT increase `max_continuations` above 20 — runaway continuation loops waste tokens and produce incoherent output
 - Do NOT enable continuation for worker/child agents — only the root user-facing agent should self-continue
 - Do NOT bypass the text-token stripping — `CONTINUE_WORK` must never reach the user
+
+---
+
+## Execution Trace Ownership — `trace/`
+
+### The Invariant
+
+The kernel is the **sole owner** of `ExecutionTrace` assembly and persistence. The turn driver in `kernel.rs` constructs one `TraceBuilder` per turn, attaches it to the `StreamHandle` via `with_trace_builder`, and on turn completion calls `TraceService::save` and emits `StreamEvent::TraceReady { trace_id }` before closing the stream.
+
+Flow:
+- `trace/builder.rs` — `TraceBuilder::observe(&StreamEvent)` accumulates model, tokens, reasoning preview, plan steps, tools, rationale. Shared with `StreamHandle` via `Arc` so every `emit` feeds the builder in addition to broadcasting.
+- `trace/mod.rs` — `ExecutionTrace`, `ToolTraceEntry`, `TraceService` (SQLite persistence, 30-day retention).
+- `trace/tool_display.rs` — pure formatting helpers (tool name shortening, argument summary) shared by the builder and channel adapters.
+
+### What NOT To Do
+
+- Do NOT construct `ExecutionTrace` literals in channel adapters — trace content must be built from the kernel's event stream, not from channel-local bookkeeping. Channels receive `StreamEvent::TraceReady` and look up the persisted row via `TraceService::get`.
+- Do NOT call `TraceService::save` outside `kernel.rs`'s turn driver — double-saves create duplicate rows and desynchronize the `TraceReady` signal.
+- Do NOT attach the `TraceBuilder` to the `StreamHandle` mid-turn — early events (`TurnStarted`, first `UsageUpdate`) would be dropped, producing an incomplete trace.
