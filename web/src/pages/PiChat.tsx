@@ -340,6 +340,11 @@ export default function PiChat() {
   const resetInflight = useRef(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  // Active session metadata — surfaced in the main-area header so the
+  // current chat's title sits above its messages (kimi-style). Updated
+  // from switchSession / newSession / initial mount; a refetch fires
+  // after the first send so backend-assigned titles appear promptly.
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   // Bump to force ChatSidebar to refetch the session list (e.g. after
   // creating a new session or sending the first message of a fresh one).
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
@@ -365,6 +370,7 @@ export default function PiChat() {
     if (!agent) return;
     agent.clearMessages();
     agent.sessionId = session.key;
+    setActiveSession(session);
     setShowWelcome((session.message_count ?? 0) === 0);
 
     // Restore the session's persisted model + thinking-level so the
@@ -602,6 +608,7 @@ export default function PiChat() {
       } else {
         initialSession = await api.post<ChatSession>("/api/v1/chat/sessions", {});
       }
+      setActiveSession(initialSession);
       setShowWelcome((initialSession.message_count ?? 0) === 0);
       // 5. Create the Agent with rara's WebSocket-backed stream function.
       //    The streamFn reads agent.sessionId at call time to get the active session key.
@@ -684,6 +691,16 @@ export default function PiChat() {
           // Nudge the sidebar to refetch so the fresh session's new
           // title and preview surface in the history list.
           setSidebarRefreshKey((k) => k + 1);
+          // Refetch the active session so the backend-assigned title
+          // lands in the header above the messages. Fire-and-forget;
+          // a retry happens on the next send if the backend hadn't
+          // finished assigning a title yet.
+          api
+            .get<ChatSession>(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
+            .then((fresh) => {
+              if (agentRef.current?.sessionId === key) setActiveSession(fresh);
+            })
+            .catch(() => { /* non-fatal */ });
 
           // Skip the PATCH when `agent.state.model` is pi-agent-core's
           // placeholder default (id/provider = "unknown"). Persisting it
@@ -758,6 +775,17 @@ export default function PiChat() {
         refreshKey={sidebarRefreshKey}
       />
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* Session title header — shows the current conversation's
+            title above its messages (kimi-style). Hidden during the
+            welcome state since the RARA wordmark already serves as
+            the brand marker there. */}
+        {activeSession && !showWelcome && !isInitializing && (
+          <div className="flex h-11 shrink-0 items-center border-b border-border/30 bg-background/30 px-5 backdrop-blur-sm">
+            <span className="truncate text-sm font-medium text-foreground/85">
+              {activeSession.title || activeSession.preview || "新对话"}
+            </span>
+          </div>
+        )}
         {/* Chat panel container — takes remaining vertical space. */}
         <div ref={containerRef} className="min-h-0 flex-1 w-full" />
         {/*
