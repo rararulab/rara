@@ -109,7 +109,15 @@ export type EventKind =
   | "thinking"
   | "tool_use"
   | "tool_result"
-  | "error";
+  | "error"
+  /**
+   * Live-only placeholder inserted right after the user submits a
+   * message so the UI gives immediate feedback while the kernel is
+   * setting up the turn / dispatching the LLM call. Cleared as soon as
+   * the first real delta / tool call arrives, or when the turn ends.
+   * Never appears in historical turn projections.
+   */
+  | "in_progress";
 
 /**
  * One renderable row in the session timeline.
