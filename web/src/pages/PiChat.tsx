@@ -63,7 +63,7 @@ import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
-import { decidePostDeleteAction } from '@/lib/session-fallback';
+import { useSessionDelete } from '@/hooks/use-session-delete';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
 
@@ -728,30 +728,16 @@ export default function PiChat() {
     setSidebarRefreshKey((k) => k + 1);
   }, [switchSession]);
 
-  /** Handle session deletion from the sidebar. */
-  const handleSessionDeleted = useCallback(
-    (deletedKey: string, fallback: ChatSession | null) => {
-      // Delegated to a pure decision helper so the "don't
-      // regenerate a session while neighbours still exist"
-      // invariant is covered by a unit test.
-      const action = decidePostDeleteAction({
-        activeSessionKey: activeSession?.key,
-        deletedKey,
-        fallback,
-      });
-      switch (action.kind) {
-        case 'noop':
-          return;
-        case 'switch':
-          void switchSession(action.session);
-          return;
-        case 'create-new':
-          void newSession();
-          return;
-      }
-    },
-    [activeSession, newSession, switchSession],
-  );
+  /**
+   * Handle session deletion from the sidebar. The decision + dispatch
+   * wiring lives in `useSessionDelete` so both the pure decision and
+   * the switch/create-new side effects are covered by unit tests.
+   */
+  const handleSessionDeleted = useSessionDelete<ChatSession>({
+    activeSessionKey: activeSession?.key,
+    switchSession,
+    newSession,
+  });
 
   /**
    * Reset the session's pinned (model, provider, thinking) triple so the
