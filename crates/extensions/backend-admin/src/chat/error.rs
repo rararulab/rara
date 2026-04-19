@@ -38,6 +38,10 @@ pub enum ChatError {
     /// A session storage error occurred.
     #[snafu(display("session error: {message}"))]
     SessionError { message: String },
+
+    /// The requested resource does not exist (generic 404).
+    #[snafu(display("not found: {message}"))]
+    NotFound { message: String },
 }
 
 /// Convert a sessions-layer error into a chat-domain error.
@@ -68,7 +72,9 @@ impl From<rara_sessions::error::SessionError> for ChatError {
 impl axum::response::IntoResponse for ChatError {
     fn into_response(self) -> axum::response::Response {
         let status = match &self {
-            Self::SessionNotFound { .. } => axum::http::StatusCode::NOT_FOUND,
+            Self::SessionNotFound { .. } | Self::NotFound { .. } => {
+                axum::http::StatusCode::NOT_FOUND
+            }
             Self::InvalidRequest { .. } => axum::http::StatusCode::BAD_REQUEST,
             Self::SessionError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         };

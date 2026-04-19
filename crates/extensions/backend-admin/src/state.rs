@@ -43,6 +43,7 @@ impl BackendState {
     pub async fn init(
         session_index: Arc<dyn rara_kernel::session::SessionIndex>,
         tape_service: rara_kernel::memory::TapeService,
+        trace_service: rara_kernel::trace::TraceService,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,
         model_lister: rara_kernel::llm::LlmModelListerRef,
@@ -55,6 +56,7 @@ impl BackendState {
         let session_service = crate::chat::service::SessionService::new(
             session_index,
             tape_service,
+            trace_service,
             settings_provider,
             model_lister,
         );

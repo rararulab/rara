@@ -40,6 +40,7 @@ use axum::{
 use rara_kernel::{
     cascade::CascadeTrace,
     channel::types::{ChannelType, ChatMessage},
+    trace::ExecutionTrace,
 };
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
 use serde::{Deserialize, Deserializer};
@@ -264,6 +265,7 @@ fn session_routes(service: SessionService) -> OpenApiRouter {
         .routes(routes!(get_session, update_session, delete_session))
         .routes(routes!(list_messages, clear_messages))
         .routes(routes!(get_cascade_trace))
+        .routes(routes!(get_execution_trace))
         .routes(routes!(bind_channel))
         .routes(routes!(get_channel_binding))
         .with_state(service)
@@ -511,6 +513,36 @@ async fn get_cascade_trace(
 ) -> Result<Json<CascadeTrace>, ChatError> {
     let trace = service
         .get_cascade_trace(&parse_session_key(&key)?, q.seq)
+        .await?;
+    Ok(Json(trace))
+}
+
+/// `GET /api/v1/chat/sessions/{key}/execution-trace` — get the
+/// persisted [`ExecutionTrace`] for the turn that produced the message
+/// at `seq`. Mirrors the Telegram inline-button payload so the web UI
+/// can show the same rationale / thinking / plan / tools / usage
+/// summary without re-running the agent loop.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{key}/execution-trace",
+    tag = "chat",
+    params(
+        ("key" = String, Path, description = "Session key"),
+        ("seq" = usize, Query, description = "Message sequence number to trace"),
+    ),
+    responses(
+        (status = 200, description = "Execution trace", body = serde_json::Value),
+        (status = 404, description = "No trace recorded for the given message"),
+    )
+)]
+#[instrument(skip(service))]
+async fn get_execution_trace(
+    State(service): State<SessionService>,
+    Path(key): Path<String>,
+    Query(q): Query<GetTraceQuery>,
+) -> Result<Json<ExecutionTrace>, ChatError> {
+    let trace = service
+        .get_execution_trace(&parse_session_key(&key)?, q.seq)
         .await?;
     Ok(Json(trace))
 }

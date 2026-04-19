@@ -53,11 +53,12 @@ void extractDocumentTool;
 import { RaraStorageBackend } from '@/adapters/rara-storage';
 import { createRaraStreamFn } from '@/adapters/rara-stream';
 import { api, settingsApi } from '@/api/client';
-import type { CascadeTrace } from '@/api/kernel-types';
+import type { CascadeTrace, ExecutionTrace } from '@/api/kernel-types';
 import type { ProviderInfo } from '@/api/types';
 import type { ChatSession, ChatMessageData, ThinkingLevel } from '@/api/types';
 import { AlmaCaret } from '@/components/AlmaCaret';
 import { CascadeModal } from '@/components/chat/CascadeModal';
+import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
@@ -361,29 +362,46 @@ function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
 }
 
 /**
- * DOM event dispatched by the Lit assistant-message renderer when the
- * user clicks the "📊 详情" button. The React layer listens on
- * `document` and calls the trace endpoint with the carried `seq`
- * directly — no timestamp indirection (see {@link assistantSeqByRef}).
+ * DOM events dispatched by the Lit assistant-message renderer when the
+ * user clicks one of the per-turn detail buttons. Both carry the same
+ * `seq` payload (resolved via {@link assistantSeqByRef}) and are
+ * handled by parallel React effects below.
+ *
+ * Two separate events rather than one discriminated payload so each
+ * handler can own its own modal state without switching on a tag.
  */
 const CASCADE_TRACE_EVENT = 'rara:cascade-trace';
+const EXECUTION_TRACE_EVENT = 'rara:execution-trace';
 
-interface CascadeTraceEventDetail {
+interface TraceEventDetail {
   seq: number;
 }
 
 /**
  * Register a Lit message renderer that wraps pi-web-ui's built-in
- * `<assistant-message>` element and appends a "📊 详情" button. The
- * button dispatches a bubbling {@link CASCADE_TRACE_EVENT} carrying the
- * persisted `seq` directly — resolved via {@link assistantSeqByRef}
- * keyed by the rendered message's object identity.
+ * `<assistant-message>` element and appends two trace-detail buttons:
+ *
+ * - "📊 详情" → dispatches {@link EXECUTION_TRACE_EVENT}, opening a
+ *   high-level per-turn summary (rationale / thinking / plan / tools /
+ *   usage) matching Telegram's "📊 详情" button.
+ * - "🔍 Cascade" → dispatches {@link CASCADE_TRACE_EVENT}, opening the
+ *   tick-level tape replay (kept for debugging the agent loop; mirrors
+ *   Telegram's "🔍 Cascade" button).
+ *
+ * Both dispatch a bubbling CustomEvent carrying the persisted `seq`
+ * resolved via {@link assistantSeqByRef}; the React layer below owns
+ * the two modals separately.
  *
  * The renderer must rebuild the same `toolResultsById` lookup that
  * `MessageList` normally hands `<assistant-message>` — otherwise paired
  * tool results would not render under the call. The `agentResolver`
  * closure gives us that map at click time without re-registering on
  * every message-list change.
+ *
+ * Alignment note: the button row uses `pl-[2.75rem]` to match the
+ * assistant-message bubble's left padding (set in `index.css` to make
+ * room for rara's avatar). Without this the buttons would stick to the
+ * container's left edge and visually detach from the bubble above.
  *
  * Skips placeholder turns with no mapped seq (e.g. mid-stream assistant
  * frames not yet persisted) — there's no row to ask the trace endpoint
@@ -397,7 +415,7 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
   registerMessageRenderer('assistant', {
     render(message) {
       const seq = assistantSeqByRef.get(message);
-      const showButton = seq !== undefined;
+      const showButtons = seq !== undefined;
       // Rebuild the toolResult lookup from current agent state. Cheap
       // (a single linear scan) and avoids stale-closure bugs because the
       // resolver always hits the live agent ref.
@@ -411,6 +429,17 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
           }
         }
       }
+      const dispatchTrace = (eventName: string) => (e: Event) => {
+        e.stopPropagation();
+        if (seq === undefined) return;
+        const detail: TraceEventDetail = { seq };
+        document.dispatchEvent(
+          new CustomEvent<TraceEventDetail>(eventName, {
+            detail,
+            bubbles: true,
+          }),
+        );
+      };
       return html`
         <div class="rara-assistant-with-trace">
           <assistant-message
@@ -420,27 +449,26 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
             .toolResultsById=${resultByCallId}
             .hideToolCalls=${false}
           ></assistant-message>
-          ${showButton
+          ${showButtons
             ? html`
-                <div class="mt-1 flex justify-start pl-1">
+                <div class="mt-1 flex justify-start gap-1 pl-[2.75rem]">
                   <button
                     type="button"
-                    class="rara-cascade-trigger inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                    title="查看本轮 cascade 执行详情"
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      if (seq === undefined) return;
-                      const detail: CascadeTraceEventDetail = { seq };
-                      document.dispatchEvent(
-                        new CustomEvent<CascadeTraceEventDetail>(CASCADE_TRACE_EVENT, {
-                          detail,
-                          bubbles: true,
-                        }),
-                      );
-                    }}
+                    class="rara-trace-trigger inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                    title="查看本轮执行摘要（rationale / thinking / plan / tools / usage）"
+                    @click=${dispatchTrace(EXECUTION_TRACE_EVENT)}
                   >
                     <span aria-hidden>📊</span>
                     <span>详情</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="rara-cascade-trigger inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                    title="查看本轮 cascade 执行详情（tick-level tape replay）"
+                    @click=${dispatchTrace(CASCADE_TRACE_EVENT)}
+                  >
+                    <span aria-hidden>🔍</span>
+                    <span>Cascade</span>
                   </button>
                 </div>
               `
@@ -506,6 +534,13 @@ export default function PiChat() {
   const [cascadeTrace, setCascadeTrace] = useState<CascadeTrace | null>(null);
   const [cascadeLoading, setCascadeLoading] = useState(false);
   const [cascadeError, setCascadeError] = useState<string | null>(null);
+  // Execution-trace modal state — populated from the new "📊 详情"
+  // button (kept distinct from the cascade viewer so the user can pick
+  // the right lens per-click).
+  const [execTraceOpen, setExecTraceOpen] = useState(false);
+  const [execTrace, setExecTrace] = useState<ExecutionTrace | null>(null);
+  const [execTraceLoading, setExecTraceLoading] = useState(false);
+  const [execTraceError, setExecTraceError] = useState<string | null>(null);
 
   // Clear any stale reset-error banner whenever the model dialog is
   // closed — regardless of close path (backdrop click, successful
@@ -522,7 +557,7 @@ export default function PiChat() {
   // inline state in the modal rather than swallowing the click silently.
   useEffect(() => {
     const handler = (ev: Event) => {
-      const ce = ev as CustomEvent<CascadeTraceEventDetail>;
+      const ce = ev as CustomEvent<TraceEventDetail>;
       const seq = ce.detail?.seq;
       const sessionKey = agentRef.current?.sessionId;
       if (seq === undefined || !sessionKey) return;
@@ -547,6 +582,40 @@ export default function PiChat() {
     };
     document.addEventListener(CASCADE_TRACE_EVENT, handler);
     return () => document.removeEventListener(CASCADE_TRACE_EVENT, handler);
+  }, []);
+
+  // Bridge for the "📊 详情" button — fetches the persisted
+  // `ExecutionTrace` for the clicked turn. A 404 is surfaced as an
+  // inline error row rather than silently closing the modal so the
+  // user understands why the view is empty (e.g. legacy turn recorded
+  // before trace persistence existed).
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const ce = ev as CustomEvent<TraceEventDetail>;
+      const seq = ce.detail?.seq;
+      const sessionKey = agentRef.current?.sessionId;
+      if (seq === undefined || !sessionKey) return;
+      setExecTraceOpen(true);
+      setExecTrace(null);
+      setExecTraceError(null);
+      setExecTraceLoading(true);
+      api
+        .get<ExecutionTrace>(
+          `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/execution-trace?seq=${seq}`,
+        )
+        .then((trace) => {
+          setExecTrace(trace);
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setExecTraceError(msg);
+        })
+        .finally(() => {
+          setExecTraceLoading(false);
+        });
+    };
+    document.addEventListener(EXECUTION_TRACE_EVENT, handler);
+    return () => document.removeEventListener(EXECUTION_TRACE_EVENT, handler);
   }, []);
 
   /** Switch the agent to a different session, loading its history. */
@@ -1089,6 +1158,13 @@ export default function PiChat() {
         loading={cascadeLoading}
         error={cascadeError}
         onClose={() => setCascadeOpen(false)}
+      />
+      <ExecutionTraceModal
+        open={execTraceOpen}
+        trace={execTrace}
+        loading={execTraceLoading}
+        error={execTraceError}
+        onClose={() => setExecTraceOpen(false)}
       />
     </div>
   );

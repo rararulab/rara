@@ -36,6 +36,7 @@ use rara_kernel::{
     llm::{Message, Role},
     memory::{TapEntry, TapEntryKind, TapeService},
     session::SessionIndexRef,
+    trace::{ExecutionTrace, TraceService},
 };
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
 use serde_json::Value;
@@ -330,6 +331,10 @@ pub struct SessionService {
     session_index:     SessionIndexRef,
     /// Tape service for append-only session recording.
     tape_service:      TapeService,
+    /// Persisted per-turn execution traces. Used by
+    /// [`Self::get_execution_trace`] to resolve a clicked assistant
+    /// message's seq back to its owning turn's trace.
+    trace_service:     TraceService,
     /// Cached catalog of models fetched from the LLM provider.
     model_catalog:     ModelCatalog,
     /// Settings provider for reading and writing flat KV settings.
@@ -342,12 +347,14 @@ impl SessionService {
     pub fn new(
         session_index: SessionIndexRef,
         tape_service: TapeService,
+        trace_service: TraceService,
         settings_provider: Arc<dyn SettingsProvider>,
         model_lister: rara_kernel::llm::LlmModelListerRef,
     ) -> Self {
         Self {
             session_index,
             tape_service,
+            trace_service,
             model_catalog: ModelCatalog::new(model_lister),
             settings_provider,
         }
@@ -616,6 +623,94 @@ impl SessionService {
         let message_id = format!("{}-{}", key, message_seq);
         let trace = build_cascade(turn_entries, &message_id);
         Ok(trace)
+    }
+
+    /// Fetch the persisted [`ExecutionTrace`] for a specific turn.
+    ///
+    /// The turn is identified by the seq of any message produced within
+    /// it (most commonly the assistant reply the user clicked on). We
+    /// find the owning user-message tape entry, read its
+    /// `rara_message_id` metadata, and look the trace up via
+    /// [`TraceService::find_trace_by_message_id`].
+    ///
+    /// Returns `InvalidRequest` when no user message precedes `seq` and
+    /// `NotFound` when no trace has been persisted for the resolved
+    /// turn (e.g. a legacy session recorded before trace storage existed).
+    #[instrument(skip(self))]
+    pub async fn get_execution_trace(
+        &self,
+        key: &SessionKey,
+        message_seq: usize,
+    ) -> Result<ExecutionTrace, ChatError> {
+        let tape_name = key.to_string();
+        let entries =
+            self.tape_service
+                .entries(&tape_name)
+                .await
+                .map_err(|e| ChatError::SessionError {
+                    message: format!("failed to read tape: {e}"),
+                })?;
+
+        // Walk the tape mirroring `tap_entries_to_chat_messages`'s seq
+        // counter so we can correlate `message_seq` back to the specific
+        // user-message TapEntry. We keep that entry's `metadata`
+        // (which is where `rara_message_id` is recorded) rather than
+        // re-deriving it — the kernel writes it at turn start and it
+        // uniquely keys the persisted trace row.
+        let i_seq = message_seq as i64;
+        let mut seq: i64 = 0;
+        let mut last_user_entry: Option<&TapEntry> = None;
+        for entry in &entries {
+            match entry.kind {
+                TapEntryKind::Message => {
+                    if let Ok(msg) = serde_json::from_value::<Message>(entry.payload.clone()) {
+                        seq += 1;
+                        if seq > i_seq {
+                            break;
+                        }
+                        if matches!(msg.role, Role::User) {
+                            last_user_entry = Some(entry);
+                        }
+                    }
+                }
+                TapEntryKind::ToolCall | TapEntryKind::ToolResult => {
+                    seq += 1;
+                    if seq > i_seq {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(user_entry) = last_user_entry else {
+            return Err(ChatError::InvalidRequest {
+                message: format!("no user message found for seq {message_seq}"),
+            });
+        };
+
+        let rara_message_id = user_entry
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("rara_message_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| ChatError::NotFound {
+                message: format!(
+                    "user message at seq {message_seq} has no rara_message_id metadata"
+                ),
+            })?;
+
+        let trace = self
+            .trace_service
+            .find_trace_by_message_id(rara_message_id)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to query execution trace: {e}"),
+            })?;
+
+        trace.map(|(_, t)| t).ok_or_else(|| ChatError::NotFound {
+            message: format!("no execution trace recorded for message {rara_message_id}"),
+        })
     }
 
     // -- channel bindings ---------------------------------------------------
