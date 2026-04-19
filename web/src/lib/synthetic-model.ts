@@ -28,7 +28,11 @@ import type { Model } from '@mariozechner/pi-ai';
 export function syntheticModel(
   providerId: string,
   modelId: string,
-  options?: { baseUrl?: string; contextWindow?: number; name?: string },
+  options?: {
+    baseUrl?: string | undefined;
+    contextWindow?: number | undefined;
+    name?: string | undefined;
+  },
 ): Model<any> {
   const model: Model<any> = {
     id: modelId,

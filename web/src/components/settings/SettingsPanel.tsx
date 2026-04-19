@@ -233,8 +233,9 @@ function getProviderList(settings: SettingsMap | undefined): ProviderDef[] {
   if (settings) {
     for (const key of Object.keys(settings)) {
       const match = key.match(/^llm\.providers\.([^.]+)\./);
-      if (match && !BUILTIN_PROVIDER_IDS.has(match[1])) {
-        customKeys.add(match[1]);
+      const id = match?.[1];
+      if (id && !BUILTIN_PROVIDER_IDS.has(id)) {
+        customKeys.add(id);
       }
     }
   }
@@ -273,10 +274,10 @@ function KvField({
   settingKey: string;
   label: string;
   value: string;
-  placeholder?: string;
+  placeholder?: string | undefined;
   onChange: (value: string) => void;
-  sensitive?: boolean;
-  description?: string;
+  sensitive?: boolean | undefined;
+  description?: string | undefined;
 }) {
   const [visible, setVisible] = useState(false);
 
@@ -595,7 +596,11 @@ const SETTINGS_PAGES: readonly SettingsPage[] = [
  * owned locally so the panel can be embedded either in a floating modal or
  * in a fullscreen route without coupling to the router.
  */
-export default function SettingsPanel({ initialSection }: { initialSection?: SettingsPage }) {
+export default function SettingsPanel({
+  initialSection,
+}: {
+  initialSection?: SettingsPage | undefined;
+}) {
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() =>
@@ -648,6 +653,7 @@ export default function SettingsPanel({ initialSection }: { initialSection?: Set
       }, 3000);
       return () => window.clearTimeout(timer);
     }
+    return undefined;
   }, [groupToasts]);
 
   // Batch save mutation for a group of keys

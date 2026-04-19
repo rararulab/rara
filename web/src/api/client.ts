@@ -177,19 +177,19 @@ export const api = {
   post: <T>(path: string, body?: unknown, options?: ApiOptions) =>
     request<T>(path, {
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
       ...(options?.signal ? { signal: options.signal } : {}),
     }),
   put: <T>(path: string, body?: unknown, options?: ApiOptions) =>
     request<T>(path, {
       method: 'PUT',
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
       ...(options?.signal ? { signal: options.signal } : {}),
     }),
   patch: <T>(path: string, body?: unknown, options?: ApiOptions) =>
     request<T>(path, {
       method: 'PATCH',
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
       ...(options?.signal ? { signal: options.signal } : {}),
     }),
   del: <T>(path: string, options?: ApiOptions) =>

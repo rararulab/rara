@@ -35,5 +35,5 @@ export const LOADING_HINTS: readonly string[] = [
 /** Return a random hint from {@link LOADING_HINTS}. */
 export function randomLoadingHint(): string {
   const idx = Math.floor(Math.random() * LOADING_HINTS.length);
-  return LOADING_HINTS[idx] ?? LOADING_HINTS[0];
+  return LOADING_HINTS[idx] ?? LOADING_HINTS[0] ?? '';
 }

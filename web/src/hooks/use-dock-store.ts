@@ -286,11 +286,13 @@ export function useDockStore(): DockStore {
       if (resp.active_session_id) {
         setActiveSessionId(resp.active_session_id);
         await loadSession(resp.active_session_id);
-      } else if (resp.sessions.length > 0) {
+      } else {
         const first = resp.sessions[0];
-        setActiveSessionId(first.id);
-        await dockUpdateWorkspace(first.id);
-        await loadSession(first.id);
+        if (first) {
+          setActiveSessionId(first.id);
+          await dockUpdateWorkspace(first.id);
+          await loadSession(first.id);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to bootstrap dock');
@@ -345,7 +347,7 @@ export function useDockStore(): DockStore {
             blocks: blocksRef.current,
             facts: factsRef.current,
             annotations: annotationsRef.current,
-            selected_anchor: selectedAnchorRef.current ?? undefined,
+            selected_anchor: selectedAnchorRef.current ?? null,
           },
           (event) => {
             switch (event.type) {
@@ -397,7 +399,7 @@ export function useDockStore(): DockStore {
         if (b.id !== id) return b;
         const diff: DockBlock['diff'] = author
           ? { original: b.html, modified: html, author }
-          : b.diff;
+          : (b.diff ?? null);
         return { ...b, html, diff };
       }),
     );
@@ -408,7 +410,7 @@ export function useDockStore(): DockStore {
   }, []);
 
   const dismissDiff = useCallback((id: string) => {
-    setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, diff: undefined } : b)));
+    setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, diff: null } : b)));
   }, []);
 
   // -----------------------------------------------------------------------

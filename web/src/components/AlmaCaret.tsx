@@ -68,7 +68,7 @@ function measureCaret(textarea: HTMLTextAreaElement): CaretPos | null {
   const cs = getComputedStyle(textarea);
   const mirror = document.createElement('div');
   for (const key of MIRROR_STYLE_KEYS) {
-    mirror.style[key as never] = cs[key as never];
+    mirror.style[key as never] = cs[key as never] ?? '';
   }
   mirror.style.position = 'absolute';
   mirror.style.visibility = 'hidden';

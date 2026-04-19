@@ -199,7 +199,7 @@ function parseAssistantContent(raw: string): (TextContent | ThinkingContent)[] {
     const before = raw.slice(cursor, match.index).trim();
     if (before) blocks.push({ type: 'text', text: before });
     // Thinking content
-    const thinking = match[1].trim();
+    const thinking = (match[1] ?? '').trim();
     if (thinking) blocks.push({ type: 'thinking', thinking });
     cursor = match.index + match[0].length;
   }
@@ -912,8 +912,9 @@ export default function PiChat() {
               // extracted text.
               for (let i = agent.state.messages.length - 1; i >= 0; i--) {
                 const m = agent.state.messages[i];
+                if (!m) continue;
                 if (m.role === 'user-with-attachments') {
-                  return m.attachments;
+                  return m.attachments ?? [];
                 }
                 if (m.role === 'user') return [];
               }

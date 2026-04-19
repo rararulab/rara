@@ -40,26 +40,31 @@ function buildSegments(items: TimelineItem[]): Segment[] {
   for (let i = 0; i < items.length; i++) {
     const prev = items[i - 1];
     const curr = items[i];
+    if (!curr) continue;
     const boundary = !prev || prev.kind !== curr.kind || prev.turn !== curr.turn;
     if (boundary && i !== 0) {
       const head = items[start];
-      segments.push({
-        startIdx: start,
-        endIdx: i - 1,
-        kind: head.kind,
-        count: i - start,
-      });
+      if (head) {
+        segments.push({
+          startIdx: start,
+          endIdx: i - 1,
+          kind: head.kind,
+          count: i - start,
+        });
+      }
       start = i;
     }
   }
   if (items.length > 0) {
     const head = items[start];
-    segments.push({
-      startIdx: start,
-      endIdx: items.length - 1,
-      kind: head.kind,
-      count: items.length - start,
-    });
+    if (head) {
+      segments.push({
+        startIdx: start,
+        endIdx: items.length - 1,
+        kind: head.kind,
+        count: items.length - start,
+      });
+    }
   }
   return segments;
 }
@@ -98,7 +103,7 @@ export function TimelineBar({ items, selectedIdx, onSegmentClick }: TimelineBarP
         const palette = KIND_PALETTE[seg.kind];
         const head = items[seg.startIdx];
         const widthPct = Math.max((seg.count / total) * 100, 0.5);
-        const label = eventLabel(seg.kind, head.tool);
+        const label = eventLabel(seg.kind, head?.tool);
 
         return (
           <button

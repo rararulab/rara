@@ -429,10 +429,11 @@ export function useSessionTimeline(
             const existing = prev.findIndex(
               (it) => it.kind === 'token_footer' && it.turn === liveTurnIdx,
             );
-            if (existing >= 0) {
+            const current = existing >= 0 ? prev[existing] : undefined;
+            if (existing >= 0 && current) {
               const next = prev.slice();
               next[existing] = {
-                ...next[existing],
+                ...current,
                 usage: { input: e.input, output: e.output },
               };
               return next;
@@ -611,7 +612,7 @@ function applyPlanProgress(
     }
   }
 
-  const existing = steps[idx];
+  const existing = steps[idx] ?? { index: idx + 1, task: '', status: 'pending' };
   const task = existing.task || extractTask(status_text);
   steps[idx] = { ...existing, task, status: ui, reason };
 
