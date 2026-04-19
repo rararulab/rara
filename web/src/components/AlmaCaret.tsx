@@ -131,7 +131,18 @@ export function AlmaCaret({ measureKey }: AlmaCaretProps = {}) {
   const [pos, setPos] = useState<CaretPos | null>(null);
   const [visible, setVisible] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [enabled] = useState(() => !isCoarsePointer());
+  // Track coarse-pointer state reactively so plugging in/out a mouse
+  // on a hybrid device (tablet with keyboard cover, touch-screen
+  // laptop) flips the Alma caret on/off mid-session rather than
+  // latching whatever pointer type happened to be active at mount.
+  const [enabled, setEnabled] = useState(() => !isCoarsePointer());
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(pointer: coarse)");
+    const onChange = (e: MediaQueryListEvent) => setEnabled(!e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
   // When ancestors animate (e.g. the composer slides out of welcome
   // position), `getBoundingClientRect()` reports the mid-animation
