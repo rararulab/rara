@@ -351,6 +351,18 @@
   margin-right: auto;
 }
 
+/*
+ * Voice button horizontal alignment. Paperclip sits at ~17px inside
+ * the composer's left edge; when the composer is capped at 48rem and
+ * centred, that edge is at `50% - 24rem`. `max()` clamps the voice
+ * button to 17px on narrow viewports where the composer fills the
+ * full width and the calc would go negative.
+ */
+.rara-chat .voice-float {
+  /* 17px inside-composer padding + 32px paperclip width + 8px gap. */
+  left: max(57px, calc(50% - 24rem + 57px));
+}
+
 .user-message-container {
   background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
   border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);

@@ -936,7 +936,7 @@ export default function PiChat() {
         button without needing to patch pi-web-ui's input internals.
       */}
       <VoiceRecorder
-        className="absolute bottom-[29px] left-14 z-20 !h-8 !w-8 !rounded-md !bg-transparent !shadow-none hover:!bg-accent"
+        className="voice-float absolute bottom-[29px] z-20 !h-8 !w-8 !rounded-md !bg-transparent !shadow-none hover:!bg-accent"
         getSessionKey={() => agentRef.current?.sessionId}
         onComplete={reloadMessages}
       />
