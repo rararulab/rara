@@ -76,6 +76,36 @@ function isRoutableProvider(
   return catalog.has(provider);
 }
 
+/**
+ * Look up the admin-configured default `(provider, model)` pair in the
+ * rara settings store. Returns `null` if the admin has not paired a
+ * default model with their default provider — the caller falls back to
+ * the unknown sentinel and pi-web-ui's composer pill goes blank instead
+ * of inventing a model from its own hard-coded catalog (which would
+ * surface a ghost "gemini-2.5-flash-lite" on a minimax-default install).
+ */
+async function resolveAdminDefaultModel(): Promise<{
+  provider: string;
+  model: string;
+} | null> {
+  try {
+    const settings = await settingsApi.list();
+    const provider = settings["llm.default_provider"]?.trim();
+    if (!provider) return null;
+    const model = settings[`llm.providers.${provider}.default_model`]?.trim();
+    if (!model) {
+      console.warn(
+        `Admin default provider \`${provider}\` has no default_model set — composer pill will show unknown.`,
+      );
+      return null;
+    }
+    return { provider, model };
+  } catch (e: unknown) {
+    console.warn("Failed to resolve admin default provider:", e);
+    return null;
+  }
+}
+
 /** Strip `<think>...</think>` blocks — used only for UI preview/title text. */
 function stripForPreview(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
@@ -496,6 +526,14 @@ export default function PiChat() {
       isRoutableProvider(validProvidersRef.current, session.model_provider)
     ) {
       agent.state.model = syntheticModel(session.model_provider, session.model);
+    } else {
+      // Unpinned session — seed the composer pill with rara's admin
+      // default so it reads "minimax: MiniMax-M2.7" rather than
+      // pi-web-ui's hard-coded catalog fallback (`gemini-2.5-*`).
+      const resolved = await resolveAdminDefaultModel();
+      if (resolved && agentRef.current?.sessionId === session.key) {
+        agent.state.model = syntheticModel(resolved.provider, resolved.model);
+      }
     }
     if (session.thinking_level) {
       agent.state.thinkingLevel = session.thinking_level;
@@ -607,34 +645,14 @@ export default function PiChat() {
         setModelDialogOpen(false);
         return;
       }
-      // Resolve the admin-configured default so the composer
-      // pill can read e.g. "codex: codex-mini" instead of the
-      // "unknown" sentinel. PiChat does not already consume
-      // react-query so we fire a one-shot request — failures
-      // here are non-fatal and fall back to the sentinel.
-      let resolvedModel = syntheticModel(
-        UNKNOWN_MODEL_SENTINEL,
-        UNKNOWN_MODEL_SENTINEL,
-      );
-      try {
-        const settings = await settingsApi.list();
-        const provider = settings["llm.default_provider"]?.trim();
-        const model = provider
-          ? settings[`llm.providers.${provider}.default_model`]?.trim()
-          : undefined;
-        if (provider && model) {
-          resolvedModel = syntheticModel(provider, model);
-        } else if (provider) {
-          // Admin set a default provider but forgot the paired
-          // `default_model` key — surface during development so the
-          // misconfig is caught before users see the unknown sentinel.
-          console.warn(
-            `Admin default provider \`${provider}\` has no default_model set — composer pill will show unknown.`,
-          );
-        }
-      } catch (e: unknown) {
-        console.warn("Failed to resolve admin default provider:", e);
-      }
+      // Resolve the admin-configured default so the composer pill can
+      // read e.g. "minimax: MiniMax-M2.7" instead of pi-web-ui's own
+      // hard-coded catalog default (which would otherwise surface a
+      // ghost "gemini-2.5-flash-lite" unrelated to rara's config).
+      const resolved = await resolveAdminDefaultModel();
+      const resolvedModel = resolved
+        ? syntheticModel(resolved.provider, resolved.model)
+        : syntheticModel(UNKNOWN_MODEL_SENTINEL, UNKNOWN_MODEL_SENTINEL);
       // Re-check the race guard after the settings fetch.
       if (agentRef.current?.sessionId !== key) {
         setModelDialogOpen(false);
@@ -765,6 +783,14 @@ export default function PiChat() {
           provider: initialSession.model_provider,
           thinking: initialSession.thinking_level ?? null,
         };
+      } else {
+        // Unpinned session — seed the composer pill with rara's admin
+        // default so it reads "minimax: MiniMax-M2.7" rather than
+        // pi-web-ui's hard-coded catalog fallback (`gemini-2.5-*`).
+        const resolved = await resolveAdminDefaultModel();
+        if (resolved) {
+          agent.state.model = syntheticModel(resolved.provider, resolved.model);
+        }
       }
       if (initialSession.thinking_level) {
         agent.state.thinkingLevel = initialSession.thinking_level;
