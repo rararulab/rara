@@ -1,5 +1,19 @@
 # rara-kernel — Agent Guidelines
 
+## Agent LLM Resolution Contract — `llm/registry.rs`
+
+The unified entry point for resolving an agent's LLM binding is
+[`DriverRegistry::resolve_agent`] in `crates/kernel/src/llm/registry.rs`.
+It returns a [`ResolvedAgent { driver, model, manifest }`] triple read from
+`agents.<name>.{driver, model}` in YAML, with fallback to the manifest's
+`provider_hint`/`model` and finally the provider default. New consumers
+MUST go through `resolve_agent` so the driver and the model come from a
+single consistent source — the split-config bug that motivated #1635
+(driver resolved via the registry, model resolved via a flat settings key
+like `knowledge.extractor_model`) should not reappear. The legacy
+`DriverRegistry::resolve` tuple API is kept as a thin shim for existing
+callers; migration is tracked in follow-up issues under Epic #1631.
+
 ## Critical: StreamDelta Event Ordering in `openai.rs`
 
 ### The Invariant
