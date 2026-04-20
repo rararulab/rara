@@ -21,6 +21,9 @@ pub(crate) mod repetition;
 pub mod runner;
 pub mod scheduled;
 mod talk_normal;
+pub mod turn_error;
+
+pub use turn_error::{TURN_ERROR_EVENT_TYPE, TurnError, TurnFailureKind};
 
 /// Maximum **byte** length for child/worker agent results passed back to
 /// the parent context.  Child agents are instructed to self-summarize
@@ -1493,6 +1496,11 @@ pub(crate) async fn run_agent_loop(
         let mut has_tool_calls = false;
         let mut last_usage: Option<llm::Usage> = None;
         let mut last_stop_reason: Option<llm::StopReason> = None;
+        // Most recent driver-reported stream failure for this iteration.
+        // `None` on a healthy stream. When `Some(_)` after the stream closes,
+        // the iteration is converted into a `TurnError` and published on the
+        // event bus instead of writing an empty record to tape.
+        let mut stream_failure: Option<llm::StreamFailure> = None;
         // Per-iteration reasoning timer — set on the first ReasoningDelta,
         // settled (added to cumulative_thinking_ms) on either:
         //   a) the first TextDelta (reasoning → content transition), or
@@ -1594,12 +1602,12 @@ pub(crate) async fn run_agent_loop(
                     }
                 }
                 llm::StreamDelta::Failure(failure) => {
-                    // Driver-reported stream failure. Log + fall through;
-                    // the subsequent Done event still closes the turn. Richer
-                    // handling (tape suppression, user-facing error) is
-                    // addressed in the next sub-PR of the streaming-robustness
-                    // epic; behavior here must remain identical to pre-PR.
+                    // Driver-reported stream failure. Retain the latest one
+                    // for post-stream handling (event-bus publication + tape
+                    // suppression) and fall through — the subsequent `Done`
+                    // event still closes the stream cleanly.
                     warn!(iteration, ?failure, "driver reported stream failure");
+                    stream_failure = Some(failure);
                 }
                 llm::StreamDelta::Done { stop_reason, usage } => {
                     if stop_reason == llm::StopReason::ToolCalls && pending_tool_calls.is_empty() {
@@ -2007,6 +2015,51 @@ pub(crate) async fn run_agent_loop(
                     .await;
                 continue;
             }
+            // Reject empty terminal turns: nudges and recoveries had their
+            // chance; writing an empty `[assistant]:` record to tape would
+            // strand the user with no reply AND poison subsequent context
+            // rebuilds. Convert to a structured `TurnError`, publish it on
+            // the event bus for downstream consumers (telegram adapter,
+            // `/status`), and fail the turn so the caller can surface the
+            // failure instead of delivering an empty message.
+            if accumulated_text.trim().is_empty() || stream_failure.is_some() {
+                let failure_kind = stream_failure
+                    .take()
+                    .map(turn_error::TurnFailureKind::from)
+                    .unwrap_or(turn_error::TurnFailureKind::EmptyTurn);
+                let summary = turn_error::TurnError::short_summary(&failure_kind, model.as_str());
+                let turn_err = turn_error::TurnError::builder()
+                    .session_key(session_key)
+                    .model(model.to_string())
+                    .iteration(iteration)
+                    .failure_kind(failure_kind)
+                    .message(summary.clone())
+                    .build();
+
+                error!(
+                    iteration,
+                    model = model.as_str(),
+                    summary = %summary,
+                    "turn terminated with no usable assistant content — emitting TurnError"
+                );
+
+                match serde_json::to_value(&turn_err) {
+                    Ok(payload) => {
+                        if let Err(e) = handle
+                            .publish_event(session_key, turn_error::TURN_ERROR_EVENT_TYPE, payload)
+                            .await
+                        {
+                            warn!(error = %e, "failed to publish turn.error event");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to serialize TurnError payload");
+                    }
+                }
+
+                return Err(KernelError::AgentExecution { message: summary });
+            }
+
             // Persist final assistant message to tape.
             let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
                 rara_message_id: rara_message_id.to_string(),
