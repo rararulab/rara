@@ -281,6 +281,15 @@ pub struct AgentManifest {
     /// **Default: `None` (uses [`machine::DEFAULT_MAX_CONTINUATIONS`]).**
     #[serde(default)]
     pub max_continuations:      Option<usize>,
+    /// Maximum character length of this agent's free-form text output.
+    ///
+    /// Interpreted per agent — e.g. `title_gen` uses this as the hard cap
+    /// on generated session titles. When the model returns longer output,
+    /// the caller truncates (never silently discards) and logs a warning.
+    ///
+    /// **Default: `None` (no cap enforced).**
+    #[serde(default)]
+    pub max_output_chars:       Option<usize>,
 }
 
 /// Process environment — isolated per-agent context.

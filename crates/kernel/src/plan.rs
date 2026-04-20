@@ -1005,6 +1005,7 @@ async fn execute_worker_step(
         tool_call_limit:        None,
         worker_timeout_secs:    None,
         max_continuations:      Some(0),
+        max_output_chars:       None,
     };
 
     info!(

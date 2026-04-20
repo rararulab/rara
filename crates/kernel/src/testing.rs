@@ -347,6 +347,7 @@ impl TestKernelBuilder {
             tool_call_limit:        None,
             worker_timeout_secs:    None,
             max_continuations:      None,
+            max_output_chars:       None,
         });
         let manifest_name = manifest.name.clone();
 

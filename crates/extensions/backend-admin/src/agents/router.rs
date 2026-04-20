@@ -175,6 +175,7 @@ async fn create_agent(
         tool_call_limit:        None,
         worker_timeout_secs:    None,
         max_continuations:      None,
+        max_output_chars:       None,
     };
 
     registry

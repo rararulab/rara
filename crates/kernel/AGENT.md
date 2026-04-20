@@ -31,6 +31,20 @@ callers; migration is tracked in follow-up issues under Epic #1631.
   Extraction failures now emit at `error!` level (previously `warn!`,
   which hid the MiniMax/gpt-4o-mini split-config bug in prod).
 
+- `kernel.rs` (session title generation) — #1637. Reads
+  `agents.title_gen.{driver, model}` via `resolve_agent`. See the
+  per-agent output caps section below for the truncation contract.
+
+### Per-agent output caps — `AgentManifest::max_output_chars`
+
+System agents whose contract includes a bounded free-form output (currently
+`title_gen`) declare the cap on the manifest via `max_output_chars`. The call
+site MUST truncate and emit a `warn!` (with `title_len`, `max_chars`,
+`truncated=true`) when the model exceeds the cap — NEVER silently discard.
+See `generate_session_title` / `finalize_title` in `kernel.rs` and the
+background to #1637 (production incident 2026-04-20 where a 237-char title
+was dropped with zero persisted state).
+
 ## Critical: StreamDelta Event Ordering in `openai.rs`
 
 ### The Invariant

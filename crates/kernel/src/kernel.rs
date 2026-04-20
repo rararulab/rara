@@ -3164,6 +3164,7 @@ impl Kernel {
             if needs_title {
                 let tape_service = self.tape_service.clone();
                 let driver_registry = Arc::clone(self.syscall.driver_registry());
+                let agent_registry = Arc::clone(&self.agent_registry);
                 let io = Arc::clone(&self.io);
                 let sk = session_key;
                 let tape_name = sk.to_string();
@@ -3172,6 +3173,7 @@ impl Kernel {
                         &tape_service,
                         &tape_name,
                         &driver_registry,
+                        &agent_registry,
                         session_index.as_ref(),
                         &io,
                         &sk,
@@ -3215,15 +3217,91 @@ impl Kernel {
 // Session title generation (standalone helper)
 // ---------------------------------------------------------------------------
 
+/// Default title cap when the manifest omits `max_output_chars`. Matches
+/// the value baked into `rara_agents::title_gen`; duplicated as a defensive
+/// floor so the kernel never stores an unbounded title even if a malformed
+/// YAML override clears the field.
+const TITLE_GEN_FALLBACK_MAX_CHARS: usize = 50;
+
+/// Normalize a raw LLM response into a bounded session title.
+///
+/// Returns `None` only when both the model output and the fallback user
+/// message are empty — an operationally-impossible state. In all other
+/// cases this returns `Some(title)` whose character count is `<= max_chars`.
+/// When truncation or fallback kicks in a warning is emitted with
+/// `truncated=true` so operators can see the model is generating titles
+/// outside the contract (previously the kernel silently dropped them — see
+/// the #1637 production incident).
+fn finalize_title(
+    raw: Option<&str>,
+    user_fallback: &str,
+    max_chars: usize,
+    session_key: &SessionKey,
+) -> Option<String> {
+    let max_chars = max_chars.max(1);
+    let cleaned = raw
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty());
+
+    let (source, candidate) = match cleaned {
+        Some(t) => ("model", t),
+        None => {
+            tracing::error!(
+                session_key = %session_key,
+                "title gen: LLM returned no usable content, falling back to user message"
+            );
+            (
+                "fallback",
+                user_fallback
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+            )
+        }
+    };
+
+    if candidate.is_empty() {
+        tracing::error!(
+            session_key = %session_key,
+            "title gen: fallback user message also empty, skipping title"
+        );
+        return None;
+    }
+
+    let raw_len = candidate.chars().count();
+    if raw_len <= max_chars {
+        return Some(candidate);
+    }
+
+    let truncated: String = candidate.chars().take(max_chars).collect();
+    tracing::warn!(
+        session_key = %session_key,
+        title_len = raw_len,
+        max_chars,
+        truncated = true,
+        source,
+        title = %truncated,
+        "title gen: title exceeded cap, truncated instead of discarding"
+    );
+    Some(truncated)
+}
+
 /// Auto-generate a short session title from the first user/assistant exchange.
 ///
 /// Reads the tape for the first user and assistant messages, asks the LLM for a
-/// concise title (<=30 chars, matching the user's language), and persists it
-/// via the session index. Errors are propagated to the caller for logging.
+/// concise title (matching the user's language), and persists it via the
+/// session index. The LLM binding comes from
+/// [`DriverRegistry::resolve_agent`](crate::llm::DriverRegistry::resolve_agent)
+/// keyed by the `title_gen` manifest, so driver + model + max-length stay in
+/// one atomic snapshot (see #1637). Errors are propagated to the caller for
+/// logging.
 async fn generate_session_title(
     tape_service: &crate::memory::TapeService,
     tape_name: &str,
     driver_registry: &crate::llm::DriverRegistry,
+    agent_registry: &crate::agent::AgentRegistry,
     session_index: &dyn crate::session::SessionIndex,
     io: &Arc<crate::io::IOSubsystem>,
     session_key: &SessionKey,
@@ -3263,31 +3341,39 @@ async fn generate_session_title(
         })
         .unwrap_or_default();
 
-    let (driver, model) = driver_registry.resolve("title_generator", None, None)?;
+    let manifest = agent_registry.get("title_gen").ok_or_else(|| {
+        Box::<dyn std::error::Error + Send + Sync>::from(
+            "title gen: `title_gen` manifest not registered",
+        )
+    })?;
+    let max_chars = manifest
+        .max_output_chars
+        .unwrap_or(TITLE_GEN_FALLBACK_MAX_CHARS);
+    let resolved = driver_registry.resolve_agent(&manifest)?;
 
     let assistant_preview: String = first_assistant_msg.chars().take(500).collect();
 
     let prompt = format!(
-        "Given this conversation opening, generate a concise title (max 30 characters).\nMatch \
-         the language of the user's message.\nReturn ONLY the title, nothing else.\n\nUser: \
-         {first_user_msg}\nAssistant: {assistant_preview}"
+        "Given this conversation opening, generate a concise title (max {max_chars} \
+         characters).\nMatch the language of the user's message.\nReturn ONLY the title, nothing \
+         else.\n\nUser: {first_user_msg}\nAssistant: {assistant_preview}"
     );
 
     let request = crate::llm::CompletionRequest {
-        model,
-        messages: vec![crate::llm::Message::user(prompt)],
-        tools: vec![],
-        temperature: Some(0.3),
-        max_tokens: Some(60),
-        thinking: None,
-        tool_choice: crate::llm::ToolChoice::None,
+        model:               resolved.model,
+        messages:            vec![crate::llm::Message::user(prompt)],
+        tools:               vec![],
+        temperature:         Some(0.3),
+        max_tokens:          Some(60),
+        thinking:            None,
+        tool_choice:         crate::llm::ToolChoice::None,
         parallel_tool_calls: false,
-        frequency_penalty: None,
-        top_p: None,
-        emit_reasoning: false,
+        frequency_penalty:   None,
+        top_p:               None,
+        emit_reasoning:      false,
     };
 
-    let response = driver.complete(request).await?;
+    let response = resolved.driver.complete(request).await?;
 
     // Prefer non-empty content, fall back to reasoning_content for thinking
     // models that return content = Some("") with actual text in reasoning.
@@ -3295,25 +3381,15 @@ async fn generate_session_title(
         .content
         .filter(|s| !s.trim().is_empty())
         .or(response.reasoning_content);
-    let Some(raw_title) = raw_title else {
-        tracing::warn!(session_key = %session_key, "title gen: LLM returned no content");
+
+    let Some(title) = finalize_title(
+        raw_title.as_deref(),
+        &first_user_msg,
+        max_chars,
+        session_key,
+    ) else {
         return Ok(());
     };
-
-    let title = raw_title.trim().trim_matches('"').to_string();
-    if title.is_empty() {
-        tracing::warn!(session_key = %session_key, "title gen: LLM returned empty title");
-        return Ok(());
-    }
-    if title.chars().count() > 50 {
-        tracing::warn!(
-            session_key = %session_key,
-            title_len = title.chars().count(),
-            title = %title,
-            "title gen: title exceeds 50 chars, discarded"
-        );
-        return Ok(());
-    }
 
     match session_index.get_session(session_key).await {
         Ok(Some(mut entry)) => {
@@ -3436,5 +3512,110 @@ mod tests {
             matches!(err, KernelError::SessionNotFound { .. }),
             "expected SessionNotFound, got {err:?}"
         );
+    }
+
+    // -- title_gen: truncation + registry wiring (issue #1637) ----------------
+
+    /// A 237-char model response (matching the observed 2026-04-20 incident)
+    /// must be truncated down to the configured cap and returned — never
+    /// silently discarded as the old code did.
+    #[test]
+    fn finalize_title_truncates_long_model_output() {
+        let long = "a".repeat(237);
+        let sk = SessionKey::new();
+        let got = finalize_title(Some(&long), "user msg", 50, &sk)
+            .expect("truncated title should still be persisted");
+        assert_eq!(got.chars().count(), 50);
+        assert!(got.chars().all(|c| c == 'a'));
+    }
+
+    /// An empty model response falls back to the first line of the user
+    /// message, still bounded by `max_chars`.
+    #[test]
+    fn finalize_title_falls_back_to_user_message_when_model_empty() {
+        let sk = SessionKey::new();
+        let got = finalize_title(
+            Some("   "), // whitespace only → treated as empty
+            "hello world, this is the first user message\nsecond line ignored",
+            50,
+            &sk,
+        )
+        .expect("fallback must produce a title");
+        assert!(got.starts_with("hello world"));
+        assert!(!got.contains('\n'));
+        assert!(got.chars().count() <= 50);
+    }
+
+    /// Short model output passes through unchanged.
+    #[test]
+    fn finalize_title_preserves_short_output() {
+        let sk = SessionKey::new();
+        let got = finalize_title(Some("  \"short title\" "), "unused", 50, &sk)
+            .expect("short title must pass through");
+        assert_eq!(got, "short title");
+    }
+
+    /// The title_gen manifest resolves its driver + model via
+    /// `DriverRegistry::resolve_agent` (unified `agents.<name>.*` path),
+    /// not via a flat `title_generator` key. This guards against regressing
+    /// to the split-brain wiring that #1637 removed.
+    #[test]
+    fn title_gen_resolves_via_resolve_agent() {
+        use std::sync::Arc as StdArc;
+
+        use crate::{
+            agent::AgentManifest,
+            llm::{
+                ScriptedLlmDriver,
+                catalog::OpenRouterCatalog,
+                registry::{AgentLlmConfig, DriverRegistry},
+            },
+        };
+
+        let catalog = StdArc::new(OpenRouterCatalog::new());
+        let reg = DriverRegistry::new("openrouter", catalog);
+        reg.register_driver(
+            "openrouter",
+            StdArc::new(ScriptedLlmDriver::new(Vec::new())),
+        );
+        reg.register_driver("ollama", StdArc::new(ScriptedLlmDriver::new(Vec::new())));
+        reg.set_provider_model("openrouter", "gpt-4o", Vec::<String>::new());
+
+        // Simulate `agents.title_gen.{driver, model}` YAML.
+        reg.set_agent_config(
+            "title_gen",
+            AgentLlmConfig {
+                driver: Some("ollama".into()),
+                model:  Some("qwen3:14b".into()),
+            },
+        );
+
+        let manifest = AgentManifest {
+            name:                   "title_gen".into(),
+            role:                   crate::agent::AgentRole::Worker,
+            description:            "t".into(),
+            model:                  None,
+            system_prompt:          String::new(),
+            soul_prompt:            None,
+            provider_hint:          None,
+            max_iterations:         Some(1),
+            tools:                  Vec::new(),
+            excluded_tools:         Vec::new(),
+            max_children:           Some(0),
+            max_context_tokens:     None,
+            priority:               crate::agent::Priority::default(),
+            metadata:               serde_json::Value::Null,
+            sandbox:                None,
+            default_execution_mode: None,
+            tool_call_limit:        None,
+            worker_timeout_secs:    None,
+            max_continuations:      Some(0),
+            max_output_chars:       Some(50),
+        };
+
+        let resolved = reg.resolve_agent(&manifest).expect("resolve_agent");
+        assert_eq!(resolved.model, "qwen3:14b");
+        assert_eq!(resolved.manifest.name, "title_gen");
+        assert_eq!(resolved.manifest.max_output_chars, Some(50));
     }
 }
