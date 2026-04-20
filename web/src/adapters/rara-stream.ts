@@ -31,7 +31,7 @@ import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type { Attachment } from '@mariozechner/pi-web-ui';
 import { Type } from '@sinclair/typebox';
 
-import { BASE_URL } from '@/api/client';
+import { BASE_URL, getBackendUrl } from '@/api/client';
 
 // ---------------------------------------------------------------------------
 // WebEvent — frames received from the rara WebSocket chat API
@@ -161,21 +161,32 @@ function buildPartial(
 
 /**
  * Derive the WebSocket URL from the configured API base URL.
- * Converts http(s) to ws(s) and appends the chat WS path.
+ *
+ * Resolution order mirrors REST (`resolveUrl` in `api/client.ts`):
+ * 1. If the user has set a custom `rara_backend_url` in localStorage we
+ *    derive WS from that host so REST and WS target the same backend.
+ *    Without this, REST follows the override but WS always fell back to
+ *    `window.location`, producing "WebSocket connection error" whenever
+ *    the override pointed at a remote backend (issue #1622).
+ * 2. Otherwise honour an explicit compile-time `BASE_URL`.
+ * 3. Otherwise derive from the current page (Vite dev proxy path).
  */
 export function buildWsUrl(sessionKey: string): string {
-  let base = BASE_URL;
+  let base: string;
 
-  // When BASE_URL is empty, derive from current page location
-  if (!base) {
+  const override = typeof window !== 'undefined' ? localStorage.getItem('rara_backend_url') : null;
+
+  if (override) {
+    base = getBackendUrl().replace(/^http/, 'ws');
+  } else if ((BASE_URL as string).length > 0) {
+    base = (BASE_URL as string).replace(/^http/, 'ws');
+  } else {
     const loc = window.location;
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
     base = `${proto}//${loc.host}`;
-  } else {
-    base = base.replace(/^http/, 'ws');
   }
 
-  // Strip trailing slash
+  // Strip trailing slash so the joined path has exactly one separator.
   base = base.replace(/\/$/, '');
 
   return `${base}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web_ryan`;
