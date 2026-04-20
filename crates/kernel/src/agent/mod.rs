@@ -1593,6 +1593,14 @@ pub(crate) async fn run_agent_loop(
                         tc.arguments_buf.push_str(&arguments);
                     }
                 }
+                llm::StreamDelta::Failure(failure) => {
+                    // Driver-reported stream failure. Log + fall through;
+                    // the subsequent Done event still closes the turn. Richer
+                    // handling (tape suppression, user-facing error) is
+                    // addressed in the next sub-PR of the streaming-robustness
+                    // epic; behavior here must remain identical to pre-PR.
+                    warn!(iteration, ?failure, "driver reported stream failure");
+                }
                 llm::StreamDelta::Done { stop_reason, usage } => {
                     if stop_reason == llm::StopReason::ToolCalls && pending_tool_calls.is_empty() {
                         warn!(

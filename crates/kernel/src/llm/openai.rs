@@ -1348,6 +1348,44 @@ async fn stream_responses_api(
         }
     }
 
+    // Stream-close salvage for the Responses API path. Providers routed
+    // through this format (currently OpenAI + clones) shouldn't hit the
+    // MiniMax failure mode, but the guard is symmetric with the chat
+    // completions path and costs nothing when reasoning is empty.
+    if state.accumulated_text.is_empty()
+        && !state.accumulated_reasoning.is_empty()
+        && !state.has_function_call
+    {
+        match salvage_after_think(&state.accumulated_reasoning) {
+            Some(salvaged) => {
+                tracing::warn!(
+                    reasoning_len = state.accumulated_reasoning.len(),
+                    salvaged_len = salvaged.len(),
+                    "Responses API stream closed with empty content; salvaged text after </think>"
+                );
+                let _ = tx
+                    .send(StreamDelta::TextDelta {
+                        text: salvaged.clone(),
+                    })
+                    .await;
+                state.accumulated_text.push_str(&salvaged);
+            }
+            None => {
+                tracing::warn!(
+                    reasoning_len = state.accumulated_reasoning.len(),
+                    "Responses API stream closed with empty content and no salvageable text"
+                );
+                let _ = tx
+                    .send(StreamDelta::Failure(
+                        super::stream::StreamFailure::EmptyContent {
+                            reasoning_len: state.accumulated_reasoning.len(),
+                        },
+                    ))
+                    .await;
+            }
+        }
+    }
+
     let _ = tx
         .send(StreamDelta::Done {
             stop_reason: state.final_stop,
@@ -1786,7 +1824,7 @@ impl StreamAccumulator {
         }
 
         let Self {
-            text,
+            mut text,
             reasoning,
             tools,
             stop_reason,
@@ -1794,6 +1832,43 @@ impl StreamAccumulator {
             ..
         } = self;
         let tool_calls = Self::collect_tools(tools);
+
+        // Stream-close salvage: some reasoning-capable providers (MiniMax-M2)
+        // emit the real answer inside `reasoning_content` after `</think>`
+        // and then close the stream without ever emitting `content`. When we
+        // see reasoning but no text, try to extract text after the last
+        // `</think>` tag; if that fails, surface a typed failure so upstream
+        // consumers can avoid writing an empty assistant record.
+        if text.is_empty() && !reasoning.is_empty() && tool_calls.is_empty() {
+            match salvage_after_think(&reasoning) {
+                Some(salvaged) => {
+                    tracing::warn!(
+                        reasoning_len = reasoning.len(),
+                        salvaged_len = salvaged.len(),
+                        "stream closed with empty content; salvaged text after </think>"
+                    );
+                    let _ = tx
+                        .send(StreamDelta::TextDelta {
+                            text: salvaged.clone(),
+                        })
+                        .await;
+                    text.push_str(&salvaged);
+                }
+                None => {
+                    tracing::warn!(
+                        reasoning_len = reasoning.len(),
+                        "stream closed with empty content and no salvageable text after </think>"
+                    );
+                    let _ = tx
+                        .send(StreamDelta::Failure(
+                            super::stream::StreamFailure::EmptyContent {
+                                reasoning_len: reasoning.len(),
+                            },
+                        ))
+                        .await;
+                }
+            }
+        }
 
         let _ = tx.send(StreamDelta::Done { stop_reason, usage }).await;
 
@@ -1813,6 +1888,28 @@ impl StreamAccumulator {
 // ---------------------------------------------------------------------------
 
 fn non_empty(s: String) -> Option<String> { if s.is_empty() { None } else { Some(s) } }
+
+/// Attempt to recover assistant text trailing the last `</think>` tag in a
+/// reasoning buffer.
+///
+/// Observed MiniMax-M2 failure mode: the model streams
+/// `reasoning_content` containing a complete `<think>...</think>` block (and
+/// sometimes the real answer in the same field after the closing tag), then
+/// closes the SSE stream without ever emitting `content`. Callers use this
+/// helper at stream close to salvage that trailing text.
+///
+/// Returns `None` when the buffer contains no `</think>` tag, or when the
+/// text after the last one is whitespace-only.
+fn salvage_after_think(reasoning: &str) -> Option<String> {
+    const CLOSE_TAG: &str = "</think>";
+    let tail = reasoning.rsplit_once(CLOSE_TAG).map(|(_, rest)| rest)?;
+    let trimmed = tail.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
 
 /// Truncate a string to at most `max_bytes` bytes without splitting a UTF-8
 /// code point.
@@ -2749,5 +2846,123 @@ mod tests {
         let data = r#"{"some":"data"}"#;
         let result = parse_responses_event("response.something.new", data, &tx, &mut state);
         assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // Stream-close salvage (issue #1632)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn salvage_after_think_extracts_trailing_text() {
+        let reasoning = "<think>planning...</think>\nHere is the answer.";
+        let salvaged = salvage_after_think(reasoning).expect("should salvage");
+        assert_eq!(salvaged, "Here is the answer.");
+    }
+
+    #[test]
+    fn salvage_after_think_prefers_last_close_tag() {
+        // Defensive: malformed reasoning with multiple close tags — take the
+        // tail after the final one, matching real-world MiniMax output where
+        // the last </think> marks the transition to the answer.
+        let reasoning = "<think>step1</think>intermediate<think>step2</think>final answer";
+        let salvaged = salvage_after_think(reasoning).expect("should salvage");
+        assert_eq!(salvaged, "final answer");
+    }
+
+    #[test]
+    fn salvage_after_think_no_close_tag_returns_none() {
+        let reasoning = "unterminated reasoning with no close tag";
+        assert!(salvage_after_think(reasoning).is_none());
+    }
+
+    #[test]
+    fn salvage_after_think_whitespace_only_tail_returns_none() {
+        let reasoning = "<think>all thoughts</think>   \n\t  ";
+        assert!(salvage_after_think(reasoning).is_none());
+    }
+
+    #[tokio::test]
+    async fn finalize_salvages_reasoning_and_emits_text_delta() {
+        let (tx, mut rx) = mpsc::channel(32);
+        let mut acc = StreamAccumulator::new();
+        // Simulate a MiniMax-style stream: only reasoning_content arrived,
+        // and the answer sits after a closing </think> tag.
+        acc.reasoning
+            .push_str("<think>deliberating...</think>The capital is Paris.");
+
+        let response = acc.finalize(&tx, "minimax-m2".to_string()).await;
+
+        // The salvaged text must be emitted as a TextDelta before Done.
+        let first = rx.try_recv().expect("should receive a delta");
+        match first {
+            StreamDelta::TextDelta { text } => assert_eq!(text, "The capital is Paris."),
+            other => panic!("expected TextDelta, got {other:?}"),
+        }
+        let second = rx.try_recv().expect("should receive Done");
+        assert!(matches!(second, StreamDelta::Done { .. }));
+
+        assert_eq!(response.content.as_deref(), Some("The capital is Paris."));
+        assert!(response.reasoning_content.is_some());
+    }
+
+    #[tokio::test]
+    async fn finalize_emits_failure_when_salvage_fails() {
+        let (tx, mut rx) = mpsc::channel(32);
+        let mut acc = StreamAccumulator::new();
+        // Reasoning with no closing </think> tag — salvage must fail.
+        acc.reasoning
+            .push_str("<think>thinking forever without closing");
+
+        let response = acc.finalize(&tx, "minimax-m2".to_string()).await;
+
+        let first = rx.try_recv().expect("should receive failure");
+        match first {
+            StreamDelta::Failure(super::super::stream::StreamFailure::EmptyContent {
+                reasoning_len,
+            }) => {
+                assert!(reasoning_len > 0);
+            }
+            other => panic!("expected Failure::EmptyContent, got {other:?}"),
+        }
+        let second = rx.try_recv().expect("should receive Done");
+        assert!(matches!(second, StreamDelta::Done { .. }));
+
+        assert!(response.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn finalize_no_reasoning_leaves_stream_unchanged() {
+        // Non-reasoning provider: both buffers empty. Salvage must not fire;
+        // the stream emits only Done.
+        let (tx, mut rx) = mpsc::channel(32);
+        let acc = StreamAccumulator::new();
+
+        let response = acc.finalize(&tx, "gpt-4o".to_string()).await;
+
+        let first = rx.try_recv().expect("should receive Done");
+        assert!(matches!(first, StreamDelta::Done { .. }));
+        assert!(rx.try_recv().is_err(), "no further deltas expected");
+
+        assert!(response.content.is_none());
+        assert!(response.reasoning_content.is_none());
+    }
+
+    #[tokio::test]
+    async fn finalize_with_text_skips_salvage() {
+        // Both text and reasoning present: salvage must NOT run, and no
+        // synthetic TextDelta or Failure must be emitted.
+        let (tx, mut rx) = mpsc::channel(32);
+        let mut acc = StreamAccumulator::new();
+        acc.text.push_str("already streamed");
+        acc.reasoning
+            .push_str("<think>ignored</think>trailing ignored");
+
+        let response = acc.finalize(&tx, "minimax-m2".to_string()).await;
+
+        let first = rx.try_recv().expect("should receive Done");
+        assert!(matches!(first, StreamDelta::Done { .. }));
+        assert!(rx.try_recv().is_err(), "no salvage delta expected");
+
+        assert_eq!(response.content.as_deref(), Some("already streamed"));
     }
 }
