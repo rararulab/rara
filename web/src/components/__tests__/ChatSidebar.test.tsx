@@ -17,6 +17,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { LiveRun, SessionSlice } from '../agent-live/live-run-store';
+
 import type { ChatSession } from '@/api/types';
 
 // Pinned so `formatRelativeDate` output stays stable across day/hour
@@ -51,10 +53,36 @@ vi.mock('@/api/client', () => ({
   },
 }));
 
+// Hoist-safe mock of useLiveRun so SidebarRunHistory (rendered by
+// ChatSidebar) can be fed synthetic run-history slices per test.
+const useLiveRunMock = vi.fn<(key: string | undefined) => SessionSlice>();
+vi.mock('../agent-live/use-live-run', () => ({
+  useLiveRun: (key: string | undefined) => useLiveRunMock(key),
+}));
+
+const emptySlice: SessionSlice = { active: null, history: [] };
+
+function runFixture(overrides: Partial<LiveRun> = {}): LiveRun {
+  return {
+    runId: 'r1',
+    sessionKey: 'b',
+    status: 'completed',
+    startedAt: Date.UTC(2026, 3, 1, 12, 0, 0),
+    endedAt: Date.UTC(2026, 3, 1, 12, 0, 5),
+    items: [{ seq: 0, turn: 0, kind: 'tool_use', tool: 'Grep', input: { query: 'hello' } }],
+    toolCalls: 1,
+    error: null,
+    currentStage: null,
+    ...overrides,
+  };
+}
+
 describe('ChatSidebar', () => {
   beforeEach(() => {
     apiGet.mockReset();
     apiDel.mockReset();
+    useLiveRunMock.mockReset();
+    useLiveRunMock.mockReturnValue(emptySlice);
   });
 
   afterEach(() => {
@@ -114,5 +142,54 @@ describe('ChatSidebar', () => {
     await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
     const row = screen.getByText('Alpha').closest('.group');
     expect(row?.className).not.toContain('bg-secondary/70');
+  });
+
+  it('renders execution history section when the active session has runs', async () => {
+    apiGet.mockResolvedValueOnce([sessionFixture('b', 'Beta')]);
+    useLiveRunMock.mockReturnValue({
+      active: null,
+      history: [runFixture()],
+    });
+
+    const { ChatSidebar } = await import('../ChatSidebar');
+
+    render(
+      <ChatSidebar
+        activeSessionKey="b"
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onDeleteSession={vi.fn()}
+        refreshKey={0}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Beta')).toBeInTheDocument());
+    expect(screen.getByText(/执行历史/)).toBeInTheDocument();
+    // TaskRunHistory header exposes an accessible button with the label
+    // "Execution history" — its presence confirms the sidebar rendered
+    // the completed-run list, not merely the wrapper shell.
+    expect(screen.getByText('Execution history')).toBeInTheDocument();
+  });
+
+  it('hides execution history section when there are no runs', async () => {
+    apiGet.mockResolvedValueOnce([sessionFixture('b', 'Beta')]);
+    useLiveRunMock.mockReturnValue(emptySlice);
+
+    const { ChatSidebar } = await import('../ChatSidebar');
+
+    render(
+      <ChatSidebar
+        activeSessionKey="b"
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onDeleteSession={vi.fn()}
+        refreshKey={0}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Beta')).toBeInTheDocument());
+    expect(screen.queryByText(/执行历史/)).not.toBeInTheDocument();
   });
 });

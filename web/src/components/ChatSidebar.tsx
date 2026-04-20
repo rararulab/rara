@@ -17,6 +17,8 @@
 import { PanelLeftClose, PanelLeft, Plus, Settings, Trash2, MessageSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { SidebarRunHistory } from './SidebarRunHistory';
+
 import { api } from '@/api/client';
 import type { ChatSession } from '@/api/types';
 import { pickSessionFallback } from '@/lib/session-fallback';
@@ -232,6 +234,7 @@ export function ChatSidebar({
               ))
             )}
           </div>
+          <SidebarRunHistory activeSessionKey={activeSessionKey} />
         </>
       )}
     </aside>
