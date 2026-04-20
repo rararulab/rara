@@ -315,14 +315,33 @@
  * the URL stays stable across deploys. A thin info-blue ring echoes
  * the user-bubble glass palette so the two participants read as one
  * coherent design.
+ *
+ * Gating: `<assistant-message>` ALWAYS renders its wrapper, even when
+ * pi-web-ui's `AssistantMessage.render()` produces no content (the
+ * brief window between `message_start` and the first content delta, or
+ * when `StreamingMessageContainer` holds a cleared/empty reference).
+ * Without gating, users see a lone avatar floating at the bottom of
+ * the transcript with nothing next to it (#1621). Paint the avatar
+ * only when at least one of the content-bearing children exists:
+ * `markdown-block`, `tool-message`, `thinking-block`, or a usage/stop
+ * marker (usage stats reuse generic tailwind classes, so we key on
+ * `.tabular-nums` which pi-web-ui uses for cost/token chips).
  */
 .rara-chat assistant-message {
   display: block;
   position: relative;
   padding-left: 2.75rem;
+}
+.rara-chat assistant-message:has(markdown-block),
+.rara-chat assistant-message:has(tool-message),
+.rara-chat assistant-message:has(thinking-block),
+.rara-chat assistant-message:has(.tabular-nums) {
   min-height: 2rem;
 }
-.rara-chat assistant-message::before {
+.rara-chat assistant-message:has(markdown-block)::before,
+.rara-chat assistant-message:has(tool-message)::before,
+.rara-chat assistant-message:has(thinking-block)::before,
+.rara-chat assistant-message:has(.tabular-nums)::before {
   content: '';
   position: absolute;
   left: 0.75rem;
