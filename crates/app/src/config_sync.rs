@@ -88,6 +88,7 @@ impl ConfigFileSync {
             cfg.telegram = new_config.telegram;
             cfg.composio = new_config.composio;
             cfg.knowledge = new_config.knowledge;
+            cfg.agents = new_config.agents;
         }
         info!("config.yaml synced to settings store");
         Ok(())
@@ -96,7 +97,7 @@ impl ConfigFileSync {
     /// Write current settings back to config.yaml.
     async fn writeback_to_file(&self) -> anyhow::Result<()> {
         let all_settings = self.settings.list().await;
-        let (llm, telegram, wechat, composio, knowledge) =
+        let (llm, telegram, wechat, composio, knowledge, agents) =
             flatten::unflatten_from_settings(&all_settings);
 
         let yaml = {
@@ -106,6 +107,7 @@ impl ConfigFileSync {
             cfg.wechat = wechat;
             cfg.composio = composio;
             cfg.knowledge = knowledge;
+            cfg.agents = agents;
             serde_yaml::to_string(&*cfg)?
         };
 
@@ -295,6 +297,11 @@ knowledge:
   search_top_k: 10
   similarity_threshold: 0.85
   extractor_model: "gpt-4o-mini"
+
+agents:
+  knowledge_extractor:
+    driver: "openrouter"
+    model: "gpt-4o-mini"
 
 gateway:
   repo_url: "https://github.com/example/repo"

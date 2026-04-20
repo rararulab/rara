@@ -97,6 +97,16 @@ pub struct AppConfig {
     /// Knowledge layer configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knowledge:              Option<flatten::KnowledgeConfig>,
+    /// Per-agent `{driver, model}` bindings (unified registry; #1636).
+    ///
+    /// ```yaml
+    /// agents:
+    ///   knowledge_extractor:
+    ///     driver: "openrouter"
+    ///     model: "gpt-4o-mini"
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents:                 Option<flatten::AgentsConfig>,
     /// Speech-to-Text configuration (optional).
     /// When present, `base_url` is required — startup fails if missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -153,6 +153,37 @@ pub struct KnowledgeConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Agents config — per-agent `{driver, model}` bindings
+// ---------------------------------------------------------------------------
+
+/// Per-agent LLM binding. Mirrors
+/// [`rara_kernel::llm::AgentLlmConfig`] and is loaded from
+/// `agents.<name>.{driver, model}` in config.yaml.
+///
+/// ```yaml
+/// agents:
+///   knowledge_extractor:
+///     driver: "openrouter"
+///     model: "gpt-4o-mini"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentBinding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model:  Option<String>,
+}
+
+/// Top-level `agents:` section — map from agent name to `{driver, model}`.
+///
+/// Introduced by #1636 as the unified replacement for scattered flat
+/// settings (e.g. the legacy `memory.knowledge.extractor_model`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentsConfig(pub HashMap<String, AgentBinding>);
+
+// ---------------------------------------------------------------------------
 // Flatten logic
 // ---------------------------------------------------------------------------
 
@@ -174,7 +205,21 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     if let Some(ref k) = config.knowledge {
         flatten_knowledge(k, &mut pairs);
     }
+    if let Some(ref a) = config.agents {
+        flatten_agents(a, &mut pairs);
+    }
     pairs
+}
+
+fn flatten_agents(agents: &AgentsConfig, out: &mut Vec<(String, String)>) {
+    for (name, binding) in &agents.0 {
+        if let Some(ref v) = binding.driver {
+            out.push((format!("agents.{name}.driver"), v.clone()));
+        }
+        if let Some(ref v) = binding.model {
+            out.push((format!("agents.{name}.model"), v.clone()));
+        }
+    }
 }
 
 fn flatten_llm(llm: &LlmConfig, out: &mut Vec<(String, String)>) {
@@ -276,6 +321,7 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
     Option<WechatConfig>,
     Option<ComposioConfig>,
     Option<KnowledgeConfig>,
+    Option<AgentsConfig>,
 ) {
     (
         unflatten_llm(pairs),
@@ -283,7 +329,32 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
         unflatten_wechat(pairs),
         unflatten_composio(pairs),
         unflatten_knowledge(pairs),
+        unflatten_agents(pairs),
     )
+}
+
+fn unflatten_agents(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<AgentsConfig> {
+    let prefix = "agents.";
+    let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for key in pairs.keys() {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            if let Some(dot) = rest.find('.') {
+                names.insert(rest[..dot].to_string());
+            }
+        }
+    }
+    if names.is_empty() {
+        return None;
+    }
+    let mut out = HashMap::new();
+    for name in names {
+        let driver = pairs.get(&format!("agents.{name}.driver")).cloned();
+        let model = pairs.get(&format!("agents.{name}.model")).cloned();
+        out.insert(name, AgentBinding { driver, model });
+    }
+    Some(AgentsConfig(out))
 }
 
 fn unflatten_llm(
@@ -470,7 +541,8 @@ mod tests {
         let map: HashMap<String, String> = flat.into_iter().collect();
 
         // Unflatten
-        let (got_llm, got_tg, _got_wechat, got_composio, got_know) = unflatten_from_settings(&map);
+        let (got_llm, got_tg, _got_wechat, got_composio, got_know, _got_agents) =
+            unflatten_from_settings(&map);
 
         // --- LLM ---
         let got_llm = got_llm.expect("llm should be Some");
@@ -516,11 +588,34 @@ mod tests {
     #[test]
     fn unflatten_empty_map_returns_none() {
         let map = HashMap::new();
-        let (llm, tg, wechat, composio, know) = unflatten_from_settings(&map);
+        let (llm, tg, wechat, composio, know, agents) = unflatten_from_settings(&map);
         assert!(wechat.is_none());
         assert!(llm.is_none());
         assert!(tg.is_none());
         assert!(composio.is_none());
         assert!(know.is_none());
+        assert!(agents.is_none());
+    }
+
+    #[test]
+    fn agents_roundtrip_flatten_unflatten() {
+        let mut m = HashMap::new();
+        m.insert(
+            "knowledge_extractor".to_string(),
+            AgentBinding {
+                driver: Some("openrouter".into()),
+                model:  Some("gpt-4o-mini".into()),
+            },
+        );
+        let agents = AgentsConfig(m);
+
+        let mut flat = Vec::new();
+        flatten_agents(&agents, &mut flat);
+        let map: HashMap<String, String> = flat.into_iter().collect();
+
+        let got = unflatten_agents(&map).expect("agents should be Some");
+        let b = got.0.get("knowledge_extractor").expect("binding present");
+        assert_eq!(b.driver.as_deref(), Some("openrouter"));
+        assert_eq!(b.model.as_deref(), Some("gpt-4o-mini"));
     }
 }

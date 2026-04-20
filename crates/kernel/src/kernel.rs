@@ -3094,22 +3094,27 @@ impl Kernel {
             let user_id = user.0.clone();
             let tape_name = session_key.to_string();
             tokio::spawn(async move {
-                let extractor_model = &knowledge.extractor_model;
-                let driver = match driver_registry.resolve(
-                    "knowledge_extractor",
-                    None,
-                    Some(extractor_model),
-                ) {
-                    Ok((d, _model_name)) => d,
+                // Resolve `{driver, model}` as one atomic lookup keyed by the
+                // extractor's manifest — not a driver + flat model string.
+                // This closes the prod failure in #1629 where MiniMax was
+                // called with `gpt-4o-mini`.
+                let manifest = crate::memory::knowledge::knowledge_extractor_manifest();
+                let resolved = match driver_registry.resolve_agent(manifest) {
+                    Ok(r) => r,
                     Err(e) => {
-                        tracing::warn!(%e, "knowledge extraction: cannot resolve model");
+                        tracing::error!(
+                            %e,
+                            agent = crate::memory::knowledge::KNOWLEDGE_EXTRACTOR_NAME,
+                            "knowledge extraction: failed to resolve agent — check \
+                             `agents.knowledge_extractor.{{driver, model}}` in config.yaml"
+                        );
                         return;
                     }
                 };
                 let entries = match tape_service.from_last_anchor(&tape_name, None).await {
                     Ok(e) => e,
                     Err(e) => {
-                        tracing::warn!(%e, "knowledge extraction: failed to read tape");
+                        tracing::error!(%e, "knowledge extraction: failed to read tape");
                         return;
                     }
                 };
@@ -3119,8 +3124,7 @@ impl Kernel {
                     &tape_name,
                     &knowledge.pool,
                     &knowledge.embedding_svc,
-                    driver.as_ref(),
-                    extractor_model,
+                    &resolved,
                     knowledge.config.similarity_threshold,
                 )
                 .await
@@ -3130,7 +3134,14 @@ impl Kernel {
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        tracing::warn!(user = %user_id, %e, "knowledge extraction failed");
+                        // Upgraded from WARN to ERROR (#1636): a silent WARN
+                        // masked every extraction failing in prod for days.
+                        tracing::error!(
+                            user = %user_id,
+                            model = %resolved.model,
+                            %e,
+                            "knowledge extraction failed"
+                        );
                     }
                 }
             });
