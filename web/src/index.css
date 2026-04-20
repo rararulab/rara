@@ -416,6 +416,27 @@
   left: max(57px, calc(50% - 24rem + 57px));
 }
 
+/*
+ * Inline slot for the in-progress `AgentLiveCard` — aligns the card to
+ * pi-web-ui's message column (48rem, centred) and anchors it just above
+ * the composer. Matches the ChatGPT / Claude pattern: the card reads as
+ * the last assistant message while a turn streams, then disappears when
+ * the real assistant bubble lands in pi-web-ui's message list.
+ *
+ * Height of the composer region is ~10.5rem (editor + pill row + stats).
+ * Using a fixed bottom offset is simpler and more reliable than
+ * ResizeObserver wiring into pi-web-ui's internals; if the composer
+ * grows (multi-line input), the card rides up with it naturally because
+ * pi-web-ui's composer pushes from the bottom of `<main>`.
+ */
+.rara-chat .rara-live-slot {
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 48rem;
+  bottom: 10.5rem;
+}
+
 .user-message-container {
   /* Content-size the bubble so justify-end actually pushes it right.
      In a flex container `display: block` resolves to "stretch" along

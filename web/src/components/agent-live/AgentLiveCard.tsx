@@ -19,7 +19,6 @@ import { useState } from 'react';
 import { AgentTranscriptDialog } from './AgentTranscriptDialog';
 import type { LiveRun } from './live-run-store';
 import { SingleAgentLiveCard } from './SingleAgentLiveCard';
-import { TaskRunHistory } from './TaskRunHistory';
 import { useLiveRun } from './use-live-run';
 
 interface Props {
@@ -27,8 +26,16 @@ interface Props {
 }
 
 /**
- * Top-level sticky card shown above the chat transcript while an agent
- * run is active, plus an `Execution history` section for prior runs.
+ * Inline in-progress card for an active run — styled and positioned to
+ * behave like the next assistant message at the bottom of the chat
+ * transcript (ChatGPT/Claude pattern). Parent owns the slot layout
+ * (see `.rara-live-slot` in `index.css`); this component renders the
+ * card content + transcript modal only.
+ *
+ * Task history has moved off this card — transient run history adds
+ * noise in the message flow; surface it from the session sidebar
+ * instead (follow-up).
+ *
  * Stop is intentionally wired as `disabled` — the backend cancel
  * endpoint is not implemented yet (tracked in a follow-up issue).
  */
@@ -36,27 +43,23 @@ export function AgentLiveCard({ sessionKey }: Props) {
   const slice = useLiveRun(sessionKey);
   const [openRun, setOpenRun] = useState<LiveRun | null>(null);
 
-  const hasAnything = slice.active !== null || slice.history.length > 0;
-  if (!hasAnything) return null;
+  if (!slice.active) return null;
 
   return (
-    <div className="sticky top-0 z-30 flex flex-col gap-2 border-b border-border/40 bg-background/80 px-3 py-2 backdrop-blur">
-      {slice.active && (
-        <SingleAgentLiveCard
-          run={slice.active}
-          onOpenTranscript={() => setOpenRun(slice.active)}
-          // Stop endpoint not yet wired — see follow-up issue referenced
-          // in the PR body. Passing no handler disables the button with
-          // a clarifying tooltip inside SingleAgentLiveCard.
-          {...({} as { onStop?: () => void })}
-        />
-      )}
-      <TaskRunHistory runs={slice.history} onOpenTranscript={setOpenRun} />
+    <>
+      <SingleAgentLiveCard
+        run={slice.active}
+        onOpenTranscript={() => setOpenRun(slice.active)}
+        // Stop endpoint not yet wired — see follow-up issue referenced
+        // in the PR body. Passing no handler disables the button with
+        // a clarifying tooltip inside SingleAgentLiveCard.
+        {...({} as { onStop?: () => void })}
+      />
       <AgentTranscriptDialog
         run={openRun}
         open={openRun !== null}
         onClose={() => setOpenRun(null)}
       />
-    </div>
+    </>
   );
 }

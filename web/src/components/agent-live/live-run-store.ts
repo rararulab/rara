@@ -51,6 +51,15 @@ export interface LiveRun {
   toolCalls: number;
   /** Last error message (for `failed` status); null otherwise. */
   error: string | null;
+  /**
+   * Latest `progress.stage` string emitted by the kernel — a free-text
+   * status marker (e.g. `"thinking"`, `"Waiting for LLM response
+   * (iteration 2)..."`, `"Processing... (3 steps completed)"`). Rendered
+   * in the live card body when the run has no substantive timeline items
+   * yet — otherwise the card would show an unhelpful "no data" placeholder
+   * while the provider is still producing its first chunk.
+   */
+  currentStage: string | null;
 }
 
 /**
@@ -206,6 +215,7 @@ export function reduce(
       items: [],
       toolCalls: 0,
       error: null,
+      currentStage: null,
     };
     return { active, history };
   }
@@ -305,6 +315,16 @@ export function reduce(
         });
       }
       return { ...slice, active: { ...run, items: nextItems } };
+    }
+    case 'progress': {
+      // Free-text status marker from the kernel (see
+      // `crates/kernel/src/agent/mod.rs` emit sites). Mirrored onto the
+      // run so the card header can read the latest stage even when no
+      // timeline items have landed yet — common for LLM providers that
+      // don't stream text deltas (e.g. MiniMax batch mode).
+      const stage = readString(event, 'stage');
+      if (!stage) return slice;
+      return { ...slice, active: { ...run, currentStage: stage } };
     }
     default:
       // Everything else is informational and ignored for the live card.

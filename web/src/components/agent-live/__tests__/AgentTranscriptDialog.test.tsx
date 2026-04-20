@@ -33,6 +33,7 @@ function runFixture(): LiveRun {
     ],
     toolCalls: 1,
     error: null,
+    currentStage: null,
   };
 }
 

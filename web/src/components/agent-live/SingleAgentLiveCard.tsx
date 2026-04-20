@@ -80,7 +80,7 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
   };
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border/60 bg-card/70 shadow-sm backdrop-blur">
+    <section className="overflow-hidden rounded-lg border border-border/50 bg-card/60 backdrop-blur-sm">
       <div
         role="button"
         tabIndex={0}
@@ -97,6 +97,11 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
         />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {headerLabel}
+          {run.currentStage && (
+            <span className="ml-2 font-normal text-muted-foreground">
+              · {stageLabel(run.currentStage)}
+            </span>
+          )}
         </span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {formatDuration(elapsed)}
@@ -142,9 +147,12 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
         <div className="relative border-t border-border/50">
           <div ref={scrollerRef} onScroll={onScroll} className="max-h-[320px] overflow-y-auto">
             {redactedItems.length === 0 ? (
-              <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-                Live log is not available for this agent provider. Results will appear when the task
-                completes.
+              <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+                <span
+                  className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
+                  aria-hidden
+                />
+                <span className="truncate">{stageLabel(run.currentStage)}</span>
               </div>
             ) : (
               <div className="divide-y divide-border/40">
@@ -181,4 +189,18 @@ function redactItem(item: TimelineItem): TimelineItem {
     return { ...item, input: redactObject(item.input) as Record<string, unknown> };
   }
   return item;
+}
+
+/**
+ * Beautify well-known kernel stage strings; raw free-text falls through.
+ * Keep the mapping small — kernel stage strings are already intentionally
+ * human-readable (see `crates/kernel/src/agent/mod.rs` emit sites); we
+ * only translate the two bare identifiers that look like machine tokens
+ * in the UI.
+ */
+function stageLabel(stage: string | null): string {
+  if (!stage) return '正在处理…';
+  if (stage === 'thinking') return '思考中…';
+  if (stage === 'interrupted') return '已中断，准备处理新消息…';
+  return stage;
 }

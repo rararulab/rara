@@ -33,6 +33,7 @@ function runFixture(overrides: Partial<LiveRun> = {}): LiveRun {
     ],
     toolCalls: 1,
     error: null,
+    currentStage: null,
     ...overrides,
   };
 }

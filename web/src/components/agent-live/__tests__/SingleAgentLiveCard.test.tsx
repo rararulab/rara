@@ -30,17 +30,37 @@ function runFixture(overrides: Partial<LiveRun> = {}): LiveRun {
     items: [],
     toolCalls: 0,
     error: null,
+    currentStage: null,
     ...overrides,
   };
 }
 
 describe('SingleAgentLiveCard', () => {
-  it('shows the empty-log message when the run has no items yet', () => {
+  it('shows a generic working placeholder when the run has no items or stage', () => {
     render(<SingleAgentLiveCard run={runFixture()} onOpenTranscript={vi.fn()} />);
+    expect(screen.getByText('正在处理…')).toBeInTheDocument();
+  });
+
+  it('renders the current stage text when set', () => {
+    render(
+      <SingleAgentLiveCard
+        run={runFixture({ currentStage: 'Waiting for LLM response (iteration 2)...' })}
+        onOpenTranscript={vi.fn()}
+      />,
+    );
+    // Appears both in header subtitle and body row.
     expect(
-      screen.getByText(
-        /Live log is not available for this agent provider\. Results will appear when the task completes\./,
-      ),
-    ).toBeInTheDocument();
+      screen.getAllByText(/Waiting for LLM response \(iteration 2\)\.\.\./).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('beautifies the well-known "thinking" stage', () => {
+    render(
+      <SingleAgentLiveCard
+        run={runFixture({ currentStage: 'thinking' })}
+        onOpenTranscript={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByText('思考中…').length).toBeGreaterThan(0);
   });
 });

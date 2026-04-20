@@ -1093,12 +1093,19 @@ export default function PiChat() {
             </span>
           </div>
         )}
-        {/* Live agent card — sticky above the chat transcript while a
-            turn is streaming. Hidden when there is no active run and no
-            history for the current session (see AgentLiveCard). */}
-        <AgentLiveCard sessionKey={activeSession?.key} />
         {/* Chat panel container — takes remaining vertical space. */}
         <div ref={containerRef} className="min-h-0 flex-1 w-full" />
+        {/* Live agent card — positioned inline with the pi-web-ui message
+            column (same 48rem cap) and anchored just above the composer,
+            so it reads as "the next assistant message" while a turn is
+            streaming. See `.rara-live-slot` in index.css for placement. */}
+        {!isInitializing && (
+          <div className="rara-live-slot pointer-events-none absolute z-10 px-2">
+            <div className="pointer-events-auto">
+              <AgentLiveCard sessionKey={activeSession?.key} />
+            </div>
+          </div>
+        )}
         {/*
           Welcome overlay — rendered above pi-web-ui's empty message list
           when the active session has no messages. Pointer-events-none so

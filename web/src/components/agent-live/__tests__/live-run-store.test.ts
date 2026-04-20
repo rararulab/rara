@@ -100,6 +100,22 @@ describe('LiveRunStore', () => {
     expect(slice.active).toBeNull();
     expect(slice.history[0]?.status).toBe('cancelled');
   });
+
+  it('tracks the latest progress.stage on the active run', () => {
+    const store = new LiveRunStore();
+    const sk = 's5';
+    store.publish(sk, startEvent);
+    expect(store.snapshot(sk).active?.currentStage).toBeNull();
+    store.publish(sk, { type: 'progress', stage: 'thinking' });
+    expect(store.snapshot(sk).active?.currentStage).toBe('thinking');
+    store.publish(sk, {
+      type: 'progress',
+      stage: 'Waiting for LLM response (iteration 2)...',
+    });
+    expect(store.snapshot(sk).active?.currentStage).toBe(
+      'Waiting for LLM response (iteration 2)...',
+    );
+  });
 });
 
 describe('mergeBySourceSeq', () => {
