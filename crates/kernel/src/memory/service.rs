@@ -370,10 +370,12 @@ impl TapeService {
         };
         messages.extend(history);
 
-        // Merge all leading system messages into one for providers with strict
-        // chat templates (e.g. Qwen via llama.cpp) that require a single
-        // system message at position 0.
-        Ok(super::context::merge_leading_system_messages(messages))
+        // Collapse every `system` role into position 0: merge leading system
+        // messages and rewrite any mid-stream `system` message as a prefixed
+        // `user` turn. This is mandatory for providers that reject non-first
+        // system roles (MiniMax `invalid message role: system (2013)`) and
+        // safe for providers that tolerate them.
+        Ok(super::context::collapse_system_messages(messages))
     }
 
     // -----------------------------------------------------------------------
