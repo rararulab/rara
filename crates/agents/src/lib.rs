@@ -163,6 +163,12 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
 /// observes sessions and dispatches instructions to Rara.
 pub fn mita() -> &'static AgentManifest { &MITA_MANIFEST }
 
+// Knowledge extractor manifest lives in `rara_kernel::memory::knowledge`
+// because the extraction pipeline itself is defined in the kernel — the
+// manifest must be visible to the `DriverRegistry::resolve_agent` call
+// site there, and `rara-kernel` sits below `rara-agents` in the
+// dependency DAG. See `crates/kernel/src/memory/knowledge/manifest.rs`.
+
 // ---------------------------------------------------------------------------
 // ScheduledJob — dedicated agent for scheduled task execution
 // ---------------------------------------------------------------------------

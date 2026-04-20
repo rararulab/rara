@@ -14,6 +14,23 @@ like `knowledge.extractor_model`) should not reappear. The legacy
 `DriverRegistry::resolve` tuple API is kept as a thin shim for existing
 callers; migration is tracked in follow-up issues under Epic #1631.
 
+### Migrated consumers
+
+- `memory/knowledge/extractor.rs` — #1636 / #1629. Reads
+  `agents.knowledge_extractor.{driver, model}`. Boot fails fast if the
+  pair is missing. `extract_knowledge` now takes a `&ResolvedAgent` so
+  driver + model can never disagree. Example config:
+
+  ```yaml
+  agents:
+    knowledge_extractor:
+      driver: "openrouter"
+      model: "gpt-4o-mini"
+  ```
+
+  Extraction failures now emit at `error!` level (previously `warn!`,
+  which hid the MiniMax/gpt-4o-mini split-config bug in prod).
+
 ## Critical: StreamDelta Event Ordering in `openai.rs`
 
 ### The Invariant

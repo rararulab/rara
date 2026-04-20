@@ -448,6 +448,58 @@ async fn build_driver_registry(
         }
     }
 
+    // -- unified per-agent configs (agents.<name>.{driver, model}) ---------------
+    //
+    // Introduced in #1636. Populates the `DriverRegistry::resolve_agent` lookup
+    // table that the knowledge extractor (and future consumers) read from.
+    // Boot fails fast if `agents.knowledge_extractor.{driver, model}` is missing
+    // — the prod failure in #1629 showed we cannot silently fall back.
+    let unified_agent_names: BTreeSet<&str> = all_settings
+        .keys()
+        .filter_map(|k| k.strip_prefix("agents."))
+        .filter_map(|k| k.split('.').next())
+        .collect();
+
+    for &agent in &unified_agent_names {
+        let driver = all_settings
+            .get(&format!("agents.{agent}.driver"))
+            .filter(|v| !v.trim().is_empty())
+            .cloned();
+        let model = all_settings
+            .get(&format!("agents.{agent}.model"))
+            .filter(|v| !v.trim().is_empty())
+            .cloned();
+
+        if driver.is_some() || model.is_some() {
+            info!(agent, ?driver, ?model, "unified agent LLM config");
+            registry.set_agent_config(
+                agent,
+                rara_kernel::llm::registry::AgentLlmConfig { driver, model },
+            );
+        }
+    }
+
+    // Required binding: the knowledge extractor must have both driver + model
+    // so resolve_agent() never falls back to a mismatched default. Fail boot
+    // with an actionable error if missing.
+    {
+        let name = rara_kernel::memory::knowledge::KNOWLEDGE_EXTRACTOR_NAME;
+        let driver = all_settings
+            .get(&format!("agents.{name}.driver"))
+            .filter(|v| !v.trim().is_empty());
+        let model = all_settings
+            .get(&format!("agents.{name}.model"))
+            .filter(|v| !v.trim().is_empty());
+        if driver.is_none() || model.is_none() {
+            anyhow::bail!(
+                "agents.{name}.{{driver, model}} must be configured in config.yaml — the \
+                 knowledge extraction pipeline requires an explicit driver + model pair (see \
+                 issue #1636). Example:\n\nagents:\n  {name}:\n    driver: \"openrouter\"\n    \
+                 model: \"gpt-4o-mini\"\n"
+            );
+        }
+    }
+
     // -- codex (ChatGPT backend via OAuth) — uses Responses API ----------------
 
     match rara_codex_oauth::load_tokens().await {
