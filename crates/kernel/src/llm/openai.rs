@@ -142,7 +142,7 @@ const RATE_LIMIT_MAX_RETRIES: u32 = 2;
 /// Initial backoff delay for rate-limited retries.
 const RATE_LIMIT_INITIAL_DELAY: Duration = Duration::from_secs(5);
 /// Maximum backoff delay for rate-limited retries.
-const RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
+const RATE_LIMIT_MAX_DELAY: Duration = Duration::from_mins(1);
 
 impl OpenAiDriver {
     /// Default SSE idle timeout (90 s). If no SSE event arrives within this
@@ -163,7 +163,7 @@ impl OpenAiDriver {
     fn build_http_client(no_proxy: bool) -> reqwest::Client {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(300));
+            .timeout(Duration::from_mins(5));
         if no_proxy {
             builder = builder.no_proxy();
         }

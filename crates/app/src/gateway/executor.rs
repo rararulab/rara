@@ -96,7 +96,7 @@ pub struct UpdateExecutor {
 }
 
 /// Build timeout: 10 minutes.
-const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+const BUILD_TIMEOUT: Duration = Duration::from_mins(10);
 
 impl UpdateExecutor {
     /// Create a new executor.

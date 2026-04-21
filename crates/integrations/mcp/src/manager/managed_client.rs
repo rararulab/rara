@@ -85,7 +85,7 @@ const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 30;
 /// Default timeout for individual tool calls (seconds).
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 60;
 /// TTL for the per-server tool cache.
-const TOOLS_CACHE_TTL: Duration = Duration::from_secs(300);
+const TOOLS_CACHE_TTL: Duration = Duration::from_mins(5);
 
 // ── AsyncManagedClient ──────────────────────────────────────────────
 

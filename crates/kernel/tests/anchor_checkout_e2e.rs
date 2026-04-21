@@ -49,7 +49,7 @@ impl SessionIndex for TestSessionIndex {
     ) -> Result<Vec<SessionEntry>, SessionError> {
         let mut entries: Vec<SessionEntry> =
             self.sessions.iter().map(|r| r.value().clone()).collect();
-        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
         entries.truncate(limit as usize);
         Ok(entries)
     }

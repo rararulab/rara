@@ -197,7 +197,7 @@ impl WeixinApiClient {
         self.post_form_with_timeout(
             "ilink/bot/get_qrcode_status",
             &[("qrcode", qrcode_id), ("bot_type", "3")],
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )
         .await
     }

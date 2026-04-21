@@ -685,7 +685,7 @@ impl SessionTable {
     /// `IdleCheck` evicts them from the table. Chosen to give the kernel UI
     /// enough time to surface recently-finished runs in the Dormant group
     /// while still bounding memory growth for long-running processes.
-    pub const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+    pub const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_mins(5);
 
     /// Create an empty process table.
     pub fn new() -> Self {

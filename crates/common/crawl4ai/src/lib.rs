@@ -73,7 +73,7 @@ impl Crawl4AiClient {
     /// Defaults to `http://localhost:11235` if not specified.
     pub fn new(base_url: &str) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_mins(1))
             .build()
             .expect("build reqwest client for Crawl4AI");
         Self::with_client(base_url, client)

@@ -103,7 +103,7 @@ pub struct WebhookState {
 }
 
 /// TTL for idempotency cache entries.
-const IDEMPOTENCY_TTL: Duration = Duration::from_secs(3600);
+const IDEMPOTENCY_TTL: Duration = Duration::from_hours(1);
 
 impl WebhookState {
     /// Create a new webhook state.

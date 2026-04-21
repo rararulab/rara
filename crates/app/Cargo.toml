@@ -57,6 +57,9 @@ rara-soul.workspace = true
 rara-tool-macro.workspace = true
 fff-search = { workspace = true }
 fff-query-parser = { workspace = true }
+# Direct dep (not imported) to activate the workspace-level `=1.3.2` pin on
+# this transitive; see the note in the workspace `[dependencies]`.
+zlob = { workspace = true }
 regex.workspace = true
 reqwest = { workspace = true }
 schemars.workspace = true

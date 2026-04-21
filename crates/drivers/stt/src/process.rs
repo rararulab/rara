@@ -15,7 +15,7 @@ use super::SttConfig;
 
 /// Maximum time to wait for the whisper-server `/health` endpoint to become
 /// reachable after spawning the process.
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(60);
+const HEALTH_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Interval between consecutive health-check polls during startup.
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(1);

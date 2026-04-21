@@ -59,7 +59,7 @@ impl SessionIndex for InMemorySessionIndex {
     ) -> Result<Vec<SessionEntry>, SessionError> {
         let mut entries: Vec<SessionEntry> =
             self.sessions.iter().map(|entry| entry.clone()).collect();
-        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
         let start = offset.max(0) as usize;
         let take = limit.max(0) as usize;
         Ok(entries.into_iter().skip(start).take(take).collect())
