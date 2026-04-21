@@ -4737,15 +4737,115 @@ fn spawn_stream_forwarder(
                                         }
                                     }
                                 }
-                            } else if let Some(mid) = progress.message_id {
-                                // No trace available (kernel save failed). Leave
-                                // the current progress text in place but drop any
-                                // pending buttons — detail view has nothing to show.
-                                rate_limiter.acquire(chat_id).await;
-                                let text = progress.render_text();
-                                let _ = bot
-                                    .edit_message_text(ChatId(chat_id), mid, &text)
-                                    .await;
+                            } else {
+                                // No trace available. This typically means the
+                                // kernel aborted the turn with a `TurnError`
+                                // (#1641) before emitting `TraceReady`, so the
+                                // progress bubble would otherwise stay stuck on
+                                // the "thinking" indicator — see issue #1634 and
+                                // the production symptom logged as
+                                // `turn completed reply_len=N` with the bubble
+                                // never clearing.
+                                //
+                                // Reconcile unconditionally based on the
+                                // accumulated text state. The `turn.error`
+                                // payload is not currently delivered to the
+                                // per-session stream (the kernel publishes to
+                                // the syscall event queue which fans out to a
+                                // separate notification chat), so `turn_error`
+                                // is `None` here until a kernel-side routing
+                                // change exposes it — the reconcile function
+                                // still handles the 4 terminal combinations
+                                // for when that wiring lands.
+                                let accumulated_snapshot = active_streams
+                                    .get(&chat_id)
+                                    .map(|s| s.accumulated.clone())
+                                    .unwrap_or_default();
+                                let outcome = super::reconcile::reconcile_terminal_state(
+                                    &accumulated_snapshot,
+                                    None,
+                                );
+                                match outcome {
+                                    super::reconcile::TerminalOutcome::Content {
+                                        body, error_footer,
+                                    } => {
+                                        // Content already flushed to stream
+                                        // messages above. Just append an error
+                                        // footer to the progress bubble (or
+                                        // drop it silently) — the user already
+                                        // sees the salvaged reply.
+                                        if let (Some(mid), Some(footer)) =
+                                            (progress.message_id, error_footer)
+                                        {
+                                            rate_limiter.acquire(chat_id).await;
+                                            let _ = bot
+                                                .edit_message_text(
+                                                    ChatId(chat_id),
+                                                    mid,
+                                                    &footer,
+                                                )
+                                                .await;
+                                        }
+                                        // Reference `body` to keep the compiler
+                                        // from flagging it as unused; the raw
+                                        // text is already delivered via the
+                                        // streamed message edit path.
+                                        let _ = body;
+                                    }
+                                    super::reconcile::TerminalOutcome::Error {
+                                        line,
+                                    } => {
+                                        warn!(
+                                            chat_id,
+                                            line = %line,
+                                            "tg stream close: no content + turn error \
+                                             — replacing progress bubble with error line"
+                                        );
+                                        if let Some(mid) = progress.message_id {
+                                            rate_limiter.acquire(chat_id).await;
+                                            let _ = bot
+                                                .edit_message_text(
+                                                    ChatId(chat_id),
+                                                    mid,
+                                                    &line,
+                                                )
+                                                .await;
+                                        } else {
+                                            rate_limiter.acquire(chat_id).await;
+                                            let req = with_thread_id!(
+                                                bot.send_message(ChatId(chat_id), &line),
+                                                thread_id
+                                            );
+                                            let _ = req.await;
+                                        }
+                                    }
+                                    super::reconcile::TerminalOutcome::Neutral {
+                                        line,
+                                    } => {
+                                        // Kernel-side bug: empty terminal turn
+                                        // without a `TurnError` means
+                                        // `#1641` did not fire its emit path.
+                                        // Surface as ERROR for observability
+                                        // and still unstick the bubble.
+                                        tracing::error!(
+                                            chat_id,
+                                            session_id = %session_id,
+                                            "tg stream close: empty content and \
+                                             no turn.error observed — kernel should \
+                                             have emitted TurnError (issue #1634)"
+                                        );
+                                        if let Some(mid) = progress.message_id {
+                                            rate_limiter.acquire(chat_id).await;
+                                            let _ = bot
+                                                .edit_message_text(
+                                                    ChatId(chat_id),
+                                                    mid,
+                                                    &line,
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                }
                             }
 
                             break;
