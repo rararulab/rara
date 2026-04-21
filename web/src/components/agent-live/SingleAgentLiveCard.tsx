@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
-import { Bot, ChevronDown, Maximize2, Square } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { AlertCircle, Bot, CheckCircle2, ChevronDown, Maximize2, Square } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { LiveRun } from './live-run-store';
 import { formatDuration } from './time-format';
 
 import type { TimelineItem } from '@/api/kernel-types';
-import { TimelineRow } from '@/components/kernel/TimelineRow';
 import { redactObject } from '@/lib/redact';
 import { cn } from '@/lib/utils';
 
@@ -70,7 +69,8 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
 
   const elapsed = (run.endedAt ?? nowTick) - run.startedAt;
   const headerLabel = `${agentName} is working`;
-  const redactedItems = run.items.map(redactItem);
+  const redactedItems = useMemo(() => run.items.map(redactItem), [run.items]);
+  const chips = useMemo(() => buildToolChips(redactedItems), [redactedItems]);
 
   const onHeaderKey = (ev: KeyboardEvent<HTMLDivElement>) => {
     if (ev.key === 'Enter' || ev.key === ' ') {
@@ -145,7 +145,11 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
 
       {expanded && (
         <div className="relative border-t border-border/50">
-          <div ref={scrollerRef} onScroll={onScroll} className="max-h-[320px] overflow-y-auto">
+          <div
+            ref={scrollerRef}
+            onScroll={onScroll}
+            className="max-h-[213px] overflow-y-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
             {redactedItems.length === 0 ? (
               <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
                 <span
@@ -155,9 +159,9 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
                 <span className="truncate">{stageLabel(run.currentStage)}</span>
               </div>
             ) : (
-              <div className="divide-y divide-border/40">
-                {redactedItems.map((item) => (
-                  <TimelineRow key={`l-${item.seq}`} item={item} />
+              <div className="flex flex-col gap-1 px-3 py-2">
+                {chips.map((chip) => (
+                  <ToolChip key={`l-${chip.seq}`} chip={chip} />
                 ))}
               </div>
             )}
@@ -189,6 +193,135 @@ function redactItem(item: TimelineItem): TimelineItem {
     return { ...item, input: redactObject(item.input) as Record<string, unknown> };
   }
   return item;
+}
+
+interface ToolChipModel {
+  /** Source `tool_use` seq — used as React key. */
+  seq: number;
+  tool: string;
+  /** Derived short preview from the (redacted) input. Empty if nothing useful. */
+  preview: string;
+  status: 'running' | 'completed' | 'errored';
+  /** Short error text when `status === 'errored'`. Replaces the preview in the UI. */
+  errorText?: string;
+}
+
+/**
+ * Fold timeline items into one chip per `tool_use`, pairing each use with the
+ * nearest following `tool_result` / `error` that shares the same `tool` name.
+ *
+ * Pairing note: `TimelineItem` deliberately does not expose the backend
+ * `tool_call_id` (see `live-run-store.ts` WeakMap comment), so pairing is a
+ * best-effort name-order heuristic. If the same tool is invoked twice before
+ * the first result lands, chips briefly share state — acceptable for a live
+ * indicator.
+ *
+ * Newest chip first (hermes pattern) so the most recent activity sits at the
+ * top of the compact panel.
+ */
+function buildToolChips(items: readonly TimelineItem[]): ToolChipModel[] {
+  const chips: ToolChipModel[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const use = items[i];
+    if (!use || use.kind !== 'tool_use' || !use.tool) continue;
+    const toolName = use.tool;
+    // Default to running when no pairing follow-up is found; a tool_use
+    // without a matching tool_result/error is still in-flight from the UI's
+    // perspective even if streaming has technically stopped.
+    let status: ToolChipModel['status'] = 'running';
+    let errorText: string | undefined;
+    for (let j = i + 1; j < items.length; j++) {
+      const follow = items[j];
+      if (!follow) continue;
+      if (follow.kind === 'tool_result' && follow.tool === toolName) {
+        status = follow.success === false ? 'errored' : 'completed';
+        if (status === 'errored' && follow.output) errorText = clip(follow.output);
+        break;
+      }
+      if (follow.kind === 'error') {
+        status = 'errored';
+        errorText = clip(follow.content ?? '');
+        break;
+      }
+    }
+    const chip: ToolChipModel = {
+      seq: use.seq,
+      tool: toolName,
+      preview: derivePreview(use.input),
+      status,
+    };
+    if (errorText !== undefined) chip.errorText = errorText;
+    chips.push(chip);
+  }
+  return chips.reverse();
+}
+
+/** Keys to try in priority order when deriving a short preview from tool input. */
+const PREVIEW_KEYS = [
+  'query',
+  'file_path',
+  'path',
+  'pattern',
+  'description',
+  'command',
+  'prompt',
+  'skill',
+] as const;
+
+function derivePreview(input: Record<string, unknown> | undefined): string {
+  if (!input) return '';
+  for (const key of PREVIEW_KEYS) {
+    const v = input[key];
+    if (typeof v === 'string' && v.length > 0) {
+      const shaped = key === 'file_path' || key === 'path' ? shortenPath(v) : v;
+      return clip(shaped);
+    }
+  }
+  for (const v of Object.values(input)) {
+    if (typeof v === 'string' && v.length > 0) return clip(v);
+  }
+  return '';
+}
+
+/** Clip long strings to ~110 chars with a trailing ellipsis. */
+function clip(s: string): string {
+  const limit = 110;
+  const flat = s.replace(/\s+/g, ' ').trim();
+  return flat.length > limit ? flat.slice(0, limit) + '…' : flat;
+}
+
+/** Render long paths as `…/<last-two-segments>` to keep chips one-line. */
+function shortenPath(p: string): string {
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length <= 2) return p;
+  return '…/' + parts.slice(-2).join('/');
+}
+
+function ToolChip({ chip }: { chip: ToolChipModel }) {
+  const body = chip.status === 'errored' && chip.errorText ? chip.errorText : chip.preview;
+  return (
+    <div className="flex items-center gap-2 rounded-sm bg-muted/40 px-2 py-1 text-[11px]">
+      <StatusIcon status={chip.status} />
+      <span className="shrink-0 font-mono text-foreground">{chip.tool}</span>
+      {body && <span className="min-w-0 flex-1 truncate text-muted-foreground">{body}</span>}
+    </div>
+  );
+}
+
+function StatusIcon({ status }: { status: ToolChipModel['status'] }) {
+  if (status === 'running') {
+    return (
+      <span
+        role="status"
+        aria-label="running"
+        className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border border-muted-foreground/30 border-t-muted-foreground"
+      />
+    );
+  }
+  if (status === 'completed') {
+    return <CheckCircle2 aria-label="completed" className="h-3 w-3 shrink-0 text-emerald-500" />;
+  }
+  return <AlertCircle aria-label="errored" className="h-3 w-3 shrink-0 text-destructive" />;
 }
 
 /**
