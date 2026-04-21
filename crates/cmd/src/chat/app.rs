@@ -1696,7 +1696,7 @@ mod tests {
     #[test]
     fn format_tool_duration_seconds() {
         assert_eq!(
-            super::format_tool_duration(std::time::Duration::from_millis(1000)),
+            super::format_tool_duration(std::time::Duration::from_secs(1)),
             "1.0s"
         );
         assert_eq!(

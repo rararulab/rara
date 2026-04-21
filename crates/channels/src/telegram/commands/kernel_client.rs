@@ -632,7 +632,7 @@ mod tests {
         ) -> Result<Vec<SessionEntry>, SessionError> {
             let mut sessions: Vec<SessionEntry> =
                 self.sessions.iter().map(|entry| entry.clone()).collect();
-            sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            sessions.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
             let start = offset.max(0) as usize;
             let take = limit.max(0) as usize;
             Ok(sessions.into_iter().skip(start).take(take).collect())

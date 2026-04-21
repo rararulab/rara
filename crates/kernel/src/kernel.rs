@@ -122,14 +122,14 @@ pub struct KernelConfig {
     /// Must be greater than any individual tool's own timeout (e.g. bash
     /// defaults to 120 s) so per-tool timeouts fire first and only the
     /// offending tool is killed rather than the entire wave.
-    #[default(_code = "Duration::from_secs(180)")]
+    #[default(_code = "Duration::from_mins(3)")]
     pub tool_execution_timeout:  Duration,
     /// Default per-tool timeout applied when a tool's
     /// `execution_timeout()` returns `None`.
     ///
     /// Must be strictly less than `tool_execution_timeout` so the per-tool
     /// timeout fires before the global wave timeout.
-    #[default(_code = "Duration::from_secs(120)")]
+    #[default(_code = "Duration::from_mins(2)")]
     pub default_tool_timeout:    Duration,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
@@ -263,7 +263,7 @@ impl Kernel {
             config.default_tool_timeout = config
                 .tool_execution_timeout
                 .checked_sub(margin)
-                .unwrap_or(Duration::from_secs(60));
+                .unwrap_or(Duration::from_mins(1));
         }
         info!(
             max_concurrency = config.max_concurrency,
@@ -543,12 +543,12 @@ impl Kernel {
                     .into_iter()
                     .flatten()
                     .min()
-                    .unwrap_or(tokio::time::Instant::now() + std::time::Duration::from_secs(3600));
+                    .unwrap_or(tokio::time::Instant::now() + std::time::Duration::from_hours(1));
 
                 tokio::time::sleep_until(earliest)
             } else {
                 // Non-zero processors never wake for scheduling.
-                tokio::time::sleep(std::time::Duration::from_secs(86400))
+                tokio::time::sleep(std::time::Duration::from_hours(24))
             };
             tokio::pin!(scheduler_sleep);
 

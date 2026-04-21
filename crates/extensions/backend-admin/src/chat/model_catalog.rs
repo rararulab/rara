@@ -30,7 +30,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 /// Cache time-to-live — 5 minutes.
-const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const CACHE_TTL: Duration = Duration::from_mins(5);
 
 // ---------------------------------------------------------------------------
 // Public types

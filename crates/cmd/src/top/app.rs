@@ -120,23 +120,19 @@ impl App {
                 self.tab = Tab::SessionDetails;
                 self.scroll_offset = 0;
             }
-            KeyCode::Tab => {
-                if self.tab == Tab::SessionDetails {
-                    self.session_state.focus = match self.session_state.focus {
-                        PanelFocus::SessionList => PanelFocus::Gantt,
-                        PanelFocus::Gantt => PanelFocus::SessionTree,
-                        PanelFocus::SessionTree => PanelFocus::SessionList,
-                    };
-                }
+            KeyCode::Tab if self.tab == Tab::SessionDetails => {
+                self.session_state.focus = match self.session_state.focus {
+                    PanelFocus::SessionList => PanelFocus::Gantt,
+                    PanelFocus::Gantt => PanelFocus::SessionTree,
+                    PanelFocus::SessionTree => PanelFocus::SessionList,
+                };
             }
-            KeyCode::BackTab => {
-                if self.tab == Tab::SessionDetails {
-                    self.session_state.focus = match self.session_state.focus {
-                        PanelFocus::SessionList => PanelFocus::SessionTree,
-                        PanelFocus::Gantt => PanelFocus::SessionList,
-                        PanelFocus::SessionTree => PanelFocus::Gantt,
-                    };
-                }
+            KeyCode::BackTab if self.tab == Tab::SessionDetails => {
+                self.session_state.focus = match self.session_state.focus {
+                    PanelFocus::SessionList => PanelFocus::SessionTree,
+                    PanelFocus::Gantt => PanelFocus::SessionList,
+                    PanelFocus::SessionTree => PanelFocus::Gantt,
+                };
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.tab == Tab::SessionDetails {
@@ -155,15 +151,14 @@ impl App {
                     }
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter
                 if self.tab == Tab::SessionDetails
                     && self.session_state.focus == PanelFocus::SessionList
-                    && !self.session_state.sessions.is_empty()
-                {
-                    // Jump focus to Gantt panel on Enter from session list
-                    self.session_state.focus = PanelFocus::Gantt;
-                    self.session_state.gantt_selected = 0;
-                }
+                    && !self.session_state.sessions.is_empty() =>
+            {
+                // Jump focus to Gantt panel on Enter from session list
+                self.session_state.focus = PanelFocus::Gantt;
+                self.session_state.gantt_selected = 0;
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 // refresh is handled externally; this is just a signal

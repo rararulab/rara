@@ -41,7 +41,7 @@ use super::{
 };
 
 /// Maximum time to wait for the user to scan the QR code.
-const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+const LOGIN_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Width/height of the generated QR code PNG in pixels.
 const QR_IMAGE_SIZE: u32 = 512;

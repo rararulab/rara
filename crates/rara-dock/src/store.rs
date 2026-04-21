@@ -70,7 +70,7 @@ impl DockSessionStore {
         }
 
         // Sort by updated_at descending so the most recent session comes first.
-        docs.sort_by(|a, b| b.session.updated_at.cmp(&a.session.updated_at));
+        docs.sort_by_key(|b| std::cmp::Reverse(b.session.updated_at));
         Ok(docs)
     }
 

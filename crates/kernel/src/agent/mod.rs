@@ -2985,7 +2985,7 @@ pub(crate) async fn run_agent_loop(
             // 120s hard timeout — treats expiry the same as an explicit Stop.
             let decision = tokio::select! {
                 result = tokio::time::timeout(
-                    std::time::Duration::from_secs(120),
+                    std::time::Duration::from_mins(2),
                     rx,
                 ) => result,
                 _ = turn_cancel.cancelled() => {

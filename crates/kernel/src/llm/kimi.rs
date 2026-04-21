@@ -38,7 +38,7 @@ impl KimiCodeDriver {
     /// Create a new Kimi Code driver with a credential resolver.
     pub fn new(resolver: LlmCredentialResolverRef) -> Self {
         let inner =
-            OpenAiDriver::with_credential_resolver(resolver, std::time::Duration::from_secs(120));
+            OpenAiDriver::with_credential_resolver(resolver, std::time::Duration::from_mins(2));
         Self { inner }
     }
 }

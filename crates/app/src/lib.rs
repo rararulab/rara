@@ -183,7 +183,7 @@ pub struct GatewayConfig {
 
 mod gateway_defaults {
     use std::time::Duration;
-    pub fn check_interval() -> Duration { Duration::from_secs(300) }
+    pub fn check_interval() -> Duration { Duration::from_mins(5) }
     pub fn health_timeout() -> u64 { 30 }
     pub fn health_poll_interval() -> Duration { Duration::from_secs(2) }
     pub fn max_restart_attempts() -> u32 { 3 }

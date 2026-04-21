@@ -138,7 +138,7 @@ fn find_files_in_process(
         .collect();
 
     // Sort by modification time, newest first.
-    matched.sort_by(|a, b| b.1.cmp(&a.1));
+    matched.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let total_found = matched.len();
     let truncated = total_found > limit;
