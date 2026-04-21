@@ -22,12 +22,16 @@ use super::{EmbeddingService, KnowledgeConfig};
 
 /// Bundles the knowledge layer's runtime dependencies into a single handle
 /// that can be shared across the kernel.
+///
+/// The extractor agent's `{driver, model}` pair is **not** stored here — it
+/// is resolved per-call via
+/// [`DriverRegistry::resolve_agent`](crate::llm::DriverRegistry::resolve_agent)
+/// keyed by the `knowledge_extractor` manifest, so a single atomic snapshot
+/// reaches `extract_knowledge`. See #1636 / #1638.
 pub struct KnowledgeService {
-    pub pool:            SqlitePool,
-    pub embedding_svc:   Arc<EmbeddingService>,
-    pub config:          KnowledgeConfig,
-    /// LLM model name for memory extraction (from runtime settings).
-    pub extractor_model: String,
+    pub pool:          SqlitePool,
+    pub embedding_svc: Arc<EmbeddingService>,
+    pub config:        KnowledgeConfig,
 }
 
 impl KnowledgeService {

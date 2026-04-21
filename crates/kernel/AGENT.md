@@ -10,7 +10,9 @@ It returns a [`ResolvedAgent { driver, model, manifest }`] triple read from
 MUST go through `resolve_agent` so the driver and the model come from a
 single consistent source — the split-config bug that motivated #1635
 (driver resolved via the registry, model resolved via a flat settings key
-like `knowledge.extractor_model`) should not reappear. The legacy
+like `memory.knowledge.extractor_model`) should not reappear. That legacy
+flat key was removed in #1638; no fallback remains in Rust, missing
+`agents.<name>.{driver, model}` fails boot. The legacy
 `DriverRegistry::resolve` tuple API is kept as a thin shim for existing
 callers; migration is tracked in follow-up issues under Epic #1631.
 
