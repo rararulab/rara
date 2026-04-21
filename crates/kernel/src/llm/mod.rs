@@ -42,5 +42,5 @@ pub use driver::{
 pub use openai::{OpenAiDriver, is_local_url};
 pub use registry::{DriverRegistry, DriverRegistryRef, ProviderModelConfig};
 pub use scripted::ScriptedLlmDriver;
-pub use stream::StreamDelta;
+pub use stream::{StreamDelta, StreamFailure};
 pub use types::*;

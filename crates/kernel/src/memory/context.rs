@@ -374,6 +374,50 @@ pub fn merge_leading_system_messages(messages: Vec<Message>) -> Vec<Message> {
     result
 }
 
+/// Prefix inserted when a non-leading system message is rewritten as a
+/// user-role message to satisfy providers that reject mid-stream `system`
+/// roles (e.g. MiniMax `invalid message role: system (2013)`).
+const SYSTEM_NOTE_PREFIX: &str = "[system note] ";
+
+/// Normalize the message list so that `Role::System` appears **only** at
+/// position 0.
+///
+/// Rationale: some providers (notably MiniMax) reject any chat-completion
+/// request that contains a `system` role after the first message with HTTP
+/// 400 `invalid message role: system (2013)`. Tape-driven context rebuilds
+/// can legitimately interleave system-role metadata (anchor summaries, user
+/// memory, ad-hoc system notes) into the middle of the stream, so we must
+/// rewrite any non-leading occurrence before dispatch.
+///
+/// Strategy:
+/// 1. Collapse every leading system message (position 0..k) into a single
+///    concatenated system message via [`merge_leading_system_messages`].
+/// 2. Rewrite any remaining `Role::System` message into a `Role::User` message
+///    prefixed with [`SYSTEM_NOTE_PREFIX`] so the semantic intent (out-of-band
+///    instruction) is preserved without abusing the `system` role the provider
+///    rejects.
+///
+/// The `user`-with-prefix form is a deliberate trade-off: an alternative
+/// would be to silently merge mid-stream system content back into the
+/// leading prompt, but that destroys the message's position in the
+/// conversation timeline. Preserving position as a `user` turn keeps the
+/// LLM's chronological reasoning intact.
+pub fn collapse_system_messages(messages: Vec<Message>) -> Vec<Message> {
+    let merged = merge_leading_system_messages(messages);
+    merged
+        .into_iter()
+        .enumerate()
+        .map(|(idx, msg)| {
+            if idx > 0 && msg.role == crate::llm::Role::System {
+                let text = msg.content.as_text().to_owned();
+                Message::user(format!("{SYSTEM_NOTE_PREFIX}{text}"))
+            } else {
+                msg
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
@@ -765,6 +809,69 @@ mod tests {
         let merged = merge_leading_system_messages(messages);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].content.as_text(), "a\n\n---\n\nb");
+    }
+
+    #[test]
+    fn collapse_system_messages_merges_leading_and_rewrites_midstream() {
+        let messages = vec![
+            Message::system("prompt"),
+            Message::system("[User Memory]\nnotes"),
+            Message::user("hi"),
+            Message::assistant("hello"),
+            Message::system("mid-stream hint"),
+            Message::user("bye"),
+        ];
+        let out = collapse_system_messages(messages);
+        // One leading system, the rest mid-stream system has been rewritten.
+        let system_count = out.iter().filter(|m| m.role == Role::System).count();
+        assert_eq!(system_count, 1, "only position 0 should carry Role::System");
+        assert_eq!(out[0].role, Role::System);
+        assert!(out[0].content.as_text().contains("prompt"));
+        assert!(out[0].content.as_text().contains("[User Memory]"));
+        // Mid-stream system is now a user message with the prefix marker.
+        let rewritten = out
+            .iter()
+            .find(|m| m.role == Role::User && m.content.as_text().starts_with("[system note] "));
+        let rewritten = rewritten.expect("mid-stream system should be rewritten as user");
+        assert!(rewritten.content.as_text().contains("mid-stream hint"));
+    }
+
+    #[test]
+    fn collapse_system_messages_round_trip_no_midstream_system() {
+        let messages = vec![
+            Message::system("prompt"),
+            Message::user("hi"),
+            Message::assistant("hello"),
+        ];
+        let out = collapse_system_messages(messages.clone());
+        assert_eq!(out.len(), messages.len());
+        assert_eq!(out[0].role, Role::System);
+        assert_eq!(out[1].role, Role::User);
+        assert_eq!(out[2].role, Role::Assistant);
+    }
+
+    #[test]
+    fn collapse_system_messages_empty() {
+        assert!(collapse_system_messages(vec![]).is_empty());
+    }
+
+    #[test]
+    fn collapse_system_messages_multiple_midstream() {
+        let messages = vec![
+            Message::system("prompt"),
+            Message::user("hi"),
+            Message::system("hint A"),
+            Message::system("hint B"),
+            Message::assistant("ok"),
+        ];
+        let out = collapse_system_messages(messages);
+        let system_count = out.iter().filter(|m| m.role == Role::System).count();
+        assert_eq!(system_count, 1);
+        let rewritten: Vec<_> = out
+            .iter()
+            .filter(|m| m.role == Role::User && m.content.as_text().starts_with("[system note] "))
+            .collect();
+        assert_eq!(rewritten.len(), 2);
     }
 
     #[test]
