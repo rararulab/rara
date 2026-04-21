@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-import { PanelLeftClose, PanelLeft, Plus, Settings, Trash2, MessageSquare } from 'lucide-react';
+import {
+  PanelLeftClose,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+  MessageSquare,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { SidebarRunHistory } from './SidebarRunHistory';
@@ -30,6 +38,7 @@ interface ChatSidebarProps {
   activeSessionKey: string | undefined;
   onSelect: (session: ChatSession) => void;
   onNewSession: () => void;
+  onOpenSearch: () => void;
   onOpenSettings: () => void;
   /** Called after a session is deleted. `fallback` is the next
    * session the caller should switch to when the deleted row was
@@ -63,6 +72,7 @@ export function ChatSidebar({
   activeSessionKey,
   onSelect,
   onNewSession,
+  onOpenSearch,
   onOpenSettings,
   onDeleteSession,
   refreshKey,
@@ -171,6 +181,18 @@ export function ChatSidebar({
         >
           <Plus className="h-4 w-4 shrink-0" />
           {!collapsed && <span className="truncate">新建会话</span>}
+        </button>
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          className={cn(
+            'flex h-9 items-center rounded-md text-sm text-muted-foreground transition-colors cursor-pointer hover:bg-secondary/60 hover:text-foreground',
+            collapsed ? 'w-9 justify-center' : 'w-full gap-2 px-3',
+          )}
+          title="搜索会话 (⌘K)"
+        >
+          <Search className="h-4 w-4 shrink-0" />
+          {!collapsed && <span className="truncate">搜索会话</span>}
         </button>
         <button
           type="button"
