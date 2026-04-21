@@ -13,7 +13,7 @@ Concrete channel adapter implementations for the rara platform — bridges the k
   - `commands/` — Slash command handlers (`/session`, `/stop`, `/status`, `/tape`, `/help`, `/mcp`) and inline keyboard callback handlers.
   - `markdown.rs` — Telegram MarkdownV2 escaping utilities.
   - `mod.rs` — `TelegramConfig` (primary chat ID, group policy, allowed group).
-- `src/web.rs` — `WebAdapter` for the web chat UI. WebSocket + SSE streaming. Authenticated via owner token.
+- `src/web.rs` — `WebAdapter` for the web chat UI. WebSocket + SSE streaming. Authenticated via owner token. Each WS/SSE connection holds a **permanent** subscription to `StreamHub::subscribe_session_events` for its session — the subscription outlives individual streams so mid-turn interrupt + re-inject does not drop events (see #1647).
 - `src/terminal.rs` — `TerminalAdapter` for interactive CLI chat sessions.
 - `tool_display` — re-exported from `rara_kernel::trace::tool_display` (the canonical home, since these helpers render data persisted in `ExecutionTrace`). `rara_channels::tool_display::*` remains the import path for in-tree callers.
 - `src/lib.rs` — Crate root, re-exports adapter modules.
@@ -48,6 +48,7 @@ Concrete channel adapter implementations for the rara platform — bridges the k
 - Do NOT hardcode chat IDs or bot tokens — they come from runtime settings.
 - Do NOT use `bot.send_message()` / `bot.edit_message_text()` directly — **why:** bypasses `ChatRateLimiter`; Telegram will 429 and inline buttons will silently vanish in forum topics. Always call `rate_limiter.acquire(chat_id).await` first.
 - Do NOT construct `rara_kernel::trace::ExecutionTrace` locally or call `TraceService::save` from an adapter — **why:** trace assembly is kernel-owned (see `rara-kernel` AGENT.md "Execution Trace Ownership"). Adapters listen for `StreamEvent::TraceReady { trace_id }` and fetch the persisted row via `TraceService::get` when rendering compact summaries / cascade buttons.
+- Do NOT spawn a per-inbound-message `StreamHub::subscribe_session` forwarder in the web adapter — **why:** `subscribe_session` snapshots currently-open streams, so any stream opened later (e.g. after the kernel interrupts turn A and re-injects as turn B) goes unobserved. Long-lived WS/SSE connections subscribe once to the session-level bus via `StreamHub::subscribe_session_events` at connect time (see #1647).
 
 ## Dependencies
 

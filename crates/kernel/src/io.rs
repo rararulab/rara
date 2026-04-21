@@ -1037,6 +1037,18 @@ pub enum StreamEvent {
         /// [`TraceService::save`](crate::trace::TraceService::save).
         trace_id: String,
     },
+    /// Terminal marker emitted by [`StreamHub::close`] immediately before the
+    /// per-stream broadcast sender is dropped.
+    ///
+    /// Per-stream subscribers naturally see `RecvError::Closed` when the
+    /// sender drops; this variant exists so that **session-level** subscribers
+    /// (via [`StreamHub::subscribe_session_events`]) — whose bus outlives
+    /// individual streams — can still observe turn completion to emit their
+    /// own terminal signal (e.g. the web `WebEvent::Done` frame).
+    StreamClosed {
+        /// The stream that just closed.
+        stream_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,10 +1136,24 @@ pub const STREAM_HUB_BROADCAST_CAPACITY: usize = 4096;
 ///
 /// Manages the lifecycle of per-execution streams and provides
 /// subscription endpoints for egress/frontends.
+///
+/// # Session-level event bus
+///
+/// Beyond per-stream broadcast channels, the hub maintains a **session-level**
+/// event bus (`session_events`) whose lifetime is independent of individual
+/// streams. Each time [`StreamHub::open`] creates a new per-stream sender, a
+/// small bridge task forwards every emitted [`StreamEvent`] to the shared
+/// session-level sender. Subscribers attached via
+/// [`StreamHub::subscribe_session_events`] keep receiving events across stream
+/// turnover — critical for long-lived WS/SSE connections that must survive
+/// mid-turn interruption + re-injection (see issue #1647).
 pub struct StreamHub {
     streams:         DashMap<StreamId, StreamEntry>,
     /// Reverse index: session_key → active stream IDs for O(1) lookup.
     session_streams: DashMap<SessionKey, Vec<StreamId>>,
+    /// Session-level event bus — outlives individual streams so long-lived
+    /// subscribers (WS/SSE) do not see `Closed` between turns.
+    session_events:  DashMap<SessionKey, broadcast::Sender<StreamEvent>>,
     capacity:        usize,
 }
 
@@ -1137,6 +1163,7 @@ impl StreamHub {
         Self {
             streams: DashMap::new(),
             session_streams: DashMap::new(),
+            session_events: DashMap::new(),
             capacity,
         }
     }
@@ -1146,6 +1173,9 @@ impl StreamHub {
     /// Called by [`open`](Self::open) to ensure only one active stream per
     /// session. Any previously unclosed streams (e.g., from a hung agent
     /// run) are cleaned up here.
+    ///
+    /// Intentionally does NOT remove the session-level `session_events`
+    /// entry — that bus outlives individual streams (see [`StreamHub`] doc).
     #[tracing::instrument(skip(self))]
     pub fn close_session(&self, session_key: &SessionKey) {
         // Remove the session entry first, releasing the DashMap shard lock.
@@ -1158,13 +1188,25 @@ impl StreamHub {
             tracing::debug!(count = ids.len(), "cleaning up zombie streams for session");
         }
         for id in &ids {
-            self.streams.remove(id);
+            if let Some((_, entry)) = self.streams.remove(id) {
+                // Emit terminal marker so session-level subscribers observe
+                // the turn boundary before the per-stream sender drops.
+                let _ = entry.tx.send(StreamEvent::StreamClosed {
+                    stream_id: id.to_string(),
+                });
+            }
         }
     }
 
     /// Open a new stream for an agent execution run.
     ///
     /// Returns a [`StreamHandle`] that the executor uses to emit events.
+    ///
+    /// Also spawns a bridge task that forwards every event emitted on the
+    /// per-stream broadcast channel into the session-level event bus (see
+    /// [`subscribe_session_events`](Self::subscribe_session_events)). The
+    /// bridge task terminates naturally when the per-stream sender is dropped
+    /// (typically via [`close`](Self::close)).
     #[tracing::instrument(skip(self), fields(stream_id = tracing::field::Empty))]
     pub fn open(&self, session_key: SessionKey) -> StreamHandle {
         // Clean up any zombie streams from previous (hung) agent runs.
@@ -1181,6 +1223,31 @@ impl StreamHub {
             .entry(session_key)
             .or_default()
             .push(stream_id.clone());
+
+        // Get-or-create the session-level bus and spawn a bridge task from
+        // the per-stream sender into it. The bus outlives the per-stream
+        // sender intentionally so mid-turn interrupt+reinject does not drop
+        // long-lived WS/SSE subscribers.
+        let session_tx = self
+            .session_events
+            .entry(session_key)
+            .or_insert_with(|| broadcast::channel(self.capacity).0)
+            .clone();
+        let mut bridge_rx = tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match bridge_rx.recv().await {
+                    Ok(ev) => {
+                        let _ = session_tx.send(ev);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "stream→session bridge lagged; events dropped");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
         StreamHandle {
             stream_id,
             tx,
@@ -1191,10 +1258,21 @@ impl StreamHub {
     /// Close a stream by its ID.
     ///
     /// This is precise — only the specified stream is removed, not other
-    /// streams on the same session.
+    /// streams on the same session. Before dropping the per-stream sender,
+    /// emits a [`StreamEvent::StreamClosed`] so session-level subscribers can
+    /// observe the turn boundary without seeing `RecvError::Closed`.
+    ///
+    /// The session-level bus entry in `session_events` is intentionally NOT
+    /// removed here — it outlives individual streams so that the next turn's
+    /// stream can reuse the same session-level subscribers.
     #[tracing::instrument(skip(self))]
     pub fn close(&self, stream_id: &StreamId) {
         if let Some((_, entry)) = self.streams.remove(stream_id) {
+            // Fire the terminal marker before the per-stream sender drops so
+            // the bridge task observes it and forwards it to session_events.
+            let _ = entry.tx.send(StreamEvent::StreamClosed {
+                stream_id: stream_id.to_string(),
+            });
             if let Some(mut ids) = self.session_streams.get_mut(&entry.session_key) {
                 ids.retain(|id| id != stream_id);
                 if ids.is_empty() {
@@ -1217,6 +1295,28 @@ impl StreamHub {
                 }
             }
         }
+    }
+
+    /// Subscribe to the **session-level** event bus.
+    ///
+    /// The returned receiver observes every [`StreamEvent`] emitted by any
+    /// stream opened on this session — including streams that are opened
+    /// *after* this call, and surviving across stream turnover. Use this
+    /// for long-lived subscribers (WS/SSE) that must keep receiving events
+    /// when the kernel interrupts turn A and re-injects as turn B.
+    ///
+    /// The bus is created on demand and persists for the lifetime of the
+    /// hub. A terminal [`StreamEvent::StreamClosed`] is delivered on each
+    /// stream completion so consumers can emit their own per-turn "done"
+    /// signals.
+    pub fn subscribe_session_events(
+        &self,
+        session_key: &SessionKey,
+    ) -> broadcast::Receiver<StreamEvent> {
+        self.session_events
+            .entry(*session_key)
+            .or_insert_with(|| broadcast::channel(self.capacity).0)
+            .subscribe()
     }
 
     /// Subscribe to all active streams for a given session.
@@ -2424,8 +2524,8 @@ mod ingress_rate_limiter_tests {
 mod stream_hub_tests {
     use super::*;
 
-    #[test]
-    fn open_cleans_up_zombie_streams() {
+    #[tokio::test]
+    async fn open_cleans_up_zombie_streams() {
         let hub = StreamHub::new(16);
         let session = SessionKey::new();
 
@@ -2464,6 +2564,109 @@ mod stream_hub_tests {
         // Closing a session with no streams should not panic.
         hub.close_session(&session);
         assert!(hub.subscribe_session(&session).is_empty());
+    }
+
+    /// Session-level subscriber attached BEFORE any stream opens sees events
+    /// from BOTH streams on the same session — the forwarder survives stream
+    /// turnover. This is the core property the web adapter relies on to keep
+    /// streaming after mid-turn interrupt + reinject (#1647).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_events_bus_survives_stream_turnover() {
+        let hub = StreamHub::new(64);
+        let session = SessionKey::new();
+
+        // Subscribe BEFORE the first stream opens.
+        let mut rx = hub.subscribe_session_events(&session);
+
+        // Turn A.
+        let handle_a = hub.open(session);
+        handle_a.emit(StreamEvent::TextDelta {
+            text: "A1".to_owned(),
+        });
+        handle_a.emit(StreamEvent::TextDelta {
+            text: "A2".to_owned(),
+        });
+        hub.close(handle_a.stream_id());
+
+        // Turn B — fresh StreamHub::open, fresh per-stream sender.
+        let handle_b = hub.open(session);
+        handle_b.emit(StreamEvent::TextDelta {
+            text: "B1".to_owned(),
+        });
+        hub.close(handle_b.stream_id());
+
+        // Drain with a bounded wait so slow bridge tasks don't flake the test.
+        let mut texts = Vec::new();
+        let mut closed = 0;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while texts.len() < 3 || closed < 2 {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(StreamEvent::TextDelta { text })) => texts.push(text),
+                Ok(Ok(StreamEvent::StreamClosed { .. })) => closed += 1,
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => break,
+                Err(_) => break,
+            }
+        }
+        // Ordering across the two per-stream bridges is not guaranteed
+        // (they run on independent tasks), but every event from both turns
+        // must reach the subscriber — that's the bug fix for #1647.
+        texts.sort();
+        assert_eq!(
+            texts,
+            vec!["A1".to_owned(), "A2".to_owned(), "B1".to_owned()]
+        );
+        assert_eq!(closed, 2, "should see one StreamClosed per stream");
+    }
+
+    /// A subscriber attached AFTER the first stream has closed still receives
+    /// events from the next stream opened on the same session.
+    ///
+    /// Uses the multi-threaded runtime so the bridge tasks spawned during
+    /// turn A actually drain before we subscribe — on the current-thread
+    /// runtime, the bridge could still be holding queued A-events at the
+    /// moment subscribe runs, which would mask the property under test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_subscriber_still_receives_next_stream_events() {
+        let hub = StreamHub::new(64);
+        let session = SessionKey::new();
+
+        // Turn A: run and close before anyone subscribes.
+        let handle_a = hub.open(session);
+        handle_a.emit(StreamEvent::TextDelta {
+            text: "A1".to_owned(),
+        });
+        hub.close(handle_a.stream_id());
+
+        // Let the turn-A bridge fully drain before we subscribe so the new
+        // receiver does not pick up A's tail.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Subscribe now — AFTER the first stream closed but BEFORE turn B.
+        let mut rx = hub.subscribe_session_events(&session);
+
+        // Turn B.
+        let handle_b = hub.open(session);
+        handle_b.emit(StreamEvent::TextDelta {
+            text: "B1".to_owned(),
+        });
+        hub.close(handle_b.stream_id());
+
+        let mut texts = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while texts.is_empty() && tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(StreamEvent::TextDelta { text })) => texts.push(text),
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        assert_eq!(texts, vec!["B1"]);
     }
 }
 

@@ -1023,6 +1023,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::TraceReady { trace_id } => CliEvent::Progress {
             text: format!("Trace saved: {trace_id}"),
         },
+        // The CLI forwarder observes stream closure via RecvError::Closed
+        // and emits its own Done — the explicit marker is redundant here.
+        StreamEvent::StreamClosed { .. } => CliEvent::Done,
     }
 }
 
