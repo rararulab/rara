@@ -129,13 +129,16 @@ pub struct ComposioConfig {
 
 /// Knowledge layer configuration section in config.yaml.
 ///
+/// The extractor LLM binding lives in the unified `agents.knowledge_extractor`
+/// block — see [`AgentsConfig`]. Any legacy `knowledge.extractor_model` key
+/// in a user's YAML is silently ignored (unknown field).
+///
 /// ```yaml
 /// knowledge:
 ///   embedding_model: "text-embedding-3-small"
 ///   embedding_dimensions: 1536
 ///   search_top_k: 10
 ///   similarity_threshold: 0.85
-///   extractor_model: "gpt-4o-mini"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -148,9 +151,48 @@ pub struct KnowledgeConfig {
     pub search_top_k:         Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity_threshold: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extractor_model:      Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Agents config — per-agent `{driver, model}` bindings
+// ---------------------------------------------------------------------------
+
+/// Per-agent LLM binding. Mirrors
+/// [`rara_kernel::llm::AgentLlmConfig`] and is loaded from
+/// `agents.<name>.{driver, model}` in config.yaml.
+///
+/// Optional `max_output_chars` lets operators cap a headless agent's
+/// free-form output without a rebuild (currently consumed by
+/// `title_gen`; see `kernel/AGENT.md`).
+///
+/// ```yaml
+/// agents:
+///   knowledge_extractor:
+///     driver: "openrouter"
+///     model: "gpt-4o-mini"
+///   title_gen:
+///     driver: "openai"
+///     model: "gpt-4o-mini"
+///     max_output_chars: 50
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentBinding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver:           Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model:            Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_chars: Option<usize>,
+}
+
+/// Top-level `agents:` section — map from agent name to `{driver, model}`.
+///
+/// Introduced by #1636 as the unified replacement for scattered flat
+/// settings (e.g. the legacy `memory.knowledge.extractor_model`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentsConfig(pub HashMap<String, AgentBinding>);
 
 // ---------------------------------------------------------------------------
 // Flatten logic
@@ -174,7 +216,24 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     if let Some(ref k) = config.knowledge {
         flatten_knowledge(k, &mut pairs);
     }
+    if let Some(ref a) = config.agents {
+        flatten_agents(a, &mut pairs);
+    }
     pairs
+}
+
+fn flatten_agents(agents: &AgentsConfig, out: &mut Vec<(String, String)>) {
+    for (name, binding) in &agents.0 {
+        if let Some(ref v) = binding.driver {
+            out.push((format!("agents.{name}.driver"), v.clone()));
+        }
+        if let Some(ref v) = binding.model {
+            out.push((format!("agents.{name}.model"), v.clone()));
+        }
+        if let Some(v) = binding.max_output_chars {
+            out.push((format!("agents.{name}.max_output_chars"), v.to_string()));
+        }
+    }
 }
 
 fn flatten_llm(llm: &LlmConfig, out: &mut Vec<(String, String)>) {
@@ -255,9 +314,6 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
     if let Some(v) = k.similarity_threshold {
         out.push((keys::KNOWLEDGE_SIMILARITY_THRESHOLD.into(), v.to_string()));
     }
-    if let Some(ref v) = k.extractor_model {
-        out.push((keys::KNOWLEDGE_EXTRACTOR_MODEL.into(), v.clone()));
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +332,7 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
     Option<WechatConfig>,
     Option<ComposioConfig>,
     Option<KnowledgeConfig>,
+    Option<AgentsConfig>,
 ) {
     (
         unflatten_llm(pairs),
@@ -283,7 +340,42 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
         unflatten_wechat(pairs),
         unflatten_composio(pairs),
         unflatten_knowledge(pairs),
+        unflatten_agents(pairs),
     )
+}
+
+fn unflatten_agents(
+    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
+) -> Option<AgentsConfig> {
+    let prefix = "agents.";
+    let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for key in pairs.keys() {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            if let Some(dot) = rest.find('.') {
+                names.insert(rest[..dot].to_string());
+            }
+        }
+    }
+    if names.is_empty() {
+        return None;
+    }
+    let mut out = HashMap::new();
+    for name in names {
+        let driver = pairs.get(&format!("agents.{name}.driver")).cloned();
+        let model = pairs.get(&format!("agents.{name}.model")).cloned();
+        let max_output_chars = pairs
+            .get(&format!("agents.{name}.max_output_chars"))
+            .and_then(|v| v.parse::<usize>().ok());
+        out.insert(
+            name,
+            AgentBinding {
+                driver,
+                model,
+                max_output_chars,
+            },
+        );
+    }
+    Some(AgentsConfig(out))
 }
 
 fn unflatten_llm(
@@ -397,13 +489,11 @@ fn unflatten_knowledge(
     let similarity_threshold = pairs
         .get(keys::KNOWLEDGE_SIMILARITY_THRESHOLD)
         .and_then(|v| v.parse::<f32>().ok());
-    let extractor_model = pairs.get(keys::KNOWLEDGE_EXTRACTOR_MODEL).cloned();
 
     if embedding_model.is_none()
         && embedding_dimensions.is_none()
         && search_top_k.is_none()
         && similarity_threshold.is_none()
-        && extractor_model.is_none()
     {
         return None;
     }
@@ -413,7 +503,6 @@ fn unflatten_knowledge(
         embedding_dimensions,
         search_top_k,
         similarity_threshold,
-        extractor_model,
     })
 }
 
@@ -458,7 +547,6 @@ mod tests {
             embedding_dimensions: Some(1536),
             search_top_k:         Some(10),
             similarity_threshold: Some(0.85),
-            extractor_model:      Some("gpt-4o-mini".into()),
         };
 
         // Flatten
@@ -470,7 +558,8 @@ mod tests {
         let map: HashMap<String, String> = flat.into_iter().collect();
 
         // Unflatten
-        let (got_llm, got_tg, _got_wechat, got_composio, got_know) = unflatten_from_settings(&map);
+        let (got_llm, got_tg, _got_wechat, got_composio, got_know, _got_agents) =
+            unflatten_from_settings(&map);
 
         // --- LLM ---
         let got_llm = got_llm.expect("llm should be Some");
@@ -510,17 +599,71 @@ mod tests {
             got_know.similarity_threshold,
             knowledge.similarity_threshold
         );
-        assert_eq!(got_know.extractor_model, knowledge.extractor_model);
     }
 
     #[test]
     fn unflatten_empty_map_returns_none() {
         let map = HashMap::new();
-        let (llm, tg, wechat, composio, know) = unflatten_from_settings(&map);
+        let (llm, tg, wechat, composio, know, agents) = unflatten_from_settings(&map);
         assert!(wechat.is_none());
         assert!(llm.is_none());
         assert!(tg.is_none());
         assert!(composio.is_none());
         assert!(know.is_none());
+        assert!(agents.is_none());
+    }
+
+    #[test]
+    fn agents_roundtrip_flatten_unflatten() {
+        let mut m = HashMap::new();
+        m.insert(
+            "knowledge_extractor".to_string(),
+            AgentBinding {
+                driver:           Some("openrouter".into()),
+                model:            Some("gpt-4o-mini".into()),
+                max_output_chars: None,
+            },
+        );
+        m.insert(
+            "title_gen".to_string(),
+            AgentBinding {
+                driver:           Some("openai".into()),
+                model:            Some("gpt-4o-mini".into()),
+                max_output_chars: Some(50),
+            },
+        );
+        let agents = AgentsConfig(m);
+
+        let mut flat = Vec::new();
+        flatten_agents(&agents, &mut flat);
+        let map: HashMap<String, String> = flat.into_iter().collect();
+
+        let got = unflatten_agents(&map).expect("agents should be Some");
+        let b = got.0.get("knowledge_extractor").expect("binding present");
+        assert_eq!(b.driver.as_deref(), Some("openrouter"));
+        assert_eq!(b.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(b.max_output_chars, None);
+        let t = got.0.get("title_gen").expect("title_gen binding present");
+        assert_eq!(t.driver.as_deref(), Some("openai"));
+        assert_eq!(t.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(t.max_output_chars, Some(50));
+    }
+
+    /// Regression: legacy `memory.knowledge.extractor_model` KV pairs must
+    /// be ignored silently — the key no longer exists in
+    /// [`KnowledgeConfig`]. `unflatten_from_settings` keeps no state for
+    /// unrecognised keys, so the output is unchanged from the empty case.
+    #[test]
+    fn legacy_extractor_model_key_is_ignored() {
+        let mut map = HashMap::new();
+        map.insert(
+            "memory.knowledge.extractor_model".to_string(),
+            "legacy-model".to_string(),
+        );
+        let (_llm, _tg, _wc, _cmp, know, _agents) = unflatten_from_settings(&map);
+        assert!(
+            know.is_none(),
+            "legacy extractor_model must not produce a KnowledgeConfig"
+        );
     }
 }

@@ -53,7 +53,6 @@ pub mod keys {
     pub const KNOWLEDGE_EMBEDDING_DIMENSIONS: &str = "memory.knowledge.embedding_dimensions";
     pub const KNOWLEDGE_SEARCH_TOP_K: &str = "memory.knowledge.search_top_k";
     pub const KNOWLEDGE_SIMILARITY_THRESHOLD: &str = "memory.knowledge.similarity_threshold";
-    pub const KNOWLEDGE_EXTRACTOR_MODEL: &str = "memory.knowledge.extractor_model";
 }
 
 /// Unified trait for reading and writing flat KV settings.

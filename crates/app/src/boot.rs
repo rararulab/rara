@@ -18,7 +18,10 @@
 //! resolvers, manifests, mcp, composio, skills) into a single module with
 //! private helpers and a public `boot()` entry point.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -259,7 +262,15 @@ pub(crate) async fn boot(
 
     // -- agent registry ----------------------------------------------------
 
-    let agent_registry = Arc::new(load_default_registry());
+    // Optional YAML overrides for headless system agents — currently just
+    // `title_gen.max_output_chars`, but structured so future knobs can land
+    // here without forcing another bootstrap refactor.
+    let title_gen_max_output_chars = settings_provider
+        .get("agents.title_gen.max_output_chars")
+        .await
+        .and_then(|v| v.trim().parse::<usize>().ok());
+
+    let agent_registry = Arc::new(load_default_registry(title_gen_max_output_chars));
 
     // -- default provider model lister / embedder ----------------------------
     //
@@ -448,6 +459,49 @@ async fn build_driver_registry(
         }
     }
 
+    // -- unified per-agent configs (agents.<name>.{driver, model}) --------------
+    //
+    // Introduced in #1636, extended by #1637. The `agents.*` namespace is the
+    // post-refactor binding consumed by `DriverRegistry::resolve_agent`. Unlike
+    // the legacy `llm.agent_overrides.*` keys, these live alongside other
+    // per-agent knobs (e.g. `agents.title_gen.max_output_chars`) and form the
+    // single `{driver, model, manifest}` snapshot used at call sites.
+    //
+    // Boot fails fast for the knowledge extractor if its driver/model are
+    // missing — the prod failure in #1629 showed we cannot silently fall back.
+    let unified_agent_names: BTreeSet<&str> = all_settings
+        .keys()
+        .filter_map(|k| k.strip_prefix("agents."))
+        .filter_map(|k| k.split('.').next())
+        .collect();
+
+    for &agent in &unified_agent_names {
+        let driver = all_settings
+            .get(&format!("agents.{agent}.driver"))
+            .filter(|v| !v.trim().is_empty())
+            .cloned();
+        let model = all_settings
+            .get(&format!("agents.{agent}.model"))
+            .filter(|v| !v.trim().is_empty())
+            .cloned();
+
+        if driver.is_some() || model.is_some() {
+            info!(agent, ?driver, ?model, "unified agent LLM config");
+            registry.set_agent_config(
+                agent,
+                rara_kernel::llm::registry::AgentLlmConfig { driver, model },
+            );
+        }
+    }
+
+    // Fail boot when any required background agent is missing an explicit
+    // `{driver, model}` pair. Silent fallbacks are forbidden by the project's
+    // "no config defaults in Rust" rule — and the prod failure in #1629 / #1636
+    // showed that a mismatched default silently breaks the knowledge
+    // extraction pipeline.
+    ensure_required_agent_configs(&all_settings, REQUIRED_BACKGROUND_AGENTS)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
     // -- codex (ChatGPT backend via OAuth) — uses Responses API ----------------
 
     match rara_codex_oauth::load_tokens().await {
@@ -491,8 +545,6 @@ async fn build_driver_registry(
 // =========================================================================
 // Private: InMemoryUserStore
 // =========================================================================
-
-use std::collections::HashMap;
 
 use rara_kernel::{
     error::Result as KernelResult,
@@ -633,11 +685,22 @@ impl IdentityResolver for PlatformIdentityResolver {
 // =========================================================================
 
 /// Load agent manifests and build an AgentRegistry.
-fn load_default_registry() -> rara_kernel::agent::AgentRegistry {
+///
+/// `title_gen_max_output_chars` optionally overrides the built-in title
+/// length cap from YAML (`agents.title_gen.max_output_chars`). When `None`,
+/// the manifest's own default from [`rara_agents::title_gen`] applies.
+fn load_default_registry(
+    title_gen_max_output_chars: Option<usize>,
+) -> rara_kernel::agent::AgentRegistry {
     use rara_kernel::agent::{AgentRegistry, ManifestLoader};
 
     let mut rara_manifest = rara_agents::rara().clone();
     rara_manifest.tools = crate::tools::rara_tool_names();
+
+    let mut title_gen_manifest = rara_agents::title_gen().clone();
+    if let Some(cap) = title_gen_max_output_chars {
+        title_gen_manifest.max_output_chars = Some(cap);
+    }
 
     let builtin = vec![
         (rara_manifest.clone(), Role::Root),
@@ -645,6 +708,10 @@ fn load_default_registry() -> rara_kernel::agent::AgentRegistry {
         (rara_agents::nana().clone(), Role::User),
         (rara_agents::worker().clone(), Role::User),
         (rara_agents::mita().clone(), Role::Root),
+        // `title_gen` is a headless background agent (no user/chat role); we
+        // still register it so the kernel can look up its manifest and resolve
+        // `{driver, model, max_output_chars}` via the unified agent registry.
+        (title_gen_manifest, Role::Root),
     ];
     let agents_dir = rara_paths::data_dir().join("agents");
     let mut loader = ManifestLoader::new();
@@ -840,11 +907,6 @@ async fn init_knowledge_service(
             anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_SIMILARITY_THRESHOLD)
         })?
         .parse()?;
-    let extractor_model = settings
-        .get(keys::KNOWLEDGE_EXTRACTOR_MODEL)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("{} is not configured", keys::KNOWLEDGE_EXTRACTOR_MODEL))?;
-
     let config = KnowledgeConfig::builder()
         .embedding_dimensions(embedding_dimensions)
         .search_top_k(search_top_k)
@@ -862,6 +924,135 @@ async fn init_knowledge_service(
         pool,
         embedding_svc,
         config,
-        extractor_model,
     }))
+}
+
+// =========================================================================
+// Background agent config validation (#1638)
+// =========================================================================
+
+/// Background agents whose `{driver, model}` pair MUST be present in
+/// `agents.<name>` for the kernel to boot. Missing entries fail boot with
+/// an actionable error instead of falling back to a hardcoded default
+/// (see `docs/guides/anti-patterns.md` — "no config defaults in Rust").
+///
+/// The list mirrors what `kernel.rs` resolves via `resolve_agent` for
+/// headless background work:
+/// - `knowledge_extractor` — memory extraction pipeline (#1636)
+/// - `title_gen` — session title auto-generation (#1637)
+const REQUIRED_BACKGROUND_AGENTS: &[&str] = &["knowledge_extractor", "title_gen"];
+
+/// Verify every agent in `required` has a non-empty `driver` and `model`
+/// in the flattened settings map. Returns a single error message naming
+/// every unconfigured agent so operators see the full picture at once.
+fn ensure_required_agent_configs(
+    settings: &HashMap<String, String>,
+    required: &[&str],
+) -> Result<(), String> {
+    let missing: Vec<String> = required
+        .iter()
+        .filter(|name| {
+            let driver = settings
+                .get(&format!("agents.{name}.driver"))
+                .filter(|v| !v.trim().is_empty());
+            let model = settings
+                .get(&format!("agents.{name}.model"))
+                .filter(|v| !v.trim().is_empty());
+            driver.is_none() || model.is_none()
+        })
+        .map(|name| (*name).to_string())
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let example: String = missing
+        .iter()
+        .map(|n| format!("  {n}:\n    driver: \"openai\"\n    model: \"gpt-4o-mini\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(format!(
+        "missing required agent config: {names} — every background agent needs an explicit \
+         `{{driver, model}}` pair in config.yaml. See config.example.yaml for the full shape. \
+         Add:\n\nagents:\n{example}\n",
+        names = missing.join(", "),
+    ))
+}
+
+#[cfg(test)]
+mod boot_validation_tests {
+    use super::*;
+
+    fn full_agent_settings() -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert(
+            "agents.knowledge_extractor.driver".into(),
+            "openrouter".into(),
+        );
+        m.insert(
+            "agents.knowledge_extractor.model".into(),
+            "gpt-4o-mini".into(),
+        );
+        m.insert("agents.title_gen.driver".into(), "openai".into());
+        m.insert("agents.title_gen.model".into(), "gpt-4o-mini".into());
+        m
+    }
+
+    #[test]
+    fn ok_when_all_required_agents_configured() {
+        let settings = full_agent_settings();
+        ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS).expect("boot ok");
+    }
+
+    #[test]
+    fn fails_when_knowledge_extractor_missing() {
+        let mut settings = full_agent_settings();
+        settings.remove("agents.knowledge_extractor.driver");
+        settings.remove("agents.knowledge_extractor.model");
+        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
+            .expect_err("must fail");
+        assert!(
+            err.contains("knowledge_extractor"),
+            "err should name the missing agent: {err}"
+        );
+    }
+
+    #[test]
+    fn fails_when_title_gen_missing() {
+        let mut settings = full_agent_settings();
+        settings.remove("agents.title_gen.driver");
+        settings.remove("agents.title_gen.model");
+        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
+            .expect_err("must fail");
+        assert!(
+            err.contains("title_gen"),
+            "err should name the missing agent: {err}"
+        );
+    }
+
+    #[test]
+    fn fails_when_driver_present_but_model_empty() {
+        let mut settings = full_agent_settings();
+        settings.insert("agents.title_gen.model".into(), "   ".into());
+        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
+            .expect_err("must fail — empty model is same as missing");
+        assert!(err.contains("title_gen"));
+    }
+
+    /// Regression: the legacy `memory.knowledge.extractor_model` key must
+    /// not paper over a missing `agents.knowledge_extractor.model`. The
+    /// validator only looks at the unified `agents.*` namespace.
+    #[test]
+    fn legacy_extractor_model_key_does_not_satisfy_agents_requirement() {
+        let mut settings = full_agent_settings();
+        settings.remove("agents.knowledge_extractor.model");
+        settings.insert(
+            "memory.knowledge.extractor_model".into(),
+            "legacy-model".into(),
+        );
+        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
+            .expect_err("legacy key must not satisfy the unified shape");
+        assert!(err.contains("knowledge_extractor"));
+    }
 }

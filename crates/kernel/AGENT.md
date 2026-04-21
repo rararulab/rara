@@ -1,5 +1,52 @@
 # rara-kernel — Agent Guidelines
 
+## Agent LLM Resolution Contract — `llm/registry.rs`
+
+The unified entry point for resolving an agent's LLM binding is
+[`DriverRegistry::resolve_agent`] in `crates/kernel/src/llm/registry.rs`.
+It returns a [`ResolvedAgent { driver, model, manifest }`] triple read from
+`agents.<name>.{driver, model}` in YAML, with fallback to the manifest's
+`provider_hint`/`model` and finally the provider default. New consumers
+MUST go through `resolve_agent` so the driver and the model come from a
+single consistent source — the split-config bug that motivated #1635
+(driver resolved via the registry, model resolved via a flat settings key
+like `memory.knowledge.extractor_model`) should not reappear. That legacy
+flat key was removed in #1638; no fallback remains in Rust, missing
+`agents.<name>.{driver, model}` fails boot. The legacy
+`DriverRegistry::resolve` tuple API is kept as a thin shim for existing
+callers; migration is tracked in follow-up issues under Epic #1631.
+
+### Migrated consumers
+
+- `memory/knowledge/extractor.rs` — #1636 / #1629. Reads
+  `agents.knowledge_extractor.{driver, model}`. Boot fails fast if the
+  pair is missing. `extract_knowledge` now takes a `&ResolvedAgent` so
+  driver + model can never disagree. Example config:
+
+  ```yaml
+  agents:
+    knowledge_extractor:
+      driver: "openrouter"
+      model: "gpt-4o-mini"
+  ```
+
+  Extraction failures now emit at `error!` level (previously `warn!`,
+  which hid the MiniMax/gpt-4o-mini split-config bug in prod).
+
+- `kernel.rs` (session title generation) — #1637. Reads
+  `agents.title_gen.{driver, model}` via `resolve_agent`. See the
+  per-agent output caps section below for the truncation contract.
+
+### Per-agent output caps — `AgentManifest::max_output_chars`
+
+System agents whose contract includes a bounded free-form output (currently
+`title_gen`) declare the cap on the manifest via `max_output_chars`. The call
+site MUST truncate and emit a `warn!` (with `title_len`, `max_chars`,
+`truncated=true`) when the model exceeds the cap — NEVER silently discard.
+See `generate_session_title` / `finalize_title` in `kernel.rs` and the
+background to #1637 (production incident 2026-04-20 where a 237-char title
+was dropped with zero persisted state).
+
 ## Critical: StreamDelta Event Ordering in `openai.rs`
 
 ### The Invariant

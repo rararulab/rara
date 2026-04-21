@@ -40,7 +40,9 @@ pub use driver::{
     LlmEmbedder, LlmEmbedderRef, LlmModelLister, LlmModelListerRef,
 };
 pub use openai::{OpenAiDriver, is_local_url};
-pub use registry::{DriverRegistry, DriverRegistryRef, ProviderModelConfig};
+pub use registry::{
+    AgentLlmConfig, DriverRegistry, DriverRegistryRef, ProviderModelConfig, ResolvedAgent,
+};
 pub use scripted::ScriptedLlmDriver;
 pub use stream::{StreamDelta, StreamFailure};
 pub use types::*;

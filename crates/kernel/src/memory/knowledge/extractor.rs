@@ -31,7 +31,7 @@ use super::{
     items::{self, NewMemoryItem},
 };
 use crate::{
-    llm::{CompletionRequest, LlmDriver, Message, ToolChoice},
+    llm::{CompletionRequest, LlmDriver, Message, ResolvedAgent, ToolChoice},
     memory::{TapEntry, TapEntryKind},
 };
 
@@ -89,10 +89,15 @@ pub async fn extract_knowledge(
     tape_name: &str,
     pool: &SqlitePool,
     embedding_svc: &EmbeddingService,
-    driver: &dyn LlmDriver,
-    extractor_model: &str,
+    agent: &ResolvedAgent,
     similarity_threshold: f32,
 ) -> Result<usize> {
+    // Driver + model are bound together by `ResolvedAgent` — closing the
+    // split-config bug where the driver came from the registry but the
+    // model came from a flat settings key (#1629 / #1636).
+    let driver = agent.driver.as_ref();
+    let extractor_model = agent.model.as_str();
+
     // Step 1: Build conversation text from tape entries.
     let conversation = build_conversation_text(entries);
     if conversation.is_empty() {
@@ -311,4 +316,118 @@ async fn update_category_files(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        agent::{AgentRole, Priority},
+        llm::{
+            AgentLlmConfig, CompletionResponse, DriverRegistry, OpenRouterCatalog,
+            ScriptedLlmDriver, StopReason,
+        },
+        memory::{TapEntry, TapEntryKind},
+    };
+
+    fn manifest(name: &str) -> crate::agent::AgentManifest {
+        crate::agent::AgentManifest {
+            name:                   name.to_string(),
+            role:                   AgentRole::Worker,
+            description:            "test".into(),
+            model:                  None,
+            system_prompt:          String::new(),
+            soul_prompt:            None,
+            provider_hint:          None,
+            max_iterations:         None,
+            tools:                  Vec::new(),
+            excluded_tools:         Vec::new(),
+            max_children:           None,
+            max_context_tokens:     None,
+            priority:               Priority::default(),
+            metadata:               serde_json::Value::Null,
+            sandbox:                None,
+            default_execution_mode: None,
+            tool_call_limit:        None,
+            worker_timeout_secs:    None,
+            max_continuations:      None,
+            max_output_chars:       None,
+        }
+    }
+
+    /// Verifies the split-config bug fix from #1629 / #1636: the model
+    /// that reaches the driver MUST come from `ResolvedAgent.model`, not
+    /// from any other source.
+    #[tokio::test]
+    async fn llm_call_uses_model_from_resolved_agent() {
+        // Scripted driver returns an empty JSON array so extraction exits
+        // cleanly after capturing the first request.
+        let scripted = Arc::new(ScriptedLlmDriver::new(vec![CompletionResponse {
+            content:           Some("[]".into()),
+            reasoning_content: None,
+            tool_calls:        Vec::new(),
+            stop_reason:       StopReason::Stop,
+            usage:             None,
+            model:             "scripted".into(),
+        }]));
+
+        let catalog = Arc::new(OpenRouterCatalog::new());
+        let reg = DriverRegistry::new("openrouter", catalog);
+        reg.register_driver("openrouter", Arc::clone(&scripted) as _);
+        reg.set_provider_model("openrouter", "provider-default", Vec::<String>::new());
+        // The unified agent config is what `resolve_agent` honours first.
+        reg.set_agent_config(
+            super::super::KNOWLEDGE_EXTRACTOR_NAME,
+            AgentLlmConfig {
+                driver: Some("openrouter".into()),
+                model:  Some("unified-agents-model".into()),
+            },
+        );
+
+        let m = manifest(super::super::KNOWLEDGE_EXTRACTOR_NAME);
+        let resolved = reg.resolve_agent(&m).expect("resolve_agent");
+        assert_eq!(resolved.model, "unified-agents-model");
+
+        // Drive `llm_extract_items` directly — it is the pure LLM boundary
+        // that used to be called with the wrong model in prod.
+        let driver_ref: &dyn LlmDriver = resolved.driver.as_ref();
+        let _ = llm_extract_items(driver_ref, &resolved.model, "hello")
+            .await
+            .expect("extraction ok");
+
+        let reqs = scripted.captured_requests();
+        assert_eq!(reqs.len(), 1, "exactly one completion");
+        assert_eq!(
+            reqs[0].model, "unified-agents-model",
+            "model sent to driver must be the one resolved via resolve_agent, not a flat key"
+        );
+    }
+
+    #[test]
+    fn build_conversation_text_skips_non_message_entries() {
+        let now = jiff::Timestamp::now();
+        let entries = vec![
+            TapEntry {
+                id:        1,
+                kind:      TapEntryKind::Message,
+                payload:   json!({"role": "user", "content": "hi"}),
+                timestamp: now,
+                metadata:  None,
+            },
+            TapEntry {
+                id:        2,
+                kind:      TapEntryKind::ToolCall,
+                payload:   json!({"role": "assistant", "content": "ignored"}),
+                timestamp: now,
+                metadata:  None,
+            },
+        ];
+        let text = build_conversation_text(&entries);
+        assert!(text.contains("[user]: hi"));
+        assert!(!text.contains("ignored"));
+    }
 }
