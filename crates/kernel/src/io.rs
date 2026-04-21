@@ -1563,7 +1563,7 @@ impl IngressRateLimiter {
     /// Returns `Ok(())` if allowed, `Err(IOError::RateLimited)` if exceeded.
     pub fn check_rate(&self, key: &str) -> Result<(), IOError> {
         let now = (self.now_fn)();
-        let window = std::time::Duration::from_secs(60);
+        let window = std::time::Duration::from_mins(1);
 
         let mut entry = self.buckets.entry(key.to_string()).or_default();
         entry.retain(|ts| now.duration_since(*ts) < window);
@@ -1587,7 +1587,7 @@ impl IngressRateLimiter {
     /// to reclaim memory from users who have gone idle.
     pub fn gc(&self) {
         let now = (self.now_fn)();
-        let window = std::time::Duration::from_secs(60);
+        let window = std::time::Duration::from_mins(1);
         self.buckets.retain(|_, v| {
             v.retain(|ts| now.duration_since(*ts) < window);
             !v.is_empty()

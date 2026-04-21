@@ -142,7 +142,7 @@ async fn browse_directory(
         });
     }
 
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|a| a.name.to_lowercase());
 
     let parent_path = dir.parent().map(|p| p.to_string_lossy().to_string());
 

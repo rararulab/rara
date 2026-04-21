@@ -33,7 +33,7 @@ pub struct V3;
 
 fn build_http_client() -> Client {
     Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_mins(1))
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default()

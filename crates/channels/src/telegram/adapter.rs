@@ -275,7 +275,7 @@ const SMALL_GROUP_THRESHOLD: u32 = 3;
 const INITIAL_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Maximum retry delay for exponential backoff.
-const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Minimum time between successive streaming edits, regardless of delta
 /// size. Acts as a coalescing floor so pathological sub-ms bursts (from
@@ -2892,7 +2892,7 @@ async fn dispatch_user_question(
     let text = if question.options.is_some() {
         format!("<b>❓ Agent Question</b>\n\n{body}")
     } else {
-        format!("<b>❓ Agent Question</b>\n\n{body}\n\n<i>Reply to this message to answer.</i>",)
+        format!("<b>❓ Agent Question</b>\n\n{body}\n\n<i>Reply to this message to answer.</i>")
     };
 
     let send_result = if let Some(ref options) = question.options {
@@ -4935,7 +4935,7 @@ fn spawn_stream_forwarder(
         let cid = chat_id;
         let epoch = my_epoch;
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            tokio::time::sleep(std::time::Duration::from_mins(2)).await;
             let removed = streams.remove_if(&cid, |_, state| state.epoch == epoch);
             if removed.is_some() {
                 warn!(

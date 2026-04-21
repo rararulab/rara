@@ -189,7 +189,7 @@ impl SupervisorService {
 
             // Reset restart counter if healthy for long enough.
             if let Some(ts) = self.last_healthy {
-                if ts.elapsed() >= Duration::from_secs(60) {
+                if ts.elapsed() >= Duration::from_mins(1) {
                     if self.restart_count > 0 {
                         info!("Agent healthy for 60s — resetting restart counter");
                     }

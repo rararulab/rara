@@ -496,7 +496,7 @@ pub(crate) async fn run_plan_loop(
 
             let decision = tokio::select! {
                 result = tokio::time::timeout(
-                    std::time::Duration::from_secs(120),
+                    std::time::Duration::from_mins(2),
                     rx,
                 ) => result,
                 _ = turn_cancel.cancelled() => {

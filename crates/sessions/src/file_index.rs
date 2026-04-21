@@ -160,7 +160,7 @@ impl SessionIndex for FileSessionIndex {
         }
 
         // Sort by updated_at descending.
-        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
 
         // Apply offset and limit.
         let offset = offset.max(0) as usize;

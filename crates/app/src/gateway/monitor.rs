@@ -159,7 +159,7 @@ impl ProcessMonitor {
             return vec![];
         }
         if let Some(last) = self.last_alert_at {
-            if last.elapsed() < std::time::Duration::from_secs(60) {
+            if last.elapsed() < std::time::Duration::from_mins(1) {
                 return vec![];
             }
         }
