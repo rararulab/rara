@@ -17,3 +17,24 @@
 // Extends Vitest's `expect` with jest-dom matchers like
 // `toBeInTheDocument`. Imported for side effects only.
 import '@testing-library/jest-dom/vitest';
+
+// jsdom doesn't implement ResizeObserver, which cmdk (and other
+// Radix-adjacent primitives) instantiate on mount. A no-op shim is
+// enough for the assertions we run — the components don't exercise
+// the observer callback in tests.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverShim {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  (globalThis as unknown as { ResizeObserver: typeof ResizeObserverShim }).ResizeObserver =
+    ResizeObserverShim;
+}
+
+// jsdom also lacks `Element.prototype.scrollIntoView`, which cmdk calls
+// when auto-scrolling the active item into view. A no-op satisfies the
+// interface without affecting assertions.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoViewShim(): void {};
+}

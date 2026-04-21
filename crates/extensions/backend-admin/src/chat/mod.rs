@@ -16,8 +16,9 @@ pub mod error;
 pub mod model_catalog;
 mod router;
 pub mod service;
+pub mod snippet;
 
 pub use router::{
     BindChannelRequest, CreateSessionRequest, GetTraceQuery, ListMessagesQuery, ListSessionsQuery,
-    SetFavoritesRequest, UpdateSessionRequest, routes,
+    SearchSessionsQuery, SetFavoritesRequest, UpdateSessionRequest, routes,
 };
