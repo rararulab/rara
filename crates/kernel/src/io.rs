@@ -1212,28 +1212,28 @@ impl StreamHub {
     /// Reap the session-level event bus entry when no streams and no
     /// subscribers remain on it.
     ///
-    /// The two checks are independent DashMap lookups — the guard from the
-    /// first `get()` is dropped before the `remove()` to avoid the
-    /// well-known DashMap shard-lock deadlock when `get` and `remove`
-    /// target the same key.
+    /// The predicate inside `remove_if` runs while the `session_events`
+    /// shard write lock is held, so the `receiver_count() == 0` check and
+    /// the removal are atomic with respect to concurrent
+    /// `subscribe_session_events` / `open()` on the same key — both of
+    /// which acquire the same shard's write lock via `entry().or_insert_with`
+    /// and therefore serialize with us.
+    ///
+    /// We additionally re-check `session_streams` emptiness inside the
+    /// closure so a concurrent `open()` that has already inserted into
+    /// `session_streams` but not yet reached its own `session_events`
+    /// get-or-create cannot have its about-to-be-bridged bus reaped out
+    /// from under it. `session_streams` lives on a different DashMap, so
+    /// taking its read guard while holding the `session_events` shard
+    /// write lock is safe — no shared shard, no lock-order cycle.
     fn reap_session_bus_if_idle(&self, session_key: &SessionKey) {
-        let session_empty = self
-            .session_streams
-            .get(session_key)
-            .map_or(true, |v| v.is_empty());
-        if !session_empty {
-            return;
-        }
-        // Compute `should_remove` inside a scoped block so the `get()` guard
-        // is dropped before `remove()` — holding a read guard across a
-        // write on the same DashMap key deadlocks.
-        let should_remove = {
-            let entry = self.session_events.get(session_key);
-            entry.map(|e| e.receiver_count() == 0).unwrap_or(false)
-        };
-        if should_remove {
-            self.session_events.remove(session_key);
-        }
+        self.session_events.remove_if(session_key, |_, sender| {
+            sender.receiver_count() == 0
+                && self
+                    .session_streams
+                    .get(session_key)
+                    .map_or(true, |v| v.is_empty())
+        });
     }
 
     /// Open a new stream for an agent execution run.
@@ -1300,11 +1300,12 @@ impl StreamHub {
     /// emits a [`StreamEvent::StreamClosed`] so session-level subscribers can
     /// observe the turn boundary without seeing `RecvError::Closed`.
     ///
-    /// The session-level bus entry in `session_events` is reaped here when
-    /// both conditions hold: this was the last active stream on the session,
-    /// AND no subscriber is holding the session bus open. If a subscriber
-    /// remains, the entry persists so the next turn's stream rejoins the
-    /// same bus — preserving mid-turn interrupt + reinject behavior (#1647).
+    /// The session-level bus entry in `session_events` is reaped here,
+    /// atomically under the shard write lock, when both conditions hold:
+    /// this was the last active stream on the session, AND no subscriber
+    /// is holding the session bus open. If a subscriber remains, the entry
+    /// survives so the next turn's stream rejoins the same bus — preserving
+    /// mid-turn interrupt + reinject behavior (#1647).
     #[tracing::instrument(skip(self))]
     pub fn close(&self, stream_id: &StreamId) {
         if let Some((_, entry)) = self.streams.remove(stream_id) {
@@ -1347,8 +1348,10 @@ impl StreamHub {
     /// for long-lived subscribers (WS/SSE) that must keep receiving events
     /// when the kernel interrupts turn A and re-injects as turn B.
     ///
-    /// The bus is created on demand and persists for the lifetime of the
-    /// hub. A terminal [`StreamEvent::StreamClosed`] is delivered on each
+    /// The bus is created on demand. It is reaped atomically when both the
+    /// session's stream list is empty AND the bus has no subscribers; a
+    /// later `subscribe_session_events` or `open()` transparently re-creates
+    /// it. A terminal [`StreamEvent::StreamClosed`] is delivered on each
     /// stream completion so consumers can emit their own per-turn "done"
     /// signals.
     pub fn subscribe_session_events(
@@ -2769,6 +2772,78 @@ mod stream_hub_tests {
             !hub.session_events.contains_key(&session),
             "session bus should reap once all streams and subscribers are gone"
         );
+    }
+
+    /// Regression test for the TOCTOU race between `close()`-triggered reap
+    /// and a concurrent `subscribe_session_events`.
+    ///
+    /// The pre-fix implementation did a non-atomic `get().receiver_count()`
+    /// check followed by `remove()`. A subscriber attaching in the window
+    /// between the two operations would see its sender deleted, silently
+    /// losing every subsequent event on the next turn.
+    ///
+    /// The current `remove_if`-based implementation holds the shard write
+    /// lock across the check+remove, serializing against the subscribe
+    /// path's `entry().or_insert_with()` on the same key. A subscriber that
+    /// wins the race must see the next turn's events; a subscriber that
+    /// loses the race simply creates a fresh bus for the next turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_close_and_subscribe_does_not_lose_bus() {
+        // Run many iterations so scheduler interleavings exercise both
+        // orderings of the close() reap vs subscribe() attach.
+        for _ in 0..256 {
+            let hub = Arc::new(StreamHub::new(64));
+            let session = SessionKey::new();
+
+            // Turn A: open and emit, then race close() against subscribe().
+            let handle_a = hub.open(session);
+            handle_a.emit(StreamEvent::TextDelta {
+                text: "A1".to_owned(),
+            });
+
+            let hub_close = hub.clone();
+            let stream_id = handle_a.stream_id().clone();
+            let close_task = tokio::spawn(async move {
+                hub_close.close(&stream_id);
+            });
+
+            let hub_sub = hub.clone();
+            let subscribe_task = tokio::spawn(async move {
+                // Yield to encourage interleaving with close()'s reap path.
+                tokio::task::yield_now().await;
+                hub_sub.subscribe_session_events(&session)
+            });
+
+            close_task.await.expect("close task");
+            let mut rx = subscribe_task.await.expect("subscribe task");
+
+            // Turn B: whichever side won the race, the subscriber MUST see
+            // turn-B events. Either it attached before reap (same bus) or
+            // after reap (a fresh bus created by open() below).
+            let handle_b = hub.open(session);
+            handle_b.emit(StreamEvent::TextDelta {
+                text: "B1".to_owned(),
+            });
+            hub.close(handle_b.stream_id());
+
+            let mut got_b1 = false;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            while tokio::time::Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(StreamEvent::TextDelta { text })) if text == "B1" => {
+                        got_b1 = true;
+                        break;
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) | Err(_) => break,
+                }
+            }
+            assert!(
+                got_b1,
+                "subscriber must observe turn-B event regardless of reap/subscribe ordering"
+            );
+        }
     }
 }
 
