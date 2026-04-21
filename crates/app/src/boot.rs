@@ -259,7 +259,15 @@ pub(crate) async fn boot(
 
     // -- agent registry ----------------------------------------------------
 
-    let agent_registry = Arc::new(load_default_registry());
+    // Optional YAML overrides for headless system agents — currently just
+    // `title_gen.max_output_chars`, but structured so future knobs can land
+    // here without forcing another bootstrap refactor.
+    let title_gen_max_output_chars = settings_provider
+        .get("agents.title_gen.max_output_chars")
+        .await
+        .and_then(|v| v.trim().parse::<usize>().ok());
+
+    let agent_registry = Arc::new(load_default_registry(title_gen_max_output_chars));
 
     // -- default provider model lister / embedder ----------------------------
     //
@@ -448,12 +456,16 @@ async fn build_driver_registry(
         }
     }
 
-    // -- unified per-agent configs (agents.<name>.{driver, model}) ---------------
+    // -- unified per-agent configs (agents.<name>.{driver, model}) --------------
     //
-    // Introduced in #1636. Populates the `DriverRegistry::resolve_agent` lookup
-    // table that the knowledge extractor (and future consumers) read from.
-    // Boot fails fast if `agents.knowledge_extractor.{driver, model}` is missing
-    // — the prod failure in #1629 showed we cannot silently fall back.
+    // Introduced in #1636, extended by #1637. The `agents.*` namespace is the
+    // post-refactor binding consumed by `DriverRegistry::resolve_agent`. Unlike
+    // the legacy `llm.agent_overrides.*` keys, these live alongside other
+    // per-agent knobs (e.g. `agents.title_gen.max_output_chars`) and form the
+    // single `{driver, model, manifest}` snapshot used at call sites.
+    //
+    // Boot fails fast for the knowledge extractor if its driver/model are
+    // missing — the prod failure in #1629 showed we cannot silently fall back.
     let unified_agent_names: BTreeSet<&str> = all_settings
         .keys()
         .filter_map(|k| k.strip_prefix("agents."))
@@ -685,11 +697,22 @@ impl IdentityResolver for PlatformIdentityResolver {
 // =========================================================================
 
 /// Load agent manifests and build an AgentRegistry.
-fn load_default_registry() -> rara_kernel::agent::AgentRegistry {
+///
+/// `title_gen_max_output_chars` optionally overrides the built-in title
+/// length cap from YAML (`agents.title_gen.max_output_chars`). When `None`,
+/// the manifest's own default from [`rara_agents::title_gen`] applies.
+fn load_default_registry(
+    title_gen_max_output_chars: Option<usize>,
+) -> rara_kernel::agent::AgentRegistry {
     use rara_kernel::agent::{AgentRegistry, ManifestLoader};
 
     let mut rara_manifest = rara_agents::rara().clone();
     rara_manifest.tools = crate::tools::rara_tool_names();
+
+    let mut title_gen_manifest = rara_agents::title_gen().clone();
+    if let Some(cap) = title_gen_max_output_chars {
+        title_gen_manifest.max_output_chars = Some(cap);
+    }
 
     let builtin = vec![
         (rara_manifest.clone(), Role::Root),
@@ -697,6 +720,10 @@ fn load_default_registry() -> rara_kernel::agent::AgentRegistry {
         (rara_agents::nana().clone(), Role::User),
         (rara_agents::worker().clone(), Role::User),
         (rara_agents::mita().clone(), Role::Root),
+        // `title_gen` is a headless background agent (no user/chat role); we
+        // still register it so the kernel can look up its manifest and resolve
+        // `{driver, model, max_output_chars}` via the unified agent registry.
+        (title_gen_manifest, Role::Root),
     ];
     let agents_dir = rara_paths::data_dir().join("agents");
     let mut loader = ManifestLoader::new();

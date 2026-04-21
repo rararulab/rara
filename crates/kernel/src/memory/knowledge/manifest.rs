@@ -58,6 +58,7 @@ static KNOWLEDGE_EXTRACTOR_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| 
     tool_call_limit:        None,
     worker_timeout_secs:    None,
     max_continuations:      Some(0),
+    max_output_chars:       None,
 });
 
 /// Return the static knowledge extractor manifest.

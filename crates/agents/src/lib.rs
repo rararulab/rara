@@ -56,6 +56,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     tool_call_limit:        None,
     worker_timeout_secs:    None,
     max_continuations:      Some(10),
+    max_output_chars:       None,
 });
 
 /// Build the **rara** agent manifest — the default user-facing chat agent.
@@ -85,6 +86,7 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     tool_call_limit:        None,
     worker_timeout_secs:    None,
     max_continuations:      Some(0),
+    max_output_chars:       None,
 });
 
 /// Build the **nana** agent manifest — a chat-only companion for regular users.
@@ -115,6 +117,7 @@ static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest
     tool_call_limit:        None,
     worker_timeout_secs:    None,
     max_continuations:      Some(0),
+    max_output_chars:       None,
 });
 
 /// Build the **worker** agent manifest — a lightweight sub-agent for task
@@ -157,6 +160,7 @@ static MITA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
     tool_call_limit:        None,
     worker_timeout_secs:    None,
     max_continuations:      Some(0),
+    max_output_chars:       None,
 });
 
 /// Build the **mita** agent manifest — a background proactive agent that
@@ -168,6 +172,46 @@ pub fn mita() -> &'static AgentManifest { &MITA_MANIFEST }
 // manifest must be visible to the `DriverRegistry::resolve_agent` call
 // site there, and `rara-kernel` sits below `rara-agents` in the
 // dependency DAG. See `crates/kernel/src/memory/knowledge/manifest.rs`.
+
+// ---------------------------------------------------------------------------
+// title_gen — background agent that auto-generates short session titles
+// ---------------------------------------------------------------------------
+
+/// Default character cap for auto-generated session titles.
+///
+/// Titles longer than this are truncated (never silently discarded) by the
+/// kernel's title generator. The value lives on the manifest so operators can
+/// override it via `agents.title_gen.max_output_chars` YAML without a rebuild.
+const TITLE_GEN_DEFAULT_MAX_CHARS: usize = 50;
+
+static TITLE_GEN_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
+    name:                   "title_gen".to_string(),
+    role:                   AgentRole::Worker,
+    description:            "Background agent that generates short human-readable session titles \
+                             from the first user/assistant exchange."
+        .to_string(),
+    model:                  None,
+    system_prompt:          String::new(),
+    soul_prompt:            None,
+    provider_hint:          None,
+    max_iterations:         Some(1),
+    tools:                  vec![],
+    excluded_tools:         vec![],
+    max_children:           Some(0),
+    max_context_tokens:     None,
+    priority:               Priority::default(),
+    metadata:               serde_json::Value::Null,
+    sandbox:                None,
+    default_execution_mode: None,
+    tool_call_limit:        None,
+    worker_timeout_secs:    None,
+    max_continuations:      Some(0),
+    max_output_chars:       Some(TITLE_GEN_DEFAULT_MAX_CHARS),
+});
+
+/// Build the **title_gen** agent manifest — the background session-title
+/// generator invoked by the kernel after the first successful turn.
+pub fn title_gen() -> &'static AgentManifest { &TITLE_GEN_MANIFEST }
 
 // ---------------------------------------------------------------------------
 // ScheduledJob — dedicated agent for scheduled task execution
@@ -206,6 +250,7 @@ pub fn scheduled_job(job_id: &str, trigger_summary: &str, message: &str) -> Agen
         tool_call_limit:        None,
         worker_timeout_secs:    None,
         max_continuations:      Some(0),
+        max_output_chars:       None,
     }
 }
 
