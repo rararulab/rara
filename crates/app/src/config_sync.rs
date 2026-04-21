@@ -296,12 +296,15 @@ knowledge:
   embedding_dimensions: 1536
   search_top_k: 10
   similarity_threshold: 0.85
-  extractor_model: "gpt-4o-mini"
 
 agents:
   knowledge_extractor:
     driver: "openrouter"
     model: "gpt-4o-mini"
+  title_gen:
+    driver: "openai"
+    model: "gpt-4o-mini"
+    max_output_chars: 50
 
 gateway:
   repo_url: "https://github.com/example/repo"

@@ -185,7 +185,6 @@ async fn stub_knowledge_service() -> crate::memory::knowledge::KnowledgeServiceR
         pool,
         embedding_svc: Arc::new(embedding_svc),
         config,
-        extractor_model: "scripted".to_string(),
     })
 }
 

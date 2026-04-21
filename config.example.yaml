@@ -1,0 +1,111 @@
+# Example rara configuration.
+#
+# Copy to `~/.config/rara/config.yaml` (see `rara_paths::config_file()`) or
+# to `./config.yaml` next to the binary. All required keys must be present;
+# rara will fail to boot with an explicit error if a required field is
+# missing. There are NO hardcoded defaults in Rust code — this file is the
+# single source of truth for every tunable.
+
+# ---------------------------------------------------------------------------
+# HTTP + gRPC servers (required)
+# ---------------------------------------------------------------------------
+
+http:
+  bind_address: "127.0.0.1:25555"
+
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+
+# ---------------------------------------------------------------------------
+# Configured users — platform identity mappings (required, non-empty)
+# ---------------------------------------------------------------------------
+
+users:
+  - name: "you"
+    role: root
+    platforms:
+      - type: telegram
+        user_id: "1234567890"
+
+# ---------------------------------------------------------------------------
+# Mita proactive agent (required)
+# ---------------------------------------------------------------------------
+
+mita:
+  heartbeat_interval: "30m"
+
+# ---------------------------------------------------------------------------
+# LLM provider registry — seeded to the settings store at startup
+# ---------------------------------------------------------------------------
+
+llm:
+  default_provider: "openrouter"
+  providers:
+    openrouter:
+      base_url: "https://openrouter.ai/api/v1"
+      api_key: "sk-or-..."
+      default_model: "anthropic/claude-3.5-sonnet"
+    openai:
+      base_url: "https://api.openai.com/v1"
+      api_key: "sk-..."
+      default_model: "gpt-4o-mini"
+    minimax:
+      base_url: "https://api.minimax.io/v1"
+      api_key: "mm-..."
+      default_model: "MiniMax-M2.7"
+
+# ---------------------------------------------------------------------------
+# Knowledge layer — long-term memory extraction
+# ---------------------------------------------------------------------------
+#
+# The extractor's LLM binding lives in the `agents:` block below
+# (`knowledge_extractor`), NOT here. Any legacy `extractor_model` key is
+# silently ignored (#1638).
+
+knowledge:
+  embedding_model: "text-embedding-3-small"
+  embedding_dimensions: 1536
+  search_top_k: 10
+  similarity_threshold: 0.85
+
+# ---------------------------------------------------------------------------
+# Per-agent `{driver, model}` bindings (unified registry — #1635/#1636/#1637)
+# ---------------------------------------------------------------------------
+#
+# Every background agent that calls the LLM is resolved via
+# `DriverRegistry::resolve_agent` keyed by its manifest name. The entries
+# below are REQUIRED — missing entries fail boot with an actionable error.
+#
+# Optional `max_output_chars` caps a headless agent's free-form output
+# without a rebuild (currently consumed by `title_gen`).
+
+agents:
+  rara:
+    driver: minimax
+    model: MiniMax-M2.7
+  knowledge_extractor:
+    driver: openai
+    model: gpt-4o-mini
+  title_gen:
+    driver: openai
+    model: gpt-4o-mini
+    max_output_chars: 50
+
+# ---------------------------------------------------------------------------
+# Optional integrations — remove or leave commented out if unused
+# ---------------------------------------------------------------------------
+
+# telegram:
+#   bot_token: "123456:ABC..."
+#   chat_id: "1234567890"
+#   group_policy: "mention_or_small_group"
+#   notification_channel_id: "-1001234567890"
+
+# wechat:
+#   account_id: "your-account-id"
+#   base_url: "https://api.wechat.example/v1"
+
+# composio:
+#   api_key: "cmp_..."
+#   entity_id: "workspace-default"

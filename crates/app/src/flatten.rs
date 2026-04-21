@@ -129,13 +129,16 @@ pub struct ComposioConfig {
 
 /// Knowledge layer configuration section in config.yaml.
 ///
+/// The extractor LLM binding lives in the unified `agents.knowledge_extractor`
+/// block — see [`AgentsConfig`]. Any legacy `knowledge.extractor_model` key
+/// in a user's YAML is silently ignored (unknown field).
+///
 /// ```yaml
 /// knowledge:
 ///   embedding_model: "text-embedding-3-small"
 ///   embedding_dimensions: 1536
 ///   search_top_k: 10
 ///   similarity_threshold: 0.85
-///   extractor_model: "gpt-4o-mini"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -148,8 +151,6 @@ pub struct KnowledgeConfig {
     pub search_top_k:         Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity_threshold: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extractor_model:      Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,19 +161,29 @@ pub struct KnowledgeConfig {
 /// [`rara_kernel::llm::AgentLlmConfig`] and is loaded from
 /// `agents.<name>.{driver, model}` in config.yaml.
 ///
+/// Optional `max_output_chars` lets operators cap a headless agent's
+/// free-form output without a rebuild (currently consumed by
+/// `title_gen`; see `kernel/AGENT.md`).
+///
 /// ```yaml
 /// agents:
 ///   knowledge_extractor:
 ///     driver: "openrouter"
 ///     model: "gpt-4o-mini"
+///   title_gen:
+///     driver: "openai"
+///     model: "gpt-4o-mini"
+///     max_output_chars: 50
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentBinding {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub driver: Option<String>,
+    pub driver:           Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model:  Option<String>,
+    pub model:            Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_chars: Option<usize>,
 }
 
 /// Top-level `agents:` section — map from agent name to `{driver, model}`.
@@ -218,6 +229,9 @@ fn flatten_agents(agents: &AgentsConfig, out: &mut Vec<(String, String)>) {
         }
         if let Some(ref v) = binding.model {
             out.push((format!("agents.{name}.model"), v.clone()));
+        }
+        if let Some(v) = binding.max_output_chars {
+            out.push((format!("agents.{name}.max_output_chars"), v.to_string()));
         }
     }
 }
@@ -300,9 +314,6 @@ fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
     if let Some(v) = k.similarity_threshold {
         out.push((keys::KNOWLEDGE_SIMILARITY_THRESHOLD.into(), v.to_string()));
     }
-    if let Some(ref v) = k.extractor_model {
-        out.push((keys::KNOWLEDGE_EXTRACTOR_MODEL.into(), v.clone()));
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +363,17 @@ fn unflatten_agents(
     for name in names {
         let driver = pairs.get(&format!("agents.{name}.driver")).cloned();
         let model = pairs.get(&format!("agents.{name}.model")).cloned();
-        out.insert(name, AgentBinding { driver, model });
+        let max_output_chars = pairs
+            .get(&format!("agents.{name}.max_output_chars"))
+            .and_then(|v| v.parse::<usize>().ok());
+        out.insert(
+            name,
+            AgentBinding {
+                driver,
+                model,
+                max_output_chars,
+            },
+        );
     }
     Some(AgentsConfig(out))
 }
@@ -468,13 +489,11 @@ fn unflatten_knowledge(
     let similarity_threshold = pairs
         .get(keys::KNOWLEDGE_SIMILARITY_THRESHOLD)
         .and_then(|v| v.parse::<f32>().ok());
-    let extractor_model = pairs.get(keys::KNOWLEDGE_EXTRACTOR_MODEL).cloned();
 
     if embedding_model.is_none()
         && embedding_dimensions.is_none()
         && search_top_k.is_none()
         && similarity_threshold.is_none()
-        && extractor_model.is_none()
     {
         return None;
     }
@@ -484,7 +503,6 @@ fn unflatten_knowledge(
         embedding_dimensions,
         search_top_k,
         similarity_threshold,
-        extractor_model,
     })
 }
 
@@ -529,7 +547,6 @@ mod tests {
             embedding_dimensions: Some(1536),
             search_top_k:         Some(10),
             similarity_threshold: Some(0.85),
-            extractor_model:      Some("gpt-4o-mini".into()),
         };
 
         // Flatten
@@ -582,7 +599,6 @@ mod tests {
             got_know.similarity_threshold,
             knowledge.similarity_threshold
         );
-        assert_eq!(got_know.extractor_model, knowledge.extractor_model);
     }
 
     #[test]
@@ -603,8 +619,17 @@ mod tests {
         m.insert(
             "knowledge_extractor".to_string(),
             AgentBinding {
-                driver: Some("openrouter".into()),
-                model:  Some("gpt-4o-mini".into()),
+                driver:           Some("openrouter".into()),
+                model:            Some("gpt-4o-mini".into()),
+                max_output_chars: None,
+            },
+        );
+        m.insert(
+            "title_gen".to_string(),
+            AgentBinding {
+                driver:           Some("openai".into()),
+                model:            Some("gpt-4o-mini".into()),
+                max_output_chars: Some(50),
             },
         );
         let agents = AgentsConfig(m);
@@ -617,5 +642,28 @@ mod tests {
         let b = got.0.get("knowledge_extractor").expect("binding present");
         assert_eq!(b.driver.as_deref(), Some("openrouter"));
         assert_eq!(b.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(b.max_output_chars, None);
+        let t = got.0.get("title_gen").expect("title_gen binding present");
+        assert_eq!(t.driver.as_deref(), Some("openai"));
+        assert_eq!(t.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(t.max_output_chars, Some(50));
+    }
+
+    /// Regression: legacy `memory.knowledge.extractor_model` KV pairs must
+    /// be ignored silently — the key no longer exists in
+    /// [`KnowledgeConfig`]. `unflatten_from_settings` keeps no state for
+    /// unrecognised keys, so the output is unchanged from the empty case.
+    #[test]
+    fn legacy_extractor_model_key_is_ignored() {
+        let mut map = HashMap::new();
+        map.insert(
+            "memory.knowledge.extractor_model".to_string(),
+            "legacy-model".to_string(),
+        );
+        let (_llm, _tg, _wc, _cmp, know, _agents) = unflatten_from_settings(&map);
+        assert!(
+            know.is_none(),
+            "legacy extractor_model must not produce a KnowledgeConfig"
+        );
     }
 }
