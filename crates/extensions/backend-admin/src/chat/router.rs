@@ -26,6 +26,7 @@
 //! | `PUT`    | `/api/v1/chat/models/favorites`                      | Set favorite models    |
 //! | `POST`   | `/api/v1/chat/sessions`                              | Create a session       |
 //! | `GET`    | `/api/v1/chat/sessions`                              | List sessions          |
+//! | `GET`    | `/api/v1/chat/sessions/search`                       | Full-text search       |
 //! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
 //! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
@@ -50,8 +51,16 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::chat::{
     error::ChatError,
     model_catalog::ChatModel,
-    service::{ProviderInfo, SessionPatch, SessionService},
+    service::{ProviderInfo, SessionPatch, SessionSearchResponse, SessionService},
 };
+
+/// Default `limit` for search requests when the client does not supply
+/// one. Chosen to match the typical session-list page size so the UI can
+/// render both in a single column without pagination.
+const SEARCH_DEFAULT_LIMIT: usize = 20;
+/// Upper bound on `limit` — protects the backend from expensive
+/// full-text queries triggered by a malformed or hostile client.
+const SEARCH_MAX_LIMIT: usize = 100;
 
 /// Parse an optional thinking-level string from a create-session body.
 ///
@@ -216,6 +225,18 @@ pub struct SetFavoritesRequest {
     pub model_ids: Vec<String>,
 }
 
+/// Query parameters for `GET /sessions/search`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct SearchSessionsQuery {
+    /// Free-form search query. An empty or whitespace-only value yields
+    /// an empty hit list with 200 (not 400) so the UI can bind directly
+    /// to an input's change event without debouncing.
+    pub q:     Option<String>,
+    /// Maximum number of hits to return. Defaults to `20`, clamped to
+    /// `[1, 100]`.
+    pub limit: Option<usize>,
+}
+
 /// Query parameters for `GET /sessions/{key}/messages`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ListMessagesQuery {
@@ -262,6 +283,7 @@ fn model_routes(service: SessionService) -> OpenApiRouter {
 fn session_routes(service: SessionService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(create_session, list_sessions))
+        .routes(routes!(search_sessions))
         .routes(routes!(get_session, update_session, delete_session))
         .routes(routes!(list_messages, clear_messages))
         .routes(routes!(get_cascade_trace))
@@ -377,6 +399,34 @@ async fn list_sessions(
 ) -> Result<Json<Vec<SessionEntry>>, ChatError> {
     let sessions = service.list_sessions(q.limit, q.offset).await?;
     Ok(Json(sessions))
+}
+
+/// `GET /api/v1/chat/sessions/search` — full-text search across session
+/// messages. Returns at most one hit per session.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/search",
+    tag = "chat",
+    params(
+        ("q" = Option<String>, Query, description = "Free-form search query"),
+        ("limit" = Option<usize>, Query, description = "Maximum hits to return (default 20, clamped to [1,100])"),
+    ),
+    responses(
+        (status = 200, description = "Search hits", body = SessionSearchResponse),
+    )
+)]
+#[instrument(skip(service))]
+async fn search_sessions(
+    State(service): State<SessionService>,
+    Query(q): Query<SearchSessionsQuery>,
+) -> Result<Json<SessionSearchResponse>, ChatError> {
+    let query = q.q.unwrap_or_default();
+    let limit = q
+        .limit
+        .unwrap_or(SEARCH_DEFAULT_LIMIT)
+        .clamp(1, SEARCH_MAX_LIMIT);
+    let response = service.search_sessions(&query, limit).await?;
+    Ok(Json(response))
 }
 
 /// `GET /api/v1/chat/sessions/{key}` — get a single session.

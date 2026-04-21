@@ -311,6 +311,41 @@ fn apply_session_patch(session: &mut SessionEntry, patch: &SessionPatch) -> bool
         | assign(&mut session.system_prompt, &patch.system_prompt)
 }
 
+/// One matched message surfaced by
+/// [`SessionService::search_sessions`].
+///
+/// The hit is a projection of a single [`TapEntry`] plus a pre-rendered
+/// snippet so the web UI can render a search result list directly from
+/// the JSON payload without re-reading the tape.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct SessionSearchHit {
+    /// Session key (also the tape name) this message belongs to.
+    pub session_key:   String,
+    /// Display title of the session, falling back to `session_key` when
+    /// no title is set. The UI should render this as the result's
+    /// clickable label.
+    pub session_title: String,
+    /// HTML-escaped text with the first matched query token wrapped in
+    /// `<mark>…</mark>`. Safe to insert into the DOM via `innerHTML`.
+    pub snippet:       String,
+    /// Role of the matched message: `"user"`, `"assistant"`, or
+    /// `"other"` for system/tool/developer messages.
+    pub role:          String,
+    /// Wall-clock time of the underlying tape entry, in milliseconds
+    /// since the Unix epoch.
+    pub timestamp_ms:  i64,
+    /// Monotonic tape-entry ID — exposed so the UI can deep-link into a
+    /// specific message inside the session view.
+    pub seq:           u64,
+}
+
+/// Response body for `GET /api/v1/chat/sessions/search`.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct SessionSearchResponse {
+    /// Top-ranked hits, one per session.
+    pub hits: Vec<SessionSearchHit>,
+}
+
 /// Central orchestrator for session-based AI chat.
 ///
 /// `SessionService` ties together two concerns:
@@ -342,6 +377,18 @@ pub struct SessionService {
 }
 
 impl SessionService {
+    /// Hard ceiling on how many sessions we scan in a single request.
+    const SEARCH_SESSION_SCAN_CAP: i64 = 500;
+    // -- full-text search ---------------------------------------------------
+
+    /// Minimum number of sessions we inspect when scanning for matches.
+    ///
+    /// The `limit` argument bounds the returned hits, but we search a
+    /// larger window of sessions so one heavily-used session cannot
+    /// monopolise the top `limit` slots (we keep only the best hit per
+    /// session, so searching more sessions improves result diversity).
+    const SEARCH_SESSION_SCAN_MULTIPLIER: i64 = 3;
+
     /// Create a new chat service with the given dependencies.
     #[must_use]
     pub fn new(
@@ -713,6 +760,82 @@ impl SessionService {
         })
     }
 
+    /// Search recent sessions for messages matching `query` (full-text).
+    ///
+    /// Scans up to `SEARCH_SESSION_SCAN_CAP` of the most recently
+    /// updated sessions, asks the tape service for ranked matches inside
+    /// each, and keeps only the single highest-ranked hit per session
+    /// before clamping to `limit`. One-hit-per-session keeps the result
+    /// list varied: the underlying FTS ranker tends to cluster many hits
+    /// inside one long thread, which otherwise drowns out other matches.
+    ///
+    /// An empty or whitespace-only `query` short-circuits to an empty
+    /// response — this is treated as "user cleared the search box", not
+    /// as a validation error.
+    #[instrument(skip(self))]
+    pub async fn search_sessions(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<SessionSearchResponse, ChatError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() || limit == 0 {
+            return Ok(SessionSearchResponse { hits: Vec::new() });
+        }
+
+        let scan_limit = (limit as i64)
+            .saturating_mul(Self::SEARCH_SESSION_SCAN_MULTIPLIER)
+            .min(Self::SEARCH_SESSION_SCAN_CAP)
+            .max(limit as i64);
+
+        let sessions = self.session_index.list_sessions(scan_limit, 0).await?;
+
+        // Per-session search bound. The service ranks inside a tape so
+        // we only need the top few candidates before picking the best
+        // one whose payload yields a usable role/text.
+        let per_session_limit = 3usize;
+
+        let mut hits: Vec<(f64, SessionSearchHit)> = Vec::new();
+        for session in &sessions {
+            let tape_name = session.key.to_string();
+            let entries = match self
+                .tape_service
+                .search(&tape_name, trimmed, per_session_limit, false)
+                .await
+            {
+                Ok(entries) => entries,
+                Err(e) => {
+                    tracing::warn!(
+                        session = %session.key,
+                        error = %e,
+                        "tape search failed, skipping session"
+                    );
+                    continue;
+                }
+            };
+
+            // `entries` is ordered by relevance; pick the first one
+            // whose payload decodes into a message we can project.
+            let Some((rank, hit)) = entries.iter().enumerate().find_map(|(idx, entry)| {
+                project_search_hit(entry, session, trimmed).map(|h| (idx, h))
+            }) else {
+                continue;
+            };
+
+            // Lower `rank` = better; negate so a max-heap-style sort by
+            // `score.partial_cmp` puts the best hits first.
+            let score = -(rank as f64);
+            hits.push((score, hit));
+        }
+
+        hits.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(limit);
+
+        Ok(SessionSearchResponse {
+            hits: hits.into_iter().map(|(_, h)| h).collect(),
+        })
+    }
+
     // -- channel bindings ---------------------------------------------------
 
     /// Bind an external channel (e.g. Telegram chat) to a session key.
@@ -891,6 +1014,57 @@ fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
         }
     }
     messages
+}
+
+/// Map a kernel [`Role`] to the short, lowercase string the web UI
+/// expects on a search hit.
+fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        // System / Developer / Tool messages are rare hits but can surface
+        // when the user searches for content embedded in a tool result;
+        // collapse the distinction so the UI has a single "other" bucket.
+        _ => "other",
+    }
+}
+
+/// Extract the plain text body of a [`Message`] for snippet generation.
+fn message_plain_text(msg: &Message) -> String { msg.content.as_text().to_owned() }
+
+/// Project a matched [`TapEntry`] into a [`SessionSearchHit`].
+///
+/// Returns `None` when the entry is not a decodable `Message` — we
+/// deliberately skip `ToolCall` / `ToolResult` / system metadata entries
+/// here because the search endpoint targets conversational content. A
+/// sibling user / assistant entry with overlapping text will usually
+/// be ranked alongside the skipped entry and picked up instead.
+fn project_search_hit(
+    entry: &TapEntry,
+    session: &SessionEntry,
+    query: &str,
+) -> Option<SessionSearchHit> {
+    if !matches!(entry.kind, TapEntryKind::Message) {
+        return None;
+    }
+    let msg: Message = serde_json::from_value(entry.payload.clone()).ok()?;
+    let text = message_plain_text(&msg);
+    let snippet = crate::chat::snippet::build_snippet(&text, query);
+    let session_key = session.key.to_string();
+    let session_title = session
+        .title
+        .as_ref()
+        .filter(|t| !t.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| session_key.clone());
+    Some(SessionSearchHit {
+        session_key,
+        session_title,
+        snippet,
+        role: role_label(msg.role).to_owned(),
+        timestamp_ms: entry.timestamp.as_millisecond(),
+        seq: entry.id,
+    })
 }
 
 #[cfg(test)]
