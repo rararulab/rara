@@ -424,6 +424,66 @@ mod tests {
         }
     }
 
+    /// #1670: when no YAML entry and no settings override exist for an
+    /// agent, `resolve_agent` must fall through to the default provider's
+    /// default model — the same inheritance chain the main agent uses.
+    #[test]
+    fn resolve_agent_inherits_default_when_no_entry() {
+        let reg = registry_with_providers();
+
+        // `blank` has no agent_config, no agent_override, no manifest model
+        // and no manifest provider_hint. The resolver must pick the default
+        // driver ("openrouter") and its default model ("gpt-4o").
+        let m = manifest("blank");
+        let resolved = reg.resolve_agent(&m).expect("resolve_agent");
+        assert_eq!(resolved.model, "gpt-4o");
+    }
+
+    /// #1670: runtime settings override wins over YAML — i.e. mutating the
+    /// `agent_config` entry between `resolve_agent` calls takes effect on
+    /// the next call without re-constructing the registry.
+    #[test]
+    fn resolve_agent_runtime_override_takes_precedence() {
+        let reg = registry_with_providers();
+
+        // Baseline: fallback to provider default.
+        let m = manifest("knowledge_extractor");
+        assert_eq!(
+            reg.resolve_agent(&m).expect("baseline").model,
+            "gpt-4o",
+            "without any override, inherit provider default"
+        );
+
+        // Simulate a YAML entry being synced into the registry.
+        reg.set_agent_config(
+            "knowledge_extractor",
+            AgentLlmConfig {
+                driver: Some("ollama".into()),
+                model:  Some("qwen3:32b".into()),
+            },
+        );
+        assert_eq!(
+            reg.resolve_agent(&m).expect("yaml").model,
+            "qwen3:32b",
+            "YAML entry wins over provider default"
+        );
+
+        // Simulate a runtime mutation (settings.db write hot-reloaded into
+        // the registry) replacing the YAML entry with a new pair.
+        reg.set_agent_config(
+            "knowledge_extractor",
+            AgentLlmConfig {
+                driver: Some("openrouter".into()),
+                model:  Some("gpt-4o-mini".into()),
+            },
+        );
+        let resolved = reg.resolve_agent(&m).expect("runtime override");
+        assert_eq!(
+            resolved.model, "gpt-4o-mini",
+            "runtime mutation picked up on next resolve_agent call"
+        );
+    }
+
     #[test]
     fn legacy_resolve_shim_still_works() {
         let reg = registry_with_providers();

@@ -70,12 +70,19 @@ knowledge:
   similarity_threshold: 0.85
 
 # ---------------------------------------------------------------------------
-# Per-agent `{driver, model}` bindings (unified registry — #1635/#1636/#1637)
+# Per-agent `{driver, model}` bindings (unified registry — #1635/#1636/#1637,
+# relaxed in #1670)
 # ---------------------------------------------------------------------------
 #
-# Every background agent that calls the LLM is resolved via
-# `DriverRegistry::resolve_agent` keyed by its manifest name. The entries
-# below are REQUIRED — missing entries fail boot with an actionable error.
+# The entire `agents:` section is OPTIONAL. Resolution order per agent:
+#   1. settings DB override (runtime mutation via `agents.<name>.{driver,model}`)
+#   2. YAML `agents.<name>.{driver, model}` (this block)
+#   3. `llm.default_provider` + that provider's `default_model` (fallback)
+#
+# Omit the block entirely and every background agent — `knowledge_extractor`,
+# `title_gen`, etc. — inherits the default provider's default model, just like
+# the main user-facing agent. Add an entry here only when you want to pin a
+# specific agent to a different provider or model.
 #
 # Optional `max_output_chars` caps a headless agent's free-form output
 # without a rebuild (currently consumed by `title_gen`).
