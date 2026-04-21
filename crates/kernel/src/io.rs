@@ -1147,12 +1147,18 @@ pub const STREAM_HUB_BROADCAST_CAPACITY: usize = 4096;
 /// [`StreamHub::subscribe_session_events`] keep receiving events across stream
 /// turnover — critical for long-lived WS/SSE connections that must survive
 /// mid-turn interruption + re-injection (see issue #1647).
+///
+/// The session bus entry is reaped when no active streams remain on the
+/// session AND no active session-bus subscribers are holding it open. A later
+/// [`subscribe_session_events`](Self::subscribe_session_events) on the same
+/// key transparently re-creates the entry.
 pub struct StreamHub {
     streams:         DashMap<StreamId, StreamEntry>,
     /// Reverse index: session_key → active stream IDs for O(1) lookup.
     session_streams: DashMap<SessionKey, Vec<StreamId>>,
-    /// Session-level event bus — outlives individual streams so long-lived
-    /// subscribers (WS/SSE) do not see `Closed` between turns.
+    /// Session-level event bus — reaped when no active streams AND no
+    /// session-bus subscribers remain; a later `subscribe_session_events`
+    /// re-creates it.
     session_events:  DashMap<SessionKey, broadcast::Sender<StreamEvent>>,
     capacity:        usize,
 }
@@ -1172,10 +1178,17 @@ impl StreamHub {
     ///
     /// Called by [`open`](Self::open) to ensure only one active stream per
     /// session. Any previously unclosed streams (e.g., from a hung agent
-    /// run) are cleaned up here.
+    /// run or a pre-empted turn) are cleaned up here.
     ///
-    /// Intentionally does NOT remove the session-level `session_events`
-    /// entry — that bus outlives individual streams (see [`StreamHub`] doc).
+    /// Does NOT emit a [`StreamEvent::StreamClosed`] for zombie streams —
+    /// pre-emption is not the genuine end of a turn, and emitting a terminal
+    /// marker here would cause session-level subscribers (web `Done` frame)
+    /// to finalize the previous turn's UI mid-flight (see issue #1647 N6/B3).
+    /// Normal turn completion routes through [`close`](Self::close) which
+    /// DOES emit the terminal marker.
+    ///
+    /// Reaps the session-level `session_events` entry if no active stream
+    /// and no subscribers remain on that bus.
     #[tracing::instrument(skip(self))]
     pub fn close_session(&self, session_key: &SessionKey) {
         // Remove the session entry first, releasing the DashMap shard lock.
@@ -1188,13 +1201,38 @@ impl StreamHub {
             tracing::debug!(count = ids.len(), "cleaning up zombie streams for session");
         }
         for id in &ids {
-            if let Some((_, entry)) = self.streams.remove(id) {
-                // Emit terminal marker so session-level subscribers observe
-                // the turn boundary before the per-stream sender drops.
-                let _ = entry.tx.send(StreamEvent::StreamClosed {
-                    stream_id: id.to_string(),
-                });
-            }
+            // Drop the per-stream entry without emitting StreamClosed —
+            // the bridge task observes RecvError::Closed and terminates
+            // naturally, which does not forward a spurious terminal frame.
+            let _ = self.streams.remove(id);
+        }
+        self.reap_session_bus_if_idle(session_key);
+    }
+
+    /// Reap the session-level event bus entry when no streams and no
+    /// subscribers remain on it.
+    ///
+    /// The two checks are independent DashMap lookups — the guard from the
+    /// first `get()` is dropped before the `remove()` to avoid the
+    /// well-known DashMap shard-lock deadlock when `get` and `remove`
+    /// target the same key.
+    fn reap_session_bus_if_idle(&self, session_key: &SessionKey) {
+        let session_empty = self
+            .session_streams
+            .get(session_key)
+            .map_or(true, |v| v.is_empty());
+        if !session_empty {
+            return;
+        }
+        // Compute `should_remove` inside a scoped block so the `get()` guard
+        // is dropped before `remove()` — holding a read guard across a
+        // write on the same DashMap key deadlocks.
+        let should_remove = {
+            let entry = self.session_events.get(session_key);
+            entry.map(|e| e.receiver_count() == 0).unwrap_or(false)
+        };
+        if should_remove {
+            self.session_events.remove(session_key);
         }
     }
 
@@ -1262,9 +1300,11 @@ impl StreamHub {
     /// emits a [`StreamEvent::StreamClosed`] so session-level subscribers can
     /// observe the turn boundary without seeing `RecvError::Closed`.
     ///
-    /// The session-level bus entry in `session_events` is intentionally NOT
-    /// removed here — it outlives individual streams so that the next turn's
-    /// stream can reuse the same session-level subscribers.
+    /// The session-level bus entry in `session_events` is reaped here when
+    /// both conditions hold: this was the last active stream on the session,
+    /// AND no subscriber is holding the session bus open. If a subscriber
+    /// remains, the entry persists so the next turn's stream rejoins the
+    /// same bus — preserving mid-turn interrupt + reinject behavior (#1647).
     #[tracing::instrument(skip(self))]
     pub fn close(&self, stream_id: &StreamId) {
         if let Some((_, entry)) = self.streams.remove(stream_id) {
@@ -1273,13 +1313,15 @@ impl StreamHub {
             let _ = entry.tx.send(StreamEvent::StreamClosed {
                 stream_id: stream_id.to_string(),
             });
-            if let Some(mut ids) = self.session_streams.get_mut(&entry.session_key) {
+            let session_key = entry.session_key;
+            if let Some(mut ids) = self.session_streams.get_mut(&session_key) {
                 ids.retain(|id| id != stream_id);
                 if ids.is_empty() {
                     drop(ids);
-                    self.session_streams.remove(&entry.session_key);
+                    self.session_streams.remove(&session_key);
                 }
             }
+            self.reap_session_bus_if_idle(&session_key);
         }
     }
 
@@ -2667,6 +2709,66 @@ mod stream_hub_tests {
             }
         }
         assert_eq!(texts, vec!["B1"]);
+    }
+
+    /// When no subscriber holds the session bus open, a completed stream
+    /// reaps the `session_events` entry along with its per-stream entry.
+    /// Prevents the unbounded growth reported in #1647 B1.
+    #[tokio::test]
+    async fn close_reaps_session_bus_when_no_subscribers() {
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+
+        let handle = hub.open(session);
+        // `open()` creates the session_events entry for bridging.
+        assert!(
+            hub.session_events.contains_key(&session),
+            "open() should create session bus entry"
+        );
+
+        hub.close(handle.stream_id());
+
+        assert!(
+            !hub.session_events.contains_key(&session),
+            "close() should reap session bus when no subscribers remain"
+        );
+        assert!(
+            !hub.session_streams.contains_key(&session),
+            "close() should remove empty session_streams entry"
+        );
+    }
+
+    /// A subscriber attached between streams keeps the session bus alive
+    /// across the gap. After the subscriber is dropped, the next
+    /// open-then-close cycle reaps the bus entry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subscriber_keeps_session_bus_alive_across_streams() {
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+
+        // Turn A with an attached subscriber.
+        let rx = hub.subscribe_session_events(&session);
+        let handle_a = hub.open(session);
+        hub.close(handle_a.stream_id());
+
+        // Subscriber still holds the bus — entry must remain.
+        assert!(
+            hub.session_events.contains_key(&session),
+            "session bus must survive close() while a subscriber is attached"
+        );
+
+        // Drop the subscriber; the sender still lives in session_events so
+        // receiver_count drops to 0.
+        drop(rx);
+
+        // A new stream opens + closes with nobody listening on the bus.
+        let handle_b = hub.open(session);
+        hub.close(handle_b.stream_id());
+
+        assert!(
+            !hub.session_events.contains_key(&session),
+            "session bus should reap once all streams and subscribers are gone"
+        );
     }
 }
 

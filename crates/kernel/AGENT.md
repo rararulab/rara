@@ -381,3 +381,25 @@ Flow:
 - Do NOT construct `ExecutionTrace` literals in channel adapters — trace content must be built from the kernel's event stream, not from channel-local bookkeeping. Channels receive `StreamEvent::TraceReady` and look up the persisted row via `TraceService::get`.
 - Do NOT call `TraceService::save` outside `kernel.rs`'s turn driver — double-saves create duplicate rows and desynchronize the `TraceReady` signal.
 - Do NOT attach the `TraceBuilder` to the `StreamHandle` mid-turn — early events (`TurnStarted`, first `UsageUpdate`) would be dropped, producing an incomplete trace.
+
+---
+
+## Critical: StreamHub Session Bus Lifecycle in `io.rs`
+
+### The Invariant
+
+The session-level `session_events` bus entry is **reaped when both conditions hold**: (1) no active per-stream entries remain for the session in `session_streams`, AND (2) no `broadcast::Receiver` holds the session sender open (`receiver_count() == 0`). Before #1647 the entry was intentionally never removed; the "persist for the lifetime of the hub" comment is obsolete.
+
+### Why This Matters
+
+Each kernel turn calls `StreamHub::open(session)` which gets-or-creates a `broadcast::Sender<StreamEvent>` of capacity 4096 and spawns a bridge task forwarding per-stream events into it. Without reaping, long-running kernels leaked one 4096-slot sender per session that ever existed. The two-sided condition (no streams AND no subscribers) preserves the #1647 invariant that a WS/SSE subscriber attached between turns keeps the bus alive across stream turnover.
+
+### Consequences
+
+- A subscriber attached between streams keeps the bus alive; the next `open()` rejoins the same bus — mid-turn interrupt + reinject still works.
+- If no subscriber is attached and every stream closes, the bus is reaped. A later `subscribe_session_events` on the same key transparently recreates it — correct behaviour, because a subscriber arriving after reap receives only events from the next stream (no stale replay).
+
+### What NOT To Do
+
+- Do NOT emit `StreamEvent::StreamClosed` from `close_session()` — that path is only called from `open()` to reap zombies from pre-empted turns. Emitting a terminal marker there would cause session-level subscribers (web `WebEvent::Done`) to finalize the previous turn's UI mid-flight when the user sends a follow-up message before the first turn completes. Normal turn completion goes through `close()` which DOES emit the marker.
+- Do NOT hold a DashMap `get()` guard across a `remove()` on the same map — DashMap shards are `RwLock`-based and a read guard across a write on the same shard deadlocks. `reap_session_bus_if_idle` scopes the `get()` guard in a block so it drops before `remove()`.
