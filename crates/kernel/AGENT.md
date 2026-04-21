@@ -4,24 +4,38 @@
 
 The unified entry point for resolving an agent's LLM binding is
 [`DriverRegistry::resolve_agent`] in `crates/kernel/src/llm/registry.rs`.
-It returns a [`ResolvedAgent { driver, model, manifest }`] triple read from
-`agents.<name>.{driver, model}` in YAML, with fallback to the manifest's
-`provider_hint`/`model` and finally the provider default. New consumers
-MUST go through `resolve_agent` so the driver and the model come from a
-single consistent source — the split-config bug that motivated #1635
-(driver resolved via the registry, model resolved via a flat settings key
-like `memory.knowledge.extractor_model`) should not reappear. That legacy
-flat key was removed in #1638; no fallback remains in Rust, missing
-`agents.<name>.{driver, model}` fails boot. The legacy
-`DriverRegistry::resolve` tuple API is kept as a thin shim for existing
-callers; migration is tracked in follow-up issues under Epic #1631.
+It returns a [`ResolvedAgent { driver, model, manifest }`] triple. New
+consumers MUST go through `resolve_agent` so the driver and the model
+come from a single consistent source — the split-config bug that
+motivated #1635 (driver resolved via the registry, model resolved via a
+flat settings key like `memory.knowledge.extractor_model`) should not
+reappear. The legacy `DriverRegistry::resolve` tuple API is kept as a
+thin shim for existing callers; migration is tracked in follow-up issues
+under Epic #1631.
+
+Resolution order, per agent (revised in #1670):
+
+1. `settings` DB entry `agents.<name>.{driver, model}` — runtime override,
+   picked up on the next call without restart (the settings store notifies
+   the registry reload path in `crates/app/src/boot.rs`).
+2. YAML `agents.<name>.{driver, model}`.
+3. Manifest `provider_hint` / `model`.
+4. `llm.default_provider` + that provider's `default_model`.
+
+Missing entries are NOT a boot error: the #1638 hard-fail for
+`knowledge_extractor` / `title_gen` was reverted in #1670 — background
+agents inherit the default provider's default model the same way the
+main user-facing agent does. Boot logs one info line per agent on the
+fallback path so operators can audit the inheritance without enabling
+debug logging.
 
 ### Migrated consumers
 
 - `memory/knowledge/extractor.rs` — #1636 / #1629. Reads
-  `agents.knowledge_extractor.{driver, model}`. Boot fails fast if the
-  pair is missing. `extract_knowledge` now takes a `&ResolvedAgent` so
-  driver + model can never disagree. Example config:
+  `agents.knowledge_extractor.{driver, model}`, falling back to the
+  default provider's default model when unset (#1670).
+  `extract_knowledge` takes a `&ResolvedAgent` so driver + model can
+  never disagree. Example config:
 
   ```yaml
   agents:

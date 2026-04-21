@@ -53,6 +53,24 @@ pub mod keys {
     pub const KNOWLEDGE_EMBEDDING_DIMENSIONS: &str = "memory.knowledge.embedding_dimensions";
     pub const KNOWLEDGE_SEARCH_TOP_K: &str = "memory.knowledge.search_top_k";
     pub const KNOWLEDGE_SIMILARITY_THRESHOLD: &str = "memory.knowledge.similarity_threshold";
+
+    /// Prefix for the unified per-agent LLM binding — `{prefix}.<agent>.driver`
+    /// selects the provider and `{prefix}.<agent>.model` the exact model.
+    ///
+    /// These keys are optional. When unset, `DriverRegistry::resolve_agent`
+    /// falls through to `agents.<name>` YAML, the manifest, and finally the
+    /// default provider's default model. Operators can mutate them at runtime
+    /// via the settings KV store and the change propagates through the
+    /// `settings.subscribe()` reload path — no restart needed.
+    pub const AGENTS_PREFIX: &str = "agents";
+
+    /// Settings key for the driver override of a named agent. See
+    /// [`AGENTS_PREFIX`] for the fallback contract.
+    pub fn agent_driver_key(agent: &str) -> String { format!("{AGENTS_PREFIX}.{agent}.driver") }
+
+    /// Settings key for the model override of a named agent. See
+    /// [`AGENTS_PREFIX`] for the fallback contract.
+    pub fn agent_model_key(agent: &str) -> String { format!("{AGENTS_PREFIX}.{agent}.model") }
 }
 
 /// Unified trait for reading and writing flat KV settings.

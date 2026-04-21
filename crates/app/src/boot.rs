@@ -461,14 +461,18 @@ async fn build_driver_registry(
 
     // -- unified per-agent configs (agents.<name>.{driver, model}) --------------
     //
-    // Introduced in #1636, extended by #1637. The `agents.*` namespace is the
-    // post-refactor binding consumed by `DriverRegistry::resolve_agent`. Unlike
-    // the legacy `llm.agent_overrides.*` keys, these live alongside other
-    // per-agent knobs (e.g. `agents.title_gen.max_output_chars`) and form the
-    // single `{driver, model, manifest}` snapshot used at call sites.
+    // Introduced in #1636, extended by #1637, relaxed in #1670. The `agents.*`
+    // namespace is the post-refactor binding consumed by
+    // `DriverRegistry::resolve_agent`. Unlike the legacy `llm.agent_overrides.*`
+    // keys, these live alongside other per-agent knobs (e.g.
+    // `agents.title_gen.max_output_chars`) and form the single
+    // `{driver, model, manifest}` snapshot used at call sites.
     //
-    // Boot fails fast for the knowledge extractor if its driver/model are
-    // missing — the prod failure in #1629 showed we cannot silently fall back.
+    // Entries here may come from YAML *or* from runtime mutations to the
+    // settings KV store. When an agent has no entry at all,
+    // `resolve_agent` falls through to the manifest and finally the default
+    // provider's default model — the same resolution path used by the main
+    // user-facing agent.
     let unified_agent_names: BTreeSet<&str> = all_settings
         .keys()
         .filter_map(|k| k.strip_prefix("agents."))
@@ -494,13 +498,28 @@ async fn build_driver_registry(
         }
     }
 
-    // Fail boot when any required background agent is missing an explicit
-    // `{driver, model}` pair. Silent fallbacks are forbidden by the project's
-    // "no config defaults in Rust" rule — and the prod failure in #1629 / #1636
-    // showed that a mismatched default silently breaks the knowledge
-    // extraction pipeline.
-    ensure_required_agent_configs(&all_settings, REQUIRED_BACKGROUND_AGENTS)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Surface which background agents are about to inherit the default
+    // `{provider, model}` pair so operators can audit resolution decisions
+    // without enabling debug logging. Missing entries are no longer a boot
+    // failure (see #1670) — the main agent already inherits via the same
+    // fallback chain and users may legitimately want the heavy reasoning
+    // model for extraction/titles.
+    for &agent in BACKGROUND_AGENTS_WITH_FALLBACK {
+        let has_driver = all_settings
+            .get(&format!("agents.{agent}.driver"))
+            .is_some_and(|v| !v.trim().is_empty());
+        let has_model = all_settings
+            .get(&format!("agents.{agent}.model"))
+            .is_some_and(|v| !v.trim().is_empty());
+        if !has_driver && !has_model {
+            info!(
+                agent,
+                provider = %default_provider,
+                model = %default_model,
+                "agent inherits default LLM binding (no agents.{agent}.{{driver,model}} configured)"
+            );
+        }
+    }
 
     // -- codex (ChatGPT backend via OAuth) — uses Responses API ----------------
 
@@ -928,131 +947,34 @@ async fn init_knowledge_service(
 }
 
 // =========================================================================
-// Background agent config validation (#1638)
+// Background agent fallback audit (#1670)
 // =========================================================================
 
-/// Background agents whose `{driver, model}` pair MUST be present in
-/// `agents.<name>` for the kernel to boot. Missing entries fail boot with
-/// an actionable error instead of falling back to a hardcoded default
-/// (see `docs/guides/anti-patterns.md` — "no config defaults in Rust").
+/// Background agents that inherit `llm.default_provider` + its default
+/// model when their `agents.<name>.{driver, model}` pair is omitted.
 ///
+/// Boot emits a single info-level line per agent on the fallback path so
+/// operators can audit resolution decisions without enabling debug logs.
 /// The list mirrors what `kernel.rs` resolves via `resolve_agent` for
 /// headless background work:
 /// - `knowledge_extractor` — memory extraction pipeline (#1636)
 /// - `title_gen` — session title auto-generation (#1637)
-const REQUIRED_BACKGROUND_AGENTS: &[&str] = &["knowledge_extractor", "title_gen"];
-
-/// Verify every agent in `required` has a non-empty `driver` and `model`
-/// in the flattened settings map. Returns a single error message naming
-/// every unconfigured agent so operators see the full picture at once.
-fn ensure_required_agent_configs(
-    settings: &HashMap<String, String>,
-    required: &[&str],
-) -> Result<(), String> {
-    let missing: Vec<String> = required
-        .iter()
-        .filter(|name| {
-            let driver = settings
-                .get(&format!("agents.{name}.driver"))
-                .filter(|v| !v.trim().is_empty());
-            let model = settings
-                .get(&format!("agents.{name}.model"))
-                .filter(|v| !v.trim().is_empty());
-            driver.is_none() || model.is_none()
-        })
-        .map(|name| (*name).to_string())
-        .collect();
-
-    if missing.is_empty() {
-        return Ok(());
-    }
-
-    let example: String = missing
-        .iter()
-        .map(|n| format!("  {n}:\n    driver: \"openai\"\n    model: \"gpt-4o-mini\""))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Err(format!(
-        "missing required agent config: {names} — every background agent needs an explicit \
-         `{{driver, model}}` pair in config.yaml. See config.example.yaml for the full shape. \
-         Add:\n\nagents:\n{example}\n",
-        names = missing.join(", "),
-    ))
-}
+///
+/// Missing entries are no longer a boot failure (#1670 reverted the
+/// #1638 hard-fail): the main user-facing agent already inherits via the
+/// same fallback chain, and users may legitimately want the heavy
+/// reasoning model for extraction/titles.
+const BACKGROUND_AGENTS_WITH_FALLBACK: &[&str] = &["knowledge_extractor", "title_gen"];
 
 #[cfg(test)]
-mod boot_validation_tests {
+mod boot_fallback_tests {
     use super::*;
 
-    fn full_agent_settings() -> HashMap<String, String> {
-        let mut m = HashMap::new();
-        m.insert(
-            "agents.knowledge_extractor.driver".into(),
-            "openrouter".into(),
-        );
-        m.insert(
-            "agents.knowledge_extractor.model".into(),
-            "gpt-4o-mini".into(),
-        );
-        m.insert("agents.title_gen.driver".into(), "openai".into());
-        m.insert("agents.title_gen.model".into(), "gpt-4o-mini".into());
-        m
-    }
-
     #[test]
-    fn ok_when_all_required_agents_configured() {
-        let settings = full_agent_settings();
-        ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS).expect("boot ok");
-    }
-
-    #[test]
-    fn fails_when_knowledge_extractor_missing() {
-        let mut settings = full_agent_settings();
-        settings.remove("agents.knowledge_extractor.driver");
-        settings.remove("agents.knowledge_extractor.model");
-        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
-            .expect_err("must fail");
-        assert!(
-            err.contains("knowledge_extractor"),
-            "err should name the missing agent: {err}"
-        );
-    }
-
-    #[test]
-    fn fails_when_title_gen_missing() {
-        let mut settings = full_agent_settings();
-        settings.remove("agents.title_gen.driver");
-        settings.remove("agents.title_gen.model");
-        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
-            .expect_err("must fail");
-        assert!(
-            err.contains("title_gen"),
-            "err should name the missing agent: {err}"
-        );
-    }
-
-    #[test]
-    fn fails_when_driver_present_but_model_empty() {
-        let mut settings = full_agent_settings();
-        settings.insert("agents.title_gen.model".into(), "   ".into());
-        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
-            .expect_err("must fail — empty model is same as missing");
-        assert!(err.contains("title_gen"));
-    }
-
-    /// Regression: the legacy `memory.knowledge.extractor_model` key must
-    /// not paper over a missing `agents.knowledge_extractor.model`. The
-    /// validator only looks at the unified `agents.*` namespace.
-    #[test]
-    fn legacy_extractor_model_key_does_not_satisfy_agents_requirement() {
-        let mut settings = full_agent_settings();
-        settings.remove("agents.knowledge_extractor.model");
-        settings.insert(
-            "memory.knowledge.extractor_model".into(),
-            "legacy-model".into(),
-        );
-        let err = ensure_required_agent_configs(&settings, REQUIRED_BACKGROUND_AGENTS)
-            .expect_err("legacy key must not satisfy the unified shape");
-        assert!(err.contains("knowledge_extractor"));
+    fn fallback_list_includes_known_background_agents() {
+        // Sanity check — the audit log depends on this list staying in sync
+        // with what `kernel.rs` actually resolves via `resolve_agent`.
+        assert!(BACKGROUND_AGENTS_WITH_FALLBACK.contains(&"knowledge_extractor"));
+        assert!(BACKGROUND_AGENTS_WITH_FALLBACK.contains(&"title_gen"));
     }
 }
