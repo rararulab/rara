@@ -63,6 +63,7 @@ import { CascadeModal } from '@/components/chat/CascadeModal';
 import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
+import { SessionSearchDialog } from '@/components/SessionSearchDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { useSessionDelete } from '@/hooks/use-session-delete';
@@ -544,6 +545,44 @@ export default function PiChat() {
   const [execTrace, setExecTrace] = useState<ExecutionTrace | null>(null);
   const [execTraceLoading, setExecTraceLoading] = useState(false);
   const [execTraceError, setExecTraceError] = useState<string | null>(null);
+  // Cmd+K session-search palette.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [recentSessions, setRecentSessions] = useState<ChatSession[]>([]);
+
+  // Global Cmd+K / Ctrl+K shortcut — toggles the search palette. We
+  // register directly on `window` (instead of a wrapper hook) because
+  // the dialog is the only consumer and there is no other keyboard
+  // shortcut story in this file yet.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setSearchOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Refetch recent sessions whenever the palette opens so the empty-query
+  // list reflects freshly-created or renamed sessions. Cheap (one
+  // request) and keeps the palette in sync with the sidebar without
+  // piping its state down.
+  useEffect(() => {
+    if (!searchOpen) return;
+    let alive = true;
+    api
+      .get<ChatSession[]>('/api/v1/chat/sessions?limit=20&offset=0')
+      .then((list) => {
+        if (alive) setRecentSessions(list);
+      })
+      .catch(() => {
+        if (alive) setRecentSessions([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [searchOpen, sidebarRefreshKey]);
 
   // Clear any stale reset-error banner whenever the model dialog is
   // closed — regardless of close path (backdrop click, successful
@@ -1077,6 +1116,7 @@ export default function PiChat() {
         activeSessionKey={activeSession?.key}
         onSelect={switchSession}
         onNewSession={newSession}
+        onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => openSettings()}
         onDeleteSession={handleSessionDeleted}
         refreshKey={sidebarRefreshKey}
@@ -1174,6 +1214,28 @@ export default function PiChat() {
         loading={cascadeLoading}
         error={cascadeError}
         onClose={() => setCascadeOpen(false)}
+      />
+      <SessionSearchDialog
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        recentSessions={recentSessions}
+        onSelect={(key) => {
+          // Look up the session in the currently-cached recents first
+          // (no extra request when the user picks a row they can already
+          // see in the dialog). Fall back to a GET when the key comes
+          // from a search hit the recents list doesn't cover.
+          const cached = recentSessions.find((s) => s.key === key);
+          if (cached) {
+            void switchSession(cached);
+            return;
+          }
+          api
+            .get<ChatSession>(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
+            .then((s) => switchSession(s))
+            .catch((e: unknown) => {
+              console.warn('Failed to open searched session:', e);
+            });
+        }}
       />
       <ExecutionTraceModal
         open={execTraceOpen}
