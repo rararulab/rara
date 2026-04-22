@@ -19,7 +19,7 @@
 //! zero coupling to I/O transport — it is purely a UI concern owned by
 //! one channel.
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Pool of poetic Chinese loading messages.
 pub const HINTS: &[&str] = &[

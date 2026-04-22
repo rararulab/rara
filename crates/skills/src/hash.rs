@@ -25,5 +25,5 @@ use crate::error::{IoSnafu, Result};
 pub fn file_hash(path: &Path) -> Result<String> {
     let content = std::fs::read(path).context(IoSnafu)?;
     let digest = Sha256::digest(&content);
-    Ok(format!("{digest:x}"))
+    Ok(hex::encode(digest))
 }

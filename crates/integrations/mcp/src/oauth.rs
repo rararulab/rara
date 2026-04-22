@@ -332,7 +332,8 @@ impl StoredOAuthTokens {
             serde_json::to_string(&payload).context("failed to serialize store key payload")?;
 
         let hash = Sha256::digest(serialized.as_bytes());
-        let prefix = &format!("{hash:x}")[..16];
+        let hex_hash = hex::encode(hash);
+        let prefix = &hex_hash[..16];
         Ok(format!("{server_name}|{prefix}"))
     }
 
