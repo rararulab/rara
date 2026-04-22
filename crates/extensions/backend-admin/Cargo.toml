@@ -46,7 +46,10 @@ uuid = { workspace = true }
 yunara-store = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 base = { workspace = true }
 common-telemetry = { workspace = true }
+tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
