@@ -470,6 +470,12 @@
  * scroll viewport is the belt-and-braces companion: it ensures any
  * native scroll-into-view (e.g. focus restoration) also clears the
  * overlay region.
+ *
+ * Invariant: this selector targets pi-web-ui ≥0.63 light DOM. On any
+ * pi-web-ui upgrade, verify that the `agent-interface > .overflow-y-auto > .max-w-3xl`
+ * chain still exists in the rendered DOM — if pi-web-ui changes its
+ * content-column class (e.g. `max-w-4xl`) or wraps the scroll viewport,
+ * this rule silently no-ops and #1675 regresses.
  */
 .rara-chat agent-interface .overflow-y-auto > .max-w-3xl {
   padding-bottom: var(--rara-live-card-h, 0);

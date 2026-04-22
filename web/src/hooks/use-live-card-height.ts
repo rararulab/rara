@@ -35,8 +35,8 @@ const CSS_VAR = '--rara-live-card-h';
  * cleared so the chat returns to its normal layout.
  */
 export function useLiveCardHeight(card: HTMLElement | null, target: HTMLElement | null) {
-  // Track the last value we wrote so the cleanup can restore the prior
-  // state instead of unconditionally wiping a value another caller set.
+  // Dedupe — skip writes when the value is unchanged to avoid layout
+  // thrash on identical resizes.
   const lastWrittenRef = useRef<string | null>(null);
 
   useEffect(() => {
