@@ -1037,6 +1037,18 @@ pub enum StreamEvent {
         /// [`TraceService::save`](crate::trace::TraceService::save).
         trace_id: String,
     },
+    /// Terminal marker emitted by [`StreamHub::close`] immediately before the
+    /// per-stream broadcast sender is dropped.
+    ///
+    /// Per-stream subscribers naturally see `RecvError::Closed` when the
+    /// sender drops; this variant exists so that **session-level** subscribers
+    /// (via [`StreamHub::subscribe_session_events`]) — whose bus outlives
+    /// individual streams — can still observe turn completion to emit their
+    /// own terminal signal (e.g. the web `WebEvent::Done` frame).
+    StreamClosed {
+        /// The stream that just closed.
+        stream_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,10 +1136,30 @@ pub const STREAM_HUB_BROADCAST_CAPACITY: usize = 4096;
 ///
 /// Manages the lifecycle of per-execution streams and provides
 /// subscription endpoints for egress/frontends.
+///
+/// # Session-level event bus
+///
+/// Beyond per-stream broadcast channels, the hub maintains a **session-level**
+/// event bus (`session_events`) whose lifetime is independent of individual
+/// streams. Each time [`StreamHub::open`] creates a new per-stream sender, a
+/// small bridge task forwards every emitted [`StreamEvent`] to the shared
+/// session-level sender. Subscribers attached via
+/// [`StreamHub::subscribe_session_events`] keep receiving events across stream
+/// turnover — critical for long-lived WS/SSE connections that must survive
+/// mid-turn interruption + re-injection (see issue #1647).
+///
+/// The session bus entry is reaped when no active streams remain on the
+/// session AND no active session-bus subscribers are holding it open. A later
+/// [`subscribe_session_events`](Self::subscribe_session_events) on the same
+/// key transparently re-creates the entry.
 pub struct StreamHub {
     streams:         DashMap<StreamId, StreamEntry>,
     /// Reverse index: session_key → active stream IDs for O(1) lookup.
     session_streams: DashMap<SessionKey, Vec<StreamId>>,
+    /// Session-level event bus — reaped when no active streams AND no
+    /// session-bus subscribers remain; a later `subscribe_session_events`
+    /// re-creates it.
+    session_events:  DashMap<SessionKey, broadcast::Sender<StreamEvent>>,
     capacity:        usize,
 }
 
@@ -1137,6 +1169,7 @@ impl StreamHub {
         Self {
             streams: DashMap::new(),
             session_streams: DashMap::new(),
+            session_events: DashMap::new(),
             capacity,
         }
     }
@@ -1145,7 +1178,17 @@ impl StreamHub {
     ///
     /// Called by [`open`](Self::open) to ensure only one active stream per
     /// session. Any previously unclosed streams (e.g., from a hung agent
-    /// run) are cleaned up here.
+    /// run or a pre-empted turn) are cleaned up here.
+    ///
+    /// Does NOT emit a [`StreamEvent::StreamClosed`] for zombie streams —
+    /// pre-emption is not the genuine end of a turn, and emitting a terminal
+    /// marker here would cause session-level subscribers (web `Done` frame)
+    /// to finalize the previous turn's UI mid-flight (see issue #1647 N6/B3).
+    /// Normal turn completion routes through [`close`](Self::close) which
+    /// DOES emit the terminal marker.
+    ///
+    /// Reaps the session-level `session_events` entry if no active stream
+    /// and no subscribers remain on that bus.
     #[tracing::instrument(skip(self))]
     pub fn close_session(&self, session_key: &SessionKey) {
         // Remove the session entry first, releasing the DashMap shard lock.
@@ -1158,13 +1201,50 @@ impl StreamHub {
             tracing::debug!(count = ids.len(), "cleaning up zombie streams for session");
         }
         for id in &ids {
-            self.streams.remove(id);
+            // Drop the per-stream entry without emitting StreamClosed —
+            // the bridge task observes RecvError::Closed and terminates
+            // naturally, which does not forward a spurious terminal frame.
+            let _ = self.streams.remove(id);
         }
+        self.reap_session_bus_if_idle(session_key);
+    }
+
+    /// Reap the session-level event bus entry when no streams and no
+    /// subscribers remain on it.
+    ///
+    /// The predicate inside `remove_if` runs while the `session_events`
+    /// shard write lock is held, so the `receiver_count() == 0` check and
+    /// the removal are atomic with respect to concurrent
+    /// `subscribe_session_events` / `open()` on the same key — both of
+    /// which acquire the same shard's write lock via `entry().or_insert_with`
+    /// and therefore serialize with us.
+    ///
+    /// We additionally re-check `session_streams` emptiness inside the
+    /// closure so a concurrent `open()` that has already inserted into
+    /// `session_streams` but not yet reached its own `session_events`
+    /// get-or-create cannot have its about-to-be-bridged bus reaped out
+    /// from under it. `session_streams` lives on a different DashMap, so
+    /// taking its read guard while holding the `session_events` shard
+    /// write lock is safe — no shared shard, no lock-order cycle.
+    fn reap_session_bus_if_idle(&self, session_key: &SessionKey) {
+        self.session_events.remove_if(session_key, |_, sender| {
+            sender.receiver_count() == 0
+                && self
+                    .session_streams
+                    .get(session_key)
+                    .map_or(true, |v| v.is_empty())
+        });
     }
 
     /// Open a new stream for an agent execution run.
     ///
     /// Returns a [`StreamHandle`] that the executor uses to emit events.
+    ///
+    /// Also spawns a bridge task that forwards every event emitted on the
+    /// per-stream broadcast channel into the session-level event bus (see
+    /// [`subscribe_session_events`](Self::subscribe_session_events)). The
+    /// bridge task terminates naturally when the per-stream sender is dropped
+    /// (typically via [`close`](Self::close)).
     #[tracing::instrument(skip(self), fields(stream_id = tracing::field::Empty))]
     pub fn open(&self, session_key: SessionKey) -> StreamHandle {
         // Clean up any zombie streams from previous (hung) agent runs.
@@ -1181,6 +1261,31 @@ impl StreamHub {
             .entry(session_key)
             .or_default()
             .push(stream_id.clone());
+
+        // Get-or-create the session-level bus and spawn a bridge task from
+        // the per-stream sender into it. The bus outlives the per-stream
+        // sender intentionally so mid-turn interrupt+reinject does not drop
+        // long-lived WS/SSE subscribers.
+        let session_tx = self
+            .session_events
+            .entry(session_key)
+            .or_insert_with(|| broadcast::channel(self.capacity).0)
+            .clone();
+        let mut bridge_rx = tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match bridge_rx.recv().await {
+                    Ok(ev) => {
+                        let _ = session_tx.send(ev);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "stream→session bridge lagged; events dropped");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
         StreamHandle {
             stream_id,
             tx,
@@ -1191,17 +1296,33 @@ impl StreamHub {
     /// Close a stream by its ID.
     ///
     /// This is precise — only the specified stream is removed, not other
-    /// streams on the same session.
+    /// streams on the same session. Before dropping the per-stream sender,
+    /// emits a [`StreamEvent::StreamClosed`] so session-level subscribers can
+    /// observe the turn boundary without seeing `RecvError::Closed`.
+    ///
+    /// The session-level bus entry in `session_events` is reaped here,
+    /// atomically under the shard write lock, when both conditions hold:
+    /// this was the last active stream on the session, AND no subscriber
+    /// is holding the session bus open. If a subscriber remains, the entry
+    /// survives so the next turn's stream rejoins the same bus — preserving
+    /// mid-turn interrupt + reinject behavior (#1647).
     #[tracing::instrument(skip(self))]
     pub fn close(&self, stream_id: &StreamId) {
         if let Some((_, entry)) = self.streams.remove(stream_id) {
-            if let Some(mut ids) = self.session_streams.get_mut(&entry.session_key) {
+            // Fire the terminal marker before the per-stream sender drops so
+            // the bridge task observes it and forwards it to session_events.
+            let _ = entry.tx.send(StreamEvent::StreamClosed {
+                stream_id: stream_id.to_string(),
+            });
+            let session_key = entry.session_key;
+            if let Some(mut ids) = self.session_streams.get_mut(&session_key) {
                 ids.retain(|id| id != stream_id);
                 if ids.is_empty() {
                     drop(ids);
-                    self.session_streams.remove(&entry.session_key);
+                    self.session_streams.remove(&session_key);
                 }
             }
+            self.reap_session_bus_if_idle(&session_key);
         }
     }
 
@@ -1217,6 +1338,30 @@ impl StreamHub {
                 }
             }
         }
+    }
+
+    /// Subscribe to the **session-level** event bus.
+    ///
+    /// The returned receiver observes every [`StreamEvent`] emitted by any
+    /// stream opened on this session — including streams that are opened
+    /// *after* this call, and surviving across stream turnover. Use this
+    /// for long-lived subscribers (WS/SSE) that must keep receiving events
+    /// when the kernel interrupts turn A and re-injects as turn B.
+    ///
+    /// The bus is created on demand. It is reaped atomically when both the
+    /// session's stream list is empty AND the bus has no subscribers; a
+    /// later `subscribe_session_events` or `open()` transparently re-creates
+    /// it. A terminal [`StreamEvent::StreamClosed`] is delivered on each
+    /// stream completion so consumers can emit their own per-turn "done"
+    /// signals.
+    pub fn subscribe_session_events(
+        &self,
+        session_key: &SessionKey,
+    ) -> broadcast::Receiver<StreamEvent> {
+        self.session_events
+            .entry(*session_key)
+            .or_insert_with(|| broadcast::channel(self.capacity).0)
+            .subscribe()
     }
 
     /// Subscribe to all active streams for a given session.
@@ -2424,8 +2569,8 @@ mod ingress_rate_limiter_tests {
 mod stream_hub_tests {
     use super::*;
 
-    #[test]
-    fn open_cleans_up_zombie_streams() {
+    #[tokio::test]
+    async fn open_cleans_up_zombie_streams() {
         let hub = StreamHub::new(16);
         let session = SessionKey::new();
 
@@ -2464,6 +2609,241 @@ mod stream_hub_tests {
         // Closing a session with no streams should not panic.
         hub.close_session(&session);
         assert!(hub.subscribe_session(&session).is_empty());
+    }
+
+    /// Session-level subscriber attached BEFORE any stream opens sees events
+    /// from BOTH streams on the same session — the forwarder survives stream
+    /// turnover. This is the core property the web adapter relies on to keep
+    /// streaming after mid-turn interrupt + reinject (#1647).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_events_bus_survives_stream_turnover() {
+        let hub = StreamHub::new(64);
+        let session = SessionKey::new();
+
+        // Subscribe BEFORE the first stream opens.
+        let mut rx = hub.subscribe_session_events(&session);
+
+        // Turn A.
+        let handle_a = hub.open(session);
+        handle_a.emit(StreamEvent::TextDelta {
+            text: "A1".to_owned(),
+        });
+        handle_a.emit(StreamEvent::TextDelta {
+            text: "A2".to_owned(),
+        });
+        hub.close(handle_a.stream_id());
+
+        // Turn B — fresh StreamHub::open, fresh per-stream sender.
+        let handle_b = hub.open(session);
+        handle_b.emit(StreamEvent::TextDelta {
+            text: "B1".to_owned(),
+        });
+        hub.close(handle_b.stream_id());
+
+        // Drain with a bounded wait so slow bridge tasks don't flake the test.
+        let mut texts = Vec::new();
+        let mut closed = 0;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while texts.len() < 3 || closed < 2 {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(StreamEvent::TextDelta { text })) => texts.push(text),
+                Ok(Ok(StreamEvent::StreamClosed { .. })) => closed += 1,
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => break,
+                Err(_) => break,
+            }
+        }
+        // Ordering across the two per-stream bridges is not guaranteed
+        // (they run on independent tasks), but every event from both turns
+        // must reach the subscriber — that's the bug fix for #1647.
+        texts.sort();
+        assert_eq!(
+            texts,
+            vec!["A1".to_owned(), "A2".to_owned(), "B1".to_owned()]
+        );
+        assert_eq!(closed, 2, "should see one StreamClosed per stream");
+    }
+
+    /// A subscriber attached AFTER the first stream has closed still receives
+    /// events from the next stream opened on the same session.
+    ///
+    /// Uses the multi-threaded runtime so the bridge tasks spawned during
+    /// turn A actually drain before we subscribe — on the current-thread
+    /// runtime, the bridge could still be holding queued A-events at the
+    /// moment subscribe runs, which would mask the property under test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_subscriber_still_receives_next_stream_events() {
+        let hub = StreamHub::new(64);
+        let session = SessionKey::new();
+
+        // Turn A: run and close before anyone subscribes.
+        let handle_a = hub.open(session);
+        handle_a.emit(StreamEvent::TextDelta {
+            text: "A1".to_owned(),
+        });
+        hub.close(handle_a.stream_id());
+
+        // Let the turn-A bridge fully drain before we subscribe so the new
+        // receiver does not pick up A's tail.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Subscribe now — AFTER the first stream closed but BEFORE turn B.
+        let mut rx = hub.subscribe_session_events(&session);
+
+        // Turn B.
+        let handle_b = hub.open(session);
+        handle_b.emit(StreamEvent::TextDelta {
+            text: "B1".to_owned(),
+        });
+        hub.close(handle_b.stream_id());
+
+        let mut texts = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while texts.is_empty() && tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(StreamEvent::TextDelta { text })) => texts.push(text),
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        assert_eq!(texts, vec!["B1"]);
+    }
+
+    /// When no subscriber holds the session bus open, a completed stream
+    /// reaps the `session_events` entry along with its per-stream entry.
+    /// Prevents the unbounded growth reported in #1647 B1.
+    #[tokio::test]
+    async fn close_reaps_session_bus_when_no_subscribers() {
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+
+        let handle = hub.open(session);
+        // `open()` creates the session_events entry for bridging.
+        assert!(
+            hub.session_events.contains_key(&session),
+            "open() should create session bus entry"
+        );
+
+        hub.close(handle.stream_id());
+
+        assert!(
+            !hub.session_events.contains_key(&session),
+            "close() should reap session bus when no subscribers remain"
+        );
+        assert!(
+            !hub.session_streams.contains_key(&session),
+            "close() should remove empty session_streams entry"
+        );
+    }
+
+    /// A subscriber attached between streams keeps the session bus alive
+    /// across the gap. After the subscriber is dropped, the next
+    /// open-then-close cycle reaps the bus entry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subscriber_keeps_session_bus_alive_across_streams() {
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+
+        // Turn A with an attached subscriber.
+        let rx = hub.subscribe_session_events(&session);
+        let handle_a = hub.open(session);
+        hub.close(handle_a.stream_id());
+
+        // Subscriber still holds the bus — entry must remain.
+        assert!(
+            hub.session_events.contains_key(&session),
+            "session bus must survive close() while a subscriber is attached"
+        );
+
+        // Drop the subscriber; the sender still lives in session_events so
+        // receiver_count drops to 0.
+        drop(rx);
+
+        // A new stream opens + closes with nobody listening on the bus.
+        let handle_b = hub.open(session);
+        hub.close(handle_b.stream_id());
+
+        assert!(
+            !hub.session_events.contains_key(&session),
+            "session bus should reap once all streams and subscribers are gone"
+        );
+    }
+
+    /// Regression test for the TOCTOU race between `close()`-triggered reap
+    /// and a concurrent `subscribe_session_events`.
+    ///
+    /// The pre-fix implementation did a non-atomic `get().receiver_count()`
+    /// check followed by `remove()`. A subscriber attaching in the window
+    /// between the two operations would see its sender deleted, silently
+    /// losing every subsequent event on the next turn.
+    ///
+    /// The current `remove_if`-based implementation holds the shard write
+    /// lock across the check+remove, serializing against the subscribe
+    /// path's `entry().or_insert_with()` on the same key. A subscriber that
+    /// wins the race must see the next turn's events; a subscriber that
+    /// loses the race simply creates a fresh bus for the next turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_close_and_subscribe_does_not_lose_bus() {
+        // Run many iterations so scheduler interleavings exercise both
+        // orderings of the close() reap vs subscribe() attach.
+        for _ in 0..256 {
+            let hub = Arc::new(StreamHub::new(64));
+            let session = SessionKey::new();
+
+            // Turn A: open and emit, then race close() against subscribe().
+            let handle_a = hub.open(session);
+            handle_a.emit(StreamEvent::TextDelta {
+                text: "A1".to_owned(),
+            });
+
+            let hub_close = hub.clone();
+            let stream_id = handle_a.stream_id().clone();
+            let close_task = tokio::spawn(async move {
+                hub_close.close(&stream_id);
+            });
+
+            let hub_sub = hub.clone();
+            let subscribe_task = tokio::spawn(async move {
+                // Yield to encourage interleaving with close()'s reap path.
+                tokio::task::yield_now().await;
+                hub_sub.subscribe_session_events(&session)
+            });
+
+            close_task.await.expect("close task");
+            let mut rx = subscribe_task.await.expect("subscribe task");
+
+            // Turn B: whichever side won the race, the subscriber MUST see
+            // turn-B events. Either it attached before reap (same bus) or
+            // after reap (a fresh bus created by open() below).
+            let handle_b = hub.open(session);
+            handle_b.emit(StreamEvent::TextDelta {
+                text: "B1".to_owned(),
+            });
+            hub.close(handle_b.stream_id());
+
+            let mut got_b1 = false;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            while tokio::time::Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Ok(Ok(StreamEvent::TextDelta { text })) if text == "B1" => {
+                        got_b1 = true;
+                        break;
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) | Err(_) => break,
+                }
+            }
+            assert!(
+                got_b1,
+                "subscriber must observe turn-B event regardless of reap/subscribe ordering"
+            );
+        }
     }
 }
 

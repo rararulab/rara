@@ -178,16 +178,24 @@ fn spawn_stream_forwarder(
                     for (stream_id, mut rx) in subscriptions {
                         if active_streams.contains(&stream_id) {
                             while let Ok(event) = rx.try_recv() {
-                                let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                                if let Some(cli_event) = stream_event_to_cli_event(event) {
+                                    let _ = adapter.send_cli_event(cli_event);
+                                }
                             }
                             continue;
                         }
 
                         active_streams.insert(stream_id.clone());
                         let adapter = adapter.clone();
+                        // Single source of `CliEvent::Done` per turn: only the
+                        // `RecvError::Closed` path below emits it. The
+                        // `StreamClosed` mapper returns `None` so we don't
+                        // double-fire Done (PR #1647 N6).
                         let handle = tokio::spawn(async move {
                             while let Ok(event) = rx.recv().await {
-                                let _ = adapter.send_cli_event(stream_event_to_cli_event(event));
+                                if let Some(cli_event) = stream_event_to_cli_event(event) {
+                                    let _ = adapter.send_cli_event(cli_event);
+                                }
                             }
                             let _ = adapter.send_cli_event(CliEvent::Done);
                         });
@@ -904,8 +912,16 @@ async fn get_or_create_cli_session(
     Ok(created.key)
 }
 
-fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
-    match event {
+/// Map a kernel [`StreamEvent`] to a [`CliEvent`] for the terminal UI.
+///
+/// Returns `None` when the event has no terminal-UI representation. In
+/// particular, `StreamEvent::StreamClosed` is intentionally mapped to
+/// `None` — the forwarder task in [`spawn_stream_forwarder`] already emits
+/// a single `CliEvent::Done` when the per-stream `broadcast::Receiver`
+/// observes `RecvError::Closed`. Emitting `Done` from both sources would
+/// produce two `Done` events per turn (see PR #1647 N6).
+fn stream_event_to_cli_event(event: StreamEvent) -> Option<CliEvent> {
+    Some(match event {
         StreamEvent::TextDelta { text } => CliEvent::TextDelta { text },
         StreamEvent::ReasoningDelta { text } => CliEvent::ReasoningDelta { text },
         StreamEvent::ToolCallStart {
@@ -1023,7 +1039,11 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::TraceReady { trace_id } => CliEvent::Progress {
             text: format!("Trace saved: {trace_id}"),
         },
-    }
+        // The CLI forwarder observes stream closure via RecvError::Closed
+        // and emits its own Done — returning None here prevents a duplicate
+        // Done from the explicit terminal marker (see fn doc comment).
+        StreamEvent::StreamClosed { .. } => return None,
+    })
 }
 
 async fn send_cli_message(
@@ -1205,7 +1225,7 @@ mod tests {
 
         assert!(matches!(
             stream_event_to_cli_event(event),
-            CliEvent::ReasoningDelta { text } if text == "internal"
+            Some(CliEvent::ReasoningDelta { text }) if text == "internal"
         ));
     }
 
@@ -1217,8 +1237,19 @@ mod tests {
 
         assert!(matches!(
             stream_event_to_cli_event(event),
-            CliEvent::TextDelta { text } if text == "hello"
+            Some(CliEvent::TextDelta { text }) if text == "hello"
         ));
+    }
+
+    /// `StreamClosed` must map to `None` so the CLI forwarder's
+    /// `RecvError::Closed` handler is the single source of `CliEvent::Done`.
+    /// See PR #1647 N6 — prior behaviour double-fired `Done` per turn.
+    #[test]
+    fn stream_closed_does_not_emit_done() {
+        let event = StreamEvent::StreamClosed {
+            stream_id: "abc".to_owned(),
+        };
+        assert!(stream_event_to_cli_event(event).is_none());
     }
 
     #[test]

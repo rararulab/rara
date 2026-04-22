@@ -268,7 +268,8 @@ impl TraceBuilder {
             | StreamEvent::ToolCallLimit { .. }
             | StreamEvent::ToolCallLimitResolved { .. }
             | StreamEvent::LoopBreakerTriggered { .. }
-            | StreamEvent::TraceReady { .. } => {}
+            | StreamEvent::TraceReady { .. }
+            | StreamEvent::StreamClosed { .. } => {}
         }
     }
 
