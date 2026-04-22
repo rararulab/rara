@@ -456,6 +456,34 @@
   bottom: 10.5rem;
 }
 
+/*
+ * Reserve scroll space inside pi-web-ui's message column for the live
+ * card overlay. `--rara-live-card-h` is published on `<main>` by
+ * `useLiveCardHeight` (see `src/hooks/use-live-card-height.ts`) only
+ * while a run is active; defaults to 0 so the chat reads identically
+ * when no card is mounted.
+ *
+ * Padding the inner content (rather than the scroll viewport) makes
+ * pi-web-ui's content-resize ResizeObserver fire — that observer
+ * drives auto-scroll, which is exactly what lifts the user's just-sent
+ * bubble above the floating card. `scroll-padding-bottom` on the
+ * scroll viewport is the belt-and-braces companion: it ensures any
+ * native scroll-into-view (e.g. focus restoration) also clears the
+ * overlay region.
+ *
+ * Invariant: this selector targets pi-web-ui ≥0.63 light DOM. On any
+ * pi-web-ui upgrade, verify that the `agent-interface > .overflow-y-auto > .max-w-3xl`
+ * chain still exists in the rendered DOM — if pi-web-ui changes its
+ * content-column class (e.g. `max-w-4xl`) or wraps the scroll viewport,
+ * this rule silently no-ops and #1675 regresses.
+ */
+.rara-chat agent-interface .overflow-y-auto > .max-w-3xl {
+  padding-bottom: var(--rara-live-card-h, 0);
+}
+.rara-chat agent-interface .overflow-y-auto {
+  scroll-padding-bottom: var(--rara-live-card-h, 0);
+}
+
 .user-message-container {
   /* Content-size the bubble so justify-end actually pushes it right.
      In a flex container `display: block` resolves to "stretch" along
