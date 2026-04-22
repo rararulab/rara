@@ -57,6 +57,7 @@ import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { SessionSearchDialog } from '@/components/SessionSearchDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
+import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
@@ -271,6 +272,11 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
  */
 export default function PiChat() {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Refs for live-card scroll-padding wiring: `liveCardRef` measures
+  // the rendered card; `mainRef` receives the `--rara-live-card-h`
+  // CSS variable that scopes the padding to this chat surface.
+  const liveCardRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const initRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
   const chatPanelRef = useRef<import('@mariozechner/pi-web-ui').ChatPanel | null>(null);
@@ -887,6 +893,11 @@ export default function PiChat() {
     };
   }, []);
 
+  // Reserve scroll padding inside pi-web-ui's message list equal to the
+  // live card's height while a run is active — see hook docstring and
+  // `.rara-chat agent-interface .max-w-3xl` rule in `index.css`.
+  useLiveCardHeight(liveCardRef, mainRef);
+
   return (
     <div
       className="rara-chat flex h-screen w-screen"
@@ -901,7 +912,7 @@ export default function PiChat() {
         onDeleteSession={handleSessionDeleted}
         refreshKey={sidebarRefreshKey}
       />
-      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <main ref={mainRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Session title header — shows the current conversation's
             title above its messages (kimi-style). Hidden during the
             welcome state since the RARA wordmark already serves as
@@ -921,7 +932,7 @@ export default function PiChat() {
             streaming. See `.rara-live-slot` in index.css for placement. */}
         {!isInitializing && (
           <div className="rara-live-slot pointer-events-none absolute z-10 px-2">
-            <div className="pointer-events-auto">
+            <div ref={liveCardRef} className="pointer-events-auto">
               <AgentLiveCard sessionKey={activeSession?.key} />
             </div>
           </div>
