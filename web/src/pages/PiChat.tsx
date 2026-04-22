@@ -15,15 +15,6 @@
  */
 
 import { Agent } from '@mariozechner/pi-agent-core';
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type {
-  UserMessage,
-  AssistantMessage,
-  TextContent,
-  ThinkingContent,
-  ToolCall,
-  ToolResultMessage,
-} from '@mariozechner/pi-ai';
 import {
   AppStorage,
   setAppStorage,
@@ -39,8 +30,6 @@ import {
   // `registerToolRenderer("extract_document", ...)` side effect so
   // pi-mono can render server-triggered document-extraction tool calls.
   extractDocumentTool,
-  type Attachment,
-  type UserMessageWithAttachments,
 } from '@mariozechner/pi-web-ui';
 import { html } from 'lit';
 import { useEffect, useRef, useCallback, useState } from 'react';
@@ -49,6 +38,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 // `registerToolRenderer` side effect) in the bundle. The actual tool
 // object is executed server-side; the renderer is what matters here.
 void extractDocumentTool;
+
+import { assistantSeqByRef, toAgentMessages } from './pi-chat-messages';
 
 import { RaraStorageBackend } from '@/adapters/rara-storage';
 import { createRaraStreamFn } from '@/adapters/rara-stream';
@@ -152,217 +143,6 @@ function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
     default:
       return null;
   }
-}
-
-/**
- * Detect whether a tool-result payload represents a failure. Mirrors the
- * backend's `is_failure_result` in `crates/app/src/tools/artifacts.rs`: a
- * bare string starting with `Error:` (pi-mono convention) or a JSON object
- * with an `error` key (kernel-serialized anyhow error).
- */
-function isToolFailure(text: string): boolean {
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith('Error:')) return true;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return (
-      typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && 'error' in parsed
-    );
-  } catch {
-    return false;
-  }
-}
-
-function mimeToFilename(mimeType: string, index: number): string {
-  const ext = mimeType.split('/')[1] || 'bin';
-  return `session-image-${index + 1}.${ext}`;
-}
-
-/** Zeroed usage — rara tracks usage server-side. */
-const EMPTY_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-/**
- * Parse assistant text into ThinkingContent + TextContent blocks.
- * `<think>reasoning</think>answer` → [{type:"thinking",...}, {type:"text",...}]
- */
-function parseAssistantContent(raw: string): (TextContent | ThinkingContent)[] {
-  const blocks: (TextContent | ThinkingContent)[] = [];
-  const re = /<think>([\s\S]*?)<\/think>/g;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = re.exec(raw)) !== null) {
-    // Text before this <think> block
-    const before = raw.slice(cursor, match.index).trim();
-    if (before) blocks.push({ type: 'text', text: before });
-    // Thinking content
-    const thinking = (match[1] ?? '').trim();
-    if (thinking) blocks.push({ type: 'thinking', thinking });
-    cursor = match.index + match[0].length;
-  }
-
-  // Remaining text after the last </think>
-  const tail = raw.slice(cursor).trim();
-  if (tail) blocks.push({ type: 'text', text: tail });
-
-  return blocks;
-}
-
-/**
- * WeakMap from assistant `AgentMessage` object references to their
- * persisted `seq`. Populated by {@link toAgentMessages} and read by the
- * Lit assistant-message renderer when the user clicks the "📊 详情"
- * button — the seq is then embedded on the dispatched CustomEvent so
- * the React layer can call the trace endpoint directly without any
- * timestamp-based lookup (which collided at second resolution).
- *
- * Keyed by object identity: the same references flow from
- * `toAgentMessages` → `agent.replaceMessages(...)` → pi-web-ui's
- * renderer, so the renderer sees the exact keys set here.
- */
-const assistantSeqByRef = new WeakMap<AgentMessage, number>();
-
-/**
- * Convert rara ChatMessageData to pi-agent-core AgentMessage for display.
- *
- * Assistant messages are registered in {@link assistantSeqByRef} keyed by
- * object identity so the Lit renderer can resolve each rendered message
- * back to its persisted `seq` without a lossy timestamp lookup.
- */
-function toAgentMessages(msgs: ChatMessageData[]): AgentMessage[] {
-  const result: AgentMessage[] = [];
-  // Track the last assistant message so "tool" role messages can attach ToolCall items.
-  let lastAssistant: AssistantMessage | null = null;
-
-  for (const m of msgs) {
-    const ts = new Date(m.created_at).getTime();
-
-    if (m.role === 'user') {
-      lastAssistant = null;
-      if (typeof m.content === 'string') {
-        result.push({ role: 'user', content: m.content, timestamp: ts } as UserMessage);
-      } else {
-        const text = m.content
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-          .map((b) => b.text)
-          .join('\n');
-        const attachments: Attachment[] = m.content.flatMap((b, index): Attachment[] => {
-          if (b.type !== 'image_base64') return [];
-          return [
-            {
-              id: `${m.seq}-image-${index}`,
-              type: 'image',
-              fileName: mimeToFilename(b.media_type, index),
-              mimeType: b.media_type,
-              size: Math.floor((b.data.length * 3) / 4),
-              content: b.data,
-              preview: b.data,
-            },
-          ];
-        });
-
-        if (attachments.length > 0) {
-          result.push({
-            role: 'user-with-attachments',
-            content: text,
-            attachments,
-            timestamp: ts,
-          } as UserMessageWithAttachments as AgentMessage);
-        } else {
-          result.push({ role: 'user', content: text, timestamp: ts } as UserMessage);
-        }
-      }
-    } else if (m.role === 'assistant') {
-      const raw =
-        typeof m.content === 'string'
-          ? m.content
-          : m.content
-              .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-              .map((b) => b.text)
-              .join('\n');
-      const content: (TextContent | ThinkingContent | ToolCall)[] = parseAssistantContent(raw);
-      // Surface persisted tool-call requests so pi-web-ui reducers (and the
-      // artifacts panel's reconstructFromMessages) can see them.
-      if (m.tool_calls && m.tool_calls.length > 0) {
-        for (const tc of m.tool_calls) {
-          const args =
-            tc.arguments && typeof tc.arguments === 'object'
-              ? (tc.arguments as Record<string, unknown>)
-              : {};
-          content.push({
-            type: 'toolCall',
-            id: tc.id,
-            name: tc.name,
-            arguments: args,
-          });
-        }
-      }
-      const assistant: AssistantMessage = {
-        role: 'assistant',
-        content,
-        api: 'messages',
-        provider: 'anthropic',
-        model: 'unknown',
-        usage: EMPTY_USAGE,
-        stopReason: 'stop',
-        timestamp: ts,
-      };
-      lastAssistant = assistant;
-      assistantSeqByRef.set(assistant, m.seq);
-      result.push(assistant);
-    } else if (m.role === 'tool') {
-      // Tool call from the assistant — attach as ToolCall to the last AssistantMessage.
-      if (lastAssistant && m.tool_call_id && m.tool_name) {
-        let args: Record<string, unknown> = {};
-        try {
-          const raw = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-          args = JSON.parse(raw);
-        } catch {
-          /* use empty args */
-        }
-        const toolCall: ToolCall = {
-          type: 'toolCall',
-          id: m.tool_call_id,
-          name: m.tool_name,
-          arguments: args,
-        };
-        lastAssistant.content.push(toolCall);
-      }
-    } else if (m.role === 'tool_result') {
-      // Tool result — emit as a separate ToolResultMessage. Preserve the
-      // backend's failure markers so ArtifactsPanel.reconstructFromMessages
-      // (which only replays successful ops) skips failed calls on reload.
-      // The kernel serializes failures in two shapes: a bare string starting
-      // with "Error:" (pi-mono convention) and JSON objects with an `error`
-      // key (produced by the anyhow -> ToolOutput path).
-      if (m.tool_call_id && m.tool_name) {
-        const text =
-          typeof m.content === 'string'
-            ? m.content
-            : m.content
-                .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-                .map((b) => b.text)
-                .join('\n');
-        const toolResult: ToolResultMessage = {
-          role: 'toolResult',
-          toolCallId: m.tool_call_id,
-          toolName: m.tool_name,
-          content: text ? [{ type: 'text', text }] : [],
-          isError: isToolFailure(text),
-          timestamp: ts,
-        };
-        result.push(toolResult as AgentMessage);
-      }
-    }
-  }
-  return result;
 }
 
 /**
