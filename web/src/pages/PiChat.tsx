@@ -272,11 +272,16 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
  */
 export default function PiChat() {
   const containerRef = useRef<HTMLDivElement>(null);
-  // Refs for live-card scroll-padding wiring: `liveCardRef` measures
-  // the rendered card; `mainRef` receives the `--rara-live-card-h`
-  // CSS variable that scopes the padding to this chat surface.
-  const liveCardRef = useRef<HTMLDivElement>(null);
-  const mainRef = useRef<HTMLElement>(null);
+  // Live-card scroll-padding wiring: `liveCardEl` measures the rendered
+  // card; `mainEl` receives the `--rara-live-card-h` CSS variable that
+  // scopes the padding to this chat surface. Both are tracked via
+  // `useState` + callback refs (rather than `useRef`) because the
+  // wrapper div mounts conditionally on `!isInitializing`; effect
+  // dependencies on `useRef` objects do not re-fire when `.current`
+  // mutates, so a ref-based wiring missed the late-mounting wrapper
+  // entirely and the CSS variable was never written.
+  const [liveCardEl, setLiveCardEl] = useState<HTMLDivElement | null>(null);
+  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
   const initRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
   const chatPanelRef = useRef<import('@mariozechner/pi-web-ui').ChatPanel | null>(null);
@@ -896,7 +901,7 @@ export default function PiChat() {
   // Reserve scroll padding inside pi-web-ui's message list equal to the
   // live card's height while a run is active — see hook docstring and
   // `.rara-chat agent-interface .max-w-3xl` rule in `index.css`.
-  useLiveCardHeight(liveCardRef, mainRef);
+  useLiveCardHeight(liveCardEl, mainEl);
 
   return (
     <div
@@ -912,7 +917,7 @@ export default function PiChat() {
         onDeleteSession={handleSessionDeleted}
         refreshKey={sidebarRefreshKey}
       />
-      <main ref={mainRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <main ref={setMainEl} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Session title header — shows the current conversation's
             title above its messages (kimi-style). Hidden during the
             welcome state since the RARA wordmark already serves as
@@ -932,7 +937,7 @@ export default function PiChat() {
             streaming. See `.rara-live-slot` in index.css for placement. */}
         {!isInitializing && (
           <div className="rara-live-slot pointer-events-none absolute z-10 px-2">
-            <div ref={liveCardRef} className="pointer-events-auto">
+            <div ref={setLiveCardEl} className="pointer-events-auto">
               <AgentLiveCard sessionKey={activeSession?.key} />
             </div>
           </div>

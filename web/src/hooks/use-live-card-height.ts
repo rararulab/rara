@@ -15,26 +15,31 @@ const CSS_VAR = '--rara-live-card-h';
  * pi-web-ui's message list (see `.rara-live-slot` in `index.css`).
  * Without compensation, pi-web-ui's auto-scroll lands the latest user
  * bubble directly under the card. This hook publishes the card's live
- * pixel height to a CSS variable on `targetRef`; the CSS rule then
- * pads pi-web-ui's scroll content by that amount, which (a) gives the
- * user bubble room to sit above the card and (b) — because pi-web-ui
- * watches its content's resize to drive auto-scroll — automatically
- * scrolls the bubble into view above the overlay.
+ * pixel height to a CSS variable on `target`; the CSS rule then pads
+ * pi-web-ui's scroll content by that amount, which (a) gives the user
+ * bubble room to sit above the card and (b) — because pi-web-ui watches
+ * its content's resize to drive auto-scroll — automatically scrolls the
+ * bubble into view above the overlay.
  *
- * `cardRef` may be null (no active run); in that case the variable is
+ * Accepts the elements directly (not refs) because the live-card
+ * wrapper mounts conditionally — once `isInitializing` flips false in
+ * the parent. `useRef` mutations don't re-run effects, so a ref-based
+ * API would attach the ResizeObserver only on the lucky render where
+ * `cardRef.current` happens to be set; usually the wrapper appears in
+ * a later render and the observer is never wired. Passing the actual
+ * elements (set via callback refs in the parent) makes the effect
+ * re-run whenever the wrapper mounts/unmounts — which is the entire
+ * point of this hook.
+ *
+ * `card` may be null (no active run); in that case the variable is
  * cleared so the chat returns to its normal layout.
  */
-export function useLiveCardHeight(
-  cardRef: React.RefObject<HTMLElement | null>,
-  targetRef: React.RefObject<HTMLElement | null>,
-) {
+export function useLiveCardHeight(card: HTMLElement | null, target: HTMLElement | null) {
   // Track the last value we wrote so the cleanup can restore the prior
   // state instead of unconditionally wiping a value another caller set.
   const lastWrittenRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const target = targetRef.current;
-    const card = cardRef.current;
     if (!target) return;
 
     const clear = () => {
@@ -77,5 +82,5 @@ export function useLiveCardHeight(
       observer.disconnect();
       clear();
     };
-  }, [cardRef, targetRef]);
+  }, [card, target]);
 }
