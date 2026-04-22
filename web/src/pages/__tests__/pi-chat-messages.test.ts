@@ -96,6 +96,16 @@ describe('finalAssistantIndices', () => {
     const msgs = [user(1), assistantToolCall(2)];
     expect(finalAssistantIndices(msgs)).toEqual(new Set([1]));
   });
+
+  it('treats a no-op user with no assistant as inert and marks only the next turn', () => {
+    const msgs = [user(1), user(2), assistantText(3)];
+    expect(finalAssistantIndices(msgs)).toEqual(new Set([2]));
+  });
+
+  it('marks the last tool-call-only assistant on an open turn with multiple tool-call assistants', () => {
+    const msgs = [user(1), assistantToolCall(2), assistantToolCall(3)];
+    expect(finalAssistantIndices(msgs)).toEqual(new Set([2]));
+  });
 });
 
 describe('toAgentMessages — trace button registration (#1672)', () => {
