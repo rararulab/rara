@@ -151,7 +151,7 @@ pub use fork_metadata::{ForkMetadata, get_fork_metadata, set_fork_metadata};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub use service::{TapeInfo, TapeService, current_tape};
+pub use service::{TapeInfo, TapeSearchHit, TapeService, current_tape};
 pub use store::FileTapeStore;
 pub use tree::{AnchorNode, AnchorTree, ForkEdge, SessionBranch};
 

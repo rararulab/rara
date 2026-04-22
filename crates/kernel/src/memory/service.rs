@@ -50,8 +50,23 @@ const EXACT_MATCH_BONUS: f64 = 1.0;
 
 #[derive(Debug)]
 struct SearchMatch {
-    score: f64,
-    entry: TapEntry,
+    score:     f64,
+    entry:     TapEntry,
+    tape_name: String,
+}
+
+/// A single ranked hit returned by [`TapeService::search_across_tapes`].
+///
+/// Carries the tape (session) the entry belongs to alongside the entry
+/// itself so cross-tape consumers (e.g. the admin session-search endpoint)
+/// can attribute each match to its originating session without a second
+/// round of lookups.
+#[derive(Debug, Clone)]
+pub struct TapeSearchHit {
+    /// Matched tape entry.
+    pub entry:     TapEntry,
+    /// Name of the tape (typically the session key) the entry belongs to.
+    pub tape_name: String,
 }
 
 /// Runtime tape info summary.
@@ -805,7 +820,11 @@ impl TapeService {
                 ) else {
                     continue;
                 };
-                results.push(SearchMatch { score, entry });
+                results.push(SearchMatch {
+                    score,
+                    entry,
+                    tape_name: name.clone(),
+                });
             }
         }
 
@@ -889,7 +908,11 @@ impl TapeService {
                 ) else {
                     continue;
                 };
-                results.push(SearchMatch { score, entry });
+                results.push(SearchMatch {
+                    score,
+                    entry,
+                    tape_name: (*tape).to_owned(),
+                });
             }
         }
 
@@ -902,6 +925,170 @@ impl TapeService {
         results.truncate(limit);
 
         Ok(results.into_iter().map(|item| item.entry).collect())
+    }
+
+    /// Cross-tape ranked search that preserves tape attribution.
+    ///
+    /// Equivalent to [`Self::search`] with `all_tapes = true`, except each
+    /// hit carries the originating tape name. When FTS5 is available, this
+    /// issues a **single** index query (the tape_name column is already
+    /// tracked in `FtsHit`, so attribution is free); otherwise it falls
+    /// back to a brute-force scan across all tapes. The underlying scoring
+    /// is identical to `search` so ordering stays stable.
+    pub async fn search_across_tapes(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> TapResult<Vec<TapeSearchHit>> {
+        let normalized_query = normalize_search_text(query);
+        if normalized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if let Some(fts) = &self.fts {
+            // Lazy backfill across all tapes so newly-added entries are
+            // visible to the index before the single query fires.
+            if let Err(e) = self.backfill_fts(fts, "", true).await {
+                tracing::warn!(%e, "FTS backfill failed, falling back to brute-force");
+            } else {
+                match fts.search(query, None, limit * 3).await {
+                    Ok(hits) if !hits.is_empty() => {
+                        return self
+                            .rerank_fts_hits_with_tape(&hits, &normalized_query, limit)
+                            .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, "FTS search failed, falling back to brute-force");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        self.search_brute_force_with_tape(&normalized_query, limit)
+            .await
+    }
+
+    /// Brute-force variant of [`Self::search_across_tapes`] — retains the
+    /// tape name for each match. Only invoked when FTS is unavailable or
+    /// returned an error.
+    async fn search_brute_force_with_tape(
+        &self,
+        normalized_query: &str,
+        limit: usize,
+    ) -> TapResult<Vec<TapeSearchHit>> {
+        let query_terms = extract_query_terms(normalized_query);
+        let query_scorer = (normalized_query.chars().count() >= MIN_FUZZY_QUERY_LENGTH)
+            .then(|| RatioBatchComparator::new(normalized_query.chars()));
+
+        let tape_names = self.store.list_tapes().await?;
+        let mut results = Vec::new();
+        for name in tape_names {
+            let entries = self.store.read(&name).await?.unwrap_or_default();
+            for entry in entries.into_iter().rev() {
+                if entry.kind != TapEntryKind::Message {
+                    continue;
+                }
+                let searchable_text = normalize_search_text(&extract_searchable_text(
+                    &entry.payload,
+                    entry.metadata.as_ref(),
+                ));
+                let Some(score) = score_search_candidate(
+                    normalized_query,
+                    &query_terms,
+                    &searchable_text,
+                    query_scorer.as_ref(),
+                ) else {
+                    continue;
+                };
+                results.push(SearchMatch {
+                    score,
+                    entry,
+                    tape_name: name.clone(),
+                });
+            }
+        }
+
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| right.entry.id.cmp(&left.entry.id))
+        });
+        results.truncate(limit);
+
+        Ok(results
+            .into_iter()
+            .map(|item| TapeSearchHit {
+                entry:     item.entry,
+                tape_name: item.tape_name,
+            })
+            .collect())
+    }
+
+    /// Re-rank FTS candidates while preserving the originating tape name.
+    async fn rerank_fts_hits_with_tape(
+        &self,
+        hits: &[super::fts::FtsHit],
+        normalized_query: &str,
+        limit: usize,
+    ) -> TapResult<Vec<TapeSearchHit>> {
+        let query_terms = extract_query_terms(normalized_query);
+        let query_scorer = (normalized_query.chars().count() >= MIN_FUZZY_QUERY_LENGTH)
+            .then(|| RatioBatchComparator::new(normalized_query.chars()));
+
+        let mut by_tape: std::collections::HashMap<&str, Vec<u64>> =
+            std::collections::HashMap::new();
+        for hit in hits {
+            by_tape
+                .entry(&hit.tape_name)
+                .or_default()
+                .push(hit.entry_id);
+        }
+
+        let mut results = Vec::new();
+        for (tape, ids) in &by_tape {
+            let entries = self.store.read(tape).await?.unwrap_or_default();
+            let id_set: std::collections::HashSet<u64> = ids.iter().copied().collect();
+            for entry in entries {
+                if !id_set.contains(&entry.id) {
+                    continue;
+                }
+                let searchable_text = normalize_search_text(&extract_searchable_text(
+                    &entry.payload,
+                    entry.metadata.as_ref(),
+                ));
+                let Some(score) = score_search_candidate(
+                    normalized_query,
+                    &query_terms,
+                    &searchable_text,
+                    query_scorer.as_ref(),
+                ) else {
+                    continue;
+                };
+                results.push(SearchMatch {
+                    score,
+                    entry,
+                    tape_name: (*tape).to_owned(),
+                });
+            }
+        }
+
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| right.entry.id.cmp(&left.entry.id))
+        });
+        results.truncate(limit);
+
+        Ok(results
+            .into_iter()
+            .map(|item| TapeSearchHit {
+                entry:     item.entry,
+                tape_name: item.tape_name,
+            })
+            .collect())
     }
 
     /// List all tape names known to the underlying store.
@@ -1878,5 +2065,112 @@ mod tests {
         let fts = svc.fts.as_ref().expect("FTS should be Some");
         let hwm = fts.last_indexed_id(tape).await.unwrap();
         assert_eq!(hwm, 0, "HWM should be 0 after delete");
+    }
+
+    #[tokio::test]
+    async fn search_across_tapes_empty_query() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service_with_fts(tmp.path()).await;
+        svc.append_message("tape-a", json!({"content": "hello"}), None)
+            .await
+            .unwrap();
+
+        let hits = svc.search_across_tapes("", 10).await.unwrap();
+        assert!(hits.is_empty());
+
+        let hits = svc.search_across_tapes("   ", 10).await.unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_across_tapes_single_tape_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service_with_fts(tmp.path()).await;
+
+        svc.append_message("tape-a", json!({"content": "rustacean loves ferris"}), None)
+            .await
+            .unwrap();
+        svc.append_message("tape-b", json!({"content": "unrelated python snake"}), None)
+            .await
+            .unwrap();
+
+        let hits = svc.search_across_tapes("ferris", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].tape_name, "tape-a");
+        assert!(
+            hits[0]
+                .entry
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("ferris")
+        );
+    }
+
+    #[tokio::test]
+    async fn search_across_tapes_multi_tape_attribution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service_with_fts(tmp.path()).await;
+
+        svc.append_message("tape-a", json!({"content": "alpha keyword tape-a"}), None)
+            .await
+            .unwrap();
+        svc.append_message("tape-b", json!({"content": "beta keyword tape-b"}), None)
+            .await
+            .unwrap();
+        svc.append_message("tape-c", json!({"content": "gamma keyword tape-c"}), None)
+            .await
+            .unwrap();
+
+        let hits = svc.search_across_tapes("keyword", 10).await.unwrap();
+        assert_eq!(hits.len(), 3);
+        let tapes: std::collections::HashSet<String> =
+            hits.iter().map(|h| h.tape_name.clone()).collect();
+        assert!(tapes.contains("tape-a"));
+        assert!(tapes.contains("tape-b"));
+        assert!(tapes.contains("tape-c"));
+
+        // Attribution check: each hit's tape_name must match the tape
+        // that actually holds the content.
+        for hit in &hits {
+            let content = hit
+                .entry
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            assert!(
+                content.contains(&hit.tape_name),
+                "hit content {content:?} should reference tape {:?}",
+                hit.tape_name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_across_tapes_brute_force_fallback() {
+        // No FTS — exercises the brute-force path for attribution.
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = temp_tape_service(tmp.path()).await;
+
+        svc.append_message("tape-x", json!({"content": "needle in x"}), None)
+            .await
+            .unwrap();
+        svc.append_message("tape-y", json!({"content": "needle in y"}), None)
+            .await
+            .unwrap();
+
+        let hits = svc.search_across_tapes("needle", 10).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        for hit in &hits {
+            let content = hit
+                .entry
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            assert!(content.contains(&hit.tape_name[hit.tape_name.len() - 1..]));
+        }
     }
 }

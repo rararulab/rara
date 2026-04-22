@@ -34,7 +34,7 @@ use rara_kernel::{
         ChannelType, ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall,
     },
     llm::{Message, Role},
-    memory::{TapEntry, TapEntryKind, TapeService},
+    memory::{TapEntry, TapEntryKind, TapeSearchHit, TapeService},
     session::SessionIndexRef,
     trace::{ExecutionTrace, TraceService},
 };
@@ -377,17 +377,15 @@ pub struct SessionService {
 }
 
 impl SessionService {
-    /// Hard ceiling on how many sessions we scan in a single request.
-    const SEARCH_SESSION_SCAN_CAP: i64 = 500;
     // -- full-text search ---------------------------------------------------
 
-    /// Minimum number of sessions we inspect when scanning for matches.
+    /// Over-fetch multiplier for cross-tape search.
     ///
-    /// The `limit` argument bounds the returned hits, but we search a
-    /// larger window of sessions so one heavily-used session cannot
-    /// monopolise the top `limit` slots (we keep only the best hit per
-    /// session, so searching more sessions improves result diversity).
-    const SEARCH_SESSION_SCAN_MULTIPLIER: i64 = 3;
+    /// The kernel returns ranked hits across every tape; we then collapse
+    /// to one hit per session. Over-fetching leaves headroom after
+    /// dedup so the response still carries up to `limit` distinct
+    /// sessions when the top matches cluster inside a few long threads.
+    const SEARCH_OVERFETCH_MULTIPLIER: usize = 3;
 
     /// Create a new chat service with the given dependencies.
     #[must_use]
@@ -760,14 +758,14 @@ impl SessionService {
         })
     }
 
-    /// Search recent sessions for messages matching `query` (full-text).
+    /// Search every session's tape for messages matching `query`.
     ///
-    /// Scans up to `SEARCH_SESSION_SCAN_CAP` of the most recently
-    /// updated sessions, asks the tape service for ranked matches inside
-    /// each, and keeps only the single highest-ranked hit per session
-    /// before clamping to `limit`. One-hit-per-session keeps the result
-    /// list varied: the underlying FTS ranker tends to cluster many hits
-    /// inside one long thread, which otherwise drowns out other matches.
+    /// Issues a single FTS query across all tapes via
+    /// [`TapeService::search_across_tapes`], then keeps only the
+    /// highest-ranked hit per session before clamping to `limit`. One
+    /// hit per session keeps the result list varied: the underlying FTS
+    /// ranker tends to cluster many hits inside a long thread, which
+    /// would otherwise drown out other sessions.
     ///
     /// An empty or whitespace-only `query` short-circuits to an empty
     /// response — this is treated as "user cleared the search box", not
@@ -783,57 +781,67 @@ impl SessionService {
             return Ok(SessionSearchResponse { hits: Vec::new() });
         }
 
-        let scan_limit = (limit as i64)
-            .saturating_mul(Self::SEARCH_SESSION_SCAN_MULTIPLIER)
-            .min(Self::SEARCH_SESSION_SCAN_CAP)
-            .max(limit as i64);
+        // Over-fetch so per-session dedup still yields up to `limit`
+        // distinct sessions when the top matches cluster in a few tapes.
+        let fetch_limit = limit.saturating_mul(Self::SEARCH_OVERFETCH_MULTIPLIER);
 
-        let sessions = self.session_index.list_sessions(scan_limit, 0).await?;
+        // Degrade gracefully: on tape-level failure we surface an empty
+        // result rather than a 500, matching the original per-session
+        // loop's "skip on error" semantics.
+        let ranked = match self
+            .tape_service
+            .search_across_tapes(trimmed, fetch_limit)
+            .await
+        {
+            Ok(hits) => hits,
+            Err(e) => {
+                tracing::warn!(error = %e, "cross-tape search failed");
+                return Ok(SessionSearchResponse { hits: Vec::new() });
+            }
+        };
 
-        // Per-session search bound. The service ranks inside a tape so
-        // we only need the top few candidates before picking the best
-        // one whose payload yields a usable role/text.
-        let per_session_limit = 3usize;
+        // Cache session lookups so we only pay one index hit per tape.
+        let mut session_cache: std::collections::HashMap<String, Option<SessionEntry>> =
+            std::collections::HashMap::new();
+        let mut seen_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut hits: Vec<SessionSearchHit> = Vec::new();
 
-        let mut hits: Vec<(f64, SessionSearchHit)> = Vec::new();
-        for session in &sessions {
-            let tape_name = session.key.to_string();
-            let entries = match self
-                .tape_service
-                .search(&tape_name, trimmed, per_session_limit, false)
-                .await
-            {
-                Ok(entries) => entries,
-                Err(e) => {
-                    tracing::warn!(
-                        session = %session.key,
-                        error = %e,
-                        "tape search failed, skipping session"
-                    );
-                    continue;
+        for TapeSearchHit { entry, tape_name } in ranked {
+            if hits.len() >= limit {
+                break;
+            }
+            if !seen_sessions.insert(tape_name.clone()) {
+                continue;
+            }
+
+            let session = match session_cache.get(&tape_name) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let key = match SessionKey::try_from_raw(&tape_name) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            tracing::debug!(
+                                tape = %tape_name,
+                                error = %e,
+                                "skipping non-session tape"
+                            );
+                            session_cache.insert(tape_name.clone(), None);
+                            continue;
+                        }
+                    };
+                    let fetched = self.session_index.get_session(&key).await.ok().flatten();
+                    session_cache.insert(tape_name.clone(), fetched.clone());
+                    fetched
                 }
             };
+            let Some(session) = session else { continue };
 
-            // `entries` is ordered by relevance; pick the first one
-            // whose payload decodes into a message we can project.
-            let Some((rank, hit)) = entries.iter().enumerate().find_map(|(idx, entry)| {
-                project_search_hit(entry, session, trimmed).map(|h| (idx, h))
-            }) else {
-                continue;
-            };
-
-            // Lower `rank` = better; negate so a max-heap-style sort by
-            // `score.partial_cmp` puts the best hits first.
-            let score = -(rank as f64);
-            hits.push((score, hit));
+            if let Some(hit) = project_search_hit(&entry, &session, trimmed) {
+                hits.push(hit);
+            }
         }
 
-        hits.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        hits.truncate(limit);
-
-        Ok(SessionSearchResponse {
-            hits: hits.into_iter().map(|(_, h)| h).collect(),
-        })
+        Ok(SessionSearchResponse { hits })
     }
 
     // -- channel bindings ---------------------------------------------------
@@ -1275,5 +1283,232 @@ mod update_request_deserialize_tests {
         let value: UpdateSessionRequest =
             serde_json::from_str(r#"{"system_prompt": "you are..."}"#).expect("parse");
         assert_eq!(value.system_prompt, Some(Some("you are...".to_owned())));
+    }
+}
+
+#[cfg(test)]
+mod search_sessions_tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use rara_domain_shared::settings::SettingsProvider;
+    use rara_kernel::{
+        llm::{LlmModelLister, ModelInfo},
+        memory::{FileTapeStore, TapeService},
+        session::{SessionIndex, SessionKey, test_utils::InMemorySessionIndex},
+        trace::TraceService,
+    };
+    use rara_sessions::types::SessionEntry;
+    use serde_json::json;
+
+    use super::SessionService;
+
+    struct StubSettings;
+
+    #[async_trait]
+    impl SettingsProvider for StubSettings {
+        async fn get(&self, _key: &str) -> Option<String> { None }
+
+        async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> { Ok(()) }
+
+        async fn delete(&self, _key: &str) -> anyhow::Result<()> { Ok(()) }
+
+        async fn list(&self) -> HashMap<String, String> { HashMap::new() }
+
+        async fn batch_update(
+            &self,
+            _patches: HashMap<String, Option<String>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+            let (_tx, rx) = tokio::sync::watch::channel(());
+            rx
+        }
+    }
+
+    struct StubModelLister;
+
+    #[async_trait]
+    impl LlmModelLister for StubModelLister {
+        async fn list_models(&self) -> rara_kernel::error::Result<Vec<ModelInfo>> { Ok(Vec::new()) }
+    }
+
+    async fn build_service_with_fts(
+        dir: &std::path::Path,
+    ) -> (SessionService, Arc<InMemorySessionIndex>) {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        sqlx::query(
+            "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind \
+             UNINDEXED, entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 \
+             remove_diacritics 2')",
+        )
+        .execute(&pool)
+        .await
+        .expect("fts table");
+        sqlx::query(
+            "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT \
+             NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("meta table");
+        sqlx::query(
+            "CREATE TABLE execution_traces (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data \
+             TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("trace table");
+
+        let store = FileTapeStore::new(dir, dir).await.unwrap();
+        let tape_service = TapeService::with_fts(store, pool.clone());
+        let sessions: Arc<InMemorySessionIndex> = Arc::new(InMemorySessionIndex::new());
+        let trace_service = TraceService::new(pool);
+        let service = SessionService::new(
+            sessions.clone(),
+            tape_service,
+            trace_service,
+            Arc::new(StubSettings),
+            Arc::new(StubModelLister),
+        );
+        (service, sessions)
+    }
+
+    async fn register_session(index: &InMemorySessionIndex, key: &SessionKey, title: &str) {
+        let now = Utc::now();
+        let entry = SessionEntry {
+            key:            key.clone(),
+            title:          Some(title.to_owned()),
+            model:          None,
+            model_provider: None,
+            thinking_level: None,
+            system_prompt:  None,
+            message_count:  0,
+            preview:        None,
+            metadata:       None,
+            created_at:     now,
+            updated_at:     now,
+        };
+        index.create_session(&entry).await.expect("create session");
+    }
+
+    #[tokio::test]
+    async fn empty_query_returns_no_hits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+
+        let key = SessionKey::new();
+        register_session(&sessions, &key, "session one").await;
+        service
+            .tape_service()
+            .append_message(&key.to_string(), json!({"content": "hello"}), None)
+            .await
+            .unwrap();
+
+        for q in ["", "   ", "\t\n"] {
+            let resp = service.search_sessions(q, 20).await.unwrap();
+            assert!(resp.hits.is_empty(), "empty query should yield no hits");
+        }
+    }
+
+    #[tokio::test]
+    async fn attribution_across_many_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+
+        let marker = "zephyrrising";
+        let mut keys = Vec::new();
+        for i in 0..12 {
+            let key = SessionKey::new();
+            register_session(&sessions, &key, &format!("session-{i}")).await;
+            service
+                .tape_service()
+                .append_message(
+                    &key.to_string(),
+                    json!({"role": "user", "content": format!("note {i}: {marker} body text")}),
+                    None,
+                )
+                .await
+                .unwrap();
+            keys.push(key);
+        }
+
+        let resp = service.search_sessions(marker, 20).await.unwrap();
+        assert_eq!(resp.hits.len(), 12);
+
+        // Dedup invariant: every hit belongs to a distinct session.
+        let unique: std::collections::HashSet<_> =
+            resp.hits.iter().map(|h| h.session_key.clone()).collect();
+        assert_eq!(unique.len(), resp.hits.len());
+
+        // Attribution: every hit's session_key must match one of the
+        // sessions we registered.
+        let registered: std::collections::HashSet<String> =
+            keys.iter().map(ToString::to_string).collect();
+        for hit in &resp.hits {
+            assert!(
+                registered.contains(&hit.session_key),
+                "unexpected session {}",
+                hit.session_key
+            );
+            assert!(hit.snippet.contains("<mark>"));
+        }
+    }
+
+    #[tokio::test]
+    async fn dedup_keeps_one_hit_per_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+
+        let key = SessionKey::new();
+        register_session(&sessions, &key, "busy session").await;
+        for i in 0..5 {
+            service
+                .tape_service()
+                .append_message(
+                    &key.to_string(),
+                    json!({"role": "user", "content": format!("pingpong-token body {i}")}),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let resp = service.search_sessions("pingpong-token", 20).await.unwrap();
+        assert_eq!(resp.hits.len(), 1, "one tape should yield one hit");
+        assert_eq!(resp.hits[0].session_key, key.to_string());
+    }
+
+    #[tokio::test]
+    async fn limit_clamps_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+
+        for i in 0..8 {
+            let key = SessionKey::new();
+            register_session(&sessions, &key, &format!("s{i}")).await;
+            service
+                .tape_service()
+                .append_message(
+                    &key.to_string(),
+                    json!({"role": "user", "content": format!("clampme body {i}")}),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let resp = service.search_sessions("clampme", 3).await.unwrap();
+        assert_eq!(resp.hits.len(), 3);
+    }
+
+    impl SessionService {
+        /// Test-only accessor to populate tapes before searching.
+        fn tape_service(&self) -> &TapeService { &self.tape_service }
     }
 }
