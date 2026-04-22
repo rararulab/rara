@@ -16,6 +16,7 @@ async-trait.workspace = true
 base.workspace = true
 bon.workspace = true
 futures.workspace = true
+hex.workspace = true
 jiff.workspace = true
 oauth2.workspace = true
 rara-kernel.workspace = true

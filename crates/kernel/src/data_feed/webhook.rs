@@ -52,7 +52,7 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use jiff::Timestamp;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -410,7 +410,7 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     use tokio::sync::mpsc;
     use tower::ServiceExt;

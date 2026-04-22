@@ -12,7 +12,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 dashmap = "6"
 futures = { workspace = true }
-governor = "0.7"
+governor = "0.10"
 image = { workspace = true }
 jiff = { workspace = true }
 rand = { workspace = true }

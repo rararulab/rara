@@ -21,7 +21,7 @@
 //! on each progress render so the message visibly changes even when the
 //! underlying tool state has not.
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Full verb pool — copied verbatim from Claude Code's
 /// `src/constants/spinnerVerbs.ts`.
