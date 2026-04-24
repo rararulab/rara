@@ -36,7 +36,7 @@ use axum::{
 };
 use rara_kernel::{
     handle::KernelHandle,
-    identity::{Principal, Resolved},
+    identity::{Principal, Resolved, Role},
     security::SecurityRef,
 };
 use serde::Serialize;
@@ -132,7 +132,14 @@ pub struct WhoamiResponse {
     /// Resolved kernel username.
     pub user_id:  String,
     /// Principal role: `Root` | `Admin` | `User`.
-    pub role:     String,
+    ///
+    /// Serialized via [`serde::Serialize`] on [`rara_kernel::identity::Role`]
+    /// rather than `Debug`, so the API surface stays stable if `Debug`
+    /// output ever diverges from the variant name. The OpenAPI schema
+    /// declares this as `string` because the kernel crate does not depend
+    /// on `utoipa`.
+    #[schema(value_type = String, example = "Admin")]
+    pub role:     Role,
     /// Whether the caller has admin-or-higher privileges.
     pub is_admin: bool,
 }
@@ -155,7 +162,7 @@ pub fn routes() -> OpenApiRouter { OpenApiRouter::new().routes(routes!(whoami)) 
 async fn whoami(Extension(principal): Extension<Principal<Resolved>>) -> Json<WhoamiResponse> {
     Json(WhoamiResponse {
         user_id:  principal.user_id.0.clone(),
-        role:     format!("{:?}", principal.role()),
+        role:     principal.role(),
         is_admin: principal.is_admin(),
     })
 }
