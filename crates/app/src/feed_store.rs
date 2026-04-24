@@ -14,30 +14,23 @@
 
 //! SQLite-backed [`FeedStore`] implementation.
 //!
-//! Persists [`FeedEvent`]s to the `data_feed_events` table and tracks
-//! per-subscriber read cursors in `feed_read_cursors`. Both tables are
+//! Persists [`FeedEvent`]s to the `data_feed_events` table. The table is
 //! created by the init migration baseline.
 
 use async_trait::async_trait;
-use diesel::{
-    ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper, upsert::excluded,
-};
+use diesel::{ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper};
 use diesel_async::RunQueryDsl;
 use jiff::Timestamp;
-use rara_kernel::{
-    data_feed::{FeedEvent, FeedEventId, FeedFilter, FeedStore},
-    session::SessionKey,
-};
-use rara_model::schema::{data_feed_events, feed_read_cursors};
+use rara_kernel::data_feed::{FeedEvent, FeedEventId, FeedFilter, FeedStore};
+use rara_model::schema::data_feed_events;
 use snafu::ResultExt;
 use tracing::instrument;
 use yunara_store::diesel_pool::DieselSqlitePool;
 
 /// SQLite-backed feed event store.
 ///
-/// Implements [`FeedStore`] using the `data_feed_events` and
-/// `feed_read_cursors` tables. All operations go through the shared
-/// diesel-async pool.
+/// Implements [`FeedStore`] using the `data_feed_events` table. All operations
+/// go through the shared diesel-async pool.
 pub struct SqliteFeedStore {
     pool: DieselSqlitePool,
 }
@@ -121,92 +114,6 @@ impl FeedStore for SqliteFeedStore {
         }
 
         Ok(events)
-    }
-
-    #[instrument(skip_all, fields(subscriber = %subscriber))]
-    async fn mark_read(
-        &self,
-        subscriber: &SessionKey,
-        up_to: FeedEventId,
-    ) -> rara_kernel::Result<()> {
-        use diesel::OptionalExtension;
-
-        let sub_id = subscriber.to_string();
-        let event_id = up_to.to_string();
-
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .whatever_context("feed_read_cursors pool acquire failed")?;
-
-        let source_name: String = data_feed_events::table
-            .filter(data_feed_events::id.eq(&event_id))
-            .select(data_feed_events::source_name)
-            .first::<String>(&mut *conn)
-            .await
-            .optional()
-            .whatever_context("data_feed_events lookup failed")?
-            .unwrap_or_else(|| "unknown".to_owned());
-
-        let now = Timestamp::now().to_string();
-
-        diesel::insert_into(feed_read_cursors::table)
-            .values((
-                feed_read_cursors::subscriber_id.eq(&sub_id),
-                feed_read_cursors::source_name.eq(&source_name),
-                feed_read_cursors::last_read_id.eq(&event_id),
-                feed_read_cursors::updated_at.eq(&now),
-            ))
-            .on_conflict((
-                feed_read_cursors::subscriber_id,
-                feed_read_cursors::source_name,
-            ))
-            .do_update()
-            .set((
-                feed_read_cursors::last_read_id.eq(excluded(feed_read_cursors::last_read_id)),
-                feed_read_cursors::updated_at.eq(excluded(feed_read_cursors::updated_at)),
-            ))
-            .execute(&mut *conn)
-            .await
-            .whatever_context("feed_read_cursors upsert failed")?;
-
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(subscriber = %subscriber))]
-    async fn unread_count(&self, subscriber: &SessionKey) -> rara_kernel::Result<usize> {
-        use diesel::sql_types::BigInt;
-
-        let sub_id = subscriber.to_string();
-
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .whatever_context("data_feed_events pool acquire failed")?;
-
-        // Correlated NOT EXISTS subquery — no clean DSL translation without
-        // a relationship definition, so we keep this one-shot raw-SQL count
-        // embedded as a narrow `sql_query` escape hatch per
-        // docs/guides/db-diesel-migration.md.
-        #[derive(diesel::QueryableByName)]
-        struct CountRow {
-            #[diesel(sql_type = BigInt)]
-            n: i64,
-        }
-
-        let row: CountRow = diesel::sql_query(
-            "SELECT COUNT(*) AS n FROM data_feed_events e WHERE NOT EXISTS (SELECT 1 FROM \
-             feed_read_cursors c WHERE c.subscriber_id = ?1 AND c.source_name = e.source_name AND \
-             c.last_read_id >= e.id)",
-        )
-        .bind::<diesel::sql_types::Text, _>(&sub_id)
-        .get_result(&mut *conn)
-        .await
-        .whatever_context("unread_count query failed")?;
-
-        Ok(row.n as usize)
     }
 }
 
