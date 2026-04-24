@@ -566,7 +566,7 @@ pub async fn start_with_options(
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
     // Spawn the feed dispatch task — consumes events from all transports,
-    // persists them to the feed_events table, and routes matching events
+    // persists them to the data_feed_events table, and routes matching events
     // to subscribing sessions via SubscriptionRegistry.
     {
         let store = feed_store.clone();
