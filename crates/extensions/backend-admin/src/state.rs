@@ -108,6 +108,9 @@ impl BackendState {
         // Kernel observability routes (stats, sessions, approvals, audit).
         router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
 
+        // Scheduler admin routes — read-only curation of kernel jobs.
+        router = router.merge(crate::scheduler::scheduler_routes(kernel_handle.clone()));
+
         // Data feed management routes (with registry sync).
         router = router.merge(crate::data_feeds::data_feed_routes(
             self.feed_router_state.clone(),

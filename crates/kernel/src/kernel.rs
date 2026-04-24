@@ -232,6 +232,7 @@ impl Kernel {
     /// Construct a kernel from core infrastructure dependencies.
     ///
     /// Registries are loaded separately via `load_*` methods before `start()`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: KernelConfig,
         driver_registry: DriverRegistryRef,
@@ -246,6 +247,7 @@ impl Kernel {
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
         trace_service: crate::trace::TraceService,
         skill_prompt_provider: crate::handle::SkillPromptProvider,
+        scheduler_dir: std::path::PathBuf,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
         // Clamp default_tool_timeout so it never exceeds the global wave timeout.
@@ -303,6 +305,7 @@ impl Kernel {
             config.clone(),
             tape_service.clone(),
             dynamic_tool_provider,
+            scheduler_dir,
         );
 
         let hook_runner: HookRunnerRef = Arc::new(HookRunner::new(config.hooks.clone()));
@@ -403,6 +406,7 @@ impl Kernel {
             self.tape_service.clone(),
             self.trace_service.clone(),
             self.syscall.job_wheel().clone(),
+            self.syscall.job_result_store().clone(),
             self.skill_prompt_provider.clone(),
             self.feed_registry.clone(),
             self.feed_store.clone(),

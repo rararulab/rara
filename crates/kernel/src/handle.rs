@@ -98,6 +98,12 @@ pub struct KernelHandle {
     trace_service:         crate::trace::TraceService,
     /// Shared job wheel for querying scheduled tasks.
     job_wheel:             Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
+    /// Append-only store for job execution results.
+    ///
+    /// Exposed so the backend admin route can derive `last_status` /
+    /// `last_run_at` and page execution history without a syscall — the
+    /// store is append-only and safe to read concurrently.
+    job_result_store:      Arc<crate::schedule::JobResultStore>,
     /// Provider for generating the skills prompt block.
     skill_prompt_provider: SkillPromptProvider,
     /// Data feed registry for managing external data sources.
@@ -128,6 +134,7 @@ impl KernelHandle {
         tape: crate::memory::TapeService,
         trace_service: crate::trace::TraceService,
         job_wheel: Arc<parking_lot::Mutex<crate::schedule::JobWheel>>,
+        job_result_store: Arc<crate::schedule::JobResultStore>,
         skill_prompt_provider: SkillPromptProvider,
         feed_registry: Option<Arc<crate::data_feed::DataFeedRegistry>>,
         feed_store: Option<crate::data_feed::FeedStoreRef>,
@@ -148,6 +155,7 @@ impl KernelHandle {
             tape,
             trace_service,
             job_wheel,
+            job_result_store,
             skill_prompt_provider,
             feed_registry,
             feed_store,
@@ -419,6 +427,29 @@ impl KernelHandle {
     /// List scheduled jobs, optionally filtered by session key.
     pub fn list_jobs(&self, session_key: Option<SessionKey>) -> Vec<crate::schedule::JobEntry> {
         self.job_wheel.lock().list(session_key.as_ref())
+    }
+
+    /// Seed a pre-built [`crate::schedule::JobEntry`] onto the wheel, bypassing
+    /// the `RegisterJob` syscall path.
+    ///
+    /// Crate-private by design: test helpers in [`crate::testing`] wrap this
+    /// so the capability isn't reachable from every downstream crate. The
+    /// syscall path remains the only way production callers register jobs,
+    /// because it is the only path that supplies a real session principal.
+    pub(crate) fn seed_job(&self, entry: crate::schedule::JobEntry) {
+        let mut wheel = self.job_wheel.lock();
+        wheel.add(entry);
+        wheel.persist();
+    }
+
+    /// Access the append-only job result store.
+    ///
+    /// Surfaced for the backend admin route so it can read execution history
+    /// and derive `last_status` / `last_run_at` without a syscall round-trip.
+    /// Mutations still go through syscalls; this is read-only by convention
+    /// — the store itself is append-only.
+    pub fn job_result_store(&self) -> &Arc<crate::schedule::JobResultStore> {
+        &self.job_result_store
     }
 
     /// Generate the skills prompt block for injection into the agent system

@@ -217,6 +217,39 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
     },
 
+    /// List every scheduled job across all sessions — admin-only surface.
+    ///
+    /// Semantically distinct from [`Syscall::ListJobs`]: this variant exists
+    /// so the backend admin route has an unambiguous, auth-gated entry point
+    /// that cannot be reused by unprivileged session tools. The kernel does
+    /// no auth check itself — the HTTP layer is responsible for gating.
+    ListAllJobs {
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
+    },
+
+    /// Immediately fire a scheduled job without advancing its `next_at`.
+    ///
+    /// The job is cloned from the wheel (not removed), inserted into the
+    /// in-flight ledger with the standard lease, and dispatched through the
+    /// same `ScheduledTask` path that [`JobWheel::drain_expired`] uses. The
+    /// wheel's original schedule is untouched — recurring jobs still fire at
+    /// their next regular `next_at`.
+    ///
+    /// Reply shape mirrors [`crate::schedule::TriggerOutcome`] so callers can
+    /// distinguish a fresh dispatch from a deduplicated no-op (job already
+    /// in-flight) and from a missing job. `NotFound` is the only error; the
+    /// other two outcomes are both `Ok`.
+    ///
+    /// [`JobWheel::drain_expired`]: crate::schedule::JobWheel::drain_expired
+    TriggerJob {
+        job_id:   crate::schedule::JobId,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<TriggerJobReply>>,
+    },
+
     // -- Task Report & Subscription --
     /// Register a notification subscription for the calling session.
     Subscribe {
@@ -242,6 +275,30 @@ pub enum Syscall {
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<()>>,
     },
+}
+
+/// Reply for [`Syscall::TriggerJob`] distinguishing a fresh dispatch from a
+/// deduplicated no-op. Mirrors the success arms of
+/// [`crate::schedule::TriggerOutcome`] — the `NotFound` case is surfaced as
+/// the `Err` half of `Result<TriggerJobReply, KernelError>`.
+///
+/// Each arm carries the wheel's [`JobEntry`] so
+/// HTTP callers can shape a response view without a follow-up `ListAllJobs`
+/// query. That second lookup used to race against `complete_in_flight` on
+/// `Trigger::Once` jobs — a caller would see the syscall succeed and then
+/// get a 404 when the job had already finished and been removed from the
+/// wheel. Threading the entry through the reply eliminates the race.
+#[derive(Debug, Clone)]
+pub enum TriggerJobReply {
+    /// The job was cloned into the in-flight ledger and a `ScheduledTask`
+    /// event has been published. Carries the wheel's job snapshot taken at
+    /// dispatch time.
+    Fired(crate::schedule::JobEntry),
+    /// A prior trigger is still executing. No new dispatch happened; the
+    /// caller can treat this as a successful idempotent operation and the
+    /// HTTP layer maps it to a `triggered: false` discriminator. Carries
+    /// the wheel's current entry for the job.
+    AlreadyInFlight(crate::schedule::JobEntry),
 }
 
 impl Syscall {
