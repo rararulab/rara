@@ -50,6 +50,7 @@ All changes — no matter how small — follow the issue → worktree → PR →
 ## Infrastructure
 
 @docs/guides/database-migrations.md
+@docs/guides/debug.md
 
 ## Guardrails
 
