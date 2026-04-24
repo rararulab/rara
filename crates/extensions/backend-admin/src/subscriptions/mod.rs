@@ -12,20 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # rara-backend-admin
+//! Admin HTTP surface for the kernel `SubscriptionRegistry`.
 //!
-//! Unified HTTP admin routes for all backend subsystems: settings,
-//! models, MCP servers, skills, data feeds, and domain routes (chat).
+//! Tag-based notification subscriptions already exist inside the kernel,
+//! but have no out-of-band management channel — without a REST surface
+//! the feed dispatch loop (`crates/app/src/lib.rs`) finds nothing to match
+//! and no `ProactiveTurn` ever fires. This module wraps the registry with
+//! a thin HTTP facade so operators can create / list / update / delete
+//! subscriptions at runtime.
 
-pub mod agents;
-pub mod auth;
-pub mod chat;
-pub mod data_feeds;
-pub mod kernel;
-pub mod mcp;
-pub mod scheduler;
-pub mod settings;
-pub mod skills;
-pub mod state;
-pub mod subscriptions;
-pub mod system_routes;
+mod router;
+
+pub use router::{SubscriptionRouterState, subscription_routes};
