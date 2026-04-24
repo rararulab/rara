@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # rara-backend-admin
+//! HTTP admin surface for the kernel scheduler.
 //!
-//! Unified HTTP admin routes for all backend subsystems: settings,
-//! models, MCP servers, skills, data feeds, and domain routes (chat).
+//! Exposes read-only curation of scheduled jobs under
+//! `/api/v1/scheduler/*`. Creation is intentionally NOT exposed here —
+//! jobs are only registered via the agent-facing `schedule` tool so the
+//! audit trail stays tied to the originating session's principal.
 
-pub mod agents;
-pub mod chat;
-pub mod data_feeds;
-pub mod kernel;
-pub mod mcp;
-pub mod scheduler;
-pub mod settings;
-pub mod skills;
-pub mod state;
-pub mod system_routes;
+pub mod dto;
+pub mod router;
+pub mod service;
+
+pub use router::scheduler_routes;
+pub use service::SchedulerSvc;

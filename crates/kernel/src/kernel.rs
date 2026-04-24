@@ -403,6 +403,7 @@ impl Kernel {
             self.tape_service.clone(),
             self.trace_service.clone(),
             self.syscall.job_wheel().clone(),
+            self.syscall.job_result_store().clone(),
             self.skill_prompt_provider.clone(),
             self.feed_registry.clone(),
             self.feed_store.clone(),
