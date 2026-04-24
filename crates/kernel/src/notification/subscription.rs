@@ -333,6 +333,61 @@ impl SubscriptionRegistry {
         result
     }
 
+    /// Return all subscriptions, optionally filtered by owner.
+    ///
+    /// Used by admin APIs that need to enumerate the full registry.
+    pub async fn list_all(&self, owner: Option<&UserId>) -> Vec<Subscription> {
+        let inner = self.inner.read().await;
+        inner
+            .subs
+            .values()
+            .filter(|sub| owner.is_none_or(|o| &sub.owner == o))
+            .cloned()
+            .collect()
+    }
+
+    /// Remove a subscription by ID without an ownership check.
+    ///
+    /// Intended for admin/operator code paths that audit the caller's
+    /// role externally (e.g. `is_admin()` in the HTTP handler). Returns
+    /// the removed subscription when it existed, `None` otherwise.
+    pub async fn admin_unsubscribe(&self, subscription_id: Uuid) -> Option<Subscription> {
+        let mut inner = self.inner.write().await;
+        let removed = inner.remove(subscription_id);
+        if removed.is_some() {
+            inner.persist();
+        }
+        removed
+    }
+
+    /// Replace a subscription's match tags and/or action. Returns the
+    /// updated subscription if it existed.
+    ///
+    /// `None` arguments preserve the existing field — this is a partial
+    /// update suitable for HTTP PATCH semantics.
+    pub async fn update(
+        &self,
+        subscription_id: Uuid,
+        match_tags: Option<Vec<String>>,
+        on_receive: Option<NotifyAction>,
+    ) -> Option<Subscription> {
+        let mut inner = self.inner.write().await;
+        let existing = inner.subs.get(&subscription_id)?.clone();
+        let new_sub = Subscription {
+            id:         existing.id,
+            subscriber: existing.subscriber,
+            owner:      existing.owner,
+            match_tags: match_tags.unwrap_or(existing.match_tags),
+            on_receive: on_receive.unwrap_or(existing.on_receive),
+        };
+        // remove() also clears the tag indices, then insert() rebuilds them
+        // for the new tag set.
+        inner.remove(subscription_id);
+        inner.insert(new_sub.clone());
+        inner.persist();
+        Some(new_sub)
+    }
+
     /// Remove all subscriptions for a given session (cleanup on session end).
     pub async fn remove_session(&self, session_key: &SessionKey) {
         let mut inner = self.inner.write().await;
