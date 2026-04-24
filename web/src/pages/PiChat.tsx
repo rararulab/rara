@@ -39,7 +39,12 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 // object is executed server-side; the renderer is what matters here.
 void extractDocumentTool;
 
-import { assistantSeqByRef, toAgentMessages } from './pi-chat-messages';
+import {
+  assistantSeqByRef,
+  messagesForArtifactReconstruction,
+  toAgentMessages,
+  toolResultByCallId,
+} from './pi-chat-messages';
 
 import { RaraStorageBackend } from '@/adapters/rara-storage';
 import { createRaraStreamFn } from '@/adapters/rara-stream';
@@ -201,11 +206,18 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
     render(message) {
       const seq = assistantSeqByRef.get(message);
       const showButtons = seq !== undefined;
-      // Rebuild the toolResult lookup from current agent state. Cheap
-      // (a single linear scan) and avoids stale-closure bugs because the
-      // resolver always hits the live agent ref.
+      // Rebuild the toolResult lookup. Historical messages live in
+      // `toolResultByCallId` because `toAgentMessages` no longer emits
+      // standalone tool-result bubbles (#1718). Live streaming frames
+      // still land in `agent.state.messages` as `toolResult` entries
+      // (pi-agent-core's post-stream loop pushes them after the relay
+      // tool resolves), so we merge both sources here — streaming
+      // wins on key collision so a fresher result from the current
+      // turn can override a stale persisted one.
       const agent = agentResolver();
-      const resultByCallId = new Map<string, import('@mariozechner/pi-ai').ToolResultMessage>();
+      const resultByCallId = new Map<string, import('@mariozechner/pi-ai').ToolResultMessage>(
+        toolResultByCallId,
+      );
       if (agent) {
         for (const m of agent.state.messages) {
           if (m.role === 'toolResult') {
@@ -524,7 +536,9 @@ export default function PiChat() {
       }
       // Rebuild the artifacts panel from the same message list so switching
       // back to a session restores every previously-created artifact.
-      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(agentMsgs);
+      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
+        messagesForArtifactReconstruction(agentMsgs),
+      );
     } catch {
       /* session may have no messages yet */
     }
@@ -551,7 +565,9 @@ export default function PiChat() {
       );
       const agentMsgs = toAgentMessages(msgs);
       agent.replaceMessages(agentMsgs);
-      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(agentMsgs);
+      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
+        messagesForArtifactReconstruction(agentMsgs),
+      );
       chatPanelRef.current?.agentInterface?.requestUpdate();
     } catch {
       /* ignore */

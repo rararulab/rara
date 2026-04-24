@@ -12,9 +12,13 @@ React page-level components that mount pi-web-ui's Lit web components
   flagged as the final one of its turn.
 - `pi-chat-messages.ts` — pure conversion from rara's `ChatMessageData` shape
   (see `@/api/types`) into pi-agent-core `Message` objects. Owns
-  `assistantSeqByRef` (a `WeakMap<AssistantMessage, number>`) and the
-  `finalAssistantIndices` helper that computes which assistant per turn is the
-  "final" one.
+  `assistantSeqByRef` (a `WeakMap<AssistantMessage, number>`),
+  `toolResultByCallId` (a `Map<string, ToolResultMessage>` populated as a
+  side-channel so tool results are NOT emitted as standalone bubbles — see
+  #1718), `messagesForArtifactReconstruction` (re-weaves those results back
+  in for `ArtifactsPanel.reconstructFromMessages`), and the
+  `finalAssistantIndices` helper that computes which assistant per turn is
+  the "final" one.
 - `pi-chat-messages.test.ts` — unit tests for the conversion + final-assistant
   gating logic.
 - Other pages (`Agents.tsx`, `Skills.tsx`, `McpServers.tsx`, etc.) follow the
@@ -69,6 +73,11 @@ AssistantMessage[]  ──────────────►   pi-web-ui re
   buttons gate.
 - Do NOT clone or spread (`{ ...msg }`) the `AssistantMessage` between
   registration and the renderer — WeakMap keys are by identity, not by value.
+- Do NOT re-introduce standalone `ToolResultMessage` entries in
+  `toAgentMessages`' output list. Pi-web-ui's `<message-list>` renders one
+  DOM row per message object; under rara's avatar CSS that means one bare
+  avatar per tool result. Keep results in `toolResultByCallId` and let the
+  custom assistant renderer inline them via `toolResultsById` (#1718).
 - Do NOT move the `assistantSeqByRef` declaration to a barrel/re-export file
   without keeping the canonical instance in `pi-chat-messages.ts`; re-exports
   are fine, redeclarations are not.
