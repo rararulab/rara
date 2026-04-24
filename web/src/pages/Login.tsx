@@ -80,14 +80,17 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-6">
+      <div className="text-[24px] font-semibold leading-none tracking-tight text-foreground">
+        rara
+      </div>
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-5 rounded-2xl border border-border/70 bg-background/70 p-6 shadow-sm"
+        className="w-full max-w-sm space-y-5 rounded-card border border-border/60 bg-background/70 p-6 shadow-[var(--shadow-card)]"
       >
         <header className="space-y-1">
-          <h1 className="text-xl font-semibold">Sign in to rara</h1>
-          <p className="text-sm text-muted-foreground">Paste your owner token to continue.</p>
+          <h1 className="text-[18px] font-semibold leading-tight">Sign in to rara</h1>
+          <p className="text-[13px] text-muted-foreground">Paste your owner token to continue.</p>
         </header>
 
         <div className="space-y-2">
@@ -110,7 +113,11 @@ export default function Login() {
           </p>
         )}
 
-        <Button type="submit" className="w-full" disabled={submitting}>
+        <Button
+          type="submit"
+          className="w-full bg-brand text-brand-foreground hover:bg-brand/90"
+          disabled={submitting}
+        >
           {submitting ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
