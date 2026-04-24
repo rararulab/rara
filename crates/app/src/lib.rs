@@ -329,6 +329,20 @@ pub async fn start_with_options(
         .whatever_context("Failed to initialize infrastructure services")?;
     let pool = db_store.pool().clone();
 
+    // Parallel diesel-async pool for crates migrated off sqlx (#1702).
+    // Lives side-by-side with the sqlx pool until every call site is
+    // migrated and the sqlx pool is retired in the cutover PR.
+    let db_dir = rara_paths::database_dir();
+    let database_url = format!("sqlite:{}/rara.db?mode=rwc", db_dir.display());
+    let diesel_pool = yunara_store::diesel_pool::build_sqlite_pool(
+        &yunara_store::diesel_pool::DieselPoolConfig::builder()
+            .database_url(database_url)
+            .max_connections(config.database.max_connections)
+            .build(),
+    )
+    .await
+    .whatever_context("Failed to build diesel-async sqlite pool")?;
+
     let settings_svc =
         rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
             .await
@@ -370,6 +384,7 @@ pub async fn start_with_options(
 
     let rara = crate::boot::boot(
         pool.clone(),
+        diesel_pool.clone(),
         settings_provider.clone(),
         &config.users,
         browser_manager,

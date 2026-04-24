@@ -8,7 +8,7 @@ SQLite-backed implementation of the `KeyringStore` trait — stores credentials 
 
 ### Key module
 
-- `src/lib.rs` — `PgKeyringStore` struct wrapping a `SqlitePool`. Implements `KeyringStore` with SQL queries against the `credential_store` table (columns: `service`, `account`, `value`, `updated_at`).
+- `src/lib.rs` — `PgKeyringStore` struct wrapping a `yunara_store::diesel_pool::DieselSqlitePool`. Implements `KeyringStore` with diesel-async DSL queries against the `credential_store` table (columns: `service`, `account`, `value`, `updated_at`). The table schema is defined in `rara-model/src/schema.rs`.
 
 ### Note on naming
 
@@ -18,7 +18,8 @@ Despite the "pg" prefix (historical), this implementation uses SQLite, not Postg
 
 - Uses `INSERT ... ON CONFLICT DO UPDATE` for upsert — save is always idempotent.
 - The `credential_store` table must exist (created by `rara-model` migrations) before this store is used.
-- Uses the `Pg` error variant from `rara-keyring-store` for database errors.
+- Uses the `Pg` (diesel query) and `Pool` (bb8 connection-acquire) error variants from `rara-keyring-store`.
+- `updated_at` is set via a literal `datetime('now')` SQL fragment — the only sanctioned `sql!` use in this crate, per `docs/guides/db-diesel-migration.md` (diesel has no cross-backend DSL helper for the sqlite-specific form).
 
 ## What NOT To Do
 
@@ -27,6 +28,6 @@ Despite the "pg" prefix (historical), this implementation uses SQLite, not Postg
 
 ## Dependencies
 
-**Upstream:** `rara-keyring-store` (for `KeyringStore` trait, error types), `sqlx`.
+**Upstream:** `rara-keyring-store` (for `KeyringStore` trait, error types), `rara-model` (schema), `yunara-store` (diesel-async pool), `diesel` + `diesel-async`.
 
 **Downstream:** `rara-app` (selects this as the credential store backend when a database pool is available).

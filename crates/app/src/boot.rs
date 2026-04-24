@@ -96,14 +96,18 @@ pub struct PlatformBindingConfig {
 /// successfully; browser tools are registered into the tool registry when set.
 pub(crate) async fn boot(
     pool: sqlx::SqlitePool,
+    diesel_pool: yunara_store::diesel_pool::DieselSqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
     browser_manager: Option<rara_browser::BrowserManagerRef>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
-
+    //
+    // Credential store migrated to diesel as part of #1702 — its pool lives
+    // side-by-side with the sqlx pool until the cutover PR consolidates
+    // every call site onto diesel.
     let credential_store: rara_keyring_store::KeyringStoreRef =
-        Arc::new(rara_pg_credential_store::PgKeyringStore::new(pool.clone()));
+        Arc::new(rara_pg_credential_store::PgKeyringStore::new(diesel_pool));
 
     // -- LLM driver registry -----------------------------------------------
 
