@@ -146,6 +146,34 @@ impl DataFeedSvc {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Update the runtime `status` and `last_error` columns for a feed,
+    /// looked up by unique name.
+    ///
+    /// Called via the [`StatusReporter`] wiring so the `data_feeds` table
+    /// reflects the actual runtime state (running / idle / error) rather
+    /// than the stale value written at creation time.
+    ///
+    /// [`StatusReporter`]: rara_kernel::data_feed::StatusReporter
+    #[instrument(skip(self))]
+    pub async fn update_status(
+        &self,
+        name: &str,
+        status: FeedStatus,
+        last_error: Option<String>,
+    ) -> anyhow::Result<bool> {
+        let now = Timestamp::now().to_string();
+        let result = sqlx::query(
+            "UPDATE data_feeds SET status = ?1, last_error = ?2, updated_at = ?3 WHERE name = ?4",
+        )
+        .bind(status.to_string())
+        .bind(&last_error)
+        .bind(&now)
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Toggle the enabled flag for a feed. Returns `true` if updated.
     #[instrument(skip(self))]
     pub async fn toggle_feed(&self, id: &str) -> anyhow::Result<bool> {
