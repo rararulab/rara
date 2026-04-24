@@ -9,7 +9,7 @@ used for runtime settings and miscellaneous persisted state.
 
 ### Key modules
 
-- `src/diesel_pool.rs` — `DieselSqlitePool` / `DieselPgPool` aliases plus `build_sqlite_pool` / `build_pg_pool`. The sqlite pool sets `WAL`, `busy_timeout=5000`, `foreign_keys=ON` pragmas once per physical connection via the manager's `custom_setup` hook.
+- `src/diesel_pool.rs` — `DieselSqlitePool` plus `build_sqlite_pool`. The sqlite pool sets `WAL`, `busy_timeout=5000`, `foreign_keys=ON` pragmas once per physical connection via the manager's `custom_setup` hook.
 - `src/config.rs` — `DatabaseConfig` with `bon::Builder`; `open(database_url)` wraps `build_sqlite_pool` and returns a `DBStore`.
 - `src/db.rs` — `DBStore` wraps `DieselSqlitePool`; provides `pool()` and `kv_store()`.
 - `src/kv.rs` — `KVStore` backed by the `kv_table` SQLite table (JSON values). Full diesel DSL; `batch_set` runs inside a transaction.
@@ -17,7 +17,7 @@ used for runtime settings and miscellaneous persisted state.
 
 ### Public API
 
-- `DatabaseConfig`, `DBStore`, `KVStore`, `DieselSqlitePool`, `DieselPgPool`.
+- `DatabaseConfig`, `DBStore`, `KVStore`, `DieselSqlitePool`.
 
 ## Critical Invariants
 

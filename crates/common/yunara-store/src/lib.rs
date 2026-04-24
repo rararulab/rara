@@ -21,8 +21,8 @@ pub mod kv;
 pub use config::DatabaseConfig;
 pub use db::DBStore;
 pub use diesel_pool::{
-    DieselPgConnection, DieselPgPool, DieselPoolConfig, DieselPoolInitError, DieselPoolRunError,
-    DieselSqliteConnection, DieselSqlitePool, build_pg_pool, build_sqlite_pool,
+    DieselPoolConfig, DieselPoolInitError, DieselPoolRunError, DieselSqliteConnection,
+    DieselSqlitePool, build_sqlite_pool,
 };
 pub use error::{Error, Result};
 pub use kv::KVStore;
