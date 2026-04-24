@@ -592,17 +592,26 @@ impl JobWheel {
     ///
     /// Returns the cloned [`JobEntry`] ready to be dispatched via
     /// `ScheduledTask`, or `None` if no job with that ID is on the wheel.
-    /// If the same job is already in-flight the new lease overwrites it —
-    /// the agent runtime is responsible for handling overlapping executions.
+    ///
+    /// No-op if the job is already in-flight — prevents spam-click from
+    /// spawning overlapping agent sessions. The caller observes `None` and
+    /// skips the dispatch; the existing in-flight entry's lease is left
+    /// untouched.
     pub fn trigger_now(&mut self, job_id: &JobId) -> Option<JobEntry> {
         let key = *self.by_id.get(job_id)?;
         let entry = self.jobs.get(&key)?.clone();
 
+        // Dedupe: if a prior trigger (manual or scheduled) is still in-flight,
+        // refuse to enqueue another. The ledger insert alone dedupes on the
+        // key, but the syscall handler separately pushes a `ScheduledTask`
+        // event per call, which would spawn N overlapping agent sessions
+        // without this guard.
         if self.in_flight.contains_key(job_id) {
             warn!(
                 job_id = %job_id,
-                "trigger_now: job already in-flight; enqueueing overlapping execution"
+                "trigger_now: job already in-flight; dedupe (no dispatch)"
             );
+            return None;
         }
 
         let now = self.clock.now();
@@ -1363,6 +1372,49 @@ mod tests {
         let ghost = JobId::new();
         assert!(wheel.trigger_now(&ghost).is_none());
         assert!(wheel.in_flight.is_empty());
+    }
+
+    /// A second `trigger_now` call while the first execution is still
+    /// in-flight must be a no-op — prevents spam-click on "Run now" from
+    /// spawning overlapping agent sessions.
+    #[test]
+    fn trigger_now_dedupes_in_flight() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+        let entry = cron_entry("0 * * * * *", future_fire);
+        let id = entry.id;
+        wheel.add(entry);
+
+        // First trigger succeeds and the ledger gains one entry.
+        let first = wheel.trigger_now(&id);
+        assert!(first.is_some(), "first trigger should dispatch");
+        assert_eq!(wheel.in_flight.len(), 1);
+
+        // Immediate repeat is a no-op — still exactly one in-flight entry.
+        let second = wheel.trigger_now(&id);
+        assert!(
+            second.is_none(),
+            "concurrent trigger must not spawn a second dispatch"
+        );
+        assert_eq!(
+            wheel.in_flight.len(),
+            1,
+            "dedupe must not mutate the existing in-flight entry"
+        );
+
+        // After the agent session completes and the ledger is cleared,
+        // triggering again works as usual.
+        assert!(wheel.complete_in_flight(&id));
+        let third = wheel.trigger_now(&id);
+        assert!(
+            third.is_some(),
+            "post-completion trigger should dispatch again"
+        );
+        assert_eq!(wheel.in_flight.len(), 1);
     }
 
     /// `list(None)` returns jobs from every session — exercised by the
