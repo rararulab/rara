@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { describe, expect, it } from 'vitest';
 
 import {
+  aggregateTurnToolCalls,
   assistantSeqByRef,
   finalAssistantIndices,
   isFirstAssistantOfTurn,
@@ -25,6 +27,16 @@ import {
   toAgentMessages,
   toolResultByCallId,
 } from '../pi-chat-messages';
+
+/**
+ * Build the `turnHosts` set that production code derives from
+ * {@link aggregateTurnToolCalls}. Tests pass an empty results map since
+ * the host-picking logic depends only on the message shape, not on
+ * whether results have landed yet.
+ */
+function hostsOf(list: readonly AgentMessage[]): ReadonlySet<AssistantMessage> {
+  return new Set(aggregateTurnToolCalls(list, new Map()).keys());
+}
 
 import type { ChatMessageData, ChatToolCallData } from '@/api/types';
 
@@ -49,6 +61,21 @@ function assistantToolCall(seq: number, toolName = 'do_thing'): ChatMessageData 
     role: 'assistant',
     content: '',
     tool_calls: [call],
+    created_at: ISO,
+  };
+}
+
+function assistantMultiToolCall(seq: number, toolNames: string[]): ChatMessageData {
+  const calls: ChatToolCallData[] = toolNames.map((name, i) => ({
+    id: `tc-${seq}-${i}`,
+    name,
+    arguments: {},
+  }));
+  return {
+    seq,
+    role: 'assistant',
+    content: '',
+    tool_calls: calls,
     created_at: ISO,
   };
 }
@@ -225,14 +252,16 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
   it('flags the sole assistant after a user as first-of-turn', () => {
     const out = toAgentMessages([user(1), assistantText(2)]);
     const [a] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(a), out)).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(a), out, hostsOf(out))).toBe(true);
   });
 
-  it('flags the first assistant of a multi-iteration turn, not the later ones', () => {
+  it('flags the turn host of a multi-iteration turn, not the tool-call-only intermediate', () => {
+    // With per-turn chip cards (#1764) the tool-call-only intermediate is
+    // invisible — the avatar belongs to the host (last assistant) instead.
     const out = toAgentMessages([user(1), assistantToolCall(2), assistantText(3)]);
     const [first, second] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
-    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out, hostsOf(out))).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out, hostsOf(out))).toBe(true);
   });
 
   it('treats intervening toolResult frames as transparent to turn position', () => {
@@ -240,8 +269,8 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
       toAgentMessages([user(1), assistantToolCall(2), toolResult(3, 2), assistantText(4)]),
     );
     const [first, second] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
-    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out, hostsOf(out))).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out, hostsOf(out))).toBe(true);
   });
 
   it('treats an empty-thinking assistant frame as transparent so the next visible assistant owns the avatar', () => {
@@ -264,8 +293,8 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
     };
     const visible = expectAssistant(assistants(toAgentMessages([user(1), assistantText(2)]))[0]);
     const list = [...toAgentMessages([user(1)]), emptyThinking, visible];
-    expect(isFirstAssistantOfTurn(emptyThinking, list)).toBe(false);
-    expect(isFirstAssistantOfTurn(visible, list)).toBe(true);
+    expect(isFirstAssistantOfTurn(emptyThinking, list, hostsOf(list))).toBe(false);
+    expect(isFirstAssistantOfTurn(visible, list, hostsOf(list))).toBe(true);
   });
 
   it('restores first-of-turn after a new user message', () => {
@@ -276,8 +305,91 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
       user(4),
       assistantText(5),
     ]);
-    const [, second, third] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
-    expect(isFirstAssistantOfTurn(expectAssistant(third), out)).toBe(true);
+    // Both turn hosts (text3, text5) are the visible first-of-turn frames;
+    // the tool-call-only intermediate is invisible.
+    const [first, second, third] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out, hostsOf(out))).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out, hostsOf(out))).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(third), out, hostsOf(out))).toBe(true);
+  });
+});
+
+describe('aggregateTurnToolCalls (#1764)', () => {
+  it('attaches every tool call from a single-iteration turn to that assistant', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantMultiToolCall(2, ['a', 'b', 'c']),
+      toolResult(3, 2, 'a'),
+      toolResult(4, 2, 'b'),
+      toolResult(5, 2, 'c'),
+    ]);
+    const [a] = assistants(out);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    const entries = agg.get(expectAssistant(a));
+    expect(entries).toBeDefined();
+    expect(entries?.map((e) => e.call.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('collects tool calls across iterations onto the turn final assistant', () => {
+    const msgs = [
+      user(1),
+      assistantMultiToolCall(2, ['grep', 'read']),
+      toolResult(3, 2, 'grep'),
+      toolResult(4, 2, 'read'),
+      assistantToolCall(5, 'bash'),
+      toolResult(6, 5, 'bash'),
+      assistantText(7, 'done'),
+    ];
+    // The first tool_result seq must point to its call's seq; adjust.
+    msgs[2] = { ...(msgs[2] as ChatMessageData), tool_call_id: 'tc-2-0', tool_name: 'grep' };
+    msgs[3] = { ...(msgs[3] as ChatMessageData), tool_call_id: 'tc-2-1', tool_name: 'read' };
+    const out = toAgentMessages(msgs);
+    const as = assistants(out);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    // Final assistant hosts all three; others host none.
+    const last = expectAssistant(as[as.length - 1]);
+    const hosted = agg.get(last);
+    expect(hosted?.map((e) => e.call.name)).toEqual(['grep', 'read', 'bash']);
+    for (let i = 0; i < as.length - 1; i++) {
+      const intermediate = expectAssistant(as[i]);
+      expect(agg.get(intermediate)).toBeUndefined();
+    }
+  });
+
+  it('pairs tool results from the side-channel with their calls', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantToolCall(2),
+      toolResult(3, 2),
+      assistantText(4),
+    ]);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    const last = assistants(out)[1];
+    const entries = agg.get(expectAssistant(last));
+    expect(entries?.length).toBe(1);
+    expect(entries?.[0]?.result).toBeDefined();
+    expect(entries?.[0]?.result?.toolCallId).toBe('tc-2');
+  });
+
+  it('scopes each turn’s card to its own tool calls across a multi-turn sequence', () => {
+    const msgs = [
+      user(1),
+      assistantToolCall(2, 'alpha'),
+      toolResult(3, 2, 'alpha'),
+      assistantText(4, 'first reply'),
+      user(5),
+      assistantToolCall(6, 'beta'),
+      toolResult(7, 6, 'beta'),
+      assistantText(8, 'second reply'),
+    ];
+    const out = toAgentMessages(msgs);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    const as = assistants(out);
+    // Turn 1 host is the second assistant (text) — tc-2 only.
+    // Turn 2 host is the fourth assistant (text) — tc-6 only.
+    const host1 = expectAssistant(as[1]);
+    const host2 = expectAssistant(as[3]);
+    expect(agg.get(host1)?.map((e) => e.call.name)).toEqual(['alpha']);
+    expect(agg.get(host2)?.map((e) => e.call.name)).toEqual(['beta']);
   });
 });

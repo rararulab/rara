@@ -41,11 +41,14 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 void extractDocumentTool;
 
 import {
+  aggregateTurnToolCalls,
   assistantSeqByRef,
+  hasTextOrThinking,
   isFirstAssistantOfTurn,
   messagesForArtifactReconstruction,
   toAgentMessages,
   toolResultByCallId,
+  type ToolCallWithResult,
 } from './pi-chat-messages';
 
 import { RaraStorageBackend } from '@/adapters/rara-storage';
@@ -67,8 +70,7 @@ import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
-import { registerRaraToolRenderers } from '@/tools/rara-tool-renderers';
-
+import { renderTurnChipCard } from '@/tools/turn-chip-card';
 const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
 
 function readStoredSessionKey(): string | null {
@@ -245,10 +247,35 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
       // the first frame of each turn as a "continuation" — the avatar and
       // top-of-bubble chrome are suppressed via CSS so the turn reads as
       // one bubble stacked under a single avatar.
-      const isFirstOfTurn = agent ? isFirstAssistantOfTurn(message, agent.state.messages) : true;
+      // Per-turn chip aggregation (#1764): every tool-call part from
+      // every iteration of this turn lands on the turn's final assistant
+      // frame. Intermediate frames get an empty list and suppress their
+      // own tool-call rendering (via `hideToolCalls`), so a turn reads as
+      // one bubble (text + one chip card) instead of a stack of cards.
+      const aggregated = agent
+        ? aggregateTurnToolCalls(agent.state.messages, resultByCallId)
+        : new Map<import('@mariozechner/pi-ai').AssistantMessage, ToolCallWithResult[]>();
+      const turnHosts = new Set(aggregated.keys());
+      const isFirstOfTurn = agent
+        ? isFirstAssistantOfTurn(message, agent.state.messages, turnHosts)
+        : true;
       const wrapperClass = isFirstOfTurn
         ? 'rara-assistant-with-trace'
         : 'rara-assistant-with-trace rara-assistant-continuation';
+      const chipEntries = aggregated.get(message) ?? [];
+      const isTurnHost = chipEntries.length > 0;
+      const chipCard = isTurnHost
+        ? renderTurnChipCard(chipEntries, {
+            isLive: chipEntries.some((e) => e.result === undefined),
+          })
+        : null;
+      // Drop intermediate tool-call-only iterations entirely: they carry
+      // no user-facing text, and their tool calls now belong to the turn
+      // host's chip card. Letting them render would leave a bare empty
+      // `<assistant-message>` row under a "continuation" avatar.
+      if (!isTurnHost && !hasTextOrThinking(message)) {
+        return html``;
+      }
       return html`
         <div class=${wrapperClass}>
           <assistant-message
@@ -256,8 +283,9 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
             .tools=${agent?.state.tools ?? []}
             .isStreaming=${false}
             .toolResultsById=${resultByCallId}
-            .hideToolCalls=${false}
+            .hideToolCalls=${true}
           ></assistant-message>
+          ${chipCard ?? ''}
           ${showButtons
             ? html`
                 <div class="mt-1 flex justify-start gap-1 pl-[2.75rem]">
@@ -684,10 +712,6 @@ export default function PiChat() {
 
     void (async () => {
       try {
-        // 0. Register rara → pi-mono tool renderer aliases. Must happen before
-        //    ChatPanel.setAgent() mounts any messages — the registry is
-        //    consulted at render time with no retro-active update.
-        registerRaraToolRenderers();
         // Wrap pi-web-ui's built-in `<assistant-message>` so each completed
         // assistant turn gets a "📊 详情" trigger that opens the cascade
         // execution-trace modal. The renderer fires a CustomEvent on the
