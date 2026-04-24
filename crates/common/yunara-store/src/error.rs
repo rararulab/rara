@@ -42,4 +42,25 @@ pub enum Error {
 
     #[snafu(display("Invalid time configuration: {message}"))]
     InvalidTimeConfig { message: String },
+
+    #[snafu(display("Failed to build diesel-async connection pool"))]
+    BuildDieselPool {
+        source: diesel_async::pooled_connection::PoolError,
+        #[snafu(implicit)]
+        loc:    snafu::Location,
+    },
+
+    #[snafu(display("Failed to acquire diesel-async connection from pool"))]
+    DieselPoolRun {
+        source: bb8::RunError<diesel_async::pooled_connection::PoolError>,
+        #[snafu(implicit)]
+        loc:    snafu::Location,
+    },
+
+    #[snafu(display("Diesel query failed"))]
+    Diesel {
+        source: diesel::result::Error,
+        #[snafu(implicit)]
+        loc:    snafu::Location,
+    },
 }
