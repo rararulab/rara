@@ -90,7 +90,17 @@ type WebEvent =
       mime_type: string;
       filename: string | null;
       data_base64: string;
-    };
+    }
+  | {
+      type: 'approval_requested';
+      id: string;
+      tool_name: string;
+      summary: string;
+      risk_level: string;
+      requested_at: string;
+      timeout_secs: number;
+    }
+  | { type: 'approval_resolved'; id: string; decision: string };
 
 // ---------------------------------------------------------------------------
 // Session key — provided via callback at stream time
