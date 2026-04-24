@@ -14,24 +14,47 @@
  * limitations under the License.
  */
 
-// Scheduler
-export interface ScheduledTask {
+// Scheduler — kernel-native job shape exposed by /api/v1/scheduler/*.
+
+/** Fire-time specification. The `type` tag matches the kernel's serde tag
+ *  on `kernel::schedule::Trigger` (`once` / `interval` / `cron`). */
+export type Trigger =
+  | { type: 'once'; run_at: string }
+  | {
+      type: 'interval';
+      every_secs: number;
+      next_at: string;
+      /** Reference point for drift-free interval scheduling. Optional on
+       *  the wire for legacy compatibility. */
+      anchor_at: string | null;
+    }
+  | { type: 'cron'; expr: string; next_at: string };
+
+/** A scheduled job in the agent's schedule store. `message` is the prompt
+ *  the agent will execute when the trigger fires. */
+export interface Job {
   id: string;
-  name: string;
-  cron_expression: string;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
+  trigger: Trigger;
+  message: string;
+  session_key: string;
+  tags: string[];
   created_at: string;
+  /** Condensed status of the most recent execution. `NeedsApproval` folds
+   *  into `'running'` on the backend — see `backend-admin/scheduler/dto.rs`. */
+  last_status: 'ok' | 'failed' | 'running' | null;
+  last_run_at: string | null;
 }
 
-export interface TaskRunRecord {
-  id: string;
+/** One historical execution of a job, from
+ *  `GET /api/v1/scheduler/jobs/:id/history`. */
+export interface JobResult {
+  job_id: string;
   task_id: string;
+  task_type: string;
   status: string;
-  started_at: string;
-  finished_at: string | null;
-  error_message: string | null;
+  summary: string;
+  action_taken: string | null;
+  completed_at: string;
 }
 
 // Flat KV Settings
