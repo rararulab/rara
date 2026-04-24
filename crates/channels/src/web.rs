@@ -194,6 +194,22 @@ pub enum WebEvent {
     /// (e.g. trace detail modal) can embed the ID without an extra
     /// round-trip; the current web UI ignores unknown events gracefully.
     TraceReady { trace_id: String },
+    /// Binary attachment (image, document, etc.) produced by a tool.
+    ///
+    /// Bytes are transported as standard (non URL-safe) base64 so the
+    /// browser can reconstruct a blob or data URL and render the file
+    /// inline alongside the matching tool call.
+    Attachment {
+        /// LLM-assigned tool call id, when the attachment was emitted from
+        /// within a tool invocation.
+        tool_call_id: Option<String>,
+        /// IANA media type of the attachment bytes.
+        mime_type:    String,
+        /// Optional original filename.
+        filename:     Option<String>,
+        /// Base64-encoded payload (standard alphabet, with padding).
+        data_base64:  String,
+    },
     /// Stream completed (no more deltas).
     Done,
 }
@@ -368,6 +384,20 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         StreamEvent::LoopBreakerTriggered { .. } => None, // informational only
         StreamEvent::ToolOutput { .. } => None,    // live preview, not persisted
         StreamEvent::TraceReady { trace_id } => Some(WebEvent::TraceReady { trace_id }),
+        StreamEvent::Attachment {
+            tool_call_id,
+            mime_type,
+            filename,
+            data,
+        } => {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            Some(WebEvent::Attachment {
+                tool_call_id,
+                mime_type,
+                filename,
+                data_base64: STANDARD.encode(&data),
+            })
+        }
         // Terminal marker from StreamHub::close — surface as per-turn Done.
         // The session-level bus itself stays open across turns.
         StreamEvent::StreamClosed { .. } => Some(WebEvent::Done),
