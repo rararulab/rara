@@ -14,6 +14,9 @@ env:
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
+  # Disable the runner image's preset sccache wrapper — no backend is configured,
+  # so `rustc -vV` probes (notably `cargo +nightly doc`) time out trying to start a server.
+  RUSTC_WRAPPER: ""
 
 defaults:
   run:
