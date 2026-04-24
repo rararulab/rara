@@ -220,10 +220,13 @@ export function buildWsUrl(sessionKey: string): string {
     throw new Error('not authenticated');
   }
 
+  // Identity is NOT sent as a query parameter — the backend derives
+  // the user id from the authenticated owner token (state.owner_user_id).
+  // Previously sending `user_id=...` here clashed with the server-trusted
+  // identity and caused `identity resolution failed` errors.
   const token = getAccessToken();
   const params = new URLSearchParams({
     session_key: sessionKey,
-    user_id: user.user_id,
   });
   if (token) params.set('token', token);
   return `${base}/api/v1/kernel/chat/ws?${params.toString()}`;

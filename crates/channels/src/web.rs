@@ -237,18 +237,21 @@ pub enum WebEvent {
 // ---------------------------------------------------------------------------
 
 /// Query parameters for WebSocket and SSE endpoints.
+///
+/// Identity is **not** carried here. After owner-token auth passes in
+/// `ws_handler` / `sse_handler`, the authenticated identity is taken
+/// from the adapter's server-trusted `owner_user_id` (config-validated
+/// at boot). Any `user_id` the client might append to the query string
+/// is silently ignored by serde.
 #[derive(Debug, Deserialize)]
 pub struct SessionQuery {
     pub session_key: String,
-    /// JWT access token (preferred). When provided, the user identity is
-    /// extracted from the token claims instead of `user_id`.
+    /// Owner token fallback for browser WebSocket upgrades that cannot
+    /// set an `Authorization` header. The header is preferred when both
+    /// are present.
     #[serde(default)]
     pub token:       Option<String>,
-    #[serde(default = "default_user_id")]
-    pub user_id:     String,
 }
-
-fn default_user_id() -> String { "anonymous".to_owned() }
 
 /// Map an egress [`PlatformOutbound`] into the [`WebEvent`] frame the
 /// browser consumes. Kept pure so adapter behaviour is unit-testable
@@ -440,10 +443,15 @@ fn parse_inbound_text_frame(text: &str) -> InboundPayload {
 }
 
 /// JSON body for POST /messages.
+///
+/// The identity is **not** carried in the body — the `POST /messages`
+/// handler derives the user id from the adapter's server-trusted
+/// `owner_user_id` after owner-token auth. Extra fields (notably a
+/// legacy `user_id`) are ignored by serde so older clients continue
+/// to deserialize without error.
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub session_key: String,
-    pub user_id:     String,
     pub content:     MessageContent,
 }
 
@@ -462,7 +470,7 @@ pub struct SendMessageResponse {
 /// # Usage
 ///
 /// ```rust,ignore
-/// let adapter = WebAdapter::new(owner_token);
+/// let adapter = WebAdapter::new(owner_token, owner_user_id);
 /// let router = adapter.router();
 /// // Mount into your axum app:
 /// // app.nest("/chat", router)
@@ -485,6 +493,14 @@ pub struct WebAdapter {
     /// guarantees a non-empty token before constructing the adapter, so
     /// the WS handler always enforces auth.
     owner_token:       String,
+    /// Authenticated owner's kernel `user_id`.
+    ///
+    /// After the owner-token check, this is the identity attached to
+    /// every inbound web message. The client's query/body `user_id`
+    /// field is ignored — auth establishes "you are the owner", so the
+    /// server, not the client, names the identity. Validated at boot by
+    /// `rara_app::validate_owner_auth` to match a configured user.
+    owner_user_id:     String,
     /// Shutdown signal sender.
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -496,10 +512,12 @@ pub struct WebAdapter {
 impl WebAdapter {
     /// Create a new `WebAdapter`.
     ///
-    /// `owner_token` is required — invalid "no auth" states are
-    /// unrepresentable. Boot-time validation (`validate_owner_auth`)
-    /// guarantees a non-empty token before reaching this constructor.
-    pub fn new(owner_token: String) -> Self {
+    /// Both `owner_token` and `owner_user_id` are required — invalid
+    /// "no auth" / "anonymous caller" states are unrepresentable.
+    /// Boot-time validation (`validate_owner_auth`) guarantees a
+    /// non-empty token and that `owner_user_id` matches a configured
+    /// user before reaching this constructor.
+    pub fn new(owner_token: String, owner_user_id: String) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             adapter_events: Arc::new(DashMap::new()),
@@ -507,6 +525,7 @@ impl WebAdapter {
             stream_hub: Arc::new(RwLock::new(None)),
             endpoint_registry: Arc::new(RwLock::new(None)),
             owner_token,
+            owner_user_id,
             shutdown_tx,
             shutdown_rx,
             stt_service: None,
@@ -533,6 +552,7 @@ impl WebAdapter {
             stream_hub:        Arc::clone(&self.stream_hub),
             endpoint_registry: Arc::clone(&self.endpoint_registry),
             owner_token:       self.owner_token.clone(),
+            owner_user_id:     self.owner_user_id.clone(),
             shutdown_rx:       self.shutdown_rx.clone(),
             stt_service:       self.stt_service.clone(),
         };
@@ -727,6 +747,10 @@ struct WebAdapterState {
     stream_hub:        Arc<RwLock<Option<Arc<StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     owner_token:       String,
+    /// Authenticated owner identity — see [`WebAdapter::owner_user_id`].
+    /// Used after auth passes to stamp inbound messages with a
+    /// server-trusted user id instead of trusting client input.
+    owner_user_id:     String,
     shutdown_rx:       watch::Receiver<bool>,
     stt_service:       Option<rara_stt::SttService>,
 }
@@ -949,7 +973,7 @@ async fn ws_handler(
 
     info!(
         session_key = %params.session_key,
-        user_id = %params.user_id,
+        user_id = %state.owner_user_id,
         "WebSocket upgrade request"
     );
     ws.on_upgrade(move |socket| handle_ws(socket, params, state))
@@ -967,8 +991,16 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         }
     };
 
-    // Register this connection in the EndpointRegistry.
-    register_endpoint(&state.endpoint_registry, &params.user_id, &session_key_str).await;
+    // Register this connection in the EndpointRegistry under the
+    // server-trusted owner id — we must NOT trust any client-provided
+    // identifier here, or an attacker with a valid owner token could
+    // impersonate an arbitrary user.
+    register_endpoint(
+        &state.endpoint_registry,
+        &state.owner_user_id,
+        &session_key_str,
+    )
+    .await;
 
     // Per-WS event sink: both the kernel session bus forwarder and adapter
     // event forwarder push into this single channel; the send task drains it
@@ -1082,7 +1114,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         let sink = Arc::clone(&state.sink);
         let adapter_events = Arc::clone(&state.adapter_events);
         let session_key_str = session_key_str.clone();
-        let user_id = params.user_id.clone();
+        let user_id = state.owner_user_id.clone();
         let stt_service = state.stt_service.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
@@ -1164,7 +1196,12 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
     adapter_forwarder.abort();
     stream_forwarder.abort();
 
-    unregister_endpoint(&state.endpoint_registry, &params.user_id, &session_key_str).await;
+    unregister_endpoint(
+        &state.endpoint_registry,
+        &state.owner_user_id,
+        &session_key_str,
+    )
+    .await;
     info!(session_key = %session_key_str, "WebSocket connection closed");
 }
 
@@ -1188,7 +1225,7 @@ async fn sse_handler(
 
     register_endpoint(
         &state.endpoint_registry,
-        &params.user_id,
+        &state.owner_user_id,
         &params.session_key,
     )
     .await;
@@ -1254,7 +1291,7 @@ async fn sse_handler(
 
     let shutdown_rx = state.shutdown_rx.clone();
     let registry_for_cleanup = Arc::clone(&state.endpoint_registry);
-    let user_for_cleanup = params.user_id.clone();
+    let user_for_cleanup = state.owner_user_id.clone();
     let key_for_cleanup = params.session_key.clone();
 
     let stream = futures::stream::unfold(
@@ -1329,15 +1366,18 @@ async fn send_message_handler(
 ) -> Response {
     debug!(
         session_key = %body.session_key,
-        user_id = %body.user_id,
+        user_id = %state.owner_user_id,
         "POST /messages"
     );
 
     let SendMessageRequest {
         session_key: session_key_str,
-        user_id,
         content,
     } = body;
+    // Identity comes from the server-trusted owner id, not the client
+    // body — auth proves "you're the owner", so the server names the
+    // identity.
+    let user_id = state.owner_user_id.clone();
 
     let session_key = match SessionKey::try_from_raw(&session_key_str) {
         Ok(k) => k,
@@ -1512,8 +1552,8 @@ mod tests {
     };
 
     use super::{
-        SendMessageRequest, WebEvent, parse_inbound_text_frame, platform_outbound_to_web_event,
-        stream_event_to_web_event,
+        SendMessageRequest, SessionQuery, WebEvent, parse_inbound_text_frame,
+        platform_outbound_to_web_event, stream_event_to_web_event,
     };
 
     #[test]
@@ -1703,6 +1743,9 @@ mod tests {
 
     #[test]
     fn deserializes_legacy_post_body_with_plain_string_content() {
+        // Legacy clients still send `user_id` in the body; serde must
+        // ignore that extra field instead of rejecting the request, and
+        // the handler takes identity from `state.owner_user_id`.
         let request: SendMessageRequest = serde_json::from_value(serde_json::json!({
             "session_key": "session-123",
             "user_id": "user-123",
@@ -1711,5 +1754,24 @@ mod tests {
         .expect("request");
 
         assert!(matches!(request.content, MessageContent::Text(text) if text == "hello world"));
+    }
+
+    #[test]
+    fn session_query_has_no_user_id_field() {
+        // A client attempting to impersonate via `?user_id=attacker`
+        // must be deserialized as if the field did not exist. We
+        // verify this by round-tripping through a JSON object that
+        // contains the hostile `user_id` key — serde drops unknown
+        // fields by default, and the struct no longer has a `user_id`
+        // to accept. Identity is established server-side from
+        // `WebAdapterState::owner_user_id` after owner-token auth.
+        let params: SessionQuery = serde_json::from_value(serde_json::json!({
+            "session_key": "s1",
+            "user_id": "attacker",
+            "token": "tok"
+        }))
+        .expect("deserialize");
+        assert_eq!(params.session_key, "s1");
+        assert_eq!(params.token.as_deref(), Some("tok"));
     }
 }

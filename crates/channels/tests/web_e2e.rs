@@ -126,7 +126,7 @@ async fn web_text_message_reaches_kernel() {
         .build()
         .await;
 
-    let adapter = WebAdapter::new("test-owner-token".to_owned());
+    let adapter = WebAdapter::new("test-owner-token".to_owned(), "test-user".to_owned());
     adapter
         .start(tk.handle.clone())
         .await
@@ -194,7 +194,8 @@ async fn web_audio_message_is_transcribed_via_stt() {
         .build()
         .await;
 
-    let adapter = WebAdapter::new("test-owner-token".to_owned()).with_stt_service(Some(stt));
+    let adapter = WebAdapter::new("test-owner-token".to_owned(), "test-user".to_owned())
+        .with_stt_service(Some(stt));
     adapter
         .start(tk.handle.clone())
         .await
