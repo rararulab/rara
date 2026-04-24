@@ -962,15 +962,24 @@ export default function PiChat() {
       />
       <main ref={setMainEl} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Session title header — shows the current conversation's
-            title above its messages (kimi-style). Hidden during the
-            welcome state since the RARA wordmark already serves as
-            the brand marker there. */}
+            title above its messages (hero-style page header). Hidden
+            during the welcome state since the lowercase `rara` lockup
+            already serves as the brand marker there.
+            Height 56px (h-14), flat single bottom border via
+            `--border-subtle`, no backdrop/blur so it reads as a calm
+            page header instead of a floating chrome strip. Model badge
+            sits on the right. */}
         {activeSession && !showWelcome && !isInitializing && (
-          <div className="flex h-11 shrink-0 items-center border-b border-border/30 bg-background/30 px-5 backdrop-blur-sm">
-            <span className="truncate text-sm font-medium text-foreground/85">
+          <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
+            <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
               {activeSession.title || activeSession.preview || '新对话'}
-            </span>
-          </div>
+            </h1>
+            {activeSession.model && (
+              <span className="shrink-0 truncate rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
+                {activeSession.model}
+              </span>
+            )}
+          </header>
         )}
         {/* Chat panel container — takes remaining vertical space. */}
         <div ref={containerRef} className="min-h-0 flex-1 w-full" />
@@ -992,10 +1001,16 @@ export default function PiChat() {
           moment the user commits their first message (onBeforeSend).
         */}
         {showWelcome && !isInitializing && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(40vh+9rem)] z-10 flex justify-center px-6">
-            <h1 className="bg-gradient-to-br from-foreground via-foreground/80 to-foreground/40 bg-clip-text text-6xl font-semibold tracking-[0.2em] text-transparent sm:text-7xl">
-              RARA
-            </h1>
+          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(40vh+8rem)] z-10 flex justify-center px-6">
+            <div className="flex flex-col items-center gap-3">
+              <div
+                className="text-[32px] font-semibold leading-none tracking-tight text-foreground"
+                style={{ fontFamily: 'var(--font-sans)' }}
+              >
+                rara
+              </div>
+              <p className="text-sm text-muted-foreground">How can I help today?</p>
+            </div>
           </div>
         )}
         {/*

@@ -541,6 +541,29 @@
   border-color: color-mix(in oklab, oklch(0.65 0.18 250) 24%, transparent);
 }
 
+/*
+ * Flatten pi-web-ui's composer card. Upstream `<message-editor>` renders
+ * with `bg-card rounded-xl border shadow-sm`, which reads as a heavy
+ * floating card on top of the chat page. We neutralise the ring and
+ * corner-rounding so the composer sits as a simple region with only a
+ * top rule separating it from the messages above — matches the calm
+ * page header landed in #1774.
+ *
+ * Scoped to `.rara-chat` so admin/surface usages of `message-editor`
+ * (if any ever appear) keep their default look.
+ *
+ * Invariant: targets pi-web-ui ≥0.63 `<message-editor>` light DOM
+ * structure (first child div carrying the card classes). If upstream
+ * reworks this wrapper the rule silently no-ops and the card returns.
+ */
+.rara-chat message-editor > div:first-child {
+  border-radius: 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  box-shadow: none;
+  background: transparent;
+}
+
 @layer components {
   .app-surface {
     background: color-mix(in oklab, var(--color-card) 92%, transparent);
