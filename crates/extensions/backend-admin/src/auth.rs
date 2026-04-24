@@ -67,6 +67,18 @@ impl AuthState {
             security: handle.security().clone(),
         }
     }
+
+    /// Test-only constructor that accepts an already-built [`SecurityRef`]
+    /// directly, bypassing [`KernelHandle`]. Lets sibling modules wire
+    /// integration tests without spinning up a full kernel.
+    #[cfg(test)]
+    pub(crate) fn for_tests(owner_token: &str, owner_user_id: &str, security: SecurityRef) -> Self {
+        Self {
+            owner_token: Arc::from(owner_token),
+            owner_user_id: owner_user_id.to_owned(),
+            security,
+        }
+    }
 }
 
 /// Axum middleware enforcing `Authorization: Bearer <owner_token>`.

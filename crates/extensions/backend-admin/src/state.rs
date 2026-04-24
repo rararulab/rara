@@ -118,6 +118,15 @@ impl BackendState {
             self.feed_router_state.clone(),
         ));
 
+        // Subscription management routes — wrap the kernel's subscription
+        // registry with a REST surface so operators can create the
+        // subscriptions that drive ProactiveTurn / SilentAppend fan-out.
+        router = router.merge(crate::subscriptions::subscription_routes(
+            crate::subscriptions::SubscriptionRouterState {
+                registry: kernel_handle.subscription_registry().clone(),
+            },
+        ));
+
         // Wrap every admin route with the bearer-auth middleware. Handlers
         // pull `Extension<Principal<Resolved>>` out of request extensions for
         // authorization checks; the middleware itself enforces the token.
