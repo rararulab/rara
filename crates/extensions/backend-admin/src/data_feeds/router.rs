@@ -354,6 +354,17 @@ async fn toggle_feed(
     // Start task if now enabled, stop already handled by remove above.
     if feed.enabled {
         start_feed_task(&feed, &state.registry);
+    } else {
+        // Disabled: explicitly drop runtime status to Idle and clear any
+        // stale last_error so the UI doesn't show "error" on a feed the
+        // user just turned off.
+        if let Err(e) = state
+            .svc
+            .update_status(&feed.name, FeedStatus::Idle, None)
+            .await
+        {
+            warn!(name = %feed.name, error = %e, "failed to persist idle status on toggle-off");
+        }
     }
 
     Ok(Json(feed))
@@ -432,7 +443,7 @@ async fn get_event(
 /// Polling feeds spawn a background tokio task. Webhook feeds are passive
 /// (handled by the webhook axum route). WebSocket feeds are not yet
 /// implemented.
-pub fn start_feed_task(config: &DataFeedConfig, registry: &DataFeedRegistry) {
+pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>) {
     match config.feed_type {
         FeedType::Polling => {
             let source = match PollingSource::from_config(config) {
@@ -442,19 +453,35 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &DataFeedRegistry) {
                         feed = %config.name, error = %e,
                         "failed to create polling source from config"
                     );
+                    // Surface config-parse failures so the UI reflects reality.
+                    registry.report_error(&config.name, format!("config parse failed: {e}"));
                     return;
                 }
             };
 
+            // Attach the registry's reporter (if any) so transient fetch
+            // errors land in the `data_feeds` row.
+            let source = match registry.reporter() {
+                Some(r) => source.with_reporter(r),
+                None => source,
+            };
+
             let cancel = CancellationToken::new();
+            // set_running also fires a Running transition through the
+            // reporter, so GET /api/v1/data-feeds reflects the spawn.
             registry.set_running(config.name.clone(), cancel.clone());
 
             let event_tx = registry.event_tx();
             let name = config.name.clone();
+            let registry = registry.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = source.run(event_tx, cancel).await {
-                    warn!(feed = %name, error = %e, "feed task exited with error");
+                match source.run(event_tx, cancel).await {
+                    Ok(()) => registry.clear_running(&name),
+                    Err(e) => {
+                        warn!(feed = %name, error = %e, "feed task exited with error");
+                        registry.report_error(&name, e.to_string());
+                    }
                 }
                 info!(feed = %name, "polling feed task stopped");
             });

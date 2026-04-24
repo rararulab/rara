@@ -34,6 +34,7 @@ mod event;
 mod feed;
 pub mod polling;
 mod registry;
+mod status_reporter;
 mod store;
 pub mod webhook;
 
@@ -41,4 +42,5 @@ pub use config::{AuthConfig, DataFeedConfig, FeedStatus, FeedType};
 pub use event::{FeedEvent, FeedEventId};
 pub use feed::DataFeed;
 pub use registry::DataFeedRegistry;
+pub use status_reporter::{StatusReporter, StatusReporterRef};
 pub use store::{FeedFilter, FeedStore, FeedStoreRef};
