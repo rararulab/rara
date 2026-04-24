@@ -18,6 +18,22 @@ grpc:
   server_address: "127.0.0.1:50051"
 
 # ---------------------------------------------------------------------------
+# Owner authentication (required)
+# ---------------------------------------------------------------------------
+#
+# `owner_token` is the static bearer token that authenticates admin HTTP
+# requests (Authorization: Bearer <token>) and the web WebSocket upgrade
+# (?token=...). Treat it like a password: long, random, kept out of logs
+# and version control.
+#
+# `owner_user_id` must reference a `users[].name` below whose role is
+# `root` or `admin`. The backend admin middleware resolves every
+# authenticated request to this principal.
+
+owner_token: "change-me-to-a-long-random-string"
+owner_user_id: "you"
+
+# ---------------------------------------------------------------------------
 # Configured users — platform identity mappings (required, non-empty)
 # ---------------------------------------------------------------------------
 

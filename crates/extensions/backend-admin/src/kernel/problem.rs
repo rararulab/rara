@@ -52,6 +52,16 @@ impl ProblemDetails {
         }
     }
 
+    /// Build a 403 Forbidden problem response.
+    pub fn forbidden(detail: impl Into<String>) -> Self {
+        Self {
+            problem_type: "https://rara.dev/problems/forbidden".to_string(),
+            title:        "Forbidden".to_string(),
+            status:       403,
+            detail:       Some(detail.into()),
+        }
+    }
+
     pub fn internal(detail: impl Into<String>) -> Self {
         Self {
             problem_type: "https://rara.dev/problems/internal-error".to_string(),

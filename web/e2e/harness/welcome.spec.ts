@@ -17,13 +17,14 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from '@playwright/test';
 
-import { freezePageClock, primeBackendUrl, stubApi } from './helpers';
+import { freezePageClock, primeAuth, primeBackendUrl, stubApi } from './helpers';
 
 test.describe('welcome page', () => {
   test.beforeEach(async ({ page }) => {
     await freezePageClock(page);
     await stubApi(page, { sessions: [] });
     await primeBackendUrl(page);
+    await primeAuth(page);
   });
 
   test('renders without active sessions and passes baseline a11y', async ({ page }, testInfo) => {
