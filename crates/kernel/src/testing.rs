@@ -449,9 +449,11 @@ impl TestKernel {
     /// The syscall path requires a real session principal in the process
     /// table, which integration tests typically don't set up. This helper is
     /// the only public surface for wheel-seeding; the underlying
-    /// `KernelHandle::seed_job` is crate-private so downstream code can't
-    /// reach it from production.
-    pub fn seed_job(&self, entry: crate::schedule::JobEntry) { self.handle.seed_job(entry); }
+    /// `KernelHandle::__seed_job_unsafe_test_harness` is crate-private and
+    /// deliberately named to warn off in-crate callers.
+    pub fn seed_job(&self, entry: crate::schedule::JobEntry) {
+        self.handle.__seed_job_unsafe_test_harness(entry);
+    }
 }
 
 /// Convenience helper: build a [`CompletionResponse`] with text content.
