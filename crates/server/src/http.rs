@@ -33,11 +33,7 @@ use smart_default::SmartDefault;
 use snafu::ResultExt;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    timeout::TimeoutLayer,
-    trace::TraceLayer,
-};
+use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{Span, info};
 
 use super::ServiceHandler;
@@ -87,21 +83,26 @@ async fn observe_http_metrics(request: Request, next: Next) -> Response {
 pub struct RestServerConfig {
     /// The address to bind the REST server
     #[default = "127.0.0.1:25555"]
-    pub bind_address:    String,
+    pub bind_address:         String,
     /// Maximum HTTP request body size
     #[default(_code = "DEFAULT_MAX_HTTP_BODY_SIZE")]
-    pub max_body_size:   ReadableSize,
-    /// Whether to enable CORS
-    #[default = true]
-    pub enable_cors:     bool,
+    pub max_body_size:        ReadableSize,
     /// Request timeout in seconds
     #[default(DEFAULT_REQUEST_TIMEOUT_SECS)]
-    pub request_timeout: u64,
+    pub request_timeout:      u64,
     /// Port for the web frontend dev server (optional).
     ///
     /// When set, the app spawns `bun run dev` in `web/`. Vite uses its
     /// own port (default 5173); this field gates whether to start it.
-    pub web_port:        Option<u16>,
+    pub web_port:             Option<u16>,
+    /// Explicit CORS allow-list for the admin HTTP surface.
+    ///
+    /// Each entry is an origin string (scheme + host + port) permitted to
+    /// call `/api/v1/*` from a browser, e.g. `http://localhost:5173`. An
+    /// empty list is a hard boot-time error — no hardcoded default, no
+    /// silent fallback (see `docs/guides/anti-patterns.md`).
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 /// Starts the REST server and returns a handle for managing its lifecycle.
@@ -182,14 +183,9 @@ where
             DefaultBodyLimit::max(config.max_body_size.as_bytes() as usize)
         });
 
-    // Add CORS if enabled
-    if config.enable_cors {
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
-        api_router = api_router.layer(cors);
-    }
+    // CORS is now owned by each domain router (see `rara_backend_admin::state`)
+    // so the allow-list can be configured per surface and preflight (OPTIONS)
+    // responses bypass downstream auth middleware.
 
     // Build the final router: merge API routes, add /health and fallback,
     // then apply TraceLayer as the outermost layer so it observes every

@@ -123,9 +123,9 @@ just consul-keys   # list current keys
 |-----|---------|---------|-------------|
 | `bind_address` | `RARA__HTTP__BIND_ADDRESS` | `127.0.0.1:25555` | HTTP listen address |
 | `max_body_size` | `RARA__HTTP__MAX_BODY_SIZE` | `100MB` | Max request body |
-| `enable_cors` | `RARA__HTTP__ENABLE_CORS` | `true` | CORS headers |
 | `request_timeout` | `RARA__HTTP__REQUEST_TIMEOUT` | `60` | Timeout in seconds |
 | `web_port` | `RARA__HTTP__WEB_PORT` | *(none)* | Static frontend server port (spawns `npx serve` or `python3 http.server` for `web/dist/`) |
+| `cors_allowed_origins` | `RARA__HTTP__CORS_ALLOWED_ORIGINS` | *(required)* | Allow-list of browser origins for `/api/v1/*` (e.g. `["http://localhost:5173"]`) — empty list is a boot-time error |
 
 #### gRPC Server (`grpc.*`)
 

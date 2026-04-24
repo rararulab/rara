@@ -728,6 +728,7 @@ pub async fn start_with_options(
         &rara.skill_registry,
         &rara.mcp_manager,
         auth_state,
+        &config.http.cors_allowed_origins,
     );
 
     let dock_store_path = rara_paths::data_dir().join("dock");

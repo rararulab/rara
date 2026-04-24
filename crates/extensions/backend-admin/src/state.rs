@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 
+use axum::http::{HeaderValue, Method, header};
 use snafu::Whatever;
+use tower_http::cors::CorsLayer;
 use tracing::info;
 
 use crate::data_feeds::DataFeedRouterState;
@@ -81,6 +83,7 @@ impl BackendState {
         skill_registry: &rara_skills::registry::InMemoryRegistry,
         mcp_manager: &rara_mcp::manager::mgr::McpManager,
         auth_state: crate::auth::AuthState,
+        cors_allowed_origins: &[String],
     ) -> (axum::Router, utoipa::openapi::OpenApi) {
         let mut api = Self::api_doc();
 
@@ -135,6 +138,15 @@ impl BackendState {
             crate::auth::auth_layer,
         ));
 
+        // CORS layer wraps OUTSIDE auth_layer so browser preflight (`OPTIONS`
+        // without an `Authorization` header) is answered by tower-http
+        // instead of being rejected with 401 by the auth middleware.
+        //
+        // Origins are drawn from YAML config — no hardcoded defaults and no
+        // silent fallback: an empty or invalid list is a hard configuration
+        // error caught at boot rather than at first browser request.
+        let router = router.layer(build_cors_layer(cors_allowed_origins));
+
         (router, api)
     }
 
@@ -157,6 +169,41 @@ impl BackendState {
         struct ApiDoc;
         ApiDoc::openapi()
     }
+}
+
+/// Build a [`CorsLayer`] allow-listing the given origins for the admin HTTP
+/// surface.
+///
+/// Panics when the allow-list is empty or contains an origin that is not a
+/// valid HTTP header value. CORS misconfiguration is a boot-time error: the
+/// frontend cannot reach the admin API without it, and silent fallback would
+/// delay the failure to first browser request.
+fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    assert!(
+        !allowed_origins.is_empty(),
+        "http.cors_allowed_origins must list at least one origin — see config.example.yaml",
+    );
+
+    let origins: Vec<HeaderValue> = allowed_origins
+        .iter()
+        .map(|origin| {
+            HeaderValue::from_str(origin).unwrap_or_else(|err| {
+                panic!("invalid http.cors_allowed_origins entry {origin:?}: {err}")
+            })
+        })
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
 fn merge_openapi_router(
