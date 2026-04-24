@@ -25,7 +25,7 @@
  * same trick pi-web-ui's `<code-block>` uses.
  */
 
-import type { ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import { html, type TemplateResult } from 'lit';
 
 import type { ToolCallWithResult } from '@/pages/pi-chat-messages';
@@ -147,11 +147,8 @@ export function renderTurnChipCard(
   const running = chips.filter((c) => c.status === 'running').length;
 
   return html`
-    <details
-      class="rara-turn-chipcard group mt-2 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
-      open
-    >
-      <summary class="flex cursor-pointer list-none items-center gap-2 marker:hidden">
+    <div class="rara-turn-chipcard mt-2 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5">
+      <div class="flex items-center gap-2">
         <span class="text-xs font-medium text-foreground">
           ${chips.length} tool call${chips.length === 1 ? '' : 's'}
         </span>
@@ -168,12 +165,9 @@ export function renderTurnChipCard(
               ></span>
             `
           : ''}
-        <span class="rara-chipcard-chevron shrink-0 text-muted-foreground transition-transform"
-          >▾</span
-        >
-      </summary>
+      </div>
       <div class="mt-1.5 flex flex-col gap-1">${chips.map((c) => renderChip(c))}</div>
-    </details>
+    </div>
   `;
 }
 
@@ -243,7 +237,3 @@ function statusIcon(status: ChipStatus): TemplateResult {
     class="inline-block h-3 w-3 shrink-0 rounded-full bg-destructive"
   ></span>`;
 }
-
-// Consumed by callers to satisfy stricter "unused" type flags — actually
-// re-exported so the chip model stays discoverable from the card module.
-export type { ToolCall, ToolResultMessage };

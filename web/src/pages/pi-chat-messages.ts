@@ -151,7 +151,7 @@ export const toolResultByCallId = new Map<string, ToolResultMessage>();
 export function isFirstAssistantOfTurn(
   msg: AgentMessage,
   all: readonly AgentMessage[],
-  turnHosts?: ReadonlySet<AssistantMessage>,
+  turnHosts: ReadonlySet<AssistantMessage>,
 ): boolean {
   // pi-agent-core emits per-iteration `AssistantMessage` frames that can
   // carry only an empty thinking-block; pi-web-ui's `:has()` avatar rules
@@ -183,25 +183,12 @@ export function isFirstAssistantOfTurn(
 
 function isVisibleAssistant(
   msg: AssistantMessage,
-  turnHosts: ReadonlySet<AssistantMessage> | undefined,
+  turnHosts: ReadonlySet<AssistantMessage>,
 ): boolean {
-  if (hasTextOrThinking(msg)) return true;
   // A tool-call-only frame is visible only when it is the turn host
-  // (which renders the chip card). Callers that don't pass `turnHosts`
-  // fall back to the legacy behaviour: any tool-call part counts.
-  if (turnHosts) return turnHosts.has(msg);
-  return hasVisibleContent(msg);
-}
-
-function hasVisibleContent(msg: AssistantMessage): boolean {
-  const content = msg.content;
-  if (!Array.isArray(content)) return false;
-  return content.some((part) => {
-    if (part.type === 'text') return part.text.trim().length > 0;
-    if (part.type === 'thinking') return part.thinking.trim().length > 0;
-    if (part.type === 'toolCall') return true;
-    return false;
-  });
+  // (which renders the chip card); all other frames need actual
+  // text/thinking content to be user-visible.
+  return hasTextOrThinking(msg) || turnHosts.has(msg);
 }
 
 /**

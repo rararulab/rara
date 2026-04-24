@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { describe, expect, it } from 'vitest';
 
@@ -26,6 +27,16 @@ import {
   toAgentMessages,
   toolResultByCallId,
 } from '../pi-chat-messages';
+
+/**
+ * Build the `turnHosts` set that production code derives from
+ * {@link aggregateTurnToolCalls}. Tests pass an empty results map since
+ * the host-picking logic depends only on the message shape, not on
+ * whether results have landed yet.
+ */
+function hostsOf(list: readonly AgentMessage[]): ReadonlySet<AssistantMessage> {
+  return new Set(aggregateTurnToolCalls(list, new Map()).keys());
+}
 
 import type { ChatMessageData, ChatToolCallData } from '@/api/types';
 
@@ -241,14 +252,16 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
   it('flags the sole assistant after a user as first-of-turn', () => {
     const out = toAgentMessages([user(1), assistantText(2)]);
     const [a] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(a), out)).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(a), out, hostsOf(out))).toBe(true);
   });
 
-  it('flags the first assistant of a multi-iteration turn, not the later ones', () => {
+  it('flags the turn host of a multi-iteration turn, not the tool-call-only intermediate', () => {
+    // With per-turn chip cards (#1764) the tool-call-only intermediate is
+    // invisible — the avatar belongs to the host (last assistant) instead.
     const out = toAgentMessages([user(1), assistantToolCall(2), assistantText(3)]);
     const [first, second] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
-    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out, hostsOf(out))).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out, hostsOf(out))).toBe(true);
   });
 
   it('treats intervening toolResult frames as transparent to turn position', () => {
@@ -256,8 +269,8 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
       toAgentMessages([user(1), assistantToolCall(2), toolResult(3, 2), assistantText(4)]),
     );
     const [first, second] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
-    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out, hostsOf(out))).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out, hostsOf(out))).toBe(true);
   });
 
   it('treats an empty-thinking assistant frame as transparent so the next visible assistant owns the avatar', () => {
@@ -280,8 +293,8 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
     };
     const visible = expectAssistant(assistants(toAgentMessages([user(1), assistantText(2)]))[0]);
     const list = [...toAgentMessages([user(1)]), emptyThinking, visible];
-    expect(isFirstAssistantOfTurn(emptyThinking, list)).toBe(false);
-    expect(isFirstAssistantOfTurn(visible, list)).toBe(true);
+    expect(isFirstAssistantOfTurn(emptyThinking, list, hostsOf(list))).toBe(false);
+    expect(isFirstAssistantOfTurn(visible, list, hostsOf(list))).toBe(true);
   });
 
   it('restores first-of-turn after a new user message', () => {
@@ -292,9 +305,12 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
       user(4),
       assistantText(5),
     ]);
-    const [, second, third] = assistants(out);
-    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
-    expect(isFirstAssistantOfTurn(expectAssistant(third), out)).toBe(true);
+    // Both turn hosts (text3, text5) are the visible first-of-turn frames;
+    // the tool-call-only intermediate is invisible.
+    const [first, second, third] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out, hostsOf(out))).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out, hostsOf(out))).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(third), out, hostsOf(out))).toBe(true);
   });
 });
 
