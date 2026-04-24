@@ -1,3 +1,0 @@
--- No-op: tape_fts schema is unchanged; only the indexed content surface
--- differs (jieba pre-segmentation). Reverting the data requires re-running
--- backfill_fts() from JSONL, which happens automatically on next search.

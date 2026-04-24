@@ -1,8 +1,10 @@
--- Consolidated SQLite init migration for Rara.
--- All UUID columns are TEXT (generated Rust-side or via randomblob default).
--- All timestamp columns are TEXT in ISO 8601 format.
--- All JSON columns are TEXT (JSON strings).
--- Boolean columns are INTEGER (0/1).
+-- Baseline init migration for Rara (squashed from 7 incremental migrations).
+--
+-- Conventions:
+-- * All UUID/ULID columns are TEXT (generated Rust-side).
+-- * All timestamp columns are TEXT in ISO 8601 format.
+-- * All JSON columns are TEXT (JSON strings).
+-- * Boolean columns are INTEGER (0/1).
 
 --------------------------------------------------------------------------------
 -- kv_table: key-value storage
@@ -220,3 +222,115 @@ CREATE TABLE task_run_history (
 
 CREATE INDEX idx_task_run_history_task_id ON task_run_history(task_id);
 CREATE INDEX idx_task_run_history_started_at ON task_run_history(started_at DESC);
+
+--------------------------------------------------------------------------------
+-- memory_items: knowledge-layer memory entries (with embeddings)
+--------------------------------------------------------------------------------
+
+CREATE TABLE memory_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    username        TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    memory_type     TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    source_tape     TEXT,
+    source_entry_id INTEGER,
+    embedding       BLOB,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_memory_items_username ON memory_items(username);
+CREATE INDEX idx_memory_items_category ON memory_items(username, category);
+
+CREATE TRIGGER set_memory_items_updated_at AFTER UPDATE ON memory_items
+BEGIN
+    UPDATE memory_items SET updated_at = datetime('now') WHERE id = NEW.id;
+END;
+
+--------------------------------------------------------------------------------
+-- execution_traces: JSON-serialized ExecutionTrace records per session
+--------------------------------------------------------------------------------
+
+CREATE TABLE execution_traces (
+    -- ULID primary key, sortable by creation time.
+    id          TEXT    PRIMARY KEY NOT NULL,
+    -- Session that produced this trace.
+    session_id  TEXT    NOT NULL,
+    -- Full ExecutionTrace as JSON.
+    trace_data  TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_execution_traces_session ON execution_traces(session_id);
+
+--------------------------------------------------------------------------------
+-- feed_events: external data ingested by the data feed subsystem
+--------------------------------------------------------------------------------
+
+CREATE TABLE feed_events (
+    id          TEXT PRIMARY KEY NOT NULL,
+    source_name TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    payload     TEXT NOT NULL DEFAULT '{}',
+    received_at TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX idx_feed_events_source ON feed_events(source_name);
+CREATE INDEX idx_feed_events_received ON feed_events(received_at);
+
+-- Per-subscriber read cursors for tracking consumption progress.
+CREATE TABLE feed_read_cursors (
+    subscriber_id TEXT NOT NULL,
+    source_name   TEXT NOT NULL,
+    last_read_id  TEXT NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (subscriber_id, source_name)
+);
+
+--------------------------------------------------------------------------------
+-- data_feeds: configured data feed sources
+--------------------------------------------------------------------------------
+
+CREATE TABLE data_feeds (
+    id          TEXT PRIMARY KEY NOT NULL,
+    name        TEXT NOT NULL UNIQUE,
+    feed_type   TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    transport   TEXT NOT NULL DEFAULT '{}',
+    auth        TEXT,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    status      TEXT NOT NULL DEFAULT 'idle',
+    last_error  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX idx_data_feeds_name ON data_feeds(name);
+CREATE INDEX idx_data_feeds_type ON data_feeds(feed_type);
+
+--------------------------------------------------------------------------------
+-- tape_fts: FTS5 full-text index for tape-search.
+--
+-- This is a derived index — source of truth is the JSONL tape files, and
+-- TapeService::backfill_fts() repopulates on next search. Content written
+-- here is jieba pre-segmented at insert time (the `unicode61` tokenizer
+-- handles whitespace splitting after Rust-side segmentation).
+--------------------------------------------------------------------------------
+
+CREATE VIRTUAL TABLE tape_fts USING fts5(
+    content,
+    tape_name UNINDEXED,
+    entry_kind UNINDEXED,
+    entry_id UNINDEXED,
+    session_key UNINDEXED,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+-- Tracks the high-water mark per tape for incremental indexing.
+CREATE TABLE tape_fts_meta (
+    tape_name TEXT PRIMARY KEY,
+    last_indexed_id INTEGER NOT NULL DEFAULT 0
+);
