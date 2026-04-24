@@ -94,15 +94,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    feed_read_cursors (subscriber_id, source_name) {
-        subscriber_id -> Text,
-        source_name -> Text,
-        last_read_id -> Text,
-        updated_at -> Text,
-    }
-}
-
-diesel::table! {
     kernel_audit_events (id) {
         id -> Text,
         timestamp -> Text,
@@ -196,7 +187,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     data_feed_events,
     data_feeds,
     execution_traces,
-    feed_read_cursors,
     kernel_audit_events,
     kernel_outbox,
     kernel_users,
