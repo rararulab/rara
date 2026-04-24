@@ -23,10 +23,10 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use rara_kernel::{
-    channel::types::MessageContent,
+    channel::types::{ChannelType, MessageContent},
     event::KernelEventEnvelope,
     identity::UserId,
-    io::{Attachment, OutboundEnvelope},
+    io::{Attachment, OutboundEnvelope, StreamEvent},
     tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
@@ -108,6 +108,29 @@ impl ToolExecute for SendFileTool {
             .and_then(|n| n.to_str())
             .map(|s| s.to_string());
 
+        // Web sessions don't receive the OutboundEnvelope via the standard
+        // adapter fanout (see `binding_to_endpoint` in kernel/src/io.rs —
+        // Web returns `None` because chat_id == session_key). Emit the
+        // bytes on the stream instead so the browser can render the file
+        // inline next to the send-file tool call. Other channels already
+        // render the attachment through their own adapter and would
+        // double-render if they observed this event, so we scope it to
+        // Web origins.
+        let is_web_origin = matches!(
+            context.origin_endpoint.as_ref().map(|e| e.channel_type),
+            Some(ChannelType::Web)
+        );
+        if is_web_origin {
+            if let Some(handle) = context.stream_handle.as_ref() {
+                handle.emit(StreamEvent::Attachment {
+                    tool_call_id: context.tool_call_id.clone(),
+                    mime_type:    mime_type.to_string(),
+                    filename:     filename.clone(),
+                    data:         data.clone(),
+                });
+            }
+        }
+
         let attachment = Attachment {
             data,
             mime_type: mime_type.to_string(),
@@ -178,7 +201,143 @@ fn mime_from_extension(ext: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
+    use rara_kernel::{
+        channel::types::ChannelType,
+        io::{Endpoint, EndpointAddress, MessageId, StreamHub},
+        queue::{ShardedEventQueue, ShardedEventQueueConfig},
+        session::SessionKey,
+    };
+
     use super::*;
+
+    fn build_queue() -> rara_kernel::queue::ShardedQueueRef {
+        std::sync::Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+            num_shards:      0,
+            shard_capacity:  1,
+            global_capacity: 16,
+        }))
+    }
+
+    fn build_context(
+        origin: Option<Endpoint>,
+        stream_handle: Option<rara_kernel::io::StreamHandle>,
+    ) -> ToolContext {
+        ToolContext {
+            user_id: "test-user".into(),
+            session_key: SessionKey::new(),
+            origin_endpoint: origin,
+            origin_user_id: None,
+            event_queue: build_queue(),
+            rara_message_id: MessageId::new(),
+            context_window_tokens: 0,
+            tool_registry: None,
+            stream_handle,
+            tool_call_id: Some("call-123".into()),
+        }
+    }
+
+    fn web_endpoint() -> Endpoint {
+        Endpoint {
+            channel_type: ChannelType::Web,
+            address:      EndpointAddress::Web {
+                connection_id: "conn-1".into(),
+            },
+        }
+    }
+
+    fn telegram_endpoint() -> Endpoint {
+        Endpoint {
+            channel_type: ChannelType::Telegram,
+            address:      EndpointAddress::Telegram {
+                chat_id:   42,
+                thread_id: None,
+            },
+        }
+    }
+
+    fn write_temp_png() -> tempfile::NamedTempFile {
+        // A minimal PNG-ish payload — SendFileTool only inspects the extension
+        // for MIME detection, not the byte signature.
+        let mut f = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .expect("tempfile");
+        f.write_all(b"\x89PNG\r\n\x1a\nFAKEDATA").expect("write");
+        f
+    }
+
+    #[tokio::test]
+    async fn attachment_stream_event_emitted_for_web_origin() {
+        use rara_kernel::io::StreamEvent;
+
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+        let handle = hub.open(session);
+        // Subscribe to the per-stream broadcast directly. The session-level
+        // bus is fed by an async bridge task whose scheduling cannot be
+        // observed from a synchronous `try_recv` right after `emit()`.
+        let streams = hub.subscribe_session(&session);
+        assert_eq!(streams.len(), 1, "open() should have created one stream");
+        let (_id, mut rx) = streams.into_iter().next().expect("one stream");
+
+        let ctx = build_context(Some(web_endpoint()), Some(handle));
+        let file = write_temp_png();
+        let params = SendFileParams {
+            file_path: file.path().to_string_lossy().into_owned(),
+            caption:   Some("hi".into()),
+        };
+        SendFileTool.run(params, &ctx).await.expect("send-file ok");
+
+        let mut saw_attachment = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let StreamEvent::Attachment {
+                tool_call_id,
+                mime_type,
+                filename,
+                data,
+            } = ev
+            {
+                assert_eq!(tool_call_id.as_deref(), Some("call-123"));
+                assert_eq!(mime_type, "image/png");
+                assert!(filename.is_some());
+                assert!(!data.is_empty());
+                saw_attachment = true;
+                break;
+            }
+        }
+        assert!(
+            saw_attachment,
+            "expected StreamEvent::Attachment for web origin"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_stream_event_suppressed_for_telegram_origin() {
+        use rara_kernel::io::StreamEvent;
+
+        let hub = StreamHub::new(16);
+        let session = SessionKey::new();
+        let handle = hub.open(session);
+        let streams = hub.subscribe_session(&session);
+        let (_id, mut rx) = streams.into_iter().next().expect("one stream");
+
+        let ctx = build_context(Some(telegram_endpoint()), Some(handle));
+        let file = write_temp_png();
+        let params = SendFileParams {
+            file_path: file.path().to_string_lossy().into_owned(),
+            caption:   None,
+        };
+        SendFileTool.run(params, &ctx).await.expect("send-file ok");
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, StreamEvent::Attachment { .. }),
+                "Telegram origin must not emit StreamEvent::Attachment"
+            );
+        }
+    }
 
     #[test]
     fn mime_images_detected() {

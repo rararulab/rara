@@ -1037,6 +1037,30 @@ pub enum StreamEvent {
         /// [`TraceService::save`](crate::trace::TraceService::save).
         trace_id: String,
     },
+    /// A binary attachment (image, document, etc.) produced by a tool
+    /// and intended for in-stream rendering by the receiving client.
+    ///
+    /// Emitted alongside an outbound envelope when the delivery target is a
+    /// channel that does not receive the envelope through the standard
+    /// adapter fanout (currently the Web UI, whose bindings are
+    /// self-referential and skipped by
+    /// [`binding_to_endpoint`](crate::io::IOSubsystem)). Channel adapters
+    /// that already deliver the envelope via `ChannelAdapter::send` (e.g.
+    /// Telegram) ignore this event to avoid double-rendering.
+    Attachment {
+        /// LLM-assigned tool call id this attachment belongs to, when the
+        /// attachment is emitted from within a tool invocation. `None` for
+        /// ambient replies (reserved for future use).
+        tool_call_id: Option<String>,
+        /// IANA media type of the attachment bytes (e.g. `image/png`).
+        mime_type:    String,
+        /// Optional human-readable filename, typically the original file
+        /// basename.
+        filename:     Option<String>,
+        /// Raw attachment bytes. Client transports are expected to
+        /// re-encode (e.g. base64 for JSON frames).
+        data:         Vec<u8>,
+    },
     /// Terminal marker emitted by [`StreamHub::close`] immediately before the
     /// per-stream broadcast sender is dropped.
     ///

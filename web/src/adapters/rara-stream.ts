@@ -83,7 +83,14 @@ type WebEvent =
       cost: number;
       model: string;
     }
-  | { type: 'phase'; phase: string };
+  | { type: 'phase'; phase: string }
+  | {
+      type: 'attachment';
+      tool_call_id: string | null;
+      mime_type: string;
+      filename: string | null;
+      data_base64: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Session key — provided via callback at stream time
@@ -385,6 +392,21 @@ export function createRaraStreamFn(
   // result preview on the order of tens of KB), so unbounded growth is not
   // a practical concern; an eviction policy would risk regressing #1601.
   const pendingToolResults = new Map<string, PendingToolResult>();
+  // Attachments emitted by a tool (currently send-file) before its
+  // `tool_call_end` frame. Keyed by the tool call id so the matching
+  // end handler can append image/file blocks onto the resolved tool
+  // result instead of dropping the binary payload (see #1731). Hoisted
+  // to the same outer scope as `pendingToolResults` for the same
+  // reason: the relay shims survive across stream re-invocations, and
+  // attachment frames may straddle invocation boundaries.
+  const pendingAttachments = new Map<
+    string,
+    {
+      mime_type: string;
+      filename: string | null;
+      data_base64: string;
+    }[]
+  >();
   // Deduplicate shim installation across invocations — one `AgentTool` per
   // distinct tool name for the whole session.
   const installedTools = new Set<string>();
@@ -604,8 +626,35 @@ export function createRaraStreamFn(
             const slot = pendingToolResults.get(event.id);
             if (slot) {
               const text = event.error ?? event.result_preview;
+              const content: AgentToolResult<unknown>['content'] = [{ type: 'text', text }];
+              // Append any buffered attachments for this tool call. Images
+              // flow into pi-ai as `image` content blocks (rendered inline
+              // by CompactToolRenderer); non-image files surface as a
+              // text-block download link carrying the base64 data URL so
+              // the user can still retrieve them without a second trip to
+              // the backend.
+              const atts = pendingAttachments.get(event.id);
+              if (atts) {
+                for (const att of atts) {
+                  if (att.mime_type.startsWith('image/')) {
+                    content.push({
+                      type: 'image',
+                      data: att.data_base64,
+                      mimeType: att.mime_type,
+                    });
+                  } else {
+                    const label = att.filename ?? 'attachment';
+                    const href = `data:${att.mime_type};base64,${att.data_base64}`;
+                    content.push({
+                      type: 'text',
+                      text: `[${label}](${href})`,
+                    });
+                  }
+                }
+                pendingAttachments.delete(event.id);
+              }
               const result: AgentToolResult<unknown> = {
-                content: [{ type: 'text', text }],
+                content,
                 details: {},
               };
               slot.resolved = result;
@@ -664,6 +713,19 @@ export function createRaraStreamFn(
             };
             next.cost = calculateCost(model, next);
             currentUsage = next;
+            break;
+          }
+
+          case 'attachment': {
+            if (event.tool_call_id) {
+              const arr = pendingAttachments.get(event.tool_call_id) ?? [];
+              arr.push({
+                mime_type: event.mime_type,
+                filename: event.filename,
+                data_base64: event.data_base64,
+              });
+              pendingAttachments.set(event.tool_call_id, arr);
+            }
             break;
           }
 
