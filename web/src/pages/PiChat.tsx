@@ -285,7 +285,7 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
             .toolResultsById=${resultByCallId}
             .hideToolCalls=${true}
           ></assistant-message>
-          ${chipCard ?? ''}
+          ${chipCard ? html`<div class="pl-[2.75rem]">${chipCard}</div>` : ''}
           ${showButtons
             ? html`
                 <div class="mt-1 flex justify-start gap-1 pl-[2.75rem]">
