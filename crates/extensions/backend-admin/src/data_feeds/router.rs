@@ -287,8 +287,23 @@ async fn update_feed(
 /// `DELETE /api/v1/data-feeds/{id}` — stop task, remove from registry and DB.
 async fn delete_feed(
     State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ProblemDetails> {
+    // Destructive operation — require admin and audit the acting principal.
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "deleting data feeds requires admin role",
+        ));
+    }
+    info!(
+        actor = %principal.user_id,
+        feed_id = %id,
+        "delete_feed"
+    );
+
     // Look up the feed name for registry removal.
     let feed = state.svc.get_feed(&id).await.ok().flatten();
 
