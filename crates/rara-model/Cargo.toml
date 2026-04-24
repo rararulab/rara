@@ -13,9 +13,9 @@ description = "Database-layer models and SQL migrations shared across domains"
 
 [dependencies]
 chrono.workspace = true
+diesel = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-sqlx = { workspace = true }
 uuid = { workspace = true }
 
 [lints]

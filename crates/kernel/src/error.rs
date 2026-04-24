@@ -117,6 +117,22 @@ pub enum KernelError {
         location: snafu::Location,
     },
 
+    /// Diesel query failed.
+    #[snafu(display("diesel query error: {source}"))]
+    Diesel {
+        source:   diesel::result::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    /// Failed to acquire a diesel-async connection from the pool.
+    #[snafu(display("diesel pool error: {source}"))]
+    DieselPool {
+        source:   bb8::RunError<diesel_async::pooled_connection::PoolError>,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
     #[snafu(display("{message}"))]
     Other { message: SharedString },
 

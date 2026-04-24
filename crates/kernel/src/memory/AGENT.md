@@ -56,8 +56,8 @@ memory/
 
 ## Dependencies
 
-- **Upstream**: `rara-paths` (config-driven tape directory), `sqlx` (shared pool
-  for FTS), `jieba-rs` (CJK tokenisation).
+- **Upstream**: `rara-paths` (config-driven tape directory), `yunara-store`
+  (shared diesel-async pool for FTS), `jieba-rs` (CJK tokenisation).
 - **Downstream**: `rara-backend-admin::chat::service::SessionService::search_sessions`
   consumes `search_across_tapes`; the agent loop uses `append_*` + context
   builders during every turn.

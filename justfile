@@ -268,27 +268,42 @@ dev:
 # Development Tools
 # ========================================================================================
 
-[doc("create a new reversible SQL migration via sqlx cli")]
+[doc("create a new reversible SQL migration via diesel cli")]
 [group("🗄️ Database")]
 migrate-add name:
-    @command -v sqlx >/dev/null 2>&1 || (echo "❌ sqlx-cli is required. Install with: cargo install sqlx-cli --no-default-features --features rustls,postgres" && exit 1)
+    @command -v diesel >/dev/null 2>&1 || (echo "❌ diesel_cli is required. Install with: cargo install diesel_cli --no-default-features --features sqlite,postgres" && exit 1)
     @echo "🗄️ Creating migration '{{name}}' in {{RARA__DATABASE__MIGRATION_DIR}}..."
-    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate add -r --source {{RARA__DATABASE__MIGRATION_DIR}} {{name}} 
+    diesel migration generate --migration-dir {{RARA__DATABASE__MIGRATION_DIR}} {{name}}
 
-[doc("run pending SQL migrations")]
+[doc("run pending SQL migrations via diesel cli")]
 [group("🗄️ Database")]
 migrate-run:
-    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate run --source {{RARA__DATABASE__MIGRATION_DIR}}
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} diesel migration run --migration-dir {{RARA__DATABASE__MIGRATION_DIR}}
 
-[doc("revert the latest SQL migration")]
+[doc("revert the latest SQL migration via diesel cli")]
 [group("🗄️ Database")]
 migrate-revert:
-    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate revert --source {{RARA__DATABASE__MIGRATION_DIR}}
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} diesel migration revert --migration-dir {{RARA__DATABASE__MIGRATION_DIR}}
 
-[doc("show migration status")]
+[doc("show pending migrations via diesel cli")]
 [group("🗄️ Database")]
 migrate-info:
-    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate info --source {{RARA__DATABASE__MIGRATION_DIR}}
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} diesel migration pending --migration-dir {{RARA__DATABASE__MIGRATION_DIR}}
+
+[doc("wipe the local rara SQLite database so diesel can rebuild from migrations")]
+[group("🗄️ Database")]
+[confirm("⚠️ This will delete the local rara SQLite database file. Continue?")]
+migrate-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname)" = "Darwin" ]; then
+        DB_DIR="$HOME/Library/Application Support/rara"
+    else
+        DB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/rara"
+    fi
+    echo "🧹 Removing $DB_DIR/rara.db* ..."
+    rm -f "$DB_DIR/rara.db" "$DB_DIR/rara.db-wal" "$DB_DIR/rara.db-shm"
+    echo "✅ Next rara start-up will re-run every diesel migration from scratch."
 
 [doc("reset rara data directory (drops database, agentfs, etc.)")]
 [group("🗄️ Database")]

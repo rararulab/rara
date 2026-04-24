@@ -35,7 +35,7 @@ Application orchestration crate that wires all subsystems together, boots the ke
 
 - Config must come from YAML files, never hardcoded defaults in Rust. Missing required fields cause a startup error.
 - `rustls::crypto::ring::default_provider().install_default()` must be called in `main()` before this crate does any TLS work.
-- Migrations run from `crates/rara-model/migrations/` via `sqlx::migrate!` — never modify applied migrations.
+- Migrations run from `crates/rara-model/migrations/` via `diesel_migrations::embed_migrations!` — never modify applied migrations.
 - `KernelHandle` is injected into `DispatchRaraTool` and `ListSessionsTool` after kernel start via `RwLock` slots — these tools will panic if invoked before wiring completes.
 - Mita-exclusive tools: `dispatch-rara`, `list-sessions`, `read-tape`, `write-user-note`, `distill-user-notes`, `update-soul-state`, `evolve-soul`, `update-session-title`, `write-skill-draft`. These are declared in Mita's manifest (`rara-agents`) and must not be added to Rara's tool set.
 
@@ -52,4 +52,4 @@ Application orchestration crate that wires all subsystems together, boots the ke
 
 **Downstream (depended on by):** `crates/cmd` (the binary entry point).
 
-**External services:** SQLite (via sqlx), Telegram Bot API, OpenRouter/LLM providers, Composio, MCP servers.
+**External services:** SQLite (via diesel-async + bb8), Telegram Bot API, OpenRouter/LLM providers, Composio, MCP servers.

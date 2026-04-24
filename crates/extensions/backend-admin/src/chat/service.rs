@@ -1339,31 +1339,7 @@ mod search_sessions_tests {
     async fn build_service_with_fts(
         dir: &std::path::Path,
     ) -> (SessionService, Arc<InMemorySessionIndex>) {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("pool");
-        sqlx::query(
-            "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind \
-             UNINDEXED, entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 \
-             remove_diacritics 2')",
-        )
-        .execute(&pool)
-        .await
-        .expect("fts table");
-        sqlx::query(
-            "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT \
-             NULL DEFAULT 0)",
-        )
-        .execute(&pool)
-        .await
-        .expect("meta table");
-        sqlx::query(
-            "CREATE TABLE execution_traces (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data \
-             TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("trace table");
+        let pool = rara_kernel::testing::build_memory_diesel_pool().await;
 
         let store = FileTapeStore::new(dir, dir).await.unwrap();
         let tape_service = TapeService::with_fts(store, pool.clone());

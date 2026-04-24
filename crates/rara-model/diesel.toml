@@ -1,0 +1,32 @@
+# Diesel CLI configuration for the rara-model crate.
+#
+# `schema.rs` is committed to the repo (not a build artifact) and is
+# regenerated via `diesel print-schema` whenever migrations change.
+# See docs/guides/db-diesel-migration.md.
+#
+# `filter.except_tables` skips:
+# - `tape_fts` and its shadow tables (`tape_fts_config`, `tape_fts_content`,
+#   `tape_fts_data`, `tape_fts_docsize`, `tape_fts_idx`) — FTS5 virtual
+#   tables are not expressible as regular diesel tables (column/table name
+#   collisions, non-standard column types). FTS queries use
+#   `diesel::sql_query` instead — see docs/guides/db-diesel-migration.md.
+#   `tape_fts_meta` is a regular table and is NOT excluded.
+# - `__diesel_schema_migrations` — diesel's internal bookkeeping table.
+
+[print_schema]
+file = "src/schema.rs"
+custom_type_derives = ["diesel::query_builder::QueryId"]
+
+[print_schema.filter]
+except_tables = [
+    "^tape_fts$",
+    "^tape_fts_config$",
+    "^tape_fts_content$",
+    "^tape_fts_data$",
+    "^tape_fts_docsize$",
+    "^tape_fts_idx$",
+    "^__diesel_schema_migrations$",
+]
+
+[migrations_directory]
+dir = "migrations"

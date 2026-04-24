@@ -3,7 +3,14 @@
 Tracking epic: [#1702](https://github.com/rararulab/rara/issues/1702).
 Feature branch: `feat/db-diesel`.
 
-This document is the single source of truth for how rara migrates its DB layer from sqlx 0.8 to diesel 2.3. Decisions below are **locked** — changes require a new RFC-level discussion on #1702, not an inline amendment.
+> **Status (2026-04-24)**: complete. `sqlx` is no longer a dependency of any
+> rara crate; the workspace builds and tests against diesel 2.3 +
+> diesel-async 0.8 + bb8 0.9. Local SQLite databases created under the old
+> sqlx flow must be rebuilt once via `just migrate-reset` — diesel tracks
+> applied migrations in `__diesel_schema_migrations` and does not read
+> `_sqlx_migrations`.
+
+This document is the single source of truth for how rara migrated its DB layer from sqlx 0.8 to diesel 2.3. Decisions below are **locked** — changes require a new RFC-level discussion on #1702, not an inline amendment.
 
 ## Scope
 
@@ -42,8 +49,8 @@ This document is the single source of truth for how rara migrates its DB layer f
 
 ## Migration file format
 
-- Existing `_up.sql` / `_down.sql` pair format under `crates/rara-model/migrations/` stays as-is. It is already diesel-compatible — diesel's canonical layout is the same pair format. No file renames, no directory restructure.
-- Checksum semantics change (SQLx → diesel), so the `_sqlx_migrations` table is replaced by `__diesel_schema_migrations` on first boot post-migration. Covered in the cutover PR.
+- Under `crates/rara-model/migrations/`, each migration is a subdirectory (`YYYYMMDDHHMMSS_<name>/`) containing a `up.sql` + `down.sql` pair. This is diesel's canonical layout. The original flat `*.up.sql` / `*.down.sql` files from the sqlx era were restructured into subdirectories once at cutover; their contents were **not** modified (only the paths changed).
+- Checksum semantics change (SQLx → diesel), so the `_sqlx_migrations` table is replaced by `__diesel_schema_migrations` on first boot post-migration. Local databases need a one-shot `just migrate-reset` to drop the old sqlx table and let diesel re-apply everything against its own tracking table.
 
 ## No schema redesign
 
