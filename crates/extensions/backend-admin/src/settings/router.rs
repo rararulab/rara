@@ -107,8 +107,24 @@ async fn delete_setting(
 
 async fn batch_update_settings(
     State(provider): State<SharedProvider>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
     Json(patches): Json<HashMap<String, Option<String>>>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    // Runtime settings are admin-only; reject plain users even if the
+    // bearer token matched (useful once per-user tokens are introduced).
+    if !principal.is_admin() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "settings mutation requires admin role".to_owned(),
+        ));
+    }
+    tracing::info!(
+        actor = %principal.user_id,
+        keys = patches.len(),
+        "settings.batch_update"
+    );
     provider
         .batch_update(patches)
         .await

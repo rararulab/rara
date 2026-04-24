@@ -590,8 +590,26 @@ struct WebAdapterState {
 // Helper: build endpoint for a Web connection
 // ---------------------------------------------------------------------------
 
-/// Verify that the provided token matches the expected owner token.
-fn verify_owner_token(expected: &str, provided: &str) -> bool { expected == provided }
+/// Extract a Bearer token from an `Authorization` header, if present and
+/// well-formed.
+///
+/// Returns `Some(token)` only for strict `Bearer <token>` values with a
+/// non-empty token after the prefix; case in the scheme keyword is ignored
+/// per [RFC 6750]. Anything else — missing header, malformed scheme,
+/// non-UTF-8 bytes — returns `None`, which the caller treats as "no header
+/// provided" and falls back to the query-string token.
+///
+/// [RFC 6750]: https://datatracker.ietf.org/doc/html/rfc6750#section-2.1
+fn bearer_token_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))?;
+    (!token.is_empty()).then_some(token)
+}
 
 /// Build a Web endpoint and its associated UserId for endpoint registration.
 ///
@@ -748,23 +766,36 @@ async fn transcribe_single_audio(
 async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<SessionQuery>,
+    headers: axum::http::HeaderMap,
     State(state): State<WebAdapterState>,
 ) -> Response {
-    // If an owner token is provided, verify it.
-    if let Some(ref token) = params.token {
-        if !token.is_empty() {
-            if let Some(ref expected) = state.owner_token {
-                if verify_owner_token(expected, token) {
-                    info!(session_key = %params.session_key, "WebSocket auth via owner token");
-                } else {
-                    warn!(session_key = %params.session_key, "invalid owner token, rejecting");
-                    return axum::response::Response::builder()
-                        .status(axum::http::StatusCode::UNAUTHORIZED)
-                        .body(axum::body::Body::from("invalid token"))
-                        .unwrap();
-                }
-            } else {
-                warn!("owner token not configured, ignoring token");
+    // Prefer `Authorization: Bearer <token>` (browsers can set this via
+    // `Sec-WebSocket-Protocol` shims or native clients), fall back to the
+    // legacy `?token=` query parameter for browser WebSocket upgrades.
+    if let Some(ref expected) = state.owner_token {
+        let header_token = bearer_token_from_headers(&headers);
+        let query_token = params.token.as_deref().filter(|t| !t.is_empty());
+        let provided = header_token.or(query_token);
+        match provided {
+            Some(tok) if rara_kernel::auth::verify_owner_token(expected, tok) => {
+                info!(session_key = %params.session_key, "WebSocket auth via owner token");
+            }
+            Some(_) => {
+                warn!(session_key = %params.session_key, "invalid owner token, rejecting");
+                return axum::response::Response::builder()
+                    .status(axum::http::StatusCode::UNAUTHORIZED)
+                    .body(axum::body::Body::from("invalid token"))
+                    .expect("static unauthorized response");
+            }
+            None => {
+                warn!(
+                    session_key = %params.session_key,
+                    "owner token configured but not provided, rejecting"
+                );
+                return axum::response::Response::builder()
+                    .status(axum::http::StatusCode::UNAUTHORIZED)
+                    .body(axum::body::Body::from("missing token"))
+                    .expect("static unauthorized response");
             }
         }
     }

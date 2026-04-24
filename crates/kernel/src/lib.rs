@@ -29,6 +29,7 @@
 //! | Notification Bus | `NotificationBus` | Inter-component notification broadcasting |
 
 pub mod agent;
+pub mod auth;
 pub mod cascade;
 pub mod channel;
 pub mod data_feed;

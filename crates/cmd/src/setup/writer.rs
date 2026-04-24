@@ -74,6 +74,29 @@ pub fn assemble_config(
         map.insert(y_str("telegram"), serde_yaml::Value::Mapping(tg_section));
     }
 
+    // Owner authentication — ensure both keys exist after the wizard runs.
+    // `owner_token` is generated once per fresh config (random ULID) and
+    // preserved on re-runs. `owner_user_id` defaults to the first admin-class
+    // user picked in this wizard session, or the first user in the existing
+    // config when none were re-collected.
+    if !map.contains_key(&y_str("owner_token")) {
+        let token = ulid::Ulid::new().to_string();
+        map.insert(y_str("owner_token"), y_str(&token));
+    }
+    if !map.contains_key(&y_str("owner_user_id")) {
+        let picked = users.and_then(pick_owner_user_id).or_else(|| {
+            map.get(&y_str("users"))
+                .and_then(serde_yaml::Value::as_sequence)
+                .and_then(|seq| seq.first())
+                .and_then(|v| v.get("name"))
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::to_owned)
+        });
+        if let Some(name) = picked {
+            map.insert(y_str("owner_user_id"), y_str(&name));
+        }
+    }
+
     // Users
     if let Some(users) = users {
         let user_list: Vec<serde_yaml::Value> = users
@@ -172,3 +195,14 @@ pub fn write_config(config_path: &Path, yaml: &str) -> Result<(), Whatever> {
 
 /// Helper: create a YAML string value (used for both keys and values).
 fn y_str(s: &str) -> serde_yaml::Value { serde_yaml::Value::String(s.to_owned()) }
+
+/// Pick the first admin-class user (root/admin) from the wizard results to
+/// seed `owner_user_id`. Falls back to the first user entry when no admin
+/// role was assigned, matching the wizard's default prompt of `root`.
+fn pick_owner_user_id(users: &[super::user::UserResult]) -> Option<String> {
+    users
+        .iter()
+        .find(|u| matches!(u.role.to_lowercase().as_str(), "root" | "admin"))
+        .or_else(|| users.first())
+        .map(|u| u.name.clone())
+}
