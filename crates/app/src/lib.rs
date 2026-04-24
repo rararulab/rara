@@ -517,27 +517,27 @@ pub async fn start_with_options(
         })
     };
 
-    let mut kernel = rara_kernel::kernel::Kernel::new(
-        kernel_config,
-        rara.driver_registry.clone(),
-        rara.tool_registry.clone(),
-        rara.agent_registry.clone(),
-        rara.session_index.clone(),
-        rara.tape_service.clone(),
-        settings_provider.clone(),
-        Arc::new(rara_kernel::security::SecuritySubsystem::new(
+    let mut kernel = rara_kernel::kernel::Kernel::builder()
+        .config(kernel_config)
+        .driver_registry(rara.driver_registry.clone())
+        .tool_registry(rara.tool_registry.clone())
+        .agent_registry(rara.agent_registry.clone())
+        .session_index(rara.session_index.clone())
+        .tape_service(rara.tape_service.clone())
+        .settings(settings_provider.clone())
+        .security(Arc::new(rara_kernel::security::SecuritySubsystem::new(
             rara.user_store.clone(),
             Arc::new(rara_kernel::security::ApprovalManager::new(
                 rara_kernel::security::ApprovalPolicy::default(),
             )),
-        )),
-        io,
-        rara.knowledge_service.clone(),
-        mcp_tool_provider,
-        trace_service,
-        skill_prompt_provider,
-        rara_paths::workspace_dir().join("scheduler"),
-    );
+        )))
+        .io(io)
+        .knowledge(rara.knowledge_service.clone())
+        .maybe_dynamic_tool_provider(mcp_tool_provider)
+        .trace_service(trace_service)
+        .skill_prompt_provider(skill_prompt_provider)
+        .scheduler_dir(rara_paths::workspace_dir().join("scheduler"))
+        .build();
 
     let cancellation_token = CancellationToken::new();
 
