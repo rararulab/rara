@@ -71,28 +71,28 @@ describe('buildWsUrl — backend override resolution (#1622)', () => {
     const loc = window.location;
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
     expect(url).toBe(
-      `${proto}//${loc.host}/api/v1/kernel/chat/ws?session_key=sess-abc&user_id=alice&token=test-token`,
+      `${proto}//${loc.host}/api/v1/kernel/chat/ws?session_key=sess-abc&token=test-token`,
     );
   });
 
   it('honors rara_backend_url override (http -> ws)', () => {
     localStorage.setItem(STORAGE_KEY, 'http://10.0.0.183:25555');
     expect(buildWsUrl('sess-abc')).toBe(
-      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess-abc&user_id=alice&token=test-token',
+      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess-abc&token=test-token',
     );
   });
 
   it('honors rara_backend_url override with https and trims trailing slash', () => {
     localStorage.setItem(STORAGE_KEY, 'https://backend.example.com/');
     expect(buildWsUrl('sess-xyz')).toBe(
-      'wss://backend.example.com/api/v1/kernel/chat/ws?session_key=sess-xyz&user_id=alice&token=test-token',
+      'wss://backend.example.com/api/v1/kernel/chat/ws?session_key=sess-xyz&token=test-token',
     );
   });
 
   it('URL-encodes session keys containing special characters', () => {
     localStorage.setItem(STORAGE_KEY, 'http://10.0.0.183:25555');
     expect(buildWsUrl('sess/with spaces')).toBe(
-      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess%2Fwith+spaces&user_id=alice&token=test-token',
+      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess%2Fwith+spaces&token=test-token',
     );
   });
 });
