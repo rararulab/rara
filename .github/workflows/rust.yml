@@ -14,13 +14,6 @@ env:
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
-  RUSTC_WRAPPER: sccache
-  SCCACHE_BUCKET: sccache
-  SCCACHE_REGION: us-east-1
-  SCCACHE_ENDPOINT: http://minio.rara.svc.cluster.local:9000
-  SCCACHE_S3_USE_SSL: "false"
-  AWS_ACCESS_KEY_ID: minioadmin
-  AWS_SECRET_ACCESS_KEY: minioadmin
 
 defaults:
   run:
