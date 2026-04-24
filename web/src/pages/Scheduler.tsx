@@ -194,7 +194,7 @@ export function DomainSchedulerPanel() {
   return (
     <div className="space-y-4">
       {tasksQuery.isLoading ? (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[repeat(auto-fill,minmax(360px,1fr))]">
           {Array.from({ length: 3 }).map((_, i) => (
             <Card key={i} className="data-panel">
               <CardContent className="p-6 space-y-4">
@@ -220,7 +220,7 @@ export function DomainSchedulerPanel() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[repeat(auto-fill,minmax(360px,1fr))]">
           {tasksQuery.data.map((task) => (
             <TaskCard key={task.id} task={task} />
           ))}

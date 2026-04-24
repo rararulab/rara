@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bot,
   BookOpen,
+  CalendarClock,
   ExternalLink,
   Eye,
   EyeOff,
@@ -69,6 +70,7 @@ import { useTheme, type Theme } from '@/hooks/use-theme';
 import { cn } from '@/lib/utils';
 import Agents from '@/pages/Agents';
 import McpServers from '@/pages/McpServers';
+import Scheduler from '@/pages/Scheduler';
 import Skills from '@/pages/Skills';
 
 /** Admin settings section identifiers. Exported so the floating modal can deep-link into a specific tab. */
@@ -81,7 +83,8 @@ export type SettingsPage =
   | 'channels'
   | 'tools'
   | 'security'
-  | 'data-feeds';
+  | 'data-feeds'
+  | 'scheduler';
 
 type ToastState = { kind: 'success' | 'error'; message: string } | null;
 
@@ -589,6 +592,7 @@ const SETTINGS_PAGES: readonly SettingsPage[] = [
   'tools',
   'security',
   'data-feeds',
+  'scheduler',
 ];
 
 /**
@@ -774,6 +778,12 @@ export default function SettingsPanel({
       label: 'Data Feeds',
       icon: <Radio className="h-4 w-4" />,
       summary: 'External event sources',
+    },
+    {
+      id: 'scheduler',
+      label: 'Scheduler',
+      icon: <CalendarClock className="h-4 w-4" />,
+      summary: 'Cron tasks and run history',
     },
   ];
 
@@ -1514,6 +1524,13 @@ export default function SettingsPanel({
         {activeCategory === 'data-feeds' && (
           <div className="data-panel p-4">
             <DataFeedsPanel />
+          </div>
+        )}
+
+        {/* ── Scheduler ── */}
+        {activeCategory === 'scheduler' && (
+          <div className="data-panel p-4">
+            <Scheduler />
           </div>
         )}
       </div>
