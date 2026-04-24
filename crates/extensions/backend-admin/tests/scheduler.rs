@@ -24,6 +24,8 @@
 //! - History reads against the real OpenDAL-backed `JobResultStore`, including
 //!   the newest-first + limit-trimming contract.
 
+use std::sync::OnceLock;
+
 use jiff::Timestamp;
 use rara_backend_admin::scheduler::service::{SchedulerError, SchedulerSvc};
 use rara_kernel::{
@@ -34,10 +36,35 @@ use rara_kernel::{
     testing::TestKernelBuilder,
 };
 
+/// Redirect `rara_paths::config_dir()` / `workspace_dir()` to a process-wide
+/// tempdir so the `Kernel::new` initialisation path doesn't attempt to create
+/// `~/.config/rara/workspace`. CI runners (`/home/runner/.config`) aren't
+/// writable by the test process, which surfaces as a `workspace_dir` panic in
+/// `rara_paths` on the first build.
+///
+/// The `OnceLock<TempDir>` is deliberately never dropped — it must outlive
+/// every test in the binary because `rara_paths`'s own `OnceLock`s cache the
+/// path and never re-read. Calling more than once is a no-op.
+fn ensure_test_paths_isolated() {
+    static SHARED_TEST_CONFIG: OnceLock<tempfile::TempDir> = OnceLock::new();
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let shared = SHARED_TEST_CONFIG
+            .get_or_init(|| tempfile::tempdir().expect("create shared test config dir"));
+        // Swallow the assert if an earlier code path already initialized
+        // `CONFIG_DIR`; falling back to the default path still works locally
+        // and surfaces an actionable panic on CI.
+        let _ = std::panic::catch_unwind(|| {
+            rara_paths::set_custom_config_dir(shared.path());
+        });
+    });
+}
+
 /// Fresh kernel: no jobs registered, the admin list is empty and lookups
 /// on a fabricated ID surface as `JobNotFound`.
 #[tokio::test]
 async fn list_on_empty_kernel_is_empty() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
@@ -50,6 +77,7 @@ async fn list_on_empty_kernel_is_empty() {
 
 #[tokio::test]
 async fn get_missing_returns_job_not_found() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
@@ -69,6 +97,7 @@ async fn get_missing_returns_job_not_found() {
 
 #[tokio::test]
 async fn delete_missing_returns_job_not_found() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
@@ -88,6 +117,7 @@ async fn delete_missing_returns_job_not_found() {
 
 #[tokio::test]
 async fn trigger_missing_returns_job_not_found() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
@@ -115,6 +145,7 @@ async fn trigger_missing_returns_job_not_found() {
 /// fails here instead of in production.
 #[tokio::test]
 async fn trigger_job_does_not_advance_next_at() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
@@ -183,6 +214,7 @@ async fn trigger_job_does_not_advance_next_at() {
 /// HTTP-shaped response).
 #[tokio::test]
 async fn trigger_job_dedupes_second_call_in_flight() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
@@ -244,6 +276,7 @@ async fn trigger_job_dedupes_second_call_in_flight() {
 /// reverse+truncate contract.
 #[tokio::test]
 async fn history_returns_newest_first_and_respects_limit() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
