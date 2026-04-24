@@ -20,10 +20,11 @@
 
 use jiff::Timestamp;
 use rara_kernel::{
-    schedule::{JobEntry, JobResult, Trigger},
+    schedule::{JobEntry, JobId, JobResult, Trigger},
     task_report::TaskReportStatus,
 };
 use serde::Serialize;
+use uuid::Uuid;
 
 /// Public wire shape of a scheduled job.
 ///
@@ -48,8 +49,8 @@ pub struct JobView {
     ///
     /// - `"ok"` — latest run completed successfully
     /// - `"failed"` — latest run failed
-    /// - `"running"` — latest run awaits user approval (kernel
-    ///   [`TaskReportStatus::NeedsApproval`])
+    /// - `"awaiting_approval"` — latest run stopped waiting on user approval
+    ///   (kernel [`TaskReportStatus::NeedsApproval`])
     /// - `null` — the job has never executed (no results on disk)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_status: Option<&'static str>,
@@ -62,8 +63,8 @@ impl JobView {
     /// Build a [`JobView`] from a kernel [`JobEntry`] and (optionally) the
     /// most recent [`JobResult`] for that job.
     ///
-    /// The status mapping is authoritative — see this module's doc comment
-    /// for the rationale behind `NeedsApproval` → `"running"`.
+    /// The status mapping is authoritative — see [`status_label`] for the
+    /// `TaskReportStatus` → wire-label contract used here.
     pub fn from_job(job: JobEntry, latest: Option<&JobResult>) -> Self {
         let last_status = latest.map(|r| status_label(r.status));
         let last_run_at = latest.map(|r| r.completed_at);
@@ -80,17 +81,62 @@ impl JobView {
     }
 }
 
+/// Wire shape of a single historical execution of a scheduled job.
+///
+/// Mirrors [`JobResult`] but normalises `status` through [`status_label`]
+/// so `GET /jobs/:id/history` speaks the same vocabulary as
+/// `GET /jobs[/:id]`'s `last_status`. The frontend no longer needs a
+/// label shim to reconcile the two routes.
+///
+/// The internal `result` blob and routing `tags` are omitted — the admin
+/// UI has no use for them today and they're load-bearing elsewhere in
+/// the kernel.
+#[derive(Debug, Serialize)]
+pub struct JobResultView {
+    /// The job that produced this result.
+    pub job_id:       JobId,
+    /// Task ID from the agent's TaskReport.
+    pub task_id:      Uuid,
+    /// Task type (e.g. `"pr_review"`).
+    pub task_type:    String,
+    /// Normalised status — see [`status_label`].
+    pub status:       &'static str,
+    /// Human-readable summary.
+    pub summary:      String,
+    /// Action taken by the agent, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_taken: Option<String>,
+    /// When this execution completed.
+    pub completed_at: Timestamp,
+}
+
+impl JobResultView {
+    /// Build a [`JobResultView`] from a kernel [`JobResult`].
+    pub fn from_result(result: JobResult) -> Self {
+        Self {
+            job_id:       result.job_id,
+            task_id:      result.task_id,
+            task_type:    result.task_type,
+            status:       status_label(result.status),
+            summary:      result.summary,
+            action_taken: result.action_taken,
+            completed_at: result.completed_at,
+        }
+    }
+}
+
 /// Map a kernel [`TaskReportStatus`] to the wire-level status label.
 ///
-/// `NeedsApproval` folds into `"running"` so the admin UI shows jobs
-/// blocked on user approval as still in-flight rather than finished.
-/// Keep this mapping stable — frontend code pattern-matches on the
-/// literal strings.
+/// `NeedsApproval` surfaces as `"awaiting_approval"` — the agent has
+/// stopped and is blocked on a human decision, which is a distinct
+/// state from an in-progress run. The admin UI styles it as a warning
+/// so users know action is required. Keep this mapping stable —
+/// frontend code pattern-matches on the literal strings.
 pub fn status_label(status: TaskReportStatus) -> &'static str {
     match status {
         TaskReportStatus::Completed => "ok",
         TaskReportStatus::Failed => "failed",
-        TaskReportStatus::NeedsApproval => "running",
+        TaskReportStatus::NeedsApproval => "awaiting_approval",
     }
 }
 
@@ -102,6 +148,9 @@ mod tests {
     fn status_label_covers_every_variant() {
         assert_eq!(status_label(TaskReportStatus::Completed), "ok");
         assert_eq!(status_label(TaskReportStatus::Failed), "failed");
-        assert_eq!(status_label(TaskReportStatus::NeedsApproval), "running");
+        assert_eq!(
+            status_label(TaskReportStatus::NeedsApproval),
+            "awaiting_approval"
+        );
     }
 }

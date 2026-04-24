@@ -39,19 +39,22 @@ export interface Job {
   session_key: string;
   tags: string[];
   created_at: string;
-  /** Condensed status of the most recent execution. `NeedsApproval` folds
-   *  into `'running'` on the backend — see `backend-admin/scheduler/dto.rs`. */
-  last_status: 'ok' | 'failed' | 'running' | null;
+  /** Condensed status of the most recent execution. `NeedsApproval` surfaces
+   *  as `'awaiting_approval'` on the backend — see
+   *  `backend-admin/scheduler/dto.rs`. */
+  last_status: 'ok' | 'failed' | 'awaiting_approval' | null;
   last_run_at: string | null;
 }
 
 /** One historical execution of a job, from
- *  `GET /api/v1/scheduler/jobs/:id/history`. */
+ *  `GET /api/v1/scheduler/jobs/:id/history`. Status uses the same wire
+ *  vocabulary as `Job.last_status` — the backend normalises both through
+ *  `status_label()` in `backend-admin/scheduler/dto.rs`. */
 export interface JobResult {
   job_id: string;
   task_id: string;
   task_type: string;
-  status: string;
+  status: 'ok' | 'failed' | 'awaiting_approval';
   summary: string;
   action_taken: string | null;
   completed_at: string;

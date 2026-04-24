@@ -27,14 +27,14 @@
 use rara_kernel::{
     event::{KernelEventEnvelope, Syscall},
     handle::KernelHandle,
-    schedule::{JobEntry, JobId, JobResult},
+    schedule::{JobEntry, JobId},
     session::SessionKey,
 };
 use snafu::{ResultExt, Snafu};
 use tokio::sync::oneshot;
 use tracing::instrument;
 
-use super::dto::JobView;
+use super::dto::{JobResultView, JobView};
 
 /// Service-level errors surfaced to the HTTP handlers.
 #[derive(Debug, Snafu)]
@@ -145,8 +145,12 @@ impl SchedulerSvc {
 
     /// Read up to `limit` most recent execution results for `job_id`,
     /// newest first.
+    ///
+    /// Results are normalised through [`JobResultView`] so their `status`
+    /// field matches the `last_status` vocabulary used by [`JobView`] —
+    /// the frontend pattern-matches on one label space across both routes.
     #[instrument(skip_all, fields(%job_id, limit))]
-    pub async fn history(&self, job_id: &JobId, limit: usize) -> Vec<JobResult> {
+    pub async fn history(&self, job_id: &JobId, limit: usize) -> Vec<JobResultView> {
         let mut results = self.handle.job_result_store().read(job_id).await;
         // `JobResultStore::read` yields ascending-by-time; admin callers
         // want newest-first paging so they don't have to flip the slice
@@ -154,6 +158,9 @@ impl SchedulerSvc {
         results.reverse();
         results.truncate(limit);
         results
+            .into_iter()
+            .map(JobResultView::from_result)
+            .collect()
     }
 
     // -- internals ----------------------------------------------------------

@@ -31,14 +31,11 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use rara_kernel::{
-    handle::KernelHandle,
-    schedule::{JobId, JobResult},
-};
+use rara_kernel::{handle::KernelHandle, schedule::JobId};
 use serde::Deserialize;
 
 use super::{
-    dto::JobView,
+    dto::{JobResultView, JobView},
     service::{SchedulerError, SchedulerSvc},
 };
 use crate::kernel::problem::ProblemDetails;
@@ -117,7 +114,7 @@ async fn job_history(
     State(svc): State<SchedulerSvc>,
     Path(id): Path<String>,
     Query(q): Query<HistoryQuery>,
-) -> Result<Json<Vec<JobResult>>, ProblemDetails> {
+) -> Result<Json<Vec<JobResultView>>, ProblemDetails> {
     let job_id = parse_job_id(&id)?;
     let limit = clamp_history_limit(q.limit);
     Ok(Json(svc.history(&job_id, limit).await))

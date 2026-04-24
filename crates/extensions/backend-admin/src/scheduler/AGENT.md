@@ -10,7 +10,7 @@ HTTP admin surface over the kernel scheduler. Read-only curation: list/get/delet
 
 ## Critical Invariants
 - Auth is applied by the upstream `backend-admin` router layer. Do NOT add auth here — duplicating gates drifts between routes.
-- `last_status` mapping is load-bearing for the frontend: `Completed → "ok"`, `Failed → "failed"`, `NeedsApproval → "running"`, no latest result → `null`. Keep `status_label` authoritative.
+- `last_status` mapping is load-bearing for the frontend: `Completed → "ok"`, `Failed → "failed"`, `NeedsApproval → "awaiting_approval"`, no latest result → `null`. Keep `status_label` authoritative — the same function normalises both `JobView.last_status` and `JobResultView.status` so `/jobs` and `/jobs/:id/history` share one wire vocabulary.
 - `TriggerJob` must leave `next_at` untouched — the kernel enforces this in `JobWheel::trigger_now`; don't introduce client-side rewrites that fake it.
 - `Principal` must never appear in any response DTO. It's internal kernel state.
 

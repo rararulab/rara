@@ -85,8 +85,13 @@ function RunStatusBadge({ status }: { status: string | null }) {
       return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">ok</Badge>;
     case 'failed':
       return <Badge variant="destructive">failed</Badge>;
-    case 'running':
-      return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">running</Badge>;
+    case 'awaiting_approval':
+      // Amber communicates "action required" — distinct from a still-running
+      // blue state. The scheduler's NeedsApproval means the agent has stopped
+      // and is blocked on a human decision.
+      return (
+        <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">awaiting approval</Badge>
+      );
     default:
       return <Badge variant="outline">{status}</Badge>;
   }
@@ -138,7 +143,7 @@ function JobHistory({ jobId }: { jobId: string }) {
               className="border-b last:border-0"
             >
               <td className="px-4 py-2">
-                <RunStatusBadge status={statusToLabel(run.status)} />
+                <RunStatusBadge status={run.status} />
               </td>
               <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
                 {formatDate(run.completed_at)}
@@ -161,24 +166,6 @@ function JobHistory({ jobId }: { jobId: string }) {
       </table>
     </div>
   );
-}
-
-/** Map the raw kernel `TaskReportStatus` string on `JobResult.status`
- *  onto the same label space used by `Job.last_status`. The admin DTO
- *  already normalises `Job.last_status`, but history rows carry the raw
- *  kernel status (`Completed` / `Failed` / `NeedsApproval`) — we keep the
- *  mapping consistent with `backend-admin/src/scheduler/dto.rs`. */
-function statusToLabel(status: string): string {
-  switch (status) {
-    case 'Completed':
-      return 'ok';
-    case 'Failed':
-      return 'failed';
-    case 'NeedsApproval':
-      return 'running';
-    default:
-      return status;
-  }
 }
 
 function JobCard({ job }: { job: Job }) {
