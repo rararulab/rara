@@ -47,7 +47,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: rust-ci
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Save on all branches: main runs get cancelled by concurrency
+          # before reaching the save step, so main-only save-if leaves the
+          # cache permanently empty. All branches share `shared-key: rust-ci`,
+          # so concurrent saves overwrite rather than accumulate.
+          save-if: true
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
@@ -73,7 +77,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: rust-ci
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Save on all branches: main runs get cancelled by concurrency
+          # before reaching the save step, so main-only save-if leaves the
+          # cache permanently empty. All branches share `shared-key: rust-ci`,
+          # so concurrent saves overwrite rather than accumulate.
+          save-if: true
 
       - name: Run tests
         run: cargo nextest run --workspace
@@ -99,7 +107,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: rust-ci
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Save on all branches: main runs get cancelled by concurrency
+          # before reaching the save step, so main-only save-if leaves the
+          # cache permanently empty. All branches share `shared-key: rust-ci`,
+          # so concurrent saves overwrite rather than accumulate.
+          save-if: true
 
       - name: Generate documentation
         run: cargo +nightly doc --workspace --no-deps --document-private-items
