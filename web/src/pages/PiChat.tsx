@@ -41,6 +41,7 @@ void extractDocumentTool;
 
 import {
   assistantSeqByRef,
+  isFirstAssistantOfTurn,
   messagesForArtifactReconstruction,
   toAgentMessages,
   toolResultByCallId,
@@ -237,8 +238,18 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
           }),
         );
       };
+      // Per-turn bubble grouping (#1727): pi-agent-core pushes one
+      // `AssistantMessage` per agentic-loop iteration, so a single user
+      // turn often produces 2-5 assistant frames. We tag everything after
+      // the first frame of each turn as a "continuation" — the avatar and
+      // top-of-bubble chrome are suppressed via CSS so the turn reads as
+      // one bubble stacked under a single avatar.
+      const isFirstOfTurn = agent ? isFirstAssistantOfTurn(message, agent.state.messages) : true;
+      const wrapperClass = isFirstOfTurn
+        ? 'rara-assistant-with-trace'
+        : 'rara-assistant-with-trace rara-assistant-continuation';
       return html`
-        <div class="rara-assistant-with-trace">
+        <div class=${wrapperClass}>
           <assistant-message
             .message=${message}
             .tools=${agent?.state.tools ?? []}

@@ -126,6 +126,64 @@ export const assistantSeqByRef = new WeakMap<AgentMessage, number>();
 export const toolResultByCallId = new Map<string, ToolResultMessage>();
 
 /**
+ * True when `msg` is the **first** assistant message of its turn inside
+ * the provided live `AgentMessage[]` — i.e. the closest preceding
+ * non-tool-result / non-assistant message is either absent (list head)
+ * or a user/user-with-attachments message.
+ *
+ * The avatar + top-of-bubble chrome is painted only for this frame; every
+ * subsequent assistant message in the same turn renders as a "continuation"
+ * (no avatar, collapsed top margin) so the whole turn reads as one bubble
+ * (#1727). Works uniformly for persisted history (emitted by
+ * {@link toAgentMessages}) and live streaming (pi-agent-core pushes each
+ * agentic-loop iteration as its own `AssistantMessage` into
+ * `agent.state.messages`).
+ *
+ * `toolResult` frames — pi-agent-core appends them post-stream for live
+ * turns — are transparent to the turn boundary: they neither open nor
+ * close a turn. Only user messages do.
+ *
+ * `O(n)` on the message list; called at render time per assistant row.
+ * For pi-web-ui's typical 200-message ceiling this is trivially cheap and
+ * avoids maintaining a parallel cache that could desync from streaming
+ * appends.
+ */
+export function isFirstAssistantOfTurn(msg: AgentMessage, all: readonly AgentMessage[]): boolean {
+  // pi-agent-core emits per-iteration `AssistantMessage` frames that can
+  // carry only an empty thinking-block; pi-web-ui's `:has()` avatar rules
+  // do not match those, so they paint no avatar. Treating them as the
+  // turn's first frame would anchor the avatar to an invisible row and
+  // strip it from the real content. Skip them in both the self check and
+  // the backward walk so the avatar lands on the first visible frame.
+  if (msg.role === 'assistant' && !hasVisibleContent(msg)) return false;
+  const idx = all.indexOf(msg);
+  if (idx < 0) return true;
+  for (let j = idx - 1; j >= 0; j--) {
+    const prev = all[j];
+    if (!prev) continue;
+    if (prev.role === 'toolResult') continue;
+    if (prev.role === 'assistant') {
+      if (!hasVisibleContent(prev)) continue;
+      return false;
+    }
+    // user / user-with-attachments / anything else is a turn boundary.
+    return true;
+  }
+  return true;
+}
+
+function hasVisibleContent(msg: AssistantMessage): boolean {
+  const content = msg.content;
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => {
+    if (part.type === 'text') return part.text.trim().length > 0;
+    if (part.type === 'thinking') return part.thinking.trim().length > 0;
+    if (part.type === 'toolCall') return true;
+    return false;
+  });
+}
+
+/**
  * For each turn (a contiguous run of non-user messages bounded by the
  * next user message or the end of the list), return the index in `msgs`
  * of the last `assistant`-role message in that turn. Indices not in the
