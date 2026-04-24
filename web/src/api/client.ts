@@ -98,6 +98,22 @@ export function getAuthUser(): AuthUser | null {
   return null;
 }
 
+/**
+ * Read both the access token and authenticated principal from localStorage.
+ *
+ * Returns `null` if either is missing, if `auth_user` is malformed JSON, or if
+ * the cached principal has an empty `user_id`. Shared by the fetch helper and
+ * the `<RequireAuth>` route guard so there is a single source of truth for
+ * "is the user logged in".
+ */
+export function getStoredAuth(): { token: string; user: AuthUser } | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  const user = getAuthUser();
+  if (!user || user.user_id === '') return null;
+  return { token, user };
+}
+
 /** Persist the access token and principal after a successful login. */
 export function setAuth(token: string, user: AuthUser): void {
   localStorage.setItem(ACCESS_TOKEN_KEY, token);

@@ -33,6 +33,21 @@ export async function primeBackendUrl(page: Page, url = 'http://localhost:25555'
 }
 
 /**
+ * Pre-seed the auth localStorage entries so `<RequireAuth>` doesn't redirect
+ * the harness to `/login`. Keys mirror the constants in `src/api/client.ts`
+ * (`ACCESS_TOKEN_KEY`, `AUTH_USER_KEY`).
+ */
+export async function primeAuth(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('access_token', 'harness-token');
+    window.localStorage.setItem(
+      'auth_user',
+      JSON.stringify({ user_id: 'harness', role: 'owner', is_admin: true }),
+    );
+  });
+}
+
+/**
  * Pinned "now" the harness renders against. Fixture `updated_at`
  * values in `stubApi` are anchored to this moment, and
  * `freezePageClock` installs the same instant into the page's JS
