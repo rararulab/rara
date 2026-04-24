@@ -157,11 +157,20 @@ function userContext(text: string): Context {
 describe('createRaraStreamFn — relay Map stability across invocations (#1732)', () => {
   beforeEach(() => {
     installLocalStorageStub();
+    // Seed an authenticated principal + token so `buildWsUrl` does not
+    // redirect to /login before we get a chance to drive the WebSocket.
+    localStorage.setItem('access_token', 'test-token');
+    localStorage.setItem(
+      'auth_user',
+      JSON.stringify({ user_id: 'alice', role: 'Admin', is_admin: true }),
+    );
     MockWebSocket.instances = [];
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
   });
 
   afterEach(() => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('auth_user');
     vi.unstubAllGlobals();
   });
 
