@@ -15,12 +15,14 @@
  */
 
 import { Zap } from 'lucide-react';
-import { Fragment, useCallback, useRef, useState } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
 
 import { SessionHeader } from './SessionHeader';
 import { TimelineBar } from './TimelineBar';
 import { TimelineRow } from './TimelineRow';
+import { TurnToolcallCard, isToolcallItem } from './TurnToolcallCard';
 
+import type { TimelineItem } from '@/api/kernel-types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSessionTimeline } from '@/hooks/use-session-timeline';
 
@@ -45,6 +47,11 @@ export interface SessionDetailProps {
  *
  * Consumes `useSessionTimeline` and renders the full execution trace.
  * Wrapped by `KernelTop` — selected session is passed from the list.
+ *
+ * Rendering strategy: non-tool timeline items (`thinking`, `agent`,
+ * `plan_card`, ...) map to a `TimelineRow`; consecutive tool-call items
+ * from the same turn collapse into a single `TurnToolcallCard` so the
+ * compact chip view replaces the verbose per-call rows.
  */
 export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
   const timeline = useSessionTimeline(session.agent_id, session.state, autoRefresh);
@@ -55,6 +62,11 @@ export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
     setSelectedIdx(idx);
     rowRefs.current.get(idx)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
+
+  const groups = useMemo(
+    () => groupTimeline(timeline.items, timeline.historicalItems.length),
+    [timeline.items, timeline.historicalItems.length],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -99,26 +111,37 @@ export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
           </div>
         ) : (
           <div className="divide-y">
-            {timeline.items.map((item, idx) => {
-              const prev = timeline.items[idx - 1];
-              const turnChanged = idx > 0 && (!prev || prev.turn !== item.turn);
-              const isLive = idx >= timeline.historicalItems.length;
-              const rowKey = `${isLive ? 'l' : 'h'}-${item.turn}-${item.seq}-${idx}`;
+            {groups.map((group) => {
+              if (group.kind === 'toolcall') {
+                return (
+                  <Fragment key={group.key}>
+                    {group.turnHeader && (
+                      <div className="bg-muted/40 px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Turn #{group.turn + 1}
+                      </div>
+                    )}
+                    <TurnToolcallCard items={group.items} turn={group.turn} isLive={group.isLive} />
+                  </Fragment>
+                );
+              }
+              const { item, absoluteIdx, turnHeader } = group;
               return (
-                <Fragment key={rowKey}>
-                  {turnChanged && (
+                <Fragment key={group.key}>
+                  {turnHeader && (
                     <div className="bg-muted/40 px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                       Turn #{item.turn + 1}
                     </div>
                   )}
                   <TimelineRow
                     ref={(el) => {
-                      if (el) rowRefs.current.set(idx, el);
-                      else rowRefs.current.delete(idx);
+                      if (el) rowRefs.current.set(absoluteIdx, el);
+                      else rowRefs.current.delete(absoluteIdx);
                     }}
                     item={item}
-                    isSelected={selectedIdx === idx}
-                    onClick={() => setSelectedIdx((prev) => (prev === idx ? null : idx))}
+                    isSelected={selectedIdx === absoluteIdx}
+                    onClick={() =>
+                      setSelectedIdx((prev) => (prev === absoluteIdx ? null : absoluteIdx))
+                    }
                   />
                 </Fragment>
               );
@@ -128,4 +151,79 @@ export function SessionDetail({ session, autoRefresh }: SessionDetailProps) {
       </div>
     </div>
   );
+}
+
+/** Rendered slot in the event list — either a single row or a toolcall card. */
+type TimelineGroup =
+  | {
+      kind: 'row';
+      key: string;
+      item: TimelineItem;
+      absoluteIdx: number;
+      turnHeader: boolean;
+    }
+  | {
+      kind: 'toolcall';
+      key: string;
+      turn: number;
+      items: TimelineItem[];
+      isLive: boolean;
+      turnHeader: boolean;
+    };
+
+/**
+ * Split a flat `TimelineItem[]` into renderable groups. Consecutive
+ * tool-call items (see {@link isToolcallItem}) sharing the same `turn`
+ * collapse into one `toolcall` group; everything else becomes a `row`
+ * group. The first item of a new turn carries a `turnHeader` flag so
+ * the caller can render the divider consistently.
+ */
+function groupTimeline(items: TimelineItem[], historicalCount: number): TimelineGroup[] {
+  const groups: TimelineGroup[] = [];
+  let prevTurn: number | null = null;
+  let i = 0;
+  while (i < items.length) {
+    const item = items[i];
+    if (!item) {
+      i++;
+      continue;
+    }
+    const turnHeader = prevTurn !== null && prevTurn !== item.turn;
+    if (isToolcallItem(item)) {
+      // Greedy fold all consecutive tool-call items of the same turn.
+      const bundle: TimelineItem[] = [];
+      const firstSeq = item.seq;
+      const turn = item.turn;
+      let liveInGroup = false;
+      while (i < items.length) {
+        const cur = items[i];
+        if (!cur || cur.turn !== turn || !isToolcallItem(cur)) break;
+        if (i >= historicalCount) liveInGroup = true;
+        bundle.push(cur);
+        i++;
+      }
+      groups.push({
+        kind: 'toolcall',
+        key: `tc-${turn}-${firstSeq}`,
+        turn,
+        items: bundle,
+        isLive: liveInGroup,
+        turnHeader,
+      });
+      prevTurn = turn;
+      continue;
+    }
+    const absoluteIdx = i;
+    const isLive = absoluteIdx >= historicalCount;
+    groups.push({
+      kind: 'row',
+      key: `${isLive ? 'l' : 'h'}-${item.turn}-${item.seq}-${absoluteIdx}`,
+      item,
+      absoluteIdx,
+      turnHeader,
+    });
+    prevTurn = item.turn;
+    i++;
+  }
+  return groups;
 }

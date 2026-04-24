@@ -211,6 +211,30 @@ pub struct DrainResult {
 }
 
 // ---------------------------------------------------------------------------
+// TriggerOutcome — explicit three-way result of JobWheel::trigger_now
+// ---------------------------------------------------------------------------
+
+/// Terminal outcome of [`JobWheel::trigger_now`].
+///
+/// Makes the three cases unambiguous so the syscall handler and the backend
+/// service layer can respond with different wire semantics: `Fired` dispatches
+/// a `ScheduledTask` event, `AlreadyInFlight` is a no-op that the HTTP layer
+/// surfaces as a dedupe signal (not a 404), and `NotFound` is the only real
+/// error path.
+#[derive(Debug)]
+pub enum TriggerOutcome {
+    /// Fresh dispatch — the job was cloned into the in-flight ledger with a
+    /// new lease and must be published via `ScheduledTask`.
+    Fired(JobEntry),
+    /// A prior trigger is still executing. The entry is returned unchanged
+    /// for observability (so the caller can return its latest view) but
+    /// nothing is inserted into the ledger and no event is published.
+    AlreadyInFlight(JobEntry),
+    /// No job with the supplied ID exists on the wheel.
+    NotFound,
+}
+
+// ---------------------------------------------------------------------------
 // InFlightEntry — in-flight ledger entry with lease deadline
 // ---------------------------------------------------------------------------
 
@@ -582,6 +606,75 @@ impl JobWheel {
             .collect()
     }
 
+    /// Insert a manual-trigger copy of `job_id` into the in-flight ledger
+    /// without mutating the wheel's scheduled entry.
+    ///
+    /// Used by `Syscall::TriggerJob` to fire a job on demand. The original
+    /// entry's `next_at` is intentionally preserved so recurring jobs keep
+    /// their regular cadence after an out-of-band trigger. Persists the
+    /// ledger to disk on the `Fired` path only.
+    ///
+    /// See [`TriggerOutcome`] for the three terminal cases. Callers MUST
+    /// distinguish `AlreadyInFlight` from `NotFound` — they map to very
+    /// different HTTP semantics at the backend boundary (dedupe vs. 404).
+    pub fn trigger_now(&mut self, job_id: &JobId) -> TriggerOutcome {
+        let Some(key) = self.by_id.get(job_id).copied() else {
+            return TriggerOutcome::NotFound;
+        };
+        let Some(entry) = self.jobs.get(&key).cloned() else {
+            return TriggerOutcome::NotFound;
+        };
+
+        // Dedupe: if a prior trigger (manual or scheduled) is still in-flight,
+        // refuse to enqueue another. The ledger insert alone dedupes on the
+        // key, but the syscall handler separately pushes a `ScheduledTask`
+        // event per call, which would spawn N overlapping agent sessions
+        // without this guard. The outcome distinguishes this from the
+        // `NotFound` case so the backend can surface "already running" to
+        // the frontend instead of a misleading 404.
+        if self.in_flight.contains_key(job_id) {
+            warn!(
+                job_id = %job_id,
+                "trigger_now: job already in-flight; dedupe (no dispatch)"
+            );
+            return TriggerOutcome::AlreadyInFlight(entry);
+        }
+
+        let now = self.clock.now();
+        let lease_deadline = now
+            .checked_add(jiff::SignedDuration::from_secs(DEFAULT_LEASE_SECS))
+            .unwrap_or(now);
+        self.in_flight.insert(
+            entry.id,
+            InFlightEntry {
+                job: entry.clone(),
+                fired_at: now,
+                lease_deadline,
+            },
+        );
+        self.persist_in_flight();
+        TriggerOutcome::Fired(entry)
+    }
+
+    /// Remove a job from the in-flight ledger without recording a result.
+    ///
+    /// Used by [`Syscall::TriggerJob`](crate::event::Syscall::TriggerJob)
+    /// when the follow-up `ScheduledTask` dispatch fails — the ledger
+    /// insertion performed by [`trigger_now`](Self::trigger_now) must be
+    /// rolled back so the lease doesn't hold for five minutes on a job
+    /// that nothing is executing. Returns `true` if an entry was removed.
+    ///
+    /// Distinct from [`complete_in_flight`](Self::complete_in_flight): that
+    /// method fires after a real execution finishes; this one is a pure
+    /// undo that never implies "ran successfully".
+    pub fn cancel_in_flight(&mut self, job_id: &JobId) -> bool {
+        let removed = self.in_flight.remove(job_id).is_some();
+        if removed {
+            self.persist_in_flight();
+        }
+        removed
+    }
+
     /// Mark a job as completed, removing it from the in-flight ledger.
     ///
     /// Called when the execution agent's session ends (regardless of whether
@@ -778,32 +871,64 @@ impl JobResultStore {
     /// Read all execution results for a given job, ordered by completion
     /// time (lexicographic on the epoch filename).
     pub async fn read(&self, job_id: &JobId) -> Vec<JobResult> {
+        let entries = self.sorted_entries(job_id).await;
+        // `sorted_entries` returns ascending — `read` keeps that order.
+        let mut results = Vec::new();
+        for entry in entries {
+            if let Some(r) = self.read_one(entry.path()).await {
+                results.push(r);
+            }
+        }
+        results
+    }
+
+    /// Read the most recent execution result for a given job.
+    ///
+    /// Cheaper than `read` when the caller only needs the latest status —
+    /// the scheduler admin UI uses this to derive `last_status` without
+    /// paging the full history. Returns `None` if the job directory is
+    /// empty or every object fails to parse.
+    pub async fn read_latest(&self, job_id: &JobId) -> Option<JobResult> {
+        // Walk newest-first so a single malformed tail entry doesn't hide
+        // the rest of the history — skip and try the next one.
+        let entries = self.sorted_entries(job_id).await;
+        for entry in entries.into_iter().rev() {
+            if let Some(r) = self.read_one(entry.path()).await {
+                return Some(r);
+            }
+        }
+        None
+    }
+
+    /// List non-directory result objects under `{job_id}/`, sorted
+    /// ascending by path (epoch filenames sort chronologically).
+    async fn sorted_entries(&self, job_id: &JobId) -> Vec<opendal::Entry> {
         let prefix = format!("{job_id}/");
         let mut entries = match self.op.list(&prefix).await {
             Ok(v) => v,
             Err(_) => return Vec::new(),
         };
-        // Sort by path (epoch filenames sort chronologically).
+        entries.retain(|e| !e.metadata().is_dir());
         entries.sort_by(|a, b| a.path().cmp(b.path()));
+        entries
+    }
 
-        let mut results = Vec::new();
-        for entry in entries {
-            if entry.metadata().is_dir() {
-                continue;
-            }
-            match self.op.read(entry.path()).await {
-                Ok(buf) => match serde_json::from_slice::<JobResult>(&buf.to_vec()) {
-                    Ok(r) => results.push(r),
-                    Err(e) => {
-                        warn!(error = %e, path = entry.path(), "skipping malformed job result");
-                    }
-                },
+    /// Read and parse a single result object, logging and returning `None`
+    /// on read or parse failure.
+    async fn read_one(&self, path: &str) -> Option<JobResult> {
+        match self.op.read(path).await {
+            Ok(buf) => match serde_json::from_slice::<JobResult>(&buf.to_vec()) {
+                Ok(r) => Some(r),
                 Err(e) => {
-                    warn!(error = %e, path = entry.path(), "failed to read job result");
+                    warn!(error = %e, path = path, "skipping malformed job result");
+                    None
                 }
+            },
+            Err(e) => {
+                warn!(error = %e, path = path, "failed to read job result");
+                None
             }
         }
-        results
     }
 }
 
@@ -1227,5 +1352,279 @@ mod tests {
             back.lease_deadline.as_second(),
             t0().as_second() + DEFAULT_LEASE_SECS
         );
+    }
+
+    fn cron_entry(expr: &str, next_at: Timestamp) -> JobEntry {
+        JobEntry {
+            id:          JobId::new(),
+            trigger:     Trigger::Cron {
+                expr: expr.into(),
+                next_at,
+            },
+            message:     "cron".into(),
+            session_key: SessionKey::new(),
+            principal:   test_principal(),
+            created_at:  next_at,
+            tags:        vec![],
+        }
+    }
+
+    /// `trigger_now` must NOT advance the wheel entry's `next_at` — the
+    /// regular cadence survives an out-of-band fire.
+    #[test]
+    fn trigger_job_fires_without_advancing_next_at() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        // Cron: next fire one hour from now.
+        let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+        let entry = cron_entry("0 * * * * *", future_fire);
+        let id = entry.id;
+        wheel.add(entry);
+
+        let fired = match wheel.trigger_now(&id) {
+            TriggerOutcome::Fired(entry) => entry,
+            other => panic!("expected Fired, got {other:?}"),
+        };
+        assert_eq!(fired.id, id);
+
+        // Wheel still holds the job with the original next_at.
+        let still_scheduled = wheel
+            .list(None)
+            .into_iter()
+            .find(|e| e.id == id)
+            .expect("job should remain on the wheel after manual trigger");
+        assert_eq!(
+            still_scheduled.trigger.next_at(),
+            future_fire,
+            "trigger_now must not mutate the wheel's scheduled next_at"
+        );
+
+        // And there is exactly one in-flight entry with the fresh lease.
+        assert_eq!(wheel.in_flight.len(), 1);
+        let ifl = &wheel.in_flight[&id];
+        assert_eq!(ifl.fired_at, t0());
+        assert_eq!(
+            ifl.lease_deadline.as_second(),
+            t0().as_second() + DEFAULT_LEASE_SECS
+        );
+    }
+
+    #[test]
+    fn trigger_now_returns_not_found_for_missing_id() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+        let ghost = JobId::new();
+        assert!(matches!(
+            wheel.trigger_now(&ghost),
+            TriggerOutcome::NotFound
+        ));
+        assert!(wheel.in_flight.is_empty());
+    }
+
+    /// A second `trigger_now` call while the first execution is still
+    /// in-flight must be a no-op — prevents spam-click on "Run now" from
+    /// spawning overlapping agent sessions.
+    #[test]
+    fn trigger_now_dedupes_in_flight() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+        let entry = cron_entry("0 * * * * *", future_fire);
+        let id = entry.id;
+        wheel.add(entry);
+
+        // First trigger succeeds and the ledger gains one entry.
+        assert!(
+            matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)),
+            "first trigger should dispatch"
+        );
+        assert_eq!(wheel.in_flight.len(), 1);
+
+        // Immediate repeat is a no-op — still exactly one in-flight entry,
+        // and the outcome explicitly flags the dedupe so the syscall handler
+        // can reply with a distinct signal (not a `NotFound`).
+        assert!(
+            matches!(wheel.trigger_now(&id), TriggerOutcome::AlreadyInFlight(_)),
+            "concurrent trigger must report AlreadyInFlight, not dispatch"
+        );
+        assert_eq!(
+            wheel.in_flight.len(),
+            1,
+            "dedupe must not mutate the existing in-flight entry"
+        );
+
+        // After the agent session completes and the ledger is cleared,
+        // triggering again works as usual.
+        assert!(wheel.complete_in_flight(&id));
+        assert!(
+            matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)),
+            "post-completion trigger should dispatch again"
+        );
+        assert_eq!(wheel.in_flight.len(), 1);
+    }
+
+    /// `cancel_in_flight` must undo a `trigger_now` insertion so a
+    /// subsequent `trigger_now` dispatches freshly instead of replying
+    /// `AlreadyInFlight` against a phantom lease. Exercises the rollback
+    /// path used by `Syscall::TriggerJob` when the downstream
+    /// `ScheduledTask` dispatch fails (queue full, etc.).
+    #[test]
+    fn cancel_in_flight_rolls_back_trigger() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+        let entry = cron_entry("0 * * * * *", future_fire);
+        let id = entry.id;
+        wheel.add(entry);
+
+        assert!(matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)));
+        assert_eq!(wheel.in_flight.len(), 1);
+
+        // Rollback: ledger must be cleared, and the return value reflects
+        // that an entry was present.
+        assert!(
+            wheel.cancel_in_flight(&id),
+            "rollback should report an entry was removed"
+        );
+        assert!(wheel.in_flight.is_empty());
+
+        // After rollback, trigger_now must not return AlreadyInFlight —
+        // that would mask the real failure behind a phantom dedupe.
+        assert!(
+            matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)),
+            "post-rollback trigger must dispatch, not dedupe"
+        );
+        assert_eq!(wheel.in_flight.len(), 1);
+    }
+
+    /// `cancel_in_flight` on a job with no in-flight entry must return
+    /// `false` and not mutate the ledger — the rollback is idempotent on
+    /// absent keys so the syscall handler can call it unconditionally
+    /// without risking persistence churn.
+    #[test]
+    fn cancel_in_flight_on_absent_is_noop() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+
+        let ghost = JobId::new();
+        assert!(!wheel.cancel_in_flight(&ghost));
+        assert!(wheel.in_flight.is_empty());
+    }
+
+    /// The rollback must persist to disk so a reload does not resurrect
+    /// the cancelled lease. Without this, a crash between `cancel_in_flight`
+    /// and the next write would leave the phantom entry hanging across
+    /// restart.
+    #[test]
+    fn cancel_in_flight_persists_removal() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+
+        let id = {
+            let mut wheel = JobWheel::load_with_clock(path.clone(), clock.clone());
+            let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+            let entry = cron_entry("0 * * * * *", future_fire);
+            let id = entry.id;
+            wheel.add(entry);
+            wheel.persist();
+            assert!(matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)));
+            assert!(wheel.cancel_in_flight(&id));
+            id
+        };
+
+        let reloaded = JobWheel::load_with_clock(path, clock);
+        assert!(
+            !reloaded.in_flight.contains_key(&id),
+            "cancelled lease must not reappear after reload"
+        );
+    }
+
+    /// `list(None)` returns jobs from every session — exercised by the
+    /// admin-only `Syscall::ListAllJobs` variant.
+    #[test]
+    fn list_all_jobs_crosses_sessions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+
+        let mut a = make_entry(future(60));
+        a.session_key = SessionKey::new();
+        let mut b = make_entry(future(90));
+        b.session_key = SessionKey::new();
+        assert_ne!(a.session_key, b.session_key);
+        let id_a = a.id;
+        let id_b = b.id;
+
+        wheel.add(a);
+        wheel.add(b);
+
+        let all = wheel.list(None);
+        assert_eq!(all.len(), 2);
+        let ids: std::collections::HashSet<_> = all.iter().map(|e| e.id).collect();
+        assert!(ids.contains(&id_a));
+        assert!(ids.contains(&id_b));
+    }
+
+    fn make_result(job_id: JobId, completed_at: Timestamp) -> JobResult {
+        JobResult {
+            job_id,
+            task_id: Uuid::new_v4(),
+            task_type: "test".into(),
+            tags: vec![],
+            status: crate::task_report::TaskReportStatus::Completed,
+            summary: format!("run at {completed_at}"),
+            result: serde_json::json!({"at": completed_at.as_second()}),
+            action_taken: None,
+            completed_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_latest_returns_most_recent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = JobResultStore::new(tmp.path().to_path_buf());
+        let job_id = JobId::new();
+
+        let t1 = Timestamp::from_second(t0().as_second()).unwrap();
+        let t2 = Timestamp::from_second(t0().as_second() + 60).unwrap();
+        let t3 = Timestamp::from_second(t0().as_second() + 120).unwrap();
+
+        store
+            .append(&make_result(job_id, t1))
+            .await
+            .expect("append t1");
+        store
+            .append(&make_result(job_id, t2))
+            .await
+            .expect("append t2");
+        store
+            .append(&make_result(job_id, t3))
+            .await
+            .expect("append t3");
+
+        let latest = store
+            .read_latest(&job_id)
+            .await
+            .expect("read_latest should find the newest result");
+        assert_eq!(latest.completed_at, t3);
+    }
+
+    #[tokio::test]
+    async fn read_latest_empty_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = JobResultStore::new(tmp.path().to_path_buf());
+        assert!(store.read_latest(&JobId::new()).await.is_none());
     }
 }

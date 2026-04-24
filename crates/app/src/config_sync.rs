@@ -254,6 +254,9 @@ mod tests {
     use crate::AppConfig;
 
     const TEST_YAML: &str = r#"
+owner_token: "test-owner-token"
+owner_user_id: "testuser"
+
 users:
   - name: "testuser"
     role: root

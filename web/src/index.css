@@ -354,6 +354,28 @@
 }
 
 /*
+ * Per-turn bubble grouping (#1727). pi-agent-core emits one AssistantMessage
+ * per agentic-loop iteration (LLM → tool → LLM → tool → final text), and
+ * pi-web-ui's MessageList renders one DOM row per message. Without this
+ * rule the transcript shows the same avatar repeated 2-5 times stacked under
+ * a single user question, which reads as fragmented replies.
+ *
+ * The React layer tags every non-first assistant frame of a turn with
+ * `rara-assistant-continuation` (see `registerCascadeAssistantRenderer` in
+ * `PiChat.tsx`). We suppress the `::before` avatar on those frames and
+ * negate the parent's `gap-3` (0.75rem) so consecutive frames merge into
+ * what visually reads as a single bubble column stacked under the first
+ * avatar. Turn boundaries — a new user message, or the end of the list —
+ * restore the avatar on the next assistant frame naturally.
+ */
+.rara-chat .rara-assistant-continuation assistant-message::before {
+  content: none;
+}
+.rara-chat .rara-assistant-continuation {
+  margin-top: -0.75rem;
+}
+
+/*
  * Pi-web-ui left-aligns user messages (`class="flex justify-start"`
  * on the bubble's parent). Flip to the right side — the standard
  * chat convention of "my messages on the right". `:has()` gives us a

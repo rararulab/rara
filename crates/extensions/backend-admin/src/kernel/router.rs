@@ -81,7 +81,18 @@ async fn get_session_turns(
 
 async fn list_approvals(
     State(handle): State<KernelHandle>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
 ) -> Result<Json<Vec<rara_kernel::security::ApprovalRequest>>, ProblemDetails> {
+    // Approval queue contains sensitive tool-call context; restrict to admins
+    // and audit the viewer.
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "viewing the approval queue requires admin role",
+        ));
+    }
+    tracing::info!(actor = %principal.user_id, "list_approvals");
     Ok(Json(handle.security().approval().list_pending()))
 }
 

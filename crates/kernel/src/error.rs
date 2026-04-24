@@ -136,6 +136,15 @@ pub enum KernelError {
     #[snafu(display("{message}"))]
     Other { message: SharedString },
 
+    /// The kernel event queue rejected a syscall-initiated dispatch.
+    ///
+    /// Signals transient backpressure — the operation itself was valid but
+    /// the queue was full or closed at the moment of enqueue. HTTP callers
+    /// surface this as 503 Service Unavailable; agents/tools retry with
+    /// [`crate::queue::push_with_retry`].
+    #[snafu(display("event queue rejected dispatch: {message}"))]
+    QueueFull { message: String },
+
     /// Agent execution failed.
     #[snafu(display("agent execution failed: {message}"))]
     AgentExecution { message: String },

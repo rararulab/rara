@@ -440,21 +440,28 @@ impl TestKernelBuilder {
         // Skills prompt (empty)
         let skill_prompt_provider: crate::handle::SkillPromptProvider = Arc::new(|| String::new());
 
-        let kernel = Kernel::new(
-            self.config,
-            driver_registry,
-            tool_registry,
-            agent_registry,
-            session_index,
-            tape_service,
-            settings,
-            security,
-            io,
-            knowledge,
-            None, // no dynamic tool provider
-            trace_service,
-            skill_prompt_provider,
-        );
+        // Per-test scheduler dir — isolates `jobs.json` / `in_flight.json` /
+        // `subscriptions.json` from every other test running in the same
+        // process. `rara_paths::workspace_dir()` is a `OnceLock` global, so
+        // without this redirect parallel tests share one `jobs.json` and
+        // see each other's seeded jobs (observed as flaky
+        // `list_on_empty_kernel_is_empty`).
+        let scheduler_dir = self.tmp_dir.join("scheduler");
+        let kernel = Kernel::builder()
+            .config(self.config)
+            .driver_registry(driver_registry)
+            .tool_registry(tool_registry)
+            .agent_registry(agent_registry)
+            .session_index(session_index)
+            .tape_service(tape_service)
+            .settings(settings)
+            .security(security)
+            .io(io)
+            .knowledge(knowledge)
+            .trace_service(trace_service)
+            .skill_prompt_provider(skill_prompt_provider)
+            .scheduler_dir(scheduler_dir)
+            .build();
 
         let cancel_token = CancellationToken::new();
         let (_kernel_arc, handle) = kernel.start(cancel_token.clone());
@@ -480,6 +487,18 @@ pub struct TestKernel {
 impl TestKernel {
     /// Shut down the kernel gracefully.
     pub fn shutdown(&self) { self.cancel_token.cancel(); }
+
+    /// Seed a pre-built [`JobEntry`](crate::schedule::JobEntry) directly onto
+    /// the wheel, bypassing the `RegisterJob` syscall path.
+    ///
+    /// The syscall path requires a real session principal in the process
+    /// table, which integration tests typically don't set up. This helper is
+    /// the only public surface for wheel-seeding; the underlying
+    /// `KernelHandle::__seed_job_unsafe_test_harness` is crate-private and
+    /// deliberately named to warn off in-crate callers.
+    pub fn seed_job(&self, entry: crate::schedule::JobEntry) {
+        self.handle.__seed_job_unsafe_test_harness(entry);
+    }
 }
 
 /// Convenience helper: build a [`CompletionResponse`] with text content.

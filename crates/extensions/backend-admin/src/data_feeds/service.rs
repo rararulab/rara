@@ -14,7 +14,7 @@
 
 //! Persistence layer for data feed CRUD and event queries.
 //!
-//! [`DataFeedSvc`] operates directly on the `data_feeds` and `feed_events`
+//! [`DataFeedSvc`] operates directly on the `data_feeds` and `data_feed_events`
 //! SQLite tables. It does not depend on [`DataFeedRegistry`] — the registry
 //! manages in-memory runtime state while this service manages persistence.
 //!
@@ -26,14 +26,14 @@ use jiff::Timestamp;
 use rara_kernel::data_feed::{
     AuthConfig, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedType,
 };
-use rara_model::schema::{data_feeds, feed_events};
+use rara_model::schema::{data_feed_events, data_feeds};
 use tracing::instrument;
 use yunara_store::diesel_pool::DieselSqlitePool;
 
 /// Service for data feed persistence operations.
 ///
 /// Holds a diesel-async SQLite pool and provides CRUD on the `data_feeds`
-/// table plus paginated queries on the `feed_events` table.
+/// table plus paginated queries on the `data_feed_events` table.
 #[derive(Clone)]
 pub struct DataFeedSvc {
     pool: DieselSqlitePool,
@@ -149,6 +149,34 @@ impl DataFeedSvc {
         Ok(affected > 0)
     }
 
+    /// Update the runtime `status` and `last_error` columns for a feed,
+    /// looked up by unique name.
+    ///
+    /// Called via the [`StatusReporter`] wiring so the `data_feeds` table
+    /// reflects the actual runtime state (running / idle / error) rather
+    /// than the stale value written at creation time.
+    ///
+    /// [`StatusReporter`]: rara_kernel::data_feed::StatusReporter
+    #[instrument(skip(self))]
+    pub async fn update_status(
+        &self,
+        name: &str,
+        status: FeedStatus,
+        last_error: Option<String>,
+    ) -> anyhow::Result<bool> {
+        let now = Timestamp::now().to_string();
+        let mut conn = self.pool.get().await?;
+        let affected = diesel::update(data_feeds::table.filter(data_feeds::name.eq(name)))
+            .set((
+                data_feeds::status.eq(status.to_string()),
+                data_feeds::last_error.eq(&last_error),
+                data_feeds::updated_at.eq(&now),
+            ))
+            .execute(&mut *conn)
+            .await?;
+        Ok(affected > 0)
+    }
+
     /// Toggle the enabled flag for a feed. Returns `true` if updated.
     #[instrument(skip(self))]
     pub async fn toggle_feed(&self, id: &str) -> anyhow::Result<bool> {
@@ -183,23 +211,23 @@ impl DataFeedSvc {
         let mut conn = self.pool.get().await?;
 
         // Count total matching events for pagination metadata.
-        let mut count_q = feed_events::table
-            .filter(feed_events::source_name.eq(source_name))
+        let mut count_q = data_feed_events::table
+            .filter(data_feed_events::source_name.eq(source_name))
             .into_boxed();
         if let Some(ref ts) = since {
-            count_q = count_q.filter(feed_events::received_at.ge(ts.to_string()));
+            count_q = count_q.filter(data_feed_events::received_at.ge(ts.to_string()));
         }
         let total: i64 = count_q.count().get_result(&mut *conn).await?;
 
-        let mut rows_q = feed_events::table
-            .filter(feed_events::source_name.eq(source_name))
+        let mut rows_q = data_feed_events::table
+            .filter(data_feed_events::source_name.eq(source_name))
             .into_boxed();
         if let Some(ref ts) = since {
-            rows_q = rows_q.filter(feed_events::received_at.ge(ts.to_string()));
+            rows_q = rows_q.filter(data_feed_events::received_at.ge(ts.to_string()));
         }
         let rows: Vec<EventRow> = rows_q
             .select(EventRow::as_select())
-            .order(feed_events::received_at.desc())
+            .order(data_feed_events::received_at.desc())
             .limit(limit)
             .offset(offset)
             .load(&mut *conn)
@@ -229,9 +257,9 @@ impl DataFeedSvc {
         use diesel::OptionalExtension;
 
         let mut conn = self.pool.get().await?;
-        let row: Option<EventRow> = feed_events::table
-            .filter(feed_events::id.eq(event_id))
-            .filter(feed_events::source_name.eq(source_name))
+        let row: Option<EventRow> = data_feed_events::table
+            .filter(data_feed_events::id.eq(event_id))
+            .filter(data_feed_events::source_name.eq(source_name))
             .select(EventRow::as_select())
             .first(&mut *conn)
             .await
@@ -302,7 +330,7 @@ impl FeedRow {
 }
 
 #[derive(Queryable, Selectable)]
-#[diesel(table_name = feed_events)]
+#[diesel(table_name = data_feed_events)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 struct EventRow {
     id:          String,

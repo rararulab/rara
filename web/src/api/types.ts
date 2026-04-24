@@ -14,24 +14,63 @@
  * limitations under the License.
  */
 
-// Scheduler
-export interface ScheduledTask {
+// Scheduler — kernel-native job shape exposed by /api/v1/scheduler/*.
+
+/** Fire-time specification. The `type` tag matches the kernel's serde tag
+ *  on `kernel::schedule::Trigger` (`once` / `interval` / `cron`). */
+export type Trigger =
+  | { type: 'once'; run_at: string }
+  | {
+      type: 'interval';
+      every_secs: number;
+      next_at: string;
+      /** Reference point for drift-free interval scheduling. Optional on
+       *  the wire for legacy compatibility. */
+      anchor_at: string | null;
+    }
+  | { type: 'cron'; expr: string; next_at: string };
+
+/** A scheduled job in the agent's schedule store. `message` is the prompt
+ *  the agent will execute when the trigger fires. */
+export interface Job {
   id: string;
-  name: string;
-  cron_expression: string;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
+  trigger: Trigger;
+  message: string;
+  session_key: string;
+  tags: string[];
   created_at: string;
+  /** Condensed status of the most recent execution. `NeedsApproval` surfaces
+   *  as `'awaiting_approval'` on the backend — see
+   *  `backend-admin/scheduler/dto.rs`. */
+  last_status: 'ok' | 'failed' | 'awaiting_approval' | null;
+  last_run_at: string | null;
 }
 
-export interface TaskRunRecord {
-  id: string;
+/** Response shape of `POST /api/v1/scheduler/jobs/:id/trigger`. Nests the
+ *  refreshed `Job` view under `job` so the `triggered` discriminator reads
+ *  as metadata about the call rather than as a field of the job itself.
+ *  `triggered` is `true` when the backend dispatched a fresh run, `false`
+ *  when the request was deduplicated because a previous run is still
+ *  in-flight. Both cases are HTTP 200 — the frontend branches on
+ *  `triggered` instead of reading a status code, so spam-clicking
+ *  "Run now" produces a neutral UX signal rather than a false error. */
+export interface TriggerJobResponse {
+  job: Job;
+  triggered: boolean;
+}
+
+/** One historical execution of a job, from
+ *  `GET /api/v1/scheduler/jobs/:id/history`. Status uses the same wire
+ *  vocabulary as `Job.last_status` — the backend normalises both through
+ *  `status_label()` in `backend-admin/scheduler/dto.rs`. */
+export interface JobResult {
+  job_id: string;
   task_id: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  error_message: string | null;
+  task_type: string;
+  status: 'ok' | 'failed' | 'awaiting_approval';
+  summary: string;
+  action_taken: string | null;
+  completed_at: string;
 }
 
 // Flat KV Settings

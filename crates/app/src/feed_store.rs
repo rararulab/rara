@@ -14,9 +14,9 @@
 
 //! SQLite-backed [`FeedStore`] implementation.
 //!
-//! Persists [`FeedEvent`]s to the `feed_events` table and tracks per-subscriber
-//! read cursors in `feed_read_cursors`. Both tables are created by the
-//! `20260414125453_feed_events` migration.
+//! Persists [`FeedEvent`]s to the `data_feed_events` table and tracks
+//! per-subscriber read cursors in `feed_read_cursors`. Both tables are
+//! created by the init migration baseline.
 
 use async_trait::async_trait;
 use diesel::{
@@ -28,15 +28,16 @@ use rara_kernel::{
     data_feed::{FeedEvent, FeedEventId, FeedFilter, FeedStore},
     session::SessionKey,
 };
-use rara_model::schema::{feed_events, feed_read_cursors};
+use rara_model::schema::{data_feed_events, feed_read_cursors};
 use snafu::ResultExt;
 use tracing::instrument;
 use yunara_store::diesel_pool::DieselSqlitePool;
 
 /// SQLite-backed feed event store.
 ///
-/// Implements [`FeedStore`] using the `feed_events` and `feed_read_cursors`
-/// tables. All operations go through the shared diesel-async pool.
+/// Implements [`FeedStore`] using the `data_feed_events` and
+/// `feed_read_cursors` tables. All operations go through the shared
+/// diesel-async pool.
 pub struct SqliteFeedStore {
     pool: DieselSqlitePool,
 }
@@ -61,22 +62,22 @@ impl FeedStore for SqliteFeedStore {
             .pool
             .get()
             .await
-            .whatever_context("feed_events pool acquire failed")?;
+            .whatever_context("data_feed_events pool acquire failed")?;
 
         // INSERT OR IGNORE for idempotency on event.id.
-        diesel::insert_into(feed_events::table)
+        diesel::insert_into(data_feed_events::table)
             .values((
-                feed_events::id.eq(&id),
-                feed_events::source_name.eq(&event.source_name),
-                feed_events::event_type.eq(&event.event_type),
-                feed_events::tags.eq(&tags_json),
-                feed_events::payload.eq(&payload_json),
-                feed_events::received_at.eq(&received_at),
+                data_feed_events::id.eq(&id),
+                data_feed_events::source_name.eq(&event.source_name),
+                data_feed_events::event_type.eq(&event.event_type),
+                data_feed_events::tags.eq(&tags_json),
+                data_feed_events::payload.eq(&payload_json),
+                data_feed_events::received_at.eq(&received_at),
             ))
             .on_conflict_do_nothing()
             .execute(&mut *conn)
             .await
-            .whatever_context("feed_events insert failed")?;
+            .whatever_context("data_feed_events insert failed")?;
 
         Ok(())
     }
@@ -87,26 +88,26 @@ impl FeedStore for SqliteFeedStore {
             .pool
             .get()
             .await
-            .whatever_context("feed_events pool acquire failed")?;
+            .whatever_context("data_feed_events pool acquire failed")?;
 
-        let mut q = feed_events::table.into_boxed();
+        let mut q = data_feed_events::table.into_boxed();
 
         if let Some(ref source) = filter.source_name {
-            q = q.filter(feed_events::source_name.eq(source));
+            q = q.filter(data_feed_events::source_name.eq(source));
         }
         if let Some(ref since) = filter.since {
-            q = q.filter(feed_events::received_at.ge(since.to_string()));
+            q = q.filter(data_feed_events::received_at.ge(since.to_string()));
         }
 
         let limit: i64 = (filter.limit.min(1000)) as i64;
 
         let rows: Vec<FeedEventRow> = q
             .select(FeedEventRow::as_select())
-            .order(feed_events::received_at.asc())
+            .order(data_feed_events::received_at.asc())
             .limit(limit)
             .load(&mut *conn)
             .await
-            .whatever_context("feed_events query failed")?;
+            .whatever_context("data_feed_events query failed")?;
 
         let mut events: Vec<FeedEvent> = Vec::with_capacity(rows.len());
         for row in rows {
@@ -139,13 +140,13 @@ impl FeedStore for SqliteFeedStore {
             .await
             .whatever_context("feed_read_cursors pool acquire failed")?;
 
-        let source_name: String = feed_events::table
-            .filter(feed_events::id.eq(&event_id))
-            .select(feed_events::source_name)
+        let source_name: String = data_feed_events::table
+            .filter(data_feed_events::id.eq(&event_id))
+            .select(data_feed_events::source_name)
             .first::<String>(&mut *conn)
             .await
             .optional()
-            .whatever_context("feed_events lookup failed")?
+            .whatever_context("data_feed_events lookup failed")?
             .unwrap_or_else(|| "unknown".to_owned());
 
         let now = Timestamp::now().to_string();
@@ -183,7 +184,7 @@ impl FeedStore for SqliteFeedStore {
             .pool
             .get()
             .await
-            .whatever_context("feed_events pool acquire failed")?;
+            .whatever_context("data_feed_events pool acquire failed")?;
 
         // Correlated NOT EXISTS subquery — no clean DSL translation without
         // a relationship definition, so we keep this one-shot raw-SQL count
@@ -196,7 +197,7 @@ impl FeedStore for SqliteFeedStore {
         }
 
         let row: CountRow = diesel::sql_query(
-            "SELECT COUNT(*) AS n FROM feed_events e WHERE NOT EXISTS (SELECT 1 FROM \
+            "SELECT COUNT(*) AS n FROM data_feed_events e WHERE NOT EXISTS (SELECT 1 FROM \
              feed_read_cursors c WHERE c.subscriber_id = ?1 AND c.source_name = e.source_name AND \
              c.last_read_id >= e.id)",
         )
@@ -214,7 +215,7 @@ impl FeedStore for SqliteFeedStore {
 // ---------------------------------------------------------------------------
 
 #[derive(Queryable, Selectable)]
-#[diesel(table_name = feed_events)]
+#[diesel(table_name = data_feed_events)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 struct FeedEventRow {
     id:          String,

@@ -15,7 +15,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { Activity, LayoutDashboard, Settings } from 'lucide-react';
+import { Activity, Bell, LayoutDashboard, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 
@@ -143,6 +143,15 @@ export default function DashboardLayout() {
           >
             <LayoutDashboard className="h-3.5 w-3.5" />
             Dock
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => navigate('/subscriptions')}
+          >
+            <Bell className="h-3.5 w-3.5" />
+            Subscriptions
           </Button>
           <Button
             variant="ghost"
