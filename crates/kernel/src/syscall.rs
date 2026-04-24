@@ -132,6 +132,11 @@ impl SyscallDispatcher {
         &self.job_wheel
     }
 
+    /// Access the job result store (for admin-surface history reads).
+    pub fn job_result_store(&self) -> &Arc<crate::schedule::JobResultStore> {
+        &self.job_result_store
+    }
+
     // -- Dispatch -----------------------------------------------------------
 
     /// Handle a syscall from a session.
