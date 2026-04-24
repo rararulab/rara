@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "ayu";
             const default_dark_theme = "ayu";
-            window.path_to_searchindex_js = "searchindex-6a600697.js";
+            window.path_to_searchindex_js = "searchindex-f5f2efda.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-15f3e962.js"></script>
+        <script src="toc-3b686cdd.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -369,9 +369,9 @@ just consul-keys   # list current keys
 <tbody>
 <tr><td><code>bind_address</code></td><td><code>RARA__HTTP__BIND_ADDRESS</code></td><td><code>127.0.0.1:25555</code></td><td>HTTP listen address</td></tr>
 <tr><td><code>max_body_size</code></td><td><code>RARA__HTTP__MAX_BODY_SIZE</code></td><td><code>100MB</code></td><td>Max request body</td></tr>
-<tr><td><code>enable_cors</code></td><td><code>RARA__HTTP__ENABLE_CORS</code></td><td><code>true</code></td><td>CORS headers</td></tr>
 <tr><td><code>request_timeout</code></td><td><code>RARA__HTTP__REQUEST_TIMEOUT</code></td><td><code>60</code></td><td>Timeout in seconds</td></tr>
 <tr><td><code>web_port</code></td><td><code>RARA__HTTP__WEB_PORT</code></td><td><em>(none)</em></td><td>Static frontend server port (spawns <code>npx serve</code> or <code>python3 http.server</code> for <code>web/dist/</code>)</td></tr>
+<tr><td><code>cors_allowed_origins</code></td><td><code>RARA__HTTP__CORS_ALLOWED_ORIGINS</code></td><td><em>(required)</em></td><td>Allow-list of browser origins for <code>/api/v1/*</code> (e.g. <code>["http://localhost:5173"]</code>) — empty list is a boot-time error</td></tr>
 </tbody>
 </table>
 </div>
@@ -1438,145 +1438,6 @@ Phase 2: HTTP /health polling
 </tbody>
 </table>
 </div>
-<div style="break-before: page; page-break-before: always;"></div>
-<h1 id="symphony"><a class="header" href="#symphony">Symphony</a></h1>
-<p>Symphony 是 rara 内置的 issue runner。它轮询 Linear 或 GitHub issue，给每个 issue 创建独立 git worktree，在该 worktree 里启动一次 <code>ralph run</code>，并把 issue 状态同步到 tracker。</p>
-<p>当前实现不是 <code>ralph web</code> / task API 架构。主流程是：</p>
-<ol>
-<li>拉取活跃 issue</li>
-<li>为 issue 创建或复用 worktree</li>
-<li>生成 <code>PROMPT.md</code></li>
-<li><code>spawn ralph run --autonomous</code></li>
-<li>启动后把 issue 转到 <code>In Progress</code></li>
-<li>成功退出后把 issue 转到 <code>Verify</code></li>
-<li>失败时保留 workspace 供人工排查</li>
-</ol>
-<h2 id="runtime-model"><a class="header" href="#runtime-model">Runtime Model</a></h2>
-<pre><code class="language-text">Issue Tracker
-    |
-    v
-Symphony poll loop
-    |
-    +-- WorkspaceManager.ensure_worktree()
-    |
-    +-- RalphAgent.start()
-    |      writes PROMPT.md
-    |      spawns `ralph run --autonomous`
-    |
-    +-- stream stdout/stderr to per-issue log file
-    |
-    +-- transition issue -&gt; In Progress
-    |
-    +-- wait for child exit
-           |
-           +-- success -&gt; transition issue -&gt; Verify
-           |
-           +-- failure -&gt; keep workspace + log summary
-</code></pre>
-<p><code>ralph run</code> 是受管子进程，不会阻塞整个 symphony 服务。Symphony 只在 poll 周期里用非阻塞方式检查子进程状态。</p>
-<h2 id="issue-states"><a class="header" href="#issue-states">Issue States</a></h2>
-<p>Linear 的默认拉取状态是 <code>Todo</code>，终止状态是 <code>Done</code>、<code>Closed</code>、<code>Cancelled</code>、<code>Canceled</code>、<code>Duplicate</code>。</p>
-<p>Symphony 对状态的约定是：</p>
-<ul>
-<li>issue 被拾取并成功启动 <code>ralph run</code> 后，转到 <code>In Progress</code></li>
-<li><code>ralph run</code> 成功退出后，转到 <code>Verify</code></li>
-<li>不会自动转到 <code>Done</code></li>
-</ul>
-<p>这意味着：</p>
-<ul>
-<li><code>Verify</code> 之后的人工验证、PR merge、最终关闭 issue 目前不由 symphony 自动处理</li>
-<li>如果 <code>ralph run</code> 启动失败，issue 不会被自动推进到 <code>In Progress</code></li>
-</ul>
-<h2 id="worktrees"><a class="header" href="#worktrees">Worktrees</a></h2>
-<p>每个 issue 使用独立 branch 和 worktree。默认目录：</p>
-<pre><code class="language-text">~/.config/rara/ralpha/worktress/&lt;repo&gt;/worktrees/&lt;branch&gt;
-</code></pre>
-<p>branch 名由 issue number 和 title slug 组成，例如：</p>
-<pre><code class="language-text">issue-42-fix-startup
-</code></pre>
-<p>如果同名 branch 已经被别的 worktree checkout，git 会拒绝再次创建，这通常意味着旧的 issue workspace 还在。</p>
-<h2 id="logs"><a class="header" href="#logs">Logs</a></h2>
-<p>每个 issue 的 <code>ralph</code> 输出都会写入独立日志文件：</p>
-<pre><code class="language-text">~/.config/rara/ralpha/logs/&lt;repo&gt;/&lt;ISSUE_IDENTIFIER&gt;.log
-</code></pre>
-<p>例如：</p>
-<pre><code class="language-text">~/.config/rara/ralpha/logs/rararulab/rara/RAR-123.log
-</code></pre>
-<p>日志文件包含：</p>
-<ul>
-<li>一行 <code>meta</code> 头，记录 issue、repo、branch、workspace</li>
-<li>追加的 <code>stdout</code></li>
-<li>追加的 <code>stderr</code></li>
-</ul>
-<p>查看日志：</p>
-<pre><code class="language-bash">lnav ~/.config/rara/ralpha/logs/**/*.log
-</code></pre>
-<p>Symphony 自己的 stdout 只保留摘要日志，不直接转发 <code>ralph</code> 的原始输出。</p>
-<h2 id="prompt-contract"><a class="header" href="#prompt-contract">Prompt Contract</a></h2>
-<p>Symphony 会在 issue worktree 中写入 <code>PROMPT.md</code>，然后在该目录里运行 <code>ralph run</code>。</p>
-<p>默认 prompt 要求 <code>ralph</code>：</p>
-<ul>
-<li>完成 issue 对应代码修改</li>
-<li>运行必要验证</li>
-<li>用系统里的 <code>linear</code> CLI 在 Linear issue 上评论自己的 reasoning / implementation plan</li>
-<li>commit 改动</li>
-<li>push branch</li>
-<li>创建 GitHub pull request</li>
-<li>用同一个 <code>linear</code> CLI 在 Linear issue 上评论 PR link 和简短实现总结</li>
-</ul>
-<p>Symphony 当前不会主动检查 PR 是否创建或是否已 merge，这些属于 agent 交付约束，不是服务端状态机的一部分。</p>
-<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
-<p>示例：</p>
-<pre><code class="language-yaml">symphony:
-  enabled: true
-  poll_interval: 30s
-  max_concurrent_agents: 2
-  workflow_file: WORKFLOW.md
-
-  tracker:
-    kind: linear
-    api_key: $LINEAR_API_KEY
-    team_key: RAR
-    active_states: [Todo]
-    started_issue_state: In Progress
-    completed_issue_state: ToVerify
-
-  agent:
-    command: ralph
-    backend: codex
-    core_config_file: ralph.core.yml
-
-  repos:
-    - name: rararulab/rara
-      url: https://github.com/rararulab/rara
-      repo_path: /path/to/repo
-</code></pre>
-<p>说明：</p>
-<ul>
-<li><code>repo_path</code> 是主仓库 checkout</li>
-<li><code>workspace_root</code> 可选；不填时默认落到 <code>~/.config/rara/ralpha/worktress/&lt;repo&gt;/worktrees</code></li>
-<li>对于只通过 <code>repo:&lt;owner&gt;/&lt;repo&gt;</code> label 动态发现、但未显式写在 <code>symphony.repos</code> 里的仓库，Symphony 会默认使用 <code>git@github.com:&lt;owner&gt;/&lt;repo&gt;.git</code> 作为 clone URL</li>
-<li><code>workflow_file</code> 默认为 <code>WORKFLOW.md</code></li>
-<li><code>tracker.started_issue_state</code> 控制 Ralph 成功启动后 issue 要切到哪个 tracker 状态，默认是 <code>In Progress</code></li>
-<li><code>tracker.completed_issue_state</code> 控制 Ralph 成功完成后 issue 要切到哪个 tracker 状态，默认是 <code>ToVerify</code></li>
-<li><code>tracker.active_states</code> 控制 symphony 会从 tracker 拉哪些状态；默认只拉 <code>Todo</code></li>
-<li><code>agent.backend</code> 控制 symphony 在 issue worktree 里执行 <code>ralph init --force --backend &lt;backend&gt;</code> 时使用的 backend</li>
-<li><code>agent.core_config_file</code> 指向仓库根目录里的 Ralph core config；默认是 <code>ralph.core.yml</code></li>
-<li>agent 默认执行 <code>ralph run --autonomous</code></li>
-<li>symphony 会先执行 <code>ralph init --force --backend &lt;backend&gt; -c ralph.core.yml</code> 生成 worktree 本地 <code>ralph.yml</code></li>
-<li>init 完成后，symphony 会把 <code>ralph.core.yml</code> 的配置物化进生成的 <code>ralph.yml</code></li>
-<li>随后执行 <code>ralph run</code>，只使用这个已经物化好的 worktree 本地 <code>ralph.yml</code></li>
-<li>运行 symphony 前，需要确保 <code>codex</code> CLI 已安装，并通过 <code>OPENAI_API_KEY</code> 或 <code>CODEX_API_KEY</code> 完成认证</li>
-</ul>
-<h2 id="source-layout"><a class="header" href="#source-layout">Source Layout</a></h2>
-<pre><code class="language-text">crates/symphony/src/
-├── agent.rs      RalphAgent: prompt rendering + child process spawn
-├── config.rs     symphony / tracker / repo config
-├── error.rs      snafu error types
-├── service.rs    poll loop, process lifecycle, issue transitions, log routing
-├── tracker.rs    GitHub and Linear issue tracker implementations
-└── workspace.rs  git worktree provisioning and cleanup
-</code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="scheduled--background-tasks"><a class="header" href="#scheduled--background-tasks">Scheduled &amp; Background Tasks</a></h1>
 <p>Rara’s kernel provides two mechanisms for agents to perform work outside the
@@ -2776,7 +2637,7 @@ buf generate
                     └──────────┘   │ (metrics)   │   └───────────┘
                                    └────────────┘
 </code></pre>
-<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
+<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
 <p>All telemetry is configured in <code>config.yaml</code> under the <code>telemetry</code> section:</p>
 <pre><code class="language-yaml">telemetry:
   otlp_endpoint: "http://localhost:4318"   # OTLP collector endpoint
@@ -3014,7 +2875,7 @@ scripts/bin/devtool check-agent-md
 <h3 id="devtool-check-deps"><a class="header" href="#devtool-check-deps"><code>devtool check-deps</code></a></h3>
 <p>Validates crate dependency direction against a 7-layer architecture map. Lower-layer crates must not depend on higher-layer crates:</p>
 <pre><code>Layer 0 (foundation)  → common/*, paths, rara-model, domain/*, rara-api
-Layer 1 (domain)      → soul, symphony, skills, vault, composio, ...
+Layer 1 (domain)      → soul, skills, vault, composio, ...
 Layer 2 (core)        → kernel
 Layer 3 (subsystems)  → dock, sessions, agents, mcp, ...
 Layer 4 (integration) → channels, backend-admin
