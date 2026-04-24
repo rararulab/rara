@@ -418,3 +418,11 @@ Each kernel turn calls `StreamHub::open(session)` which gets-or-creates a `broad
 - Do NOT emit `StreamEvent::StreamClosed` from `close_session()` — that path is only called from `open()` to reap zombies from pre-empted turns. Emitting a terminal marker there would cause session-level subscribers (web `WebEvent::Done`) to finalize the previous turn's UI mid-flight when the user sends a follow-up message before the first turn completes. Normal turn completion goes through `close()` which DOES emit the marker.
 - Do NOT hold a DashMap `get()` guard across a `remove()` on the same map — DashMap shards are `RwLock`-based and a read guard across a write on the same shard deadlocks. `reap_session_bus_if_idle` uses `remove_if` so the receiver-count check and the removal happen atomically under the shard write lock with no nested same-shard lock.
 - Do NOT replace the `remove_if` closure with a pre-check + `remove()` pair — the non-atomic variant has a TOCTOU window where a concurrent `subscribe_session_events` can attach a fresh receiver to a sender the reaper then deletes, silently losing every subsequent event for that session.
+
+---
+
+## Critical: Scheduler Admin Syscalls — `schedule.rs` + `syscall.rs`
+
+- `Syscall::TriggerJob` fires a job on demand by cloning its `JobEntry`, inserting it into the in-flight ledger with the standard lease, and pushing a `ScheduledTask` event. It MUST NOT mutate the wheel's `next_at` — recurring jobs continue on their regular cadence. The only in-flight mutation path that advances schedules is `drain_expired` → `reschedule_recurring`; `TriggerJob` deliberately bypasses it.
+- `Syscall::ListAllJobs` is an admin-only surface. The kernel does not authenticate it; the backend HTTP route is the auth boundary. Do NOT repurpose this variant for session-scoped tool calls — use `Syscall::ListJobs` there so future tightening of `ListAllJobs` permissions cannot regress tool UX.
+- `JobResultStore::read_latest` intentionally walks results newest-first and skips malformed entries, so a single corrupt tail object does not hide the rest of the history from the admin UI. Keep the fall-through behaviour when extending the store.

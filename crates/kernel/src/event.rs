@@ -217,6 +217,34 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
     },
 
+    /// List every scheduled job across all sessions — admin-only surface.
+    ///
+    /// Semantically distinct from [`Syscall::ListJobs`]: this variant exists
+    /// so the backend admin route has an unambiguous, auth-gated entry point
+    /// that cannot be reused by unprivileged session tools. The kernel does
+    /// no auth check itself — the HTTP layer is responsible for gating.
+    ListAllJobs {
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<Vec<crate::schedule::JobEntry>>>,
+    },
+
+    /// Immediately fire a scheduled job without advancing its `next_at`.
+    ///
+    /// The job is cloned from the wheel (not removed), inserted into the
+    /// in-flight ledger with the standard lease, and dispatched through the
+    /// same `ScheduledTask` path that [`JobWheel::drain_expired`] uses. The
+    /// wheel's original schedule is untouched — recurring jobs still fire at
+    /// their next regular `next_at`.
+    ///
+    /// [`JobWheel::drain_expired`]: crate::schedule::JobWheel::drain_expired
+    TriggerJob {
+        job_id:   crate::schedule::JobId,
+        #[debug(skip)]
+        #[serde(skip_serializing)]
+        reply_tx: oneshot::Sender<crate::error::Result<()>>,
+    },
+
     // -- Task Report & Subscription --
     /// Register a notification subscription for the calling session.
     Subscribe {

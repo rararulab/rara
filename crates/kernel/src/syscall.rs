@@ -505,6 +505,48 @@ impl SyscallDispatcher {
                 let jobs = wheel.list(None);
                 let _ = reply_tx.send(Ok(jobs));
             }
+            Syscall::ListAllJobs { reply_tx } => {
+                // Admin-only surface: the backend HTTP route is responsible
+                // for permission checks. The kernel itself is auth-agnostic
+                // here so the call stays a pure data read.
+                let wheel = self.job_wheel.lock();
+                let jobs = wheel.list(None);
+                let _ = reply_tx.send(Ok(jobs));
+            }
+            Syscall::TriggerJob { job_id, reply_tx } => {
+                let wheel_ref = self.job_wheel.clone();
+                let job_id_clone = job_id.clone();
+                let triggered = tokio::task::spawn_blocking(move || {
+                    let mut wheel = wheel_ref.lock();
+                    wheel.trigger_now(&job_id_clone)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "spawn_blocking panicked during TriggerJob");
+                    None
+                });
+
+                let result = match triggered {
+                    Some(job) => {
+                        info!(
+                            job_id = %job.id,
+                            session = %job.session_key,
+                            "manually triggered scheduled job"
+                        );
+                        // Dispatch via the same ScheduledTask event path
+                        // drain_expired uses so manual triggers and automatic
+                        // fires share one execution pipeline.
+                        let _ = kernel_handle
+                            .event_queue()
+                            .try_push(crate::event::KernelEventEnvelope::scheduled_task(job));
+                        Ok(())
+                    }
+                    None => Err(KernelError::Other {
+                        message: format!("job not found: {job_id}").into(),
+                    }),
+                };
+                let _ = reply_tx.send(result);
+            }
             Syscall::Subscribe {
                 match_tags,
                 on_receive,

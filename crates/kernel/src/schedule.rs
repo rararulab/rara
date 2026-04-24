@@ -582,6 +582,45 @@ impl JobWheel {
             .collect()
     }
 
+    /// Insert a manual-trigger copy of `job_id` into the in-flight ledger
+    /// without mutating the wheel's scheduled entry.
+    ///
+    /// Used by `Syscall::TriggerJob` to fire a job on demand. The original
+    /// entry's `next_at` is intentionally preserved so recurring jobs keep
+    /// their regular cadence after an out-of-band trigger. Persists the
+    /// ledger to disk on success.
+    ///
+    /// Returns the cloned [`JobEntry`] ready to be dispatched via
+    /// `ScheduledTask`, or `None` if no job with that ID is on the wheel.
+    /// If the same job is already in-flight the new lease overwrites it —
+    /// the agent runtime is responsible for handling overlapping executions.
+    pub fn trigger_now(&mut self, job_id: &JobId) -> Option<JobEntry> {
+        let key = *self.by_id.get(job_id)?;
+        let entry = self.jobs.get(&key)?.clone();
+
+        if self.in_flight.contains_key(job_id) {
+            warn!(
+                job_id = %job_id,
+                "trigger_now: job already in-flight; enqueueing overlapping execution"
+            );
+        }
+
+        let now = self.clock.now();
+        let lease_deadline = now
+            .checked_add(jiff::SignedDuration::from_secs(DEFAULT_LEASE_SECS))
+            .unwrap_or(now);
+        self.in_flight.insert(
+            entry.id,
+            InFlightEntry {
+                job: entry.clone(),
+                fired_at: now,
+                lease_deadline,
+            },
+        );
+        self.persist_in_flight();
+        Some(entry)
+    }
+
     /// Mark a job as completed, removing it from the in-flight ledger.
     ///
     /// Called when the execution agent's session ends (regardless of whether
@@ -778,32 +817,64 @@ impl JobResultStore {
     /// Read all execution results for a given job, ordered by completion
     /// time (lexicographic on the epoch filename).
     pub async fn read(&self, job_id: &JobId) -> Vec<JobResult> {
+        let entries = self.sorted_entries(job_id).await;
+        // `sorted_entries` returns ascending — `read` keeps that order.
+        let mut results = Vec::new();
+        for entry in entries {
+            if let Some(r) = self.read_one(entry.path()).await {
+                results.push(r);
+            }
+        }
+        results
+    }
+
+    /// Read the most recent execution result for a given job.
+    ///
+    /// Cheaper than `read` when the caller only needs the latest status —
+    /// the scheduler admin UI uses this to derive `last_status` without
+    /// paging the full history. Returns `None` if the job directory is
+    /// empty or every object fails to parse.
+    pub async fn read_latest(&self, job_id: &JobId) -> Option<JobResult> {
+        // Walk newest-first so a single malformed tail entry doesn't hide
+        // the rest of the history — skip and try the next one.
+        let entries = self.sorted_entries(job_id).await;
+        for entry in entries.into_iter().rev() {
+            if let Some(r) = self.read_one(entry.path()).await {
+                return Some(r);
+            }
+        }
+        None
+    }
+
+    /// List non-directory result objects under `{job_id}/`, sorted
+    /// ascending by path (epoch filenames sort chronologically).
+    async fn sorted_entries(&self, job_id: &JobId) -> Vec<opendal::Entry> {
         let prefix = format!("{job_id}/");
         let mut entries = match self.op.list(&prefix).await {
             Ok(v) => v,
             Err(_) => return Vec::new(),
         };
-        // Sort by path (epoch filenames sort chronologically).
+        entries.retain(|e| !e.metadata().is_dir());
         entries.sort_by(|a, b| a.path().cmp(b.path()));
+        entries
+    }
 
-        let mut results = Vec::new();
-        for entry in entries {
-            if entry.metadata().is_dir() {
-                continue;
-            }
-            match self.op.read(entry.path()).await {
-                Ok(buf) => match serde_json::from_slice::<JobResult>(&buf.to_vec()) {
-                    Ok(r) => results.push(r),
-                    Err(e) => {
-                        warn!(error = %e, path = entry.path(), "skipping malformed job result");
-                    }
-                },
+    /// Read and parse a single result object, logging and returning `None`
+    /// on read or parse failure.
+    async fn read_one(&self, path: &str) -> Option<JobResult> {
+        match self.op.read(path).await {
+            Ok(buf) => match serde_json::from_slice::<JobResult>(&buf.to_vec()) {
+                Ok(r) => Some(r),
                 Err(e) => {
-                    warn!(error = %e, path = entry.path(), "failed to read job result");
+                    warn!(error = %e, path = path, "skipping malformed job result");
+                    None
                 }
+            },
+            Err(e) => {
+                warn!(error = %e, path = path, "failed to read job result");
+                None
             }
         }
-        results
     }
 }
 
@@ -1227,5 +1298,147 @@ mod tests {
             back.lease_deadline.as_second(),
             t0().as_second() + DEFAULT_LEASE_SECS
         );
+    }
+
+    fn cron_entry(expr: &str, next_at: Timestamp) -> JobEntry {
+        JobEntry {
+            id:          JobId::new(),
+            trigger:     Trigger::Cron {
+                expr: expr.into(),
+                next_at,
+            },
+            message:     "cron".into(),
+            session_key: SessionKey::new(),
+            principal:   test_principal(),
+            created_at:  next_at,
+            tags:        vec![],
+        }
+    }
+
+    /// `trigger_now` must NOT advance the wheel entry's `next_at` — the
+    /// regular cadence survives an out-of-band fire.
+    #[test]
+    fn trigger_job_fires_without_advancing_next_at() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        // Cron: next fire one hour from now.
+        let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+        let entry = cron_entry("0 * * * * *", future_fire);
+        let id = entry.id;
+        wheel.add(entry);
+
+        let fired = wheel.trigger_now(&id).expect("trigger_now should find job");
+        assert_eq!(fired.id, id);
+
+        // Wheel still holds the job with the original next_at.
+        let still_scheduled = wheel
+            .list(None)
+            .into_iter()
+            .find(|e| e.id == id)
+            .expect("job should remain on the wheel after manual trigger");
+        assert_eq!(
+            still_scheduled.trigger.next_at(),
+            future_fire,
+            "trigger_now must not mutate the wheel's scheduled next_at"
+        );
+
+        // And there is exactly one in-flight entry with the fresh lease.
+        assert_eq!(wheel.in_flight.len(), 1);
+        let ifl = &wheel.in_flight[&id];
+        assert_eq!(ifl.fired_at, t0());
+        assert_eq!(
+            ifl.lease_deadline.as_second(),
+            t0().as_second() + DEFAULT_LEASE_SECS
+        );
+    }
+
+    #[test]
+    fn trigger_job_missing_id_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+        let ghost = JobId::new();
+        assert!(wheel.trigger_now(&ghost).is_none());
+        assert!(wheel.in_flight.is_empty());
+    }
+
+    /// `list(None)` returns jobs from every session — exercised by the
+    /// admin-only `Syscall::ListAllJobs` variant.
+    #[test]
+    fn list_all_jobs_crosses_sessions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+
+        let mut a = make_entry(future(60));
+        a.session_key = SessionKey::new();
+        let mut b = make_entry(future(90));
+        b.session_key = SessionKey::new();
+        assert_ne!(a.session_key, b.session_key);
+        let id_a = a.id;
+        let id_b = b.id;
+
+        wheel.add(a);
+        wheel.add(b);
+
+        let all = wheel.list(None);
+        assert_eq!(all.len(), 2);
+        let ids: std::collections::HashSet<_> = all.iter().map(|e| e.id).collect();
+        assert!(ids.contains(&id_a));
+        assert!(ids.contains(&id_b));
+    }
+
+    fn make_result(job_id: JobId, completed_at: Timestamp) -> JobResult {
+        JobResult {
+            job_id,
+            task_id: Uuid::new_v4(),
+            task_type: "test".into(),
+            tags: vec![],
+            status: crate::task_report::TaskReportStatus::Completed,
+            summary: format!("run at {completed_at}"),
+            result: serde_json::json!({"at": completed_at.as_second()}),
+            action_taken: None,
+            completed_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_latest_returns_most_recent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = JobResultStore::new(tmp.path().to_path_buf());
+        let job_id = JobId::new();
+
+        let t1 = Timestamp::from_second(t0().as_second()).unwrap();
+        let t2 = Timestamp::from_second(t0().as_second() + 60).unwrap();
+        let t3 = Timestamp::from_second(t0().as_second() + 120).unwrap();
+
+        store
+            .append(&make_result(job_id, t1))
+            .await
+            .expect("append t1");
+        store
+            .append(&make_result(job_id, t2))
+            .await
+            .expect("append t2");
+        store
+            .append(&make_result(job_id, t3))
+            .await
+            .expect("append t3");
+
+        let latest = store
+            .read_latest(&job_id)
+            .await
+            .expect("read_latest should find the newest result");
+        assert_eq!(latest.completed_at, t3);
+    }
+
+    #[tokio::test]
+    async fn read_latest_empty_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = JobResultStore::new(tmp.path().to_path_buf());
+        assert!(store.read_latest(&JobId::new()).await.is_none());
     }
 }
