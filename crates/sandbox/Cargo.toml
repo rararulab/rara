@@ -1,0 +1,42 @@
+# Standalone sub-workspace: see the root `Cargo.toml` `exclude` entry for
+# `crates/sandbox`. boxlite's `rusqlite = "0.37"` dependency links sqlite3
+# via libsqlite3-sys 0.35, which collides with the main workspace's
+# `sqlx = "0.8"` (libsqlite3-sys 0.30). Until issue #1700 decides how to
+# wire this into the kernel, `rara-sandbox` builds independently.
+[workspace]
+
+[package]
+name = "rara-sandbox"
+version = "0.0.1"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["crrow"]
+repository = "https://github.com/rararulab/rara"
+homepage = "https://github.com/rararulab/rara"
+readme = "../../README.md"
+keywords = ["rust", "agent", "sandbox", "boxlite", "microvm"]
+categories = ["virtualization"]
+description = "Hardware-isolated code execution sandbox backed by boxlite (microVM)."
+publish = false
+
+[dependencies]
+bon = "^3.6"
+boxlite = { git = "https://github.com/boxlite-ai/boxlite", tag = "v0.8.2" }
+futures = "^0.3"
+serde = { version = "^1.0", features = ["derive"] }
+snafu = "^0.9"
+tokio = { version = "^1.45", features = ["full", "tracing"] }
+tracing = "^0.1"
+
+[dev-dependencies]
+tokio = { version = "^1.45", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"

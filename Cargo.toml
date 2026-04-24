@@ -102,6 +102,12 @@ needless_for_each = "allow"
 
 [workspace]
 resolver = "3"
+# `crates/sandbox` is intentionally excluded: its `boxlite` git dep brings in
+# `rusqlite = "0.37"` (links = "sqlite3", via `libsqlite3-sys 0.35`), which
+# collides with the workspace's `sqlx = "0.8"` (`libsqlite3-sys 0.30`).
+# Cargo forbids two crates sharing the same `links` value. Integration with
+# the rest of the workspace is tracked in issue #1700.
+exclude = ["crates/sandbox"]
 members = [
     "api",
     "crates/app",
