@@ -14,10 +14,15 @@
 
 pub mod config;
 pub mod db;
+pub mod diesel_pool;
 pub mod error;
 pub mod kv;
 
 pub use config::DatabaseConfig;
 pub use db::DBStore;
+pub use diesel_pool::{
+    DieselPoolConfig, DieselPoolInitError, DieselPoolRunError, DieselSqliteConnection,
+    DieselSqlitePool, build_sqlite_pool,
+};
 pub use error::{Error, Result};
 pub use kv::KVStore;

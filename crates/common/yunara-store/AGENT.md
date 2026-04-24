@@ -2,37 +2,37 @@
 
 ## Purpose
 
-Database connection pool and key-value store — wraps SQLx SQLite pool creation with `DatabaseConfig` and provides a `KVStore` for simple string key-value persistence.
+Shared diesel-async + bb8 SQLite connection pool and a JSON key-value store
+used for runtime settings and miscellaneous persisted state.
 
 ## Architecture
 
 ### Key modules
 
-- `src/config.rs` — `DatabaseConfig` with `bon::Builder`. `open(database_url)` creates and returns a `DBStore`.
-- `src/db.rs` — `DBStore` wraps `SqlitePool`. Provides `pool()` accessor and `kv_store()` to get a `KVStore` instance.
-- `src/kv.rs` — `KVStore` — simple string key-value store backed by a `kv_store` SQLite table. Methods: `get`, `set`, `delete`, `list_keys`.
-- `src/err.rs` — `snafu`-based error types.
+- `src/diesel_pool.rs` — `DieselSqlitePool` plus `build_sqlite_pool`. The sqlite pool sets `WAL`, `busy_timeout=5000`, `foreign_keys=ON` pragmas once per physical connection via the manager's `custom_setup` hook.
+- `src/config.rs` — `DatabaseConfig` with `bon::Builder`; `open(database_url)` wraps `build_sqlite_pool` and returns a `DBStore`.
+- `src/db.rs` — `DBStore` wraps `DieselSqlitePool`; provides `pool()` and `kv_store()`.
+- `src/kv.rs` — `KVStore` backed by the `kv_table` SQLite table (JSON values). Full diesel DSL; `batch_set` runs inside a transaction.
+- `src/error.rs` — `snafu` error enum covering pool, diesel, and codec failures.
 
 ### Public API
 
-- `DatabaseConfig` — connection pool configuration (re-exported).
-- `DBStore` — database handle (re-exported).
-- `KVStore` — key-value operations (re-exported).
+- `DatabaseConfig`, `DBStore`, `KVStore`, `DieselSqlitePool`.
 
 ## Critical Invariants
 
-- `DatabaseConfig` does not provide default database URLs — the URL must be passed to `open()`.
-- The `kv_store` table must exist before `KVStore` is used — it is created by `rara-model` migrations.
-- `DBStore` owns the pool — when dropped, the pool is closed.
+- No hardcoded database URLs — caller supplies the URL to `DatabaseConfig::open()`.
+- The `kv_table` schema is owned by `rara-model/migrations` and must exist before `KVStore` is used.
+- Pragmas are applied on physical-connection establishment, not on every checkout — `bb8` recycles the same connection without re-setup.
 
 ## What NOT To Do
 
-- Do NOT put repository implementations or business logic in this crate — it is infrastructure only.
-- Do NOT hardcode database URLs — they are resolved from `rara_paths::database_dir()` in `rara-app`.
-- Do NOT use `KVStore` for structured data — it is string-only; use proper SQLx models for typed data.
+- Do NOT put repository implementations or business logic here — infrastructure only.
+- Do NOT bypass the diesel DSL with `diesel::sql_query` outside the sanctioned fragments (see `docs/guides/db-diesel-migration.md`).
+- Do NOT re-introduce the sqlx pool; `yunara-store` is diesel-only post-#1702.
 
 ## Dependencies
 
-**Upstream:** `sqlx` (SQLite), `bon`, `serde`.
+**Upstream:** `diesel`, `diesel-async`, `bb8`, `rara-model` (schema), `bon`, `serde`.
 
-**Downstream:** `rara-app` (creates `DBStore` at startup), `rara-backend-admin` (uses `KVStore` for settings).
+**Downstream:** `rara-app` (creates `DBStore` at startup), `rara-backend-admin` (uses `KVStore` for settings + `DieselSqlitePool` for data-feed persistence).

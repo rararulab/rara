@@ -34,7 +34,15 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-use sqlx::SqlitePool;
+use diesel::{
+    ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper, sql_types::Text,
+};
+use diesel_async::RunQueryDsl;
+use rara_model::schema::execution_traces;
+use snafu::ResultExt;
+use yunara_store::diesel_pool::DieselSqlitePool;
+
+use crate::error::{DieselPoolSnafu, DieselSnafu, JsonSnafu, Result};
 
 pub mod builder;
 pub mod tool_display;
@@ -77,17 +85,42 @@ pub struct ToolTraceEntry {
 const TRACE_RETENTION_DAYS: u32 = 30;
 const CLEANUP_INTERVAL: u32 = 100;
 
+/// Row projection for a stored trace's serialized payload.
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = execution_traces)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct TraceDataRow {
+    trace_data: String,
+}
+
+/// Row projection for a trace's session_id.
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = execution_traces)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct TraceSessionRow {
+    session_id: String,
+}
+
+/// Row projection for `(session_id, trace_data)` lookups by message id.
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = execution_traces)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+struct TraceSessionAndDataRow {
+    session_id: String,
+    trace_data: String,
+}
+
 /// Persistent store for execution traces backed by SQLite.
 ///
 /// Traces older than 30 days are automatically cleaned up every 100 saves.
 #[derive(Debug, Clone)]
 pub struct TraceService {
-    pool:       SqlitePool,
+    pool:       DieselSqlitePool,
     save_count: Arc<AtomicU32>,
 }
 
 impl TraceService {
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: DieselSqlitePool) -> Self {
         Self {
             pool,
             save_count: Arc::new(AtomicU32::new(0)),
@@ -95,31 +128,44 @@ impl TraceService {
     }
 
     /// Save an execution trace. Returns the generated ULID.
-    pub async fn save(
-        &self,
-        session_id: &str,
-        trace: &ExecutionTrace,
-    ) -> Result<String, sqlx::Error> {
+    #[tracing::instrument(skip_all)]
+    pub async fn save(&self, session_id: &str, trace: &ExecutionTrace) -> Result<String> {
         let id = ulid::Ulid::new().to_string();
-        let trace_data =
-            serde_json::to_string(trace).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+        let trace_data = serde_json::to_string(trace).context(JsonSnafu)?;
 
-        sqlx::query("INSERT INTO execution_traces (id, session_id, trace_data) VALUES (?, ?, ?)")
-            .bind(&id)
-            .bind(session_id)
-            .bind(&trace_data)
-            .execute(&self.pool)
-            .await?;
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        diesel::insert_into(execution_traces::table)
+            .values((
+                execution_traces::id.eq(&id),
+                execution_traces::session_id.eq(session_id),
+                execution_traces::trace_data.eq(&trace_data),
+            ))
+            .execute(&mut *conn)
+            .await
+            .context(DieselSnafu)?;
 
         // Periodically clean up old traces.
         if self.save_count.fetch_add(1, Ordering::Relaxed) % CLEANUP_INTERVAL == 0 {
             let pool = self.pool.clone();
             tokio::spawn(async move {
-                if let Err(e) = sqlx::query(
-                    "DELETE FROM execution_traces WHERE created_at < datetime('now', ?)",
+                let cutoff = format!("-{TRACE_RETENTION_DAYS} days");
+                let mut conn = match pool.get().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to acquire diesel conn for trace cleanup");
+                        return;
+                    }
+                };
+                // `created_at < datetime('now', ?)` — diesel has no cross-backend
+                // DSL for sqlite's `datetime()`; emit it via the sanctioned
+                // `sql::<Text>` helper per docs/guides/db-diesel-migration.md.
+                let cutoff_expr = diesel::dsl::sql::<Text>("datetime('now', ")
+                    .bind::<Text, _>(cutoff)
+                    .sql(")");
+                if let Err(e) = diesel::delete(
+                    execution_traces::table.filter(execution_traces::created_at.lt(cutoff_expr)),
                 )
-                .bind(format!("-{TRACE_RETENTION_DAYS} days"))
-                .execute(&pool)
+                .execute(&mut *conn)
                 .await
                 {
                     tracing::warn!(error = %e, "failed to clean up old execution traces");
@@ -131,17 +177,22 @@ impl TraceService {
     }
 
     /// Retrieve an execution trace by ID.
-    pub async fn get(&self, id: &str) -> Result<Option<ExecutionTrace>, sqlx::Error> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT trace_data FROM execution_traces WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
+    #[tracing::instrument(skip_all)]
+    pub async fn get(&self, id: &str) -> Result<Option<ExecutionTrace>> {
+        use diesel::OptionalExtension;
+
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let row: Option<TraceDataRow> = execution_traces::table
+            .filter(execution_traces::id.eq(id))
+            .select(TraceDataRow::as_select())
+            .first(&mut *conn)
+            .await
+            .optional()
+            .context(DieselSnafu)?;
 
         match row {
-            Some((data,)) => {
-                let trace = serde_json::from_str(&data)
-                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+            Some(r) => {
+                let trace = serde_json::from_str(&r.trace_data).context(JsonSnafu)?;
                 Ok(Some(trace))
             }
             None => Ok(None),
@@ -149,13 +200,19 @@ impl TraceService {
     }
 
     /// Retrieve the session_id associated with a trace.
-    pub async fn get_session_id(&self, id: &str) -> Result<Option<String>, sqlx::Error> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT session_id FROM execution_traces WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row.map(|(s,)| s))
+    #[tracing::instrument(skip_all)]
+    pub async fn get_session_id(&self, id: &str) -> Result<Option<String>> {
+        use diesel::OptionalExtension;
+
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let row: Option<TraceSessionRow> = execution_traces::table
+            .filter(execution_traces::id.eq(id))
+            .select(TraceSessionRow::as_select())
+            .first(&mut *conn)
+            .await
+            .optional()
+            .context(DieselSnafu)?;
+        Ok(row.map(|r| r.session_id))
     }
 
     /// Find the session and full execution trace for a `rara_message_id`.
@@ -165,23 +222,36 @@ impl TraceService {
     /// model, tokens, iterations, thinking, tools, plan steps, and
     /// rationale, so callers do not need to re-derive these from tape
     /// entries.
+    #[tracing::instrument(skip_all)]
     pub async fn find_trace_by_message_id(
         &self,
         message_id: &str,
-    ) -> Result<Option<(String, ExecutionTrace)>, sqlx::Error> {
-        let row: Option<(String, String)> = sqlx::query_as(
-            "SELECT session_id, trace_data FROM execution_traces WHERE json_extract(trace_data, \
-             '$.rara_message_id') = ? LIMIT 1",
+    ) -> Result<Option<(String, ExecutionTrace)>> {
+        use diesel::OptionalExtension;
+
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+
+        // `json_extract(trace_data, '$.rara_message_id') = ?` has no DSL
+        // analogue — diesel lacks a cross-backend JSON1 helper. Emit the
+        // predicate via `sql::<Bool>` per docs/guides/db-diesel-migration.md.
+        let predicate = diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "json_extract(trace_data, '$.rara_message_id') = ",
         )
-        .bind(message_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        .bind::<Text, _>(message_id);
+
+        let row: Option<TraceSessionAndDataRow> = execution_traces::table
+            .filter(predicate)
+            .select(TraceSessionAndDataRow::as_select())
+            .limit(1)
+            .first(&mut *conn)
+            .await
+            .optional()
+            .context(DieselSnafu)?;
 
         match row {
-            Some((session_id, data)) => {
-                let trace = serde_json::from_str(&data)
-                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
-                Ok(Some((session_id, trace)))
+            Some(r) => {
+                let trace = serde_json::from_str(&r.trace_data).context(JsonSnafu)?;
+                Ok(Some((r.session_id, trace)))
             }
             None => Ok(None),
         }
@@ -189,12 +259,19 @@ impl TraceService {
 
     /// Delete traces older than `retention_days`. Returns the number of rows
     /// removed.
-    pub async fn cleanup(&self, retention_days: u32) -> Result<u64, sqlx::Error> {
-        let result =
-            sqlx::query("DELETE FROM execution_traces WHERE created_at < datetime('now', ?)")
-                .bind(format!("-{retention_days} days"))
-                .execute(&self.pool)
-                .await?;
-        Ok(result.rows_affected())
+    #[tracing::instrument(skip_all)]
+    pub async fn cleanup(&self, retention_days: u32) -> Result<u64> {
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let cutoff = format!("-{retention_days} days");
+        let cutoff_expr = diesel::dsl::sql::<Text>("datetime('now', ")
+            .bind::<Text, _>(cutoff)
+            .sql(")");
+        let affected = diesel::delete(
+            execution_traces::table.filter(execution_traces::created_at.lt(cutoff_expr)),
+        )
+        .execute(&mut *conn)
+        .await
+        .context(DieselSnafu)?;
+        Ok(affected as u64)
     }
 }

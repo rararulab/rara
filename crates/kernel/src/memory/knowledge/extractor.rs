@@ -22,8 +22,8 @@
 
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
-use sqlx::SqlitePool;
 use tracing::{info, warn};
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 use super::{
     categories,
@@ -55,7 +55,7 @@ pub enum ExtractorError {
 
     /// Database operation failed.
     #[snafu(display("database error: {source}"))]
-    Database { source: sqlx::Error },
+    Database { source: crate::error::KernelError },
 
     /// Category file I/O failed.
     #[snafu(display("category error: {source}"))]
@@ -87,7 +87,7 @@ pub async fn extract_knowledge(
     entries: &[TapEntry],
     username: &str,
     tape_name: &str,
-    pool: &SqlitePool,
+    pool: &DieselSqlitePool,
     embedding_svc: &EmbeddingService,
     agent: &ResolvedAgent,
     similarity_threshold: f32,
@@ -250,7 +250,7 @@ async fn update_category_files(
     driver: &dyn LlmDriver,
     model: &str,
     username: &str,
-    pool: &SqlitePool,
+    pool: &DieselSqlitePool,
 ) -> Result<()> {
     let all_items = items::list_items_by_username(pool, username)
         .await

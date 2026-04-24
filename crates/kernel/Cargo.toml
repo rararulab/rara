@@ -57,7 +57,11 @@ serde_yaml.workspace = true
 sha2.workspace = true
 smart-default.workspace = true
 snafu.workspace = true
-sqlx.workspace = true
+bb8 = "0.9"
+diesel.workspace = true
+diesel-async.workspace = true
+rara-model.workspace = true
+yunara-store.workspace = true
 strum = { workspace = true, features = ["derive"] }
 subtle.workspace = true
 tokio.workspace = true
@@ -76,8 +80,10 @@ async-trait.workspace = true
 chrono.workspace = true
 common-telemetry.workspace = true
 dashmap = "6"
+diesel_migrations.workspace = true
 rara-domain-shared = { workspace = true, features = ["testing"] }
 rara-kernel = { path = ".", features = ["testing"] }
+rara-model.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 test-case = "^3"

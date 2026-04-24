@@ -160,6 +160,9 @@ croner = "3"
 crossbeam-queue = "0.3"
 crossterm = "0.28"
 derive_more = { version = "2.0", features = ["full"] }
+diesel = { version = "2.3", features = ["sqlite", "chrono", "uuid", "serde_json", "r2d2", "returning_clauses_for_sqlite_3_35"] }
+diesel-async = { version = "0.8", features = ["sqlite", "bb8"] }
+diesel_migrations = { version = "2.3", features = ["sqlite"] }
 dirs = "^6"
 eventsource-stream = "0.2"
 futures = "^0.3"
@@ -205,7 +208,6 @@ sha2 = "0.11"
 shadow-rs = "1.2"
 smart-default = "0.7"
 snafu = "^0.9"
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono", "uuid"] }
 strum = "^0.27"
 strum_macros = "^0.27"
 subtle = "2"

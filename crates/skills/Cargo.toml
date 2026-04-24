@@ -32,7 +32,11 @@ serde_json.workspace = true
 serde_yaml = "0.9"
 sha2.workspace = true
 snafu.workspace = true
-sqlx.workspace = true
+bb8 = "0.9"
+diesel.workspace = true
+diesel-async.workspace = true
+rara-model.workspace = true
+yunara-store.workspace = true
 strum = { workspace = true, features = ["derive"] }
 strum_macros.workspace = true
 tar = "0.4"

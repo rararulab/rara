@@ -34,7 +34,7 @@ use rara_kernel::{
     trace::{ExecutionTrace, TraceService},
 };
 use snafu::{ResultExt, Whatever};
-use sqlx::sqlite::SqlitePoolOptions;
+use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePool, build_sqlite_pool};
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Inspect a message by its rara_message_id")]
@@ -98,13 +98,16 @@ impl DebugCmd {
 
 /// Open the rara SQLite database in read-only mode. The CLI must not run
 /// migrations or hold a write lock — the running daemon may be active.
-async fn open_db() -> Result<sqlx::SqlitePool, sqlx::Error> {
+async fn open_db() -> Result<DieselSqlitePool, yunara_store::error::Error> {
     let db_path = rara_paths::database_dir().join("rara.db");
     let url = format!("sqlite:{}?mode=ro", db_path.display());
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await
+    build_sqlite_pool(
+        &DieselPoolConfig::builder()
+            .database_url(url)
+            .max_connections(1)
+            .build(),
+    )
+    .await
 }
 
 /// Single chronological event extracted from the tape.

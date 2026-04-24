@@ -20,37 +20,40 @@
 //!
 //! [`DataFeedRegistry`]: rara_kernel::data_feed::DataFeedRegistry
 
+use diesel::{ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper};
+use diesel_async::RunQueryDsl;
 use jiff::Timestamp;
 use rara_kernel::data_feed::{
     AuthConfig, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedType,
 };
-use sqlx::SqlitePool;
+use rara_model::schema::{data_feed_events, data_feeds};
 use tracing::instrument;
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 /// Service for data feed persistence operations.
 ///
-/// Holds a SQLite connection pool and provides CRUD on the `data_feeds`
+/// Holds a diesel-async SQLite pool and provides CRUD on the `data_feeds`
 /// table plus paginated queries on the `data_feed_events` table.
 #[derive(Clone)]
 pub struct DataFeedSvc {
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
 }
 
 impl DataFeedSvc {
     /// Create a new service backed by the given pool.
-    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
+    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
 
     // -- Feed config CRUD ---------------------------------------------------
 
     /// List all registered data feed configurations.
     #[instrument(skip_all)]
     pub async fn list_feeds(&self) -> anyhow::Result<Vec<DataFeedConfig>> {
-        let rows: Vec<FeedRow> = sqlx::query_as(
-            "SELECT id, name, feed_type, tags, transport, auth, enabled, status, last_error, \
-             created_at, updated_at FROM data_feeds ORDER BY created_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let mut conn = self.pool.get().await?;
+        let rows: Vec<FeedRow> = data_feeds::table
+            .select(FeedRow::as_select())
+            .order(data_feeds::created_at.desc())
+            .load(&mut *conn)
+            .await?;
 
         rows.into_iter().map(FeedRow::into_config).collect()
     }
@@ -58,13 +61,15 @@ impl DataFeedSvc {
     /// Get a single feed by ID.
     #[instrument(skip(self))]
     pub async fn get_feed(&self, id: &str) -> anyhow::Result<Option<DataFeedConfig>> {
-        let row: Option<FeedRow> = sqlx::query_as(
-            "SELECT id, name, feed_type, tags, transport, auth, enabled, status, last_error, \
-             created_at, updated_at FROM data_feeds WHERE id = ?1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        use diesel::OptionalExtension;
+
+        let mut conn = self.pool.get().await?;
+        let row: Option<FeedRow> = data_feeds::table
+            .filter(data_feeds::id.eq(id))
+            .select(FeedRow::as_select())
+            .first(&mut *conn)
+            .await
+            .optional()?;
 
         row.map(FeedRow::into_config).transpose()
     }
@@ -80,24 +85,23 @@ impl DataFeedSvc {
             .map(serde_json::to_string)
             .transpose()?;
 
-        sqlx::query(
-            "INSERT INTO data_feeds (id, name, feed_type, tags, transport, auth, enabled, status, \
-             last_error, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
-             ?11)",
-        )
-        .bind(&config.id)
-        .bind(&config.name)
-        .bind(config.feed_type.to_string())
-        .bind(&tags_json)
-        .bind(&transport_json)
-        .bind(&auth_json)
-        .bind(config.enabled)
-        .bind(config.status.to_string())
-        .bind(&config.last_error)
-        .bind(config.created_at.to_string())
-        .bind(config.updated_at.to_string())
-        .execute(&self.pool)
-        .await?;
+        let mut conn = self.pool.get().await?;
+        diesel::insert_into(data_feeds::table)
+            .values((
+                data_feeds::id.eq(&config.id),
+                data_feeds::name.eq(&config.name),
+                data_feeds::feed_type.eq(config.feed_type.to_string()),
+                data_feeds::tags.eq(&tags_json),
+                data_feeds::transport.eq(&transport_json),
+                data_feeds::auth.eq(&auth_json),
+                data_feeds::enabled.eq(i32::from(config.enabled)),
+                data_feeds::status.eq(config.status.to_string()),
+                data_feeds::last_error.eq(&config.last_error),
+                data_feeds::created_at.eq(config.created_at.to_string()),
+                data_feeds::updated_at.eq(config.updated_at.to_string()),
+            ))
+            .execute(&mut *conn)
+            .await?;
 
         Ok(())
     }
@@ -116,34 +120,33 @@ impl DataFeedSvc {
             .transpose()?;
         let now = Timestamp::now().to_string();
 
-        let result = sqlx::query(
-            "UPDATE data_feeds SET name = ?1, feed_type = ?2, tags = ?3, transport = ?4, auth = \
-             ?5, enabled = ?6, status = ?7, last_error = ?8, updated_at = ?9 WHERE id = ?10",
-        )
-        .bind(&config.name)
-        .bind(config.feed_type.to_string())
-        .bind(&tags_json)
-        .bind(&transport_json)
-        .bind(&auth_json)
-        .bind(config.enabled)
-        .bind(config.status.to_string())
-        .bind(&config.last_error)
-        .bind(&now)
-        .bind(&config.id)
-        .execute(&self.pool)
-        .await?;
+        let mut conn = self.pool.get().await?;
+        let affected = diesel::update(data_feeds::table.filter(data_feeds::id.eq(&config.id)))
+            .set((
+                data_feeds::name.eq(&config.name),
+                data_feeds::feed_type.eq(config.feed_type.to_string()),
+                data_feeds::tags.eq(&tags_json),
+                data_feeds::transport.eq(&transport_json),
+                data_feeds::auth.eq(&auth_json),
+                data_feeds::enabled.eq(i32::from(config.enabled)),
+                data_feeds::status.eq(config.status.to_string()),
+                data_feeds::last_error.eq(&config.last_error),
+                data_feeds::updated_at.eq(&now),
+            ))
+            .execute(&mut *conn)
+            .await?;
 
-        Ok(result.rows_affected() > 0)
+        Ok(affected > 0)
     }
 
     /// Delete a feed by ID. Returns `true` if a row was deleted.
     #[instrument(skip(self))]
     pub async fn delete_feed(&self, id: &str) -> anyhow::Result<bool> {
-        let result = sqlx::query("DELETE FROM data_feeds WHERE id = ?1")
-            .bind(id)
-            .execute(&self.pool)
+        let mut conn = self.pool.get().await?;
+        let affected = diesel::delete(data_feeds::table.filter(data_feeds::id.eq(id)))
+            .execute(&mut *conn)
             .await?;
-        Ok(result.rows_affected() > 0)
+        Ok(affected > 0)
     }
 
     /// Update the runtime `status` and `last_error` columns for a feed,
@@ -162,30 +165,36 @@ impl DataFeedSvc {
         last_error: Option<String>,
     ) -> anyhow::Result<bool> {
         let now = Timestamp::now().to_string();
-        let result = sqlx::query(
-            "UPDATE data_feeds SET status = ?1, last_error = ?2, updated_at = ?3 WHERE name = ?4",
-        )
-        .bind(status.to_string())
-        .bind(&last_error)
-        .bind(&now)
-        .bind(name)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() > 0)
+        let mut conn = self.pool.get().await?;
+        let affected = diesel::update(data_feeds::table.filter(data_feeds::name.eq(name)))
+            .set((
+                data_feeds::status.eq(status.to_string()),
+                data_feeds::last_error.eq(&last_error),
+                data_feeds::updated_at.eq(&now),
+            ))
+            .execute(&mut *conn)
+            .await?;
+        Ok(affected > 0)
     }
 
     /// Toggle the enabled flag for a feed. Returns `true` if updated.
     #[instrument(skip(self))]
     pub async fn toggle_feed(&self, id: &str) -> anyhow::Result<bool> {
+        use diesel::{dsl::sql, sql_types::Integer};
+
         let now = Timestamp::now().to_string();
-        let result = sqlx::query(
-            "UPDATE data_feeds SET enabled = NOT enabled, updated_at = ?1 WHERE id = ?2",
-        )
-        .bind(&now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() > 0)
+        let mut conn = self.pool.get().await?;
+        // `NOT enabled` on a stored integer column has no clean DSL — we use
+        // the sanctioned `sql::<Integer>` fragment per
+        // docs/guides/db-diesel-migration.md.
+        let affected = diesel::update(data_feeds::table.filter(data_feeds::id.eq(id)))
+            .set((
+                data_feeds::enabled.eq(sql::<Integer>("NOT enabled")),
+                data_feeds::updated_at.eq(&now),
+            ))
+            .execute(&mut *conn)
+            .await?;
+        Ok(affected > 0)
     }
 
     // -- Event queries ------------------------------------------------------
@@ -199,58 +208,41 @@ impl DataFeedSvc {
         limit: i64,
         offset: i64,
     ) -> anyhow::Result<EventPage> {
-        // Count total matching events for pagination metadata.
-        let total: (i64,) = if let Some(ref ts) = since {
-            sqlx::query_as(
-                "SELECT COUNT(*) FROM data_feed_events WHERE source_name = ?1 AND received_at >= \
-                 ?2",
-            )
-            .bind(source_name)
-            .bind(ts.to_string())
-            .fetch_one(&self.pool)
-            .await?
-        } else {
-            sqlx::query_as("SELECT COUNT(*) FROM data_feed_events WHERE source_name = ?1")
-                .bind(source_name)
-                .fetch_one(&self.pool)
-                .await?
-        };
+        let mut conn = self.pool.get().await?;
 
-        let rows: Vec<EventRow> = if let Some(ref ts) = since {
-            sqlx::query_as(
-                "SELECT id, source_name, event_type, tags, payload, received_at FROM \
-                 data_feed_events WHERE source_name = ?1 AND received_at >= ?2 ORDER BY \
-                 received_at DESC LIMIT ?3 OFFSET ?4",
-            )
-            .bind(source_name)
-            .bind(ts.to_string())
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?
-        } else {
-            sqlx::query_as(
-                "SELECT id, source_name, event_type, tags, payload, received_at FROM \
-                 data_feed_events WHERE source_name = ?1 ORDER BY received_at DESC LIMIT ?2 \
-                 OFFSET ?3",
-            )
-            .bind(source_name)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?
-        };
+        // Count total matching events for pagination metadata.
+        let mut count_q = data_feed_events::table
+            .filter(data_feed_events::source_name.eq(source_name))
+            .into_boxed();
+        if let Some(ref ts) = since {
+            count_q = count_q.filter(data_feed_events::received_at.ge(ts.to_string()));
+        }
+        let total: i64 = count_q.count().get_result(&mut *conn).await?;
+
+        let mut rows_q = data_feed_events::table
+            .filter(data_feed_events::source_name.eq(source_name))
+            .into_boxed();
+        if let Some(ref ts) = since {
+            rows_q = rows_q.filter(data_feed_events::received_at.ge(ts.to_string()));
+        }
+        let rows: Vec<EventRow> = rows_q
+            .select(EventRow::as_select())
+            .order(data_feed_events::received_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load(&mut *conn)
+            .await?;
 
         let events: Vec<FeedEvent> = rows
             .into_iter()
             .map(EventRow::into_event)
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let has_more = (offset + limit) < total.0;
+        let has_more = (offset + limit) < total;
 
         Ok(EventPage {
             events,
-            total: total.0,
+            total,
             has_more,
         })
     }
@@ -262,14 +254,16 @@ impl DataFeedSvc {
         source_name: &str,
         event_id: &str,
     ) -> anyhow::Result<Option<FeedEvent>> {
-        let row: Option<EventRow> = sqlx::query_as(
-            "SELECT id, source_name, event_type, tags, payload, received_at FROM data_feed_events \
-             WHERE id = ?1 AND source_name = ?2",
-        )
-        .bind(event_id)
-        .bind(source_name)
-        .fetch_optional(&self.pool)
-        .await?;
+        use diesel::OptionalExtension;
+
+        let mut conn = self.pool.get().await?;
+        let row: Option<EventRow> = data_feed_events::table
+            .filter(data_feed_events::id.eq(event_id))
+            .filter(data_feed_events::source_name.eq(source_name))
+            .select(EventRow::as_select())
+            .first(&mut *conn)
+            .await
+            .optional()?;
 
         row.map(EventRow::into_event).transpose()
     }
@@ -290,7 +284,9 @@ pub struct EventPage {
 // Internal row types for SQLite <-> domain mapping
 // ---------------------------------------------------------------------------
 
-#[derive(sqlx::FromRow)]
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = data_feeds)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 struct FeedRow {
     id:         String,
     name:       String,
@@ -298,7 +294,7 @@ struct FeedRow {
     tags:       String,
     transport:  String,
     auth:       Option<String>,
-    enabled:    bool,
+    enabled:    i32,
     status:     String,
     last_error: Option<String>,
     created_at: String,
@@ -324,7 +320,7 @@ impl FeedRow {
             .tags(tags)
             .transport(transport)
             .maybe_auth(auth)
-            .enabled(self.enabled)
+            .enabled(self.enabled != 0)
             .status(status)
             .maybe_last_error(self.last_error)
             .created_at(created_at)
@@ -333,7 +329,9 @@ impl FeedRow {
     }
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = data_feed_events)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 struct EventRow {
     id:          String,
     source_name: String,

@@ -33,7 +33,9 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
-sqlx = { workspace = true }
+diesel = { workspace = true }
+diesel-async = { workspace = true }
+rara-model = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }

@@ -116,7 +116,10 @@ impl TapeService {
     pub fn new(store: FileTapeStore) -> Self { Self { store, fts: None } }
 
     /// Create a service with FTS5 full-text search support.
-    pub fn with_fts(store: FileTapeStore, pool: sqlx::SqlitePool) -> Self {
+    pub fn with_fts(
+        store: FileTapeStore,
+        pool: yunara_store::diesel_pool::DieselSqlitePool,
+    ) -> Self {
         // Preload the jieba dictionary off the hot path. `warmup` is
         // idempotent — repeated `with_fts` calls do not leak threads.
         super::fts::warmup_tokenizer();
@@ -845,7 +848,7 @@ impl TapeService {
         fts: &super::fts::TapeFts,
         tape_name: &str,
         all_tapes: bool,
-    ) -> Result<(), sqlx::Error> {
+    ) -> crate::error::Result<()> {
         let tape_names = if all_tapes {
             self.store.list_tapes().await.unwrap_or_default()
         } else {
@@ -1986,25 +1989,7 @@ mod tests {
 
     /// Create a [`TapeService`] with FTS enabled via an in-memory SQLite pool.
     async fn temp_tape_service_with_fts(dir: &Path) -> TapeService {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("in-memory pool");
-        sqlx::query(
-            "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind \
-             UNINDEXED, entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 \
-             remove_diacritics 2')",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fts table");
-        sqlx::query(
-            "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT \
-             NULL DEFAULT 0)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create meta table");
-
+        let pool = crate::testing::build_memory_diesel_pool().await;
         let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
         TapeService::with_fts(store, pool)
     }

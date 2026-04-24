@@ -12,42 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sqlx::{Sqlite, SqlitePool, sqlite::SqlitePoolOptions};
+use crate::{diesel_pool::DieselSqlitePool, kv::KVStore};
 
-use crate::{error::*, kv::KVStore};
-
-/// Database store that manages the SQLite connection pool.
+/// Database store that owns the shared diesel-async SQLite pool.
 #[derive(Clone)]
 pub struct DBStore {
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
 }
 
 impl DBStore {
-    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
+    /// Wrap an existing diesel-async SQLite pool.
+    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
 
     /// Get a KV store instance.
     pub fn kv_store(&self) -> KVStore { KVStore::new(self.pool.clone()) }
 
-    /// Get the underlying SQLite pool.
-    pub fn pool(&self) -> &SqlitePool { &self.pool }
-
-    /// Acquire a connection from the pool.
-    pub async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<Sqlite>> {
-        Ok(self.pool.acquire().await?)
-    }
-
-    /// Creates a DBStore backed by a lazily-connected pool.
-    ///
-    /// Intended for tests where the DB might not be queried.
-    #[doc(hidden)]
-    pub fn new_lazy(database_url: &str) -> Result<Self> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_lazy(database_url)?;
-        Ok(Self { pool })
-    }
+    /// Get the underlying diesel-async SQLite pool.
+    pub fn pool(&self) -> &DieselSqlitePool { &self.pool }
 }
 
-impl From<DBStore> for SqlitePool {
+impl From<DBStore> for DieselSqlitePool {
     fn from(store: DBStore) -> Self { store.pool }
 }

@@ -19,28 +19,30 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use diesel::{QueryDsl, TextExpressionMethods};
+use diesel_async::RunQueryDsl;
+use rara_model::schema::kv_table;
 use snafu::Whatever;
-use sqlx::SqlitePool;
 use tokio::sync::watch;
-use yunara_store::KVStore;
+use yunara_store::{KVStore, diesel_pool::DieselSqlitePool};
 
 /// Internal prefix applied to all settings keys in the KV store.
 const PREFIX: &str = "settings.";
 
-/// Service that manages flat KV settings with PostgreSQL persistence.
+/// Service that manages flat KV settings with SQLite persistence.
 ///
 /// Implements
 /// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
 #[derive(Clone)]
 pub struct SettingsSvc {
     kv:   KVStore,
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
     tx:   Arc<watch::Sender<()>>,
 }
 
 impl SettingsSvc {
     /// Load settings from the flat KV store.
-    pub async fn load(kv: KVStore, pool: SqlitePool) -> Result<Self, Whatever> {
+    pub async fn load(kv: KVStore, pool: DieselSqlitePool) -> Result<Self, Whatever> {
         let (tx, _rx) = watch::channel(());
         Ok(Self {
             kv,
@@ -82,15 +84,24 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
 
     async fn list(&self) -> HashMap<String, String> {
         // Query all rows with the settings prefix.
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, value FROM kv_table WHERE key LIKE ?1")
-                .bind(format!("{PREFIX}%"))
-                .fetch_all(&self.pool)
-                .await
-                .unwrap_or_default();
+        let pattern = format!("{PREFIX}%");
+        let mut conn = match self.pool.get().await {
+            Ok(c) => c,
+            Err(_) => return HashMap::new(),
+        };
+        let rows: Vec<(String, Option<String>)> = match kv_table::table
+            .filter(kv_table::key.like(pattern))
+            .select((kv_table::key, kv_table::value))
+            .load(&mut *conn)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(_) => return HashMap::new(),
+        };
 
         rows.into_iter()
             .filter_map(|(k, v)| {
+                let v = v?;
                 let stripped = k.strip_prefix(PREFIX)?;
                 // Values are JSON-encoded strings in the KV store, so we
                 // need to deserialize the outer JSON quotes.

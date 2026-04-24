@@ -15,32 +15,36 @@
 //! SQLite-backed [`FeedStore`] implementation.
 //!
 //! Persists [`FeedEvent`]s to the `data_feed_events` table and tracks
-//! per-subscriber read cursors in `feed_read_cursors`. The events table is
-//! created by the `20260414125453_feed_events` migration and renamed to
-//! `data_feed_events` by
-//! `20260424074904_rename_feed_events_to_data_feed_events`.
+//! per-subscriber read cursors in `feed_read_cursors`. Both tables are
+//! created by the init migration baseline.
 
 use async_trait::async_trait;
+use diesel::{
+    ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper, upsert::excluded,
+};
+use diesel_async::RunQueryDsl;
 use jiff::Timestamp;
 use rara_kernel::{
     data_feed::{FeedEvent, FeedEventId, FeedFilter, FeedStore},
     session::SessionKey,
 };
+use rara_model::schema::{data_feed_events, feed_read_cursors};
 use snafu::ResultExt;
-use sqlx::SqlitePool;
 use tracing::instrument;
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 /// SQLite-backed feed event store.
 ///
 /// Implements [`FeedStore`] using the `data_feed_events` and
-/// `feed_read_cursors` tables. All operations use the shared connection pool.
+/// `feed_read_cursors` tables. All operations go through the shared
+/// diesel-async pool.
 pub struct SqliteFeedStore {
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
 }
 
 impl SqliteFeedStore {
     /// Create a new store backed by the given connection pool.
-    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
+    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -54,54 +58,54 @@ impl FeedStore for SqliteFeedStore {
             serde_json::to_string(&event.payload).expect("payload serialisation should not fail");
         let received_at = event.received_at.to_string();
 
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .whatever_context("data_feed_events pool acquire failed")?;
+
         // INSERT OR IGNORE for idempotency on event.id.
-        sqlx::query(
-            "INSERT OR IGNORE INTO data_feed_events (id, source_name, event_type, tags, payload, \
-             received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .bind(&id)
-        .bind(&event.source_name)
-        .bind(&event.event_type)
-        .bind(&tags_json)
-        .bind(&payload_json)
-        .bind(&received_at)
-        .execute(&self.pool)
-        .await
-        .whatever_context("data_feed_events insert failed")?;
+        diesel::insert_into(data_feed_events::table)
+            .values((
+                data_feed_events::id.eq(&id),
+                data_feed_events::source_name.eq(&event.source_name),
+                data_feed_events::event_type.eq(&event.event_type),
+                data_feed_events::tags.eq(&tags_json),
+                data_feed_events::payload.eq(&payload_json),
+                data_feed_events::received_at.eq(&received_at),
+            ))
+            .on_conflict_do_nothing()
+            .execute(&mut *conn)
+            .await
+            .whatever_context("data_feed_events insert failed")?;
 
         Ok(())
     }
 
     #[instrument(skip_all)]
     async fn query(&self, filter: FeedFilter) -> rara_kernel::Result<Vec<FeedEvent>> {
-        let mut sql = String::from(
-            "SELECT id, source_name, event_type, tags, payload, received_at FROM data_feed_events \
-             WHERE 1=1",
-        );
-        let mut binds: Vec<String> = Vec::new();
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .whatever_context("data_feed_events pool acquire failed")?;
+
+        let mut q = data_feed_events::table.into_boxed();
 
         if let Some(ref source) = filter.source_name {
-            sql.push_str(" AND source_name = ?");
-            binds.push(source.clone());
+            q = q.filter(data_feed_events::source_name.eq(source));
         }
-
         if let Some(ref since) = filter.since {
-            sql.push_str(" AND received_at >= ?");
-            binds.push(since.to_string());
+            q = q.filter(data_feed_events::received_at.ge(since.to_string()));
         }
 
-        sql.push_str(" ORDER BY received_at ASC LIMIT ?");
+        let limit: i64 = (filter.limit.min(1000)) as i64;
 
-        let limit = filter.limit.min(1000) as i64;
-
-        let mut query = sqlx::query_as::<_, FeedEventRow>(&sql);
-        for bind in &binds {
-            query = query.bind(bind);
-        }
-        query = query.bind(limit);
-
-        let rows: Vec<FeedEventRow> = query
-            .fetch_all(&self.pool)
+        let rows: Vec<FeedEventRow> = q
+            .select(FeedEventRow::as_select())
+            .order(data_feed_events::received_at.asc())
+            .limit(limit)
+            .load(&mut *conn)
             .await
             .whatever_context("data_feed_events query failed")?;
 
@@ -125,49 +129,84 @@ impl FeedStore for SqliteFeedStore {
         subscriber: &SessionKey,
         up_to: FeedEventId,
     ) -> rara_kernel::Result<()> {
+        use diesel::OptionalExtension;
+
         let sub_id = subscriber.to_string();
         let event_id = up_to.to_string();
 
-        let source: Option<(String,)> =
-            sqlx::query_as("SELECT source_name FROM data_feed_events WHERE id = ?1")
-                .bind(&event_id)
-                .fetch_optional(&self.pool)
-                .await
-                .whatever_context("data_feed_events lookup failed")?;
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .whatever_context("feed_read_cursors pool acquire failed")?;
 
-        let source_name = source.map(|s| s.0).unwrap_or_else(|| "unknown".to_owned());
+        let source_name: String = data_feed_events::table
+            .filter(data_feed_events::id.eq(&event_id))
+            .select(data_feed_events::source_name)
+            .first::<String>(&mut *conn)
+            .await
+            .optional()
+            .whatever_context("data_feed_events lookup failed")?
+            .unwrap_or_else(|| "unknown".to_owned());
 
-        sqlx::query(
-            "INSERT INTO feed_read_cursors (subscriber_id, source_name, last_read_id, updated_at) \
-             VALUES (?1, ?2, ?3, ?4) ON CONFLICT(subscriber_id, source_name) DO UPDATE SET \
-             last_read_id = excluded.last_read_id, updated_at = excluded.updated_at",
-        )
-        .bind(&sub_id)
-        .bind(&source_name)
-        .bind(&event_id)
-        .bind(Timestamp::now().to_string())
-        .execute(&self.pool)
-        .await
-        .whatever_context("feed_read_cursors upsert failed")?;
+        let now = Timestamp::now().to_string();
+
+        diesel::insert_into(feed_read_cursors::table)
+            .values((
+                feed_read_cursors::subscriber_id.eq(&sub_id),
+                feed_read_cursors::source_name.eq(&source_name),
+                feed_read_cursors::last_read_id.eq(&event_id),
+                feed_read_cursors::updated_at.eq(&now),
+            ))
+            .on_conflict((
+                feed_read_cursors::subscriber_id,
+                feed_read_cursors::source_name,
+            ))
+            .do_update()
+            .set((
+                feed_read_cursors::last_read_id.eq(excluded(feed_read_cursors::last_read_id)),
+                feed_read_cursors::updated_at.eq(excluded(feed_read_cursors::updated_at)),
+            ))
+            .execute(&mut *conn)
+            .await
+            .whatever_context("feed_read_cursors upsert failed")?;
 
         Ok(())
     }
 
     #[instrument(skip_all, fields(subscriber = %subscriber))]
     async fn unread_count(&self, subscriber: &SessionKey) -> rara_kernel::Result<usize> {
+        use diesel::sql_types::BigInt;
+
         let sub_id = subscriber.to_string();
 
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM data_feed_events e WHERE NOT EXISTS (SELECT 1 FROM \
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .whatever_context("data_feed_events pool acquire failed")?;
+
+        // Correlated NOT EXISTS subquery — no clean DSL translation without
+        // a relationship definition, so we keep this one-shot raw-SQL count
+        // embedded as a narrow `sql_query` escape hatch per
+        // docs/guides/db-diesel-migration.md.
+        #[derive(diesel::QueryableByName)]
+        struct CountRow {
+            #[diesel(sql_type = BigInt)]
+            n: i64,
+        }
+
+        let row: CountRow = diesel::sql_query(
+            "SELECT COUNT(*) AS n FROM data_feed_events e WHERE NOT EXISTS (SELECT 1 FROM \
              feed_read_cursors c WHERE c.subscriber_id = ?1 AND c.source_name = e.source_name AND \
              c.last_read_id >= e.id)",
         )
-        .bind(&sub_id)
-        .fetch_one(&self.pool)
+        .bind::<diesel::sql_types::Text, _>(&sub_id)
+        .get_result(&mut *conn)
         .await
         .whatever_context("unread_count query failed")?;
 
-        Ok(count.0 as usize)
+        Ok(row.n as usize)
     }
 }
 
@@ -175,7 +214,9 @@ impl FeedStore for SqliteFeedStore {
 // Internal row type
 // ---------------------------------------------------------------------------
 
-#[derive(sqlx::FromRow)]
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = data_feed_events)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 struct FeedEventRow {
     id:          String,
     source_name: String,
