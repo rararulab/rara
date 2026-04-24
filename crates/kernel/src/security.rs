@@ -166,22 +166,30 @@ struct PendingRequest {
 /// blocks on a oneshot channel until a human resolves it (via `resolve()`)
 /// or the request times out.
 pub struct ApprovalManager {
-    pending:    DashMap<Uuid, PendingRequest>,
-    expired:    DashMap<Uuid, Timestamp>,
-    policy:     RwLock<ApprovalPolicy>,
+    pending:     DashMap<Uuid, PendingRequest>,
+    expired:     DashMap<Uuid, Timestamp>,
+    policy:      RwLock<ApprovalPolicy>,
     /// Broadcast channel for notifying external listeners (e.g. Telegram
     /// adapter) when a new approval request is submitted.
-    request_tx: tokio::sync::broadcast::Sender<ApprovalRequest>,
+    request_tx:  tokio::sync::broadcast::Sender<ApprovalRequest>,
+    /// Broadcast channel for notifying external listeners when a pending
+    /// approval is resolved. Channel adapters use this to push live
+    /// "approval resolved" events to their clients (e.g. to clear a
+    /// pending badge in the web UI) regardless of which surface actually
+    /// resolved the request.
+    resolved_tx: tokio::sync::broadcast::Sender<ApprovalResponse>,
 }
 
 impl ApprovalManager {
     pub fn new(policy: ApprovalPolicy) -> Self {
         let (request_tx, _) = tokio::sync::broadcast::channel(16);
+        let (resolved_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             pending: DashMap::new(),
             expired: DashMap::new(),
             policy: RwLock::new(policy),
             request_tx,
+            resolved_tx,
         }
     }
 
@@ -189,6 +197,13 @@ impl ApprovalManager {
     /// use this to send interactive approval prompts to users.
     pub fn subscribe_requests(&self) -> tokio::sync::broadcast::Receiver<ApprovalRequest> {
         self.request_tx.subscribe()
+    }
+
+    /// Subscribe to approval resolutions. Channel adapters use this to push
+    /// a "request resolved" notification to clients so stale pending UI can
+    /// be cleared no matter which surface approved/denied the request.
+    pub fn subscribe_resolutions(&self) -> tokio::sync::broadcast::Receiver<ApprovalResponse> {
+        self.resolved_tx.subscribe()
     }
 
     /// Check if a tool requires approval based on current policy.
@@ -250,8 +265,18 @@ impl ApprovalManager {
                 decision
             }
             _ => {
-                self.expired.insert(id, Timestamp::now());
+                let now = Timestamp::now();
+                self.expired.insert(id, now);
                 self.pending.remove(&id);
+                // Broadcast the timeout as a resolution so live clients
+                // clear the pending entry without waiting for their next
+                // poll of the approvals endpoint.
+                let _ = self.resolved_tx.send(ApprovalResponse {
+                    request_id: id,
+                    decision:   ApprovalDecision::TimedOut,
+                    decided_at: now,
+                    decided_by: None,
+                });
                 warn!(request_id = %id, "approval request timed out");
                 ApprovalDecision::TimedOut
             }
@@ -275,6 +300,10 @@ impl ApprovalManager {
                     decided_by,
                 };
                 let _ = pending.sender.send(decision);
+                // Notify external listeners (web UI, future surfaces) that
+                // this request is no longer pending so they can clear any
+                // cached "pending" state.
+                let _ = self.resolved_tx.send(response.clone());
                 info!(request_id = %request_id, ?decision, "approval resolved");
                 Ok(response)
             }

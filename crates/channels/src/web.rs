@@ -75,6 +75,7 @@ use rara_kernel::{
         EgressError, Endpoint, EndpointAddress, EndpointRegistry, InteractionType,
         PlatformOutbound, RawPlatformMessage, ReplyContext, StreamEvent, StreamHub,
     },
+    security::{ApprovalRequest, ApprovalResponse},
     session::SessionKey,
 };
 use serde::{Deserialize, Serialize};
@@ -210,6 +211,23 @@ pub enum WebEvent {
         /// Base64-encoded payload (standard alphabet, with padding).
         data_base64:  String,
     },
+    /// A new approval request has been submitted for this session. The
+    /// browser should refresh its pending-approval view (e.g. invalidate
+    /// the `kernel-approvals` query) so the user sees the request without
+    /// waiting for the next poll.
+    ApprovalRequested {
+        id:           String,
+        tool_name:    String,
+        summary:      String,
+        risk_level:   String,
+        requested_at: String,
+        timeout_secs: u64,
+    },
+    /// A previously-pending approval has been resolved (approved, denied,
+    /// or timed out) — possibly by another surface such as Telegram. The
+    /// browser should refresh its pending-approval view to drop the
+    /// cleared entry.
+    ApprovalResolved { id: String, decision: String },
     /// Stream completed (no more deltas).
     Done,
 }
@@ -605,6 +623,95 @@ impl WebAdapter {
                 "web publish: no active receivers"
             );
         }
+    }
+}
+
+/// Listen for approval lifecycle events and fan them out to the originating
+/// session's adapter bus.
+///
+/// Maps `ApprovalRequest` → [`WebEvent::ApprovalRequested`] keyed by
+/// `session_key`. Resolutions carry only `request_id`, so the listener
+/// maintains a short-lived `request_id → session_key` map populated from
+/// the request stream and drained on resolution. Entries that never fire
+/// (lost due to broadcast lag) leak until the adapter stops — bounded by
+/// the per-agent pending limit enforced by `ApprovalManager`, so the map
+/// never grows unboundedly in practice.
+#[tracing::instrument(skip_all, name = "web.approval_listener")]
+async fn approval_listener(
+    mut request_rx: tokio::sync::broadcast::Receiver<ApprovalRequest>,
+    mut resolution_rx: tokio::sync::broadcast::Receiver<ApprovalResponse>,
+    adapter_events: Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let session_by_request: Arc<DashMap<uuid::Uuid, SessionKey>> = Arc::new(DashMap::new());
+
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                info!("web approval listener: shutting down");
+                return;
+            }
+            result = request_rx.recv() => {
+                match result {
+                    Ok(req) => {
+                        session_by_request.insert(req.id, req.session_key.clone());
+                        let event = WebEvent::ApprovalRequested {
+                            id:           req.id.to_string(),
+                            tool_name:    req.tool_name.clone(),
+                            summary:      req.summary.clone(),
+                            risk_level:   risk_level_str(req.risk_level).to_owned(),
+                            requested_at: req.requested_at.to_string(),
+                            timeout_secs: req.timeout_secs,
+                        };
+                        WebAdapter::publish_adapter_event(&adapter_events, &req.session_key, event);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "web approval listener: request stream lagged");
+                    }
+                }
+            }
+            result = resolution_rx.recv() => {
+                match result {
+                    Ok(resp) => {
+                        let Some((_, session_key)) = session_by_request.remove(&resp.request_id) else {
+                            // Request originated before this listener was
+                            // subscribed, or the session already went away.
+                            continue;
+                        };
+                        let decision = decision_str(resp.decision).to_owned();
+                        let event = WebEvent::ApprovalResolved {
+                            id: resp.request_id.to_string(),
+                            decision,
+                        };
+                        WebAdapter::publish_adapter_event(&adapter_events, &session_key, event);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "web approval listener: resolution stream lagged");
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn risk_level_str(level: rara_kernel::security::RiskLevel) -> &'static str {
+    use rara_kernel::security::RiskLevel;
+    match level {
+        RiskLevel::Low => "low",
+        RiskLevel::Medium => "medium",
+        RiskLevel::High => "high",
+        RiskLevel::Critical => "critical",
+    }
+}
+
+fn decision_str(decision: rara_kernel::security::ApprovalDecision) -> &'static str {
+    use rara_kernel::security::ApprovalDecision;
+    match decision {
+        ApprovalDecision::Approved => "approved",
+        ApprovalDecision::Denied => "denied",
+        ApprovalDecision::TimedOut => "timed_out",
     }
 }
 
@@ -1340,6 +1447,25 @@ impl ChannelAdapter for WebAdapter {
     async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
         *self.stream_hub.write().await = Some(handle.stream_hub().clone());
         *self.endpoint_registry.write().await = Some(handle.endpoint_registry().clone());
+
+        // Subscribe to approval events and fan them out to the originating
+        // session's adapter bus so the browser learns about
+        // requests/resolutions without polling. Mirrors the Telegram
+        // adapter's `approval_listener` (see
+        // `crates/channels/src/telegram/adapter.rs`).
+        {
+            let request_rx = handle.security().approval().subscribe_requests();
+            let resolution_rx = handle.security().approval().subscribe_resolutions();
+            let events = Arc::clone(&self.adapter_events);
+            let shutdown_rx = self.shutdown_rx.clone();
+            tokio::spawn(approval_listener(
+                request_rx,
+                resolution_rx,
+                events,
+                shutdown_rx,
+            ));
+        }
+
         let mut guard = self.sink.write().await;
         *guard = Some(handle);
         info!("WebAdapter started");
@@ -1533,6 +1659,34 @@ mod tests {
         let json = serde_json::to_value(&event).expect("serialize");
         assert_eq!(json["type"], "error");
         assert_eq!(json["message"], "model rejected reasoning=minimal");
+    }
+
+    #[test]
+    fn approval_requested_serializes_as_snake_case_tagged_frame() {
+        let event = WebEvent::ApprovalRequested {
+            id:           "11111111-1111-1111-1111-111111111111".to_owned(),
+            tool_name:    "bash".to_owned(),
+            summary:      "rm -rf /tmp/x".to_owned(),
+            risk_level:   "critical".to_owned(),
+            requested_at: "2025-01-01T00:00:00Z".to_owned(),
+            timeout_secs: 120,
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "approval_requested");
+        assert_eq!(json["tool_name"], "bash");
+        assert_eq!(json["risk_level"], "critical");
+        assert_eq!(json["timeout_secs"], 120);
+    }
+
+    #[test]
+    fn approval_resolved_serializes_as_snake_case_tagged_frame() {
+        let event = WebEvent::ApprovalResolved {
+            id:       "22222222-2222-2222-2222-222222222222".to_owned(),
+            decision: "approved".to_owned(),
+        };
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "approval_resolved");
+        assert_eq!(json["decision"], "approved");
     }
 
     #[test]
