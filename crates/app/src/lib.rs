@@ -439,7 +439,7 @@ pub async fn start_with_options(
     .whatever_context("Failed to initialize BackendState")?;
 
     let web_adapter = Arc::new(
-        rara_channels::web::WebAdapter::new(Some(config.owner_token.clone()))
+        rara_channels::web::WebAdapter::new(config.owner_token.clone())
             .with_stt_service(stt_service.clone()),
     );
     let web_router = web_adapter.router();

@@ -414,7 +414,7 @@ pub struct SendMessageResponse {
 /// # Usage
 ///
 /// ```rust,ignore
-/// let adapter = WebAdapter::new();
+/// let adapter = WebAdapter::new(owner_token);
 /// let router = adapter.router();
 /// // Mount into your axum app:
 /// // app.nest("/chat", router)
@@ -432,7 +432,11 @@ pub struct WebAdapter {
     /// EndpointRegistry for tracking connected users (set during startup).
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     /// Owner token for verifying WebSocket auth tokens.
-    owner_token:       Option<String>,
+    ///
+    /// Always present: the boot layer (`rara_app::validate_owner_auth`)
+    /// guarantees a non-empty token before constructing the adapter, so
+    /// the WS handler always enforces auth.
+    owner_token:       String,
     /// Shutdown signal sender.
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -443,7 +447,11 @@ pub struct WebAdapter {
 
 impl WebAdapter {
     /// Create a new `WebAdapter`.
-    pub fn new(owner_token: Option<String>) -> Self {
+    ///
+    /// `owner_token` is required — invalid "no auth" states are
+    /// unrepresentable. Boot-time validation (`validate_owner_auth`)
+    /// guarantees a non-empty token before reaching this constructor.
+    pub fn new(owner_token: String) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             adapter_events: Arc::new(DashMap::new()),
@@ -581,7 +589,7 @@ struct WebAdapterState {
     sink:              Arc<RwLock<Option<KernelHandle>>>,
     stream_hub:        Arc<RwLock<Option<Arc<StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    owner_token:       Option<String>,
+    owner_token:       String,
     shutdown_rx:       watch::Receiver<bool>,
     stt_service:       Option<rara_stt::SttService>,
 }
@@ -772,31 +780,33 @@ async fn ws_handler(
     // Prefer `Authorization: Bearer <token>` (browsers can set this via
     // `Sec-WebSocket-Protocol` shims or native clients), fall back to the
     // legacy `?token=` query parameter for browser WebSocket upgrades.
-    if let Some(ref expected) = state.owner_token {
-        let header_token = bearer_token_from_headers(&headers);
-        let query_token = params.token.as_deref().filter(|t| !t.is_empty());
-        let provided = header_token.or(query_token);
-        match provided {
-            Some(tok) if rara_kernel::auth::verify_owner_token(expected, tok) => {
-                info!(session_key = %params.session_key, "WebSocket auth via owner token");
-            }
-            Some(_) => {
-                warn!(session_key = %params.session_key, "invalid owner token, rejecting");
-                return axum::response::Response::builder()
-                    .status(axum::http::StatusCode::UNAUTHORIZED)
-                    .body(axum::body::Body::from("invalid token"))
-                    .expect("static unauthorized response");
-            }
-            None => {
-                warn!(
-                    session_key = %params.session_key,
-                    "owner token configured but not provided, rejecting"
-                );
-                return axum::response::Response::builder()
-                    .status(axum::http::StatusCode::UNAUTHORIZED)
-                    .body(axum::body::Body::from("missing token"))
-                    .expect("static unauthorized response");
-            }
+    //
+    // Auth is always enforced: `owner_token` is a required `String`
+    // guaranteed non-empty by startup validation, so "no token = no auth"
+    // is not representable.
+    let header_token = bearer_token_from_headers(&headers);
+    let query_token = params.token.as_deref().filter(|t| !t.is_empty());
+    let provided = header_token.or(query_token);
+    match provided {
+        Some(tok) if rara_kernel::auth::verify_owner_token(&state.owner_token, tok) => {
+            info!(session_key = %params.session_key, "WebSocket auth via owner token");
+        }
+        Some(_) => {
+            warn!(session_key = %params.session_key, "invalid owner token, rejecting");
+            return axum::response::Response::builder()
+                .status(axum::http::StatusCode::UNAUTHORIZED)
+                .body(axum::body::Body::from("invalid token"))
+                .expect("static unauthorized response");
+        }
+        None => {
+            warn!(
+                session_key = %params.session_key,
+                "owner token not provided, rejecting"
+            );
+            return axum::response::Response::builder()
+                .status(axum::http::StatusCode::UNAUTHORIZED)
+                .body(axum::body::Body::from("missing token"))
+                .expect("static unauthorized response");
         }
     }
 
