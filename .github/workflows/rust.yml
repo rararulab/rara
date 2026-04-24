@@ -35,7 +35,7 @@ jobs:
       - name: Install diesel system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev wget
 
       - name: Setup mold linker
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
@@ -61,7 +61,7 @@ jobs:
       - name: Install diesel system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev wget
 
       - name: Setup mold linker
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
@@ -83,6 +83,11 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      - name: Install wget for mold installer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wget
 
       - name: Setup mold linker
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
