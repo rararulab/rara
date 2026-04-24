@@ -29,6 +29,7 @@ import DashboardLayout from '@/layouts/DashboardLayout';
 import Dock from '@/pages/Dock';
 import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
+import Login from '@/pages/Login';
 import PiChat from '@/pages/PiChat';
 
 const STORAGE_KEY = 'rara_backend_url';
@@ -82,6 +83,9 @@ export default function App() {
             <Routes>
               {/* Fullscreen pi-web-ui chat */}
               <Route index element={<PiChat />} />
+
+              {/* Owner-token login — public route */}
+              <Route path="login" element={<Login />} />
 
               {/* Deep-link redirect — see SettingsRoute */}
               <Route path="settings" element={<SettingsRoute />} />

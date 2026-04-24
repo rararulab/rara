@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { randomLoadingHint } from './loading-hints';
 
-import { api } from '@/api/client';
+import { api, getAccessToken, redirectToLogin } from '@/api/client';
 import {
   isLiveState,
   turnsToTimeline,
@@ -100,9 +100,17 @@ export function useSessionTimeline(
 
     const host = window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = localStorage.getItem('access_token') ?? '';
+    const token = getAccessToken();
+    if (!token) {
+      // Live session stream requires an authenticated principal. Bail out
+      // here and let the login redirect flow repopulate storage.
+      redirectToLogin();
+      return;
+    }
     const ws = new WebSocket(
-      `${protocol}//${host}/api/v1/kernel/sessions/${sessionKey}/stream?token=${token}`,
+      `${protocol}//${host}/api/v1/kernel/sessions/${sessionKey}/stream?token=${encodeURIComponent(
+        token,
+      )}`,
     );
 
     // Live seq is an independent monotonic counter; combine with the "l-"

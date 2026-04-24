@@ -31,7 +31,13 @@ import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type { Attachment } from '@mariozechner/pi-web-ui';
 import { Type } from '@sinclair/typebox';
 
-import { BASE_URL, getBackendUrl } from '@/api/client';
+import {
+  BASE_URL,
+  getAccessToken,
+  getAuthUser,
+  getBackendUrl,
+  redirectToLogin,
+} from '@/api/client';
 
 // ---------------------------------------------------------------------------
 // WebEvent — frames received from the rara WebSocket chat API
@@ -189,7 +195,21 @@ export function buildWsUrl(sessionKey: string): string {
   // Strip trailing slash so the joined path has exactly one separator.
   base = base.replace(/\/$/, '');
 
-  return `${base}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web_ryan`;
+  const user = getAuthUser();
+  if (!user) {
+    // No authenticated principal — caller must log in before opening a WS.
+    // `redirectToLogin` will clear any stale token and navigate to /login.
+    redirectToLogin();
+    throw new Error('not authenticated');
+  }
+
+  const token = getAccessToken();
+  const params = new URLSearchParams({
+    session_key: sessionKey,
+    user_id: user.user_id,
+  });
+  if (token) params.set('token', token);
+  return `${base}/api/v1/kernel/chat/ws?${params.toString()}`;
 }
 
 /**
