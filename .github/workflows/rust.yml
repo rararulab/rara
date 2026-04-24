@@ -23,8 +23,8 @@ permissions:
   contents: read
 
 jobs:
-  clippy:
-    name: Clippy
+  clippy-test:
+    name: Clippy & Test
     runs-on: arc-runner-set
     steps:
       - name: Checkout code
@@ -32,15 +32,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Start sccache
-        run: sccache --start-server || true
+      - name: Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: rust-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
+      - name: Run tests
+        run: cargo nextest run --workspace
 
   docs:
     name: Documentation
@@ -51,48 +53,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Start sccache
-        run: sccache --start-server || true
+      - name: Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: rust-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Generate documentation
         run: cargo +nightly doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
-  test:
-    name: Test
-    runs-on: arc-runner-set
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          persist-credentials: false
-
-      - name: Start sccache
-        run: sccache --start-server || true
-
-      - name: Run tests
-        run: cargo nextest run --workspace
-
   rust-success:
     name: Rust Success
     runs-on: arc-runner-set
-    needs: [clippy, docs, test]
+    needs: [clippy-test, docs]
     if: always()
     steps:
       - name: Check all Rust jobs status
         env:
-          CLIPPY_RESULT: ${{ needs.clippy.result }}
+          CLIPPY_TEST_RESULT: ${{ needs.clippy-test.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
-          TEST_RESULT: ${{ needs.test.result }}
         run: |
-          if [[ "$CLIPPY_RESULT" != "success" || \
-                "$DOCS_RESULT" != "success" || \
-                "$TEST_RESULT" != "success" ]]; then
+          if [[ "$CLIPPY_TEST_RESULT" != "success" || \
+                "$DOCS_RESULT" != "success" ]]; then
             echo "One or more Rust jobs failed"
-            echo "  clippy: $CLIPPY_RESULT"
-            echo "  docs:   $DOCS_RESULT"
-            echo "  test:   $TEST_RESULT"
+            echo "  clippy-test: $CLIPPY_TEST_RESULT"
+            echo "  docs:        $DOCS_RESULT"
             exit 1
           fi
           echo "All Rust jobs passed successfully"
