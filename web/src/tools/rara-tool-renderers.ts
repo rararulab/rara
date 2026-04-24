@@ -23,7 +23,7 @@
  * module-level `Map`, so late registration would miss the first render.
  */
 
-import { BashRenderer, registerToolRenderer } from '@mariozechner/pi-web-ui';
+import { registerToolRenderer } from '@mariozechner/pi-web-ui';
 
 import { CompactToolRenderer } from './CompactToolRenderer';
 
@@ -31,11 +31,15 @@ import { CompactToolRenderer } from './CompactToolRenderer';
  * Tool names declared by the rara backend (see `crates/app/src/tools/`).
  * Everything in this list gets the compact single-line renderer.
  *
- * Four tools keep pi-mono's specialised renderers and are intentionally
+ * `bash` is included here (not given pi-mono's `BashRenderer`) so every
+ * rara tool call has a uniform compact layout — a single-line summary
+ * plus a `<details>` block for the full command/IO. The specialised
+ * terminal card carried too much visual weight in long chat transcripts
+ * (#1718); users can still expand the row to see the entire command
+ * and output verbatim.
+ *
+ * Three tools keep pi-mono's specialised renderers and are intentionally
  * absent:
- * - `bash`            — pi-mono's `BashRenderer` shows a live terminal
- *                       block, which fits a single command better than
- *                       a truncated one-liner.
  * - `artifacts`       — `ArtifactsToolRenderer` renders the artifact
  *                       card UX; JSON wouldn't help.
  * - `javascript_repl` — pi-mono-registered; no rara-side equivalent.
@@ -49,6 +53,7 @@ import { CompactToolRenderer } from './CompactToolRenderer';
 const RARA_COMPACT_TOOLS = [
   'acp-delegate',
   'ask-user',
+  'bash',
   'create-directory',
   'create-skill',
   'debug_trace',
@@ -96,8 +101,6 @@ const RARA_COMPACT_TOOLS = [
 ];
 
 export function registerRaraToolRenderers(): void {
-  registerToolRenderer('bash', new BashRenderer());
-
   for (const name of RARA_COMPACT_TOOLS) {
     registerToolRenderer(name, new CompactToolRenderer(name));
   }
