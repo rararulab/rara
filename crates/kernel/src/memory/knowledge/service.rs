@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 use super::{EmbeddingService, KnowledgeConfig};
 
@@ -29,7 +29,7 @@ use super::{EmbeddingService, KnowledgeConfig};
 /// keyed by the `knowledge_extractor` manifest, so a single atomic snapshot
 /// reaches `extract_knowledge`. See #1636 / #1638.
 pub struct KnowledgeService {
-    pub pool:          SqlitePool,
+    pub pool:          DieselSqlitePool,
     pub embedding_svc: Arc<EmbeddingService>,
     pub config:        KnowledgeConfig,
 }

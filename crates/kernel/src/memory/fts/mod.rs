@@ -10,12 +10,15 @@
 mod repo;
 mod tokenizer;
 
+use diesel_async::RunQueryDsl;
 use serde_json::Value;
-use sqlx::SqlitePool;
+use snafu::ResultExt;
 pub(crate) use tokenizer::warmup as warmup_tokenizer;
 use tracing::{debug, warn};
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 use super::{TapEntry, TapEntryKind};
+use crate::error::{DieselPoolSnafu, Result};
 
 /// A hit returned by [`TapeFts::search`].
 #[derive(Debug, Clone)]
@@ -35,7 +38,7 @@ pub(crate) struct FtsHit {
 /// search when FTS returns an error.
 #[derive(Debug, Clone)]
 pub(crate) struct TapeFts {
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
 }
 
 impl TapeFts {
@@ -43,7 +46,7 @@ impl TapeFts {
     ///
     /// The pool must already have the `tape_fts` virtual table (created by
     /// the `tape_fts_init` migration).
-    pub(crate) fn new(pool: SqlitePool) -> Self { Self { pool } }
+    pub(crate) fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
 
     /// Index a batch of tape entries into FTS5.
     ///
@@ -54,8 +57,9 @@ impl TapeFts {
         tape_name: &str,
         session_key: &str,
         entries: &[TapEntry],
-    ) -> Result<usize, sqlx::Error> {
-        let hwm = repo::get_hwm(&self.pool, tape_name).await.unwrap_or(0) as u64;
+    ) -> Result<usize> {
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let hwm = repo::get_hwm(&mut conn, tape_name).await.unwrap_or(0) as u64;
 
         let new_entries: Vec<_> = entries.iter().filter(|e| e.id > hwm).collect();
 
@@ -87,14 +91,21 @@ impl TapeFts {
                 .collect()
         })
         .await
-        .map_err(|e| sqlx::Error::Protocol(format!("fts segment task: {e}")))?;
+        .map_err(|e| crate::error::KernelError::Memory {
+            message: format!("fts segment task join failed: {e}"),
+        })?;
 
-        let mut tx = self.pool.begin().await?;
+        // Emit inserts + HWM update as a single atomic FTS update. Diesel's
+        // `sql_query` approach keeps us flexible even though the virtual
+        // table is outside the DSL.
+        diesel::sql_query("BEGIN")
+            .execute(&mut *conn)
+            .await
+            .context(crate::error::DieselSnafu)?;
         let mut count = 0usize;
-
         for (entry_id, kind_str, content) in &segmented {
             repo::insert(
-                &mut tx,
+                &mut conn,
                 content,
                 tape_name,
                 kind_str,
@@ -102,12 +113,13 @@ impl TapeFts {
                 session_key,
             )
             .await?;
-
             count += 1;
         }
-
-        repo::upsert_hwm(&mut tx, tape_name, max_id as i64).await?;
-        tx.commit().await?;
+        repo::upsert_hwm(&mut conn, tape_name, max_id as i64).await?;
+        diesel::sql_query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .context(crate::error::DieselSnafu)?;
 
         debug!(tape_name, count, max_id, "FTS indexed entries");
         Ok(count)
@@ -122,13 +134,14 @@ impl TapeFts {
         query: &str,
         tape_filter: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<FtsHit>, sqlx::Error> {
+    ) -> Result<Vec<FtsHit>> {
         let fts_query = sanitize_fts_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
 
-        let rows = repo::search(&self.pool, &fts_query, tape_filter, limit as i64).await?;
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let rows = repo::search(&mut conn, &fts_query, tape_filter, limit as i64).await?;
 
         Ok(rows
             .into_iter()
@@ -141,20 +154,23 @@ impl TapeFts {
     }
 
     /// Return the high-water mark (last indexed entry ID) for a tape.
-    pub(crate) async fn last_indexed_id(&self, tape_name: &str) -> Result<u64, sqlx::Error> {
-        Ok(repo::get_hwm(&self.pool, tape_name).await? as u64)
+    pub(crate) async fn last_indexed_id(&self, tape_name: &str) -> Result<u64> {
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        Ok(repo::get_hwm(&mut conn, tape_name).await? as u64)
     }
 
     /// Remove all FTS entries for a tape (used on reset/archive/delete).
-    pub(crate) async fn remove_tape(&self, tape_name: &str) -> Result<(), sqlx::Error> {
-        repo::delete_by_tape(&self.pool, tape_name).await?;
+    pub(crate) async fn remove_tape(&self, tape_name: &str) -> Result<()> {
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        repo::delete_by_tape(&mut conn, tape_name).await?;
         debug!(tape_name, "FTS entries removed");
         Ok(())
     }
 
     /// Delete all FTS data (full reset).
-    pub(crate) async fn clear_all(&self) -> Result<(), sqlx::Error> {
-        repo::delete_all(&self.pool).await?;
+    pub(crate) async fn clear_all(&self) -> Result<()> {
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        repo::delete_all(&mut conn).await?;
         warn!("FTS index cleared — will rebuild on next access");
         Ok(())
     }
@@ -343,27 +359,7 @@ mod tests {
     }
 
     /// Helper: create an in-memory pool with the FTS schema.
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("in-memory pool");
-        sqlx::query(
-            "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind \
-             UNINDEXED, entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 \
-             remove_diacritics 2')",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fts table");
-        sqlx::query(
-            "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT \
-             NULL DEFAULT 0)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create meta table");
-        pool
-    }
+    async fn test_pool() -> DieselSqlitePool { crate::testing::build_memory_diesel_pool().await }
 
     #[tokio::test]
     async fn roundtrip_index_and_search() {

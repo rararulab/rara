@@ -424,7 +424,7 @@ pub async fn start_with_options(
     // turn end) and the backend session service (which reads them for
     // the web "📊 详情" button). Create it once here so both sides see
     // the same underlying pool.
-    let trace_service = rara_kernel::trace::TraceService::new(pool.clone());
+    let trace_service = rara_kernel::trace::TraceService::new(diesel_pool.clone());
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),
