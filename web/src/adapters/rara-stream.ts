@@ -369,6 +369,26 @@ export function createRaraStreamFn(
   getPendingAttachments?: PendingAttachmentsFn,
   onWebEvent?: WebEventObserver,
 ): StreamFn {
+  // Session-stable registry of kernel-authoritative tool results keyed by
+  // `toolCallId`. Hoisted out of the inner `StreamFn` closure so the relay
+  // `AgentTool` shims installed into `context.tools` on the first invocation
+  // keep resolving new entries registered by subsequent invocations within
+  // the same session (see #1732). pi-agent-core skips reinstalling shims
+  // whose name already lives in `context.tools`, so if each invocation
+  // allocated its own Map the shim would close over a stale reference and
+  // throw "No kernel result registered for tool call ..." on follow-up turns.
+  //
+  // NOTE: entries accumulate for the lifetime of the returned `StreamFn` —
+  // we intentionally never evict because `resolved` is cached so late
+  // pi-agent-core `execute()` calls still return the real result. A single
+  // session's tool-call count is bounded (hundreds max, each holding a
+  // result preview on the order of tens of KB), so unbounded growth is not
+  // a practical concern; an eviction policy would risk regressing #1601.
+  const pendingToolResults = new Map<string, PendingToolResult>();
+  // Deduplicate shim installation across invocations — one `AgentTool` per
+  // distinct tool name for the whole session.
+  const installedTools = new Set<string>();
+
   return (
     model: Model<any>,
     context: Context,
@@ -395,19 +415,14 @@ export function createRaraStreamFn(
 
     // Accumulated content blocks for building partial messages
     const content: (TextContent | ThinkingContent | ToolCall)[] = [];
-    // Per-turn registry of kernel-authoritative tool results keyed by
-    // `toolCallId`. The companion `AgentTool` shims installed into
-    // `context.tools` await these promises so pi-agent-core's loop
-    // threads the real result through without the "Tool X not found"
-    // fallback (see #1601).
-    const pendingToolResults = new Map<string, PendingToolResult>();
-    // Deduplicate shim installation — one `AgentTool` per distinct name.
-    const installedTools = new Set<string>();
     // Ensure `context.tools` is an array we can mutate in place so the
     // shims are visible when pi-agent-core's loop reads `currentContext.tools`
     // after this stream ends.
     if (!context.tools) context.tools = [];
     const contextTools = context.tools;
+    // Names already present in `context.tools` — includes shims installed
+    // by a previous invocation of this same `StreamFn` (per-session closure),
+    // so we don't push duplicate entries on follow-up turns.
     const installedNamesFromContext = new Set(contextTools.map((t) => t.name));
     // Running usage — starts empty, replaced when the backend emits its
     // final `usage` event. Cost is computed against the session model's
