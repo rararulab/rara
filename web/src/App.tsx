@@ -32,6 +32,7 @@ import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
 import Login from '@/pages/Login';
 import PiChat from '@/pages/PiChat';
+import Subscriptions from '@/pages/Subscriptions';
 
 const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
@@ -116,6 +117,7 @@ export default function App() {
                 <Route path="docs" element={<Docs />} />
                 <Route path="kernel-top" element={<KernelTop />} />
                 <Route path="dock" element={<Dock />} />
+                <Route path="subscriptions" element={<Subscriptions />} />
               </Route>
             </Routes>
           </SettingsModalProvider>
