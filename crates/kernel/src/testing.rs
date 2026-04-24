@@ -394,6 +394,13 @@ impl TestKernelBuilder {
         // Skills prompt (empty)
         let skill_prompt_provider: crate::handle::SkillPromptProvider = Arc::new(|| String::new());
 
+        // Per-test scheduler dir — isolates `jobs.json` / `in_flight.json` /
+        // `subscriptions.json` from every other test running in the same
+        // process. `rara_paths::workspace_dir()` is a `OnceLock` global, so
+        // without this redirect parallel tests share one `jobs.json` and
+        // see each other's seeded jobs (observed as flaky
+        // `list_on_empty_kernel_is_empty`).
+        let scheduler_dir = self.tmp_dir.join("scheduler");
         let kernel = Kernel::new(
             self.config,
             driver_registry,
@@ -408,6 +415,7 @@ impl TestKernelBuilder {
             None, // no dynamic tool provider
             trace_service,
             skill_prompt_provider,
+            scheduler_dir,
         );
 
         let cancel_token = CancellationToken::new();
@@ -434,6 +442,16 @@ pub struct TestKernel {
 impl TestKernel {
     /// Shut down the kernel gracefully.
     pub fn shutdown(&self) { self.cancel_token.cancel(); }
+
+    /// Seed a pre-built [`JobEntry`](crate::schedule::JobEntry) directly onto
+    /// the wheel, bypassing the `RegisterJob` syscall path.
+    ///
+    /// The syscall path requires a real session principal in the process
+    /// table, which integration tests typically don't set up. This helper is
+    /// the only public surface for wheel-seeding; the underlying
+    /// `KernelHandle::seed_job` is crate-private so downstream code can't
+    /// reach it from production.
+    pub fn seed_job(&self, entry: crate::schedule::JobEntry) { self.handle.seed_job(entry); }
 }
 
 /// Convenience helper: build a [`CompletionResponse`] with text content.

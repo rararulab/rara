@@ -46,14 +46,16 @@ export interface Job {
   last_run_at: string | null;
 }
 
-/** Response shape of `POST /api/v1/scheduler/jobs/:id/trigger`. Extends
- *  the usual `Job` view with a `triggered` discriminator: `true` when the
- *  backend dispatched a fresh run, `false` when the request was
- *  deduplicated because a previous run is still in-flight. Both cases are
- *  HTTP 200 — the frontend branches on `triggered` instead of reading a
- *  status code, so spam-clicking "Run now" produces a neutral UX signal
- *  rather than a false error. */
-export interface TriggerJobResponse extends Job {
+/** Response shape of `POST /api/v1/scheduler/jobs/:id/trigger`. Nests the
+ *  refreshed `Job` view under `job` so the `triggered` discriminator reads
+ *  as metadata about the call rather than as a field of the job itself.
+ *  `triggered` is `true` when the backend dispatched a fresh run, `false`
+ *  when the request was deduplicated because a previous run is still
+ *  in-flight. Both cases are HTTP 200 — the frontend branches on
+ *  `triggered` instead of reading a status code, so spam-clicking
+ *  "Run now" produces a neutral UX signal rather than a false error. */
+export interface TriggerJobResponse {
+  job: Job;
   triggered: boolean;
 }
 

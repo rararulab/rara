@@ -84,6 +84,12 @@ pub(crate) struct SyscallDispatcher {
 
 impl SyscallDispatcher {
     /// Create a new syscall dispatcher.
+    ///
+    /// `scheduler_dir` is where the job wheel, in-flight ledger, and
+    /// subscription registry persist their JSON state. Production callers
+    /// pass `rara_paths::workspace_dir().join("scheduler")`; integration
+    /// tests pass a per-test tempdir so parallel tests don't stomp on one
+    /// another's `jobs.json`.
     pub fn new(
         shared_kv: SharedKv,
         pipe_registry: PipeRegistry,
@@ -93,8 +99,8 @@ impl SyscallDispatcher {
         config: KernelConfig,
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
+        scheduler_dir: std::path::PathBuf,
     ) -> Self {
-        let scheduler_dir = rara_paths::workspace_dir().join("scheduler");
         let jobs_path = scheduler_dir.join("jobs.json");
         let subs_path = scheduler_dir.join("subscriptions.json");
         let job_wheel = Arc::new(parking_lot::Mutex::new(crate::schedule::JobWheel::load(
@@ -534,30 +540,55 @@ impl SyscallDispatcher {
 
                 let result = match outcome {
                     crate::schedule::TriggerOutcome::Fired(job) => {
-                        info!(
-                            job_id = %job.id,
-                            session = %job.session_key,
-                            "manually triggered scheduled job"
-                        );
                         // Dispatch via the same ScheduledTask event path
                         // drain_expired uses so manual triggers and automatic
-                        // fires share one execution pipeline.
-                        let _ = kernel_handle
-                            .event_queue()
-                            .try_push(crate::event::KernelEventEnvelope::scheduled_task(job));
-                        Ok(crate::event::TriggerJobReply::Fired)
+                        // fires share one execution pipeline. If the queue
+                        // rejects the push we must roll back the in-flight
+                        // ledger entry `trigger_now` just wrote — otherwise
+                        // the lease would hold for 5 minutes while no agent
+                        // is actually running, making subsequent triggers
+                        // return `AlreadyInFlight` on a phantom execution.
+                        let envelope =
+                            crate::event::KernelEventEnvelope::scheduled_task(job.clone());
+                        match kernel_handle.event_queue().try_push(envelope) {
+                            Ok(()) => {
+                                info!(
+                                    job_id = %job.id,
+                                    "manually triggered scheduled job"
+                                );
+                                Ok(crate::event::TriggerJobReply::Fired(job))
+                            }
+                            Err(e) => {
+                                let wheel_ref = self.job_wheel.clone();
+                                let cancel_id = job.id;
+                                let cancelled = tokio::task::spawn_blocking(move || {
+                                    wheel_ref.lock().cancel_in_flight(&cancel_id)
+                                })
+                                .await
+                                .unwrap_or(false);
+                                warn!(
+                                    job_id = %job.id,
+                                    error = %e,
+                                    cancelled_ledger = cancelled,
+                                    "trigger_now: event queue rejected ScheduledTask dispatch; \
+                                     rolled back in-flight ledger"
+                                );
+                                Err(KernelError::QueueFull {
+                                    message: format!("event queue rejected dispatch: {e}"),
+                                })
+                            }
+                        }
                     }
                     crate::schedule::TriggerOutcome::AlreadyInFlight(job) => {
                         info!(
                             job_id = %job.id,
-                            session = %job.session_key,
                             "trigger_now deduplicated — prior execution still in-flight"
                         );
                         // Deliberately do NOT push a ScheduledTask event —
                         // that would spawn a second overlapping agent session
                         // for the same job. The existing in-flight agent
                         // will publish its report when it finishes.
-                        Ok(crate::event::TriggerJobReply::AlreadyInFlight)
+                        Ok(crate::event::TriggerJobReply::AlreadyInFlight(job))
                     }
                     crate::schedule::TriggerOutcome::NotFound => Err(KernelError::Other {
                         message: format!("job not found: {job_id}").into(),

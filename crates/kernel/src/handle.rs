@@ -429,15 +429,14 @@ impl KernelHandle {
         self.job_wheel.lock().list(session_key.as_ref())
     }
 
-    /// Insert a pre-built [`JobEntry`] directly onto the wheel, bypassing the
-    /// `RegisterJob` syscall path.
+    /// Seed a pre-built [`crate::schedule::JobEntry`] onto the wheel, bypassing
+    /// the `RegisterJob` syscall path.
     ///
-    /// Intended for integration tests that need to seed jobs without
-    /// spinning up a real session + principal in the process table. The
+    /// Crate-private by design: test helpers in [`crate::testing`] wrap this
+    /// so the capability isn't reachable from every downstream crate. The
     /// syscall path remains the only way production callers register jobs,
     /// because it is the only path that supplies a real session principal.
-    #[doc(hidden)]
-    pub fn register_job_for_testing(&self, entry: crate::schedule::JobEntry) {
+    pub(crate) fn seed_job(&self, entry: crate::schedule::JobEntry) {
         let mut wheel = self.job_wheel.lock();
         wheel.add(entry);
         wheel.persist();

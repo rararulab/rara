@@ -281,15 +281,24 @@ pub enum Syscall {
 /// deduplicated no-op. Mirrors the success arms of
 /// [`crate::schedule::TriggerOutcome`] — the `NotFound` case is surfaced as
 /// the `Err` half of `Result<TriggerJobReply, KernelError>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Each arm carries the wheel's [`JobEntry`] so
+/// HTTP callers can shape a response view without a follow-up `ListAllJobs`
+/// query. That second lookup used to race against `complete_in_flight` on
+/// `Trigger::Once` jobs — a caller would see the syscall succeed and then
+/// get a 404 when the job had already finished and been removed from the
+/// wheel. Threading the entry through the reply eliminates the race.
+#[derive(Debug, Clone)]
 pub enum TriggerJobReply {
     /// The job was cloned into the in-flight ledger and a `ScheduledTask`
-    /// event has been published.
-    Fired,
+    /// event has been published. Carries the wheel's job snapshot taken at
+    /// dispatch time.
+    Fired(crate::schedule::JobEntry),
     /// A prior trigger is still executing. No new dispatch happened; the
     /// caller can treat this as a successful idempotent operation and the
-    /// HTTP layer maps it to a `triggered: false` discriminator.
-    AlreadyInFlight,
+    /// HTTP layer maps it to a `triggered: false` discriminator. Carries
+    /// the wheel's current entry for the job.
+    AlreadyInFlight(crate::schedule::JobEntry),
 }
 
 impl Syscall {

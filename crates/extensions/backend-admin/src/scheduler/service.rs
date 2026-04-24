@@ -25,6 +25,7 @@
 //! drain would produce.
 
 use rara_kernel::{
+    error::KernelError,
     event::{KernelEventEnvelope, Syscall, TriggerJobReply},
     handle::KernelHandle,
     schedule::{JobEntry, JobId},
@@ -50,6 +51,12 @@ pub enum SchedulerError {
     /// Event queue is full or closed; the syscall was not delivered.
     #[snafu(display("event queue unavailable: {message}"))]
     EventQueue { message: String },
+    /// Kernel accepted the trigger but could not dispatch the
+    /// `ScheduledTask` event (queue full / closed). Transient — the client
+    /// should retry. The in-flight ledger has already been rolled back on
+    /// the kernel side.
+    #[snafu(display("scheduler is temporarily unavailable: {message}"))]
+    TriggerUnavailable { message: String },
     /// Kernel returned an error executing the syscall.
     #[snafu(display("kernel syscall failed: {source}"))]
     Kernel {
@@ -141,15 +148,31 @@ impl SchedulerSvc {
         })?;
         let reply = match rx.await.context(ReplyDroppedSnafu)? {
             Ok(r) => r,
+            Err(KernelError::QueueFull { message }) => {
+                return Err(SchedulerError::TriggerUnavailable { message });
+            }
             Err(_) => {
                 return Err(SchedulerError::JobNotFound {
                     job_id: job_id.to_string(),
                 });
             }
         };
-        let view = self.get_job(job_id).await?;
-        let triggered = matches!(reply, TriggerJobReply::Fired);
-        Ok(TriggerJobView { view, triggered })
+        // The reply carries the wheel's `JobEntry` snapshot taken inside the
+        // syscall, so we only need the result-store lookup here. Re-querying
+        // the wheel from the service side would race against
+        // `complete_in_flight` on `Trigger::Once` jobs — the syscall would
+        // return `Fired` and then `get_job` would 404 because the job had
+        // already finished and been removed.
+        let (job, triggered) = match reply {
+            TriggerJobReply::Fired(job) => (job, true),
+            TriggerJobReply::AlreadyInFlight(job) => (job, false),
+        };
+        let latest = self.handle.job_result_store().read_latest(&job.id).await;
+        let view = JobView::from_job(job, latest.as_ref());
+        Ok(TriggerJobView {
+            job: view,
+            triggered,
+        })
     }
 
     /// Read up to `limit` most recent execution results for `job_id`,

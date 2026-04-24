@@ -119,7 +119,7 @@ async fn trigger_job_does_not_advance_next_at() {
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
     let svc = SchedulerSvc::new(tk.handle.clone());
 
-    // Seed a cron job scheduled one hour out. `register_job_for_testing`
+    // Seed a cron job scheduled one hour out. `TestKernel::seed_job`
     // bypasses the RegisterJob syscall because that path requires a real
     // session principal in the process table, which this test doesn't set up.
     let future_fire = Timestamp::from_second(Timestamp::now().as_second() + 3600)
@@ -143,7 +143,7 @@ async fn trigger_job_does_not_advance_next_at() {
         tags:        vec![],
     };
     let job_id = entry.id;
-    tk.handle.register_job_for_testing(entry);
+    tk.seed_job(entry);
 
     // Capture `next_at` before trigger.
     let before = svc.get_job(&job_id).await.expect("seed job visible");
@@ -161,12 +161,12 @@ async fn trigger_job_does_not_advance_next_at() {
         "first trigger against a quiescent wheel must report triggered=true"
     );
     assert_eq!(
-        after.view.trigger.next_at(),
+        after.job.trigger.next_at(),
         future_fire,
         "trigger must not mutate the wheel's scheduled next_at"
     );
     assert!(
-        after.view.last_run_at.is_none(),
+        after.job.last_run_at.is_none(),
         "last_run_at only populates once the agent actually completes"
     );
 
@@ -208,7 +208,7 @@ async fn trigger_job_dedupes_second_call_in_flight() {
         tags:        vec![],
     };
     let job_id = entry.id;
-    tk.handle.register_job_for_testing(entry);
+    tk.seed_job(entry);
 
     // First trigger fires through the syscall path — the in-flight ledger
     // gains one entry and `triggered` is `true`.
@@ -227,7 +227,7 @@ async fn trigger_job_dedupes_second_call_in_flight() {
     );
     // View is still the same job — wheel schedule is unchanged.
     assert_eq!(
-        second.view.trigger.next_at(),
+        second.job.trigger.next_at(),
         future_fire,
         "dedupe must not mutate next_at"
     );

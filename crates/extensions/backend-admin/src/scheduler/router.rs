@@ -139,6 +139,11 @@ fn into_problem(err: SchedulerError) -> ProblemDetails {
         SchedulerError::JobNotFound { ref job_id } => {
             ProblemDetails::not_found("Job Not Found", format!("no job with id: {job_id}"))
         }
+        // Queue backpressure is transient — 503 tells well-behaved clients
+        // to retry rather than treating it as a persistent outage.
+        SchedulerError::TriggerUnavailable { ref message } => {
+            ProblemDetails::service_unavailable(format!("trigger dispatch failed: {message}"))
+        }
         other => ProblemDetails::internal(other.to_string()),
     }
 }

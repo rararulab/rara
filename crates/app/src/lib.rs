@@ -530,6 +530,7 @@ pub async fn start_with_options(
         mcp_tool_provider,
         trace_service,
         skill_prompt_provider,
+        rara_paths::workspace_dir().join("scheduler"),
     );
 
     let cancellation_token = CancellationToken::new();

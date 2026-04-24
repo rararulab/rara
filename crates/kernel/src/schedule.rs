@@ -656,6 +656,25 @@ impl JobWheel {
         TriggerOutcome::Fired(entry)
     }
 
+    /// Remove a job from the in-flight ledger without recording a result.
+    ///
+    /// Used by [`Syscall::TriggerJob`](crate::event::Syscall::TriggerJob)
+    /// when the follow-up `ScheduledTask` dispatch fails — the ledger
+    /// insertion performed by [`trigger_now`](Self::trigger_now) must be
+    /// rolled back so the lease doesn't hold for five minutes on a job
+    /// that nothing is executing. Returns `true` if an entry was removed.
+    ///
+    /// Distinct from [`complete_in_flight`](Self::complete_in_flight): that
+    /// method fires after a real execution finishes; this one is a pure
+    /// undo that never implies "ran successfully".
+    pub fn cancel_in_flight(&mut self, job_id: &JobId) -> bool {
+        let removed = self.in_flight.remove(job_id).is_some();
+        if removed {
+            self.persist_in_flight();
+        }
+        removed
+    }
+
     /// Mark a job as completed, removing it from the in-flight ledger.
     ///
     /// Called when the execution agent's session ends (regardless of whether
