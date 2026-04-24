@@ -36,6 +36,7 @@ pub mod polling;
 mod registry;
 mod status_reporter;
 mod store;
+mod time;
 pub mod webhook;
 
 pub use config::{AuthConfig, DataFeedConfig, FeedStatus, FeedType};
@@ -44,3 +45,4 @@ pub use feed::DataFeed;
 pub use registry::DataFeedRegistry;
 pub use status_reporter::{StatusReporter, StatusReporterRef};
 pub use store::{FeedFilter, FeedStore, FeedStoreRef};
+pub use time::parse_duration_ago;
