@@ -81,6 +81,27 @@ impl JobView {
     }
 }
 
+/// Wire shape of `POST /api/v1/scheduler/jobs/{id}/trigger`.
+///
+/// Wraps the refreshed [`JobView`] with a `triggered` discriminator so the
+/// frontend can distinguish a fresh dispatch (`true`) from a dedupe no-op
+/// (`false`, the job was already running from a prior trigger) without
+/// having to read an HTTP status code. Both outcomes are HTTP 200 — the
+/// only error path is a genuine `JobNotFound` 404. This avoids asking the
+/// web client to special-case a 409-style error for what is really an
+/// idempotent operation.
+#[derive(Debug, Serialize)]
+pub struct TriggerJobView {
+    /// Latest view of the job after the trigger attempt. `next_at` is
+    /// unchanged by design — manual triggers never advance the schedule.
+    #[serde(flatten)]
+    pub view:      JobView,
+    /// `true` when the syscall dispatched a fresh `ScheduledTask` event;
+    /// `false` when an earlier trigger is still in-flight and the call was
+    /// deduplicated.
+    pub triggered: bool,
+}
+
 /// Wire shape of a single historical execution of a scheduled job.
 ///
 /// Mirrors [`JobResult`] but normalises `status` through [`status_label`]

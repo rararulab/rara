@@ -35,7 +35,7 @@ use rara_kernel::{handle::KernelHandle, schedule::JobId};
 use serde::Deserialize;
 
 use super::{
-    dto::{JobResultView, JobView},
+    dto::{JobResultView, JobView, TriggerJobView},
     service::{SchedulerError, SchedulerSvc},
 };
 use crate::kernel::problem::ProblemDetails;
@@ -102,7 +102,7 @@ async fn delete_job(
 async fn trigger_job(
     State(svc): State<SchedulerSvc>,
     Path(id): Path<String>,
-) -> Result<Json<JobView>, ProblemDetails> {
+) -> Result<Json<TriggerJobView>, ProblemDetails> {
     let job_id = parse_job_id(&id)?;
     svc.trigger_job(&job_id)
         .await

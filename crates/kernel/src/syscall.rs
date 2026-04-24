@@ -520,19 +520,22 @@ impl SyscallDispatcher {
             }
             Syscall::TriggerJob { job_id, reply_tx } => {
                 let wheel_ref = self.job_wheel.clone();
-                let job_id_clone = job_id.clone();
-                let triggered = tokio::task::spawn_blocking(move || {
+                let job_id_clone = job_id;
+                let outcome = tokio::task::spawn_blocking(move || {
                     let mut wheel = wheel_ref.lock();
                     wheel.trigger_now(&job_id_clone)
                 })
                 .await
                 .unwrap_or_else(|e| {
                     warn!(error = %e, "spawn_blocking panicked during TriggerJob");
-                    None
+                    // Panic during trigger_now is indistinguishable from an
+                    // infrastructure fault — surface as NotFound rather than
+                    // a hollow success so the HTTP layer returns an error.
+                    crate::schedule::TriggerOutcome::NotFound
                 });
 
-                let result = match triggered {
-                    Some(job) => {
+                let result = match outcome {
+                    crate::schedule::TriggerOutcome::Fired(job) => {
                         info!(
                             job_id = %job.id,
                             session = %job.session_key,
@@ -544,9 +547,21 @@ impl SyscallDispatcher {
                         let _ = kernel_handle
                             .event_queue()
                             .try_push(crate::event::KernelEventEnvelope::scheduled_task(job));
-                        Ok(())
+                        Ok(crate::event::TriggerJobReply::Fired)
                     }
-                    None => Err(KernelError::Other {
+                    crate::schedule::TriggerOutcome::AlreadyInFlight(job) => {
+                        info!(
+                            job_id = %job.id,
+                            session = %job.session_key,
+                            "trigger_now deduplicated — prior execution still in-flight"
+                        );
+                        // Deliberately do NOT push a ScheduledTask event —
+                        // that would spawn a second overlapping agent session
+                        // for the same job. The existing in-flight agent
+                        // will publish its report when it finishes.
+                        Ok(crate::event::TriggerJobReply::AlreadyInFlight)
+                    }
+                    crate::schedule::TriggerOutcome::NotFound => Err(KernelError::Other {
                         message: format!("job not found: {job_id}").into(),
                     }),
                 };

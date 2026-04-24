@@ -211,6 +211,30 @@ pub struct DrainResult {
 }
 
 // ---------------------------------------------------------------------------
+// TriggerOutcome — explicit three-way result of JobWheel::trigger_now
+// ---------------------------------------------------------------------------
+
+/// Terminal outcome of [`JobWheel::trigger_now`].
+///
+/// Makes the three cases unambiguous so the syscall handler and the backend
+/// service layer can respond with different wire semantics: `Fired` dispatches
+/// a `ScheduledTask` event, `AlreadyInFlight` is a no-op that the HTTP layer
+/// surfaces as a dedupe signal (not a 404), and `NotFound` is the only real
+/// error path.
+#[derive(Debug)]
+pub enum TriggerOutcome {
+    /// Fresh dispatch — the job was cloned into the in-flight ledger with a
+    /// new lease and must be published via `ScheduledTask`.
+    Fired(JobEntry),
+    /// A prior trigger is still executing. The entry is returned unchanged
+    /// for observability (so the caller can return its latest view) but
+    /// nothing is inserted into the ledger and no event is published.
+    AlreadyInFlight(JobEntry),
+    /// No job with the supplied ID exists on the wheel.
+    NotFound,
+}
+
+// ---------------------------------------------------------------------------
 // InFlightEntry — in-flight ledger entry with lease deadline
 // ---------------------------------------------------------------------------
 
@@ -588,30 +612,32 @@ impl JobWheel {
     /// Used by `Syscall::TriggerJob` to fire a job on demand. The original
     /// entry's `next_at` is intentionally preserved so recurring jobs keep
     /// their regular cadence after an out-of-band trigger. Persists the
-    /// ledger to disk on success.
+    /// ledger to disk on the `Fired` path only.
     ///
-    /// Returns the cloned [`JobEntry`] ready to be dispatched via
-    /// `ScheduledTask`, or `None` if no job with that ID is on the wheel.
-    ///
-    /// No-op if the job is already in-flight — prevents spam-click from
-    /// spawning overlapping agent sessions. The caller observes `None` and
-    /// skips the dispatch; the existing in-flight entry's lease is left
-    /// untouched.
-    pub fn trigger_now(&mut self, job_id: &JobId) -> Option<JobEntry> {
-        let key = *self.by_id.get(job_id)?;
-        let entry = self.jobs.get(&key)?.clone();
+    /// See [`TriggerOutcome`] for the three terminal cases. Callers MUST
+    /// distinguish `AlreadyInFlight` from `NotFound` — they map to very
+    /// different HTTP semantics at the backend boundary (dedupe vs. 404).
+    pub fn trigger_now(&mut self, job_id: &JobId) -> TriggerOutcome {
+        let Some(key) = self.by_id.get(job_id).copied() else {
+            return TriggerOutcome::NotFound;
+        };
+        let Some(entry) = self.jobs.get(&key).cloned() else {
+            return TriggerOutcome::NotFound;
+        };
 
         // Dedupe: if a prior trigger (manual or scheduled) is still in-flight,
         // refuse to enqueue another. The ledger insert alone dedupes on the
         // key, but the syscall handler separately pushes a `ScheduledTask`
         // event per call, which would spawn N overlapping agent sessions
-        // without this guard.
+        // without this guard. The outcome distinguishes this from the
+        // `NotFound` case so the backend can surface "already running" to
+        // the frontend instead of a misleading 404.
         if self.in_flight.contains_key(job_id) {
             warn!(
                 job_id = %job_id,
                 "trigger_now: job already in-flight; dedupe (no dispatch)"
             );
-            return None;
+            return TriggerOutcome::AlreadyInFlight(entry);
         }
 
         let now = self.clock.now();
@@ -627,7 +653,7 @@ impl JobWheel {
             },
         );
         self.persist_in_flight();
-        Some(entry)
+        TriggerOutcome::Fired(entry)
     }
 
     /// Mark a job as completed, removing it from the in-flight ledger.
@@ -1339,7 +1365,10 @@ mod tests {
         let id = entry.id;
         wheel.add(entry);
 
-        let fired = wheel.trigger_now(&id).expect("trigger_now should find job");
+        let fired = match wheel.trigger_now(&id) {
+            TriggerOutcome::Fired(entry) => entry,
+            other => panic!("expected Fired, got {other:?}"),
+        };
         assert_eq!(fired.id, id);
 
         // Wheel still holds the job with the original next_at.
@@ -1365,12 +1394,15 @@ mod tests {
     }
 
     #[test]
-    fn trigger_job_missing_id_returns_none() {
+    fn trigger_now_returns_not_found_for_missing_id() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("jobs.json");
         let mut wheel = JobWheel::load(path);
         let ghost = JobId::new();
-        assert!(wheel.trigger_now(&ghost).is_none());
+        assert!(matches!(
+            wheel.trigger_now(&ghost),
+            TriggerOutcome::NotFound
+        ));
         assert!(wheel.in_flight.is_empty());
     }
 
@@ -1390,15 +1422,18 @@ mod tests {
         wheel.add(entry);
 
         // First trigger succeeds and the ledger gains one entry.
-        let first = wheel.trigger_now(&id);
-        assert!(first.is_some(), "first trigger should dispatch");
+        assert!(
+            matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)),
+            "first trigger should dispatch"
+        );
         assert_eq!(wheel.in_flight.len(), 1);
 
-        // Immediate repeat is a no-op — still exactly one in-flight entry.
-        let second = wheel.trigger_now(&id);
+        // Immediate repeat is a no-op — still exactly one in-flight entry,
+        // and the outcome explicitly flags the dedupe so the syscall handler
+        // can reply with a distinct signal (not a `NotFound`).
         assert!(
-            second.is_none(),
-            "concurrent trigger must not spawn a second dispatch"
+            matches!(wheel.trigger_now(&id), TriggerOutcome::AlreadyInFlight(_)),
+            "concurrent trigger must report AlreadyInFlight, not dispatch"
         );
         assert_eq!(
             wheel.in_flight.len(),
@@ -1409,9 +1444,8 @@ mod tests {
         // After the agent session completes and the ledger is cleared,
         // triggering again works as usual.
         assert!(wheel.complete_in_flight(&id));
-        let third = wheel.trigger_now(&id);
         assert!(
-            third.is_some(),
+            matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)),
             "post-completion trigger should dispatch again"
         );
         assert_eq!(wheel.in_flight.len(), 1);

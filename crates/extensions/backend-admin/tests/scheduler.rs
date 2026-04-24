@@ -156,14 +156,80 @@ async fn trigger_job_does_not_advance_next_at() {
     // Trigger via the admin service — full HTTP-path minus the axum decode.
     let after = svc.trigger_job(&job_id).await.expect("trigger succeeds");
 
+    assert!(
+        after.triggered,
+        "first trigger against a quiescent wheel must report triggered=true"
+    );
     assert_eq!(
-        after.trigger.next_at(),
+        after.view.trigger.next_at(),
         future_fire,
         "trigger must not mutate the wheel's scheduled next_at"
     );
     assert!(
-        after.last_run_at.is_none(),
+        after.view.last_run_at.is_none(),
         "last_run_at only populates once the agent actually completes"
+    );
+
+    tk.shutdown();
+}
+
+/// Second trigger while the first is still in-flight reports `triggered=false`.
+///
+/// The wheel-level `trigger_now_dedupes_in_flight` unit test exercises the
+/// ledger, but the admin wire needs its own coverage — a regression that
+/// flipped the 200+discriminator to a 404 error path would silently break
+/// the frontend's "Run now" spam-click affordance, and only an end-to-end
+/// admin-service test catches the full chain (syscall reply → service →
+/// HTTP-shaped response).
+#[tokio::test]
+async fn trigger_job_dedupes_second_call_in_flight() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let tk = TestKernelBuilder::new(tmp.path()).build().await;
+    let svc = SchedulerSvc::new(tk.handle.clone());
+
+    let future_fire = Timestamp::from_second(Timestamp::now().as_second() + 3600)
+        .expect("future timestamp representable");
+    let user = KernelUser {
+        name:        "test-user".into(),
+        role:        Role::User,
+        permissions: vec![Permission::Spawn],
+        enabled:     true,
+    };
+    let entry = JobEntry {
+        id:          JobId::new(),
+        trigger:     Trigger::Cron {
+            expr:    "0 * * * * *".into(),
+            next_at: future_fire,
+        },
+        message:     "cron".into(),
+        session_key: SessionKey::new(),
+        principal:   Principal::from_user(&user),
+        created_at:  Timestamp::now(),
+        tags:        vec![],
+    };
+    let job_id = entry.id;
+    tk.handle.register_job_for_testing(entry);
+
+    // First trigger fires through the syscall path — the in-flight ledger
+    // gains one entry and `triggered` is `true`.
+    let first = svc.trigger_job(&job_id).await.expect("first trigger ok");
+    assert!(
+        first.triggered,
+        "first trigger should report triggered=true"
+    );
+
+    // Second trigger against the same job while the first is still in-flight
+    // must be a 200 with `triggered=false`, NOT a 404 JobNotFound.
+    let second = svc.trigger_job(&job_id).await.expect("second trigger ok");
+    assert!(
+        !second.triggered,
+        "dedupe must report triggered=false, got {second:?}"
+    );
+    // View is still the same job — wheel schedule is unchanged.
+    assert_eq!(
+        second.view.trigger.next_at(),
+        future_fire,
+        "dedupe must not mutate next_at"
     );
 
     tk.shutdown();

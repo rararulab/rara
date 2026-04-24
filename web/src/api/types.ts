@@ -46,6 +46,17 @@ export interface Job {
   last_run_at: string | null;
 }
 
+/** Response shape of `POST /api/v1/scheduler/jobs/:id/trigger`. Extends
+ *  the usual `Job` view with a `triggered` discriminator: `true` when the
+ *  backend dispatched a fresh run, `false` when the request was
+ *  deduplicated because a previous run is still in-flight. Both cases are
+ *  HTTP 200 — the frontend branches on `triggered` instead of reading a
+ *  status code, so spam-clicking "Run now" produces a neutral UX signal
+ *  rather than a false error. */
+export interface TriggerJobResponse extends Job {
+  triggered: boolean;
+}
+
 /** One historical execution of a job, from
  *  `GET /api/v1/scheduler/jobs/:id/history`. Status uses the same wire
  *  vocabulary as `Job.last_status` — the backend normalises both through

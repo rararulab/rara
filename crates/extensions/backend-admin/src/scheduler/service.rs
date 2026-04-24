@@ -25,7 +25,7 @@
 //! drain would produce.
 
 use rara_kernel::{
-    event::{KernelEventEnvelope, Syscall},
+    event::{KernelEventEnvelope, Syscall, TriggerJobReply},
     handle::KernelHandle,
     schedule::{JobEntry, JobId},
     session::SessionKey,
@@ -34,7 +34,7 @@ use snafu::{ResultExt, Snafu};
 use tokio::sync::oneshot;
 use tracing::instrument;
 
-use super::dto::{JobResultView, JobView};
+use super::dto::{JobResultView, JobView, TriggerJobView};
 
 /// Service-level errors surfaced to the HTTP handlers.
 #[derive(Debug, Snafu)]
@@ -124,23 +124,32 @@ impl SchedulerSvc {
 
     /// Fire a job on demand without advancing its `next_at`.
     ///
-    /// Returns the refreshed [`JobView`] so the HTTP layer can respond with
-    /// the post-trigger state. The `next_at` in the view is unchanged from
-    /// before the call — that invariant is enforced inside the kernel by
+    /// Returns a [`TriggerJobView`] whose `triggered` flag distinguishes a
+    /// fresh dispatch (`true`) from a deduplicated no-op (`false`, the job
+    /// was already running from a prior trigger). Both cases are HTTP 200
+    /// — the frontend branches on `triggered` instead of decoding an error
+    /// status. `JobNotFound` remains the only error path. The `next_at` in
+    /// the view is unchanged from before the call — that invariant is
+    /// enforced inside the kernel by
     /// [`rara_kernel::schedule::JobWheel::trigger_now`].
     #[instrument(skip_all, fields(%job_id))]
-    pub async fn trigger_job(&self, job_id: &JobId) -> Result<JobView> {
+    pub async fn trigger_job(&self, job_id: &JobId) -> Result<TriggerJobView> {
         let (tx, rx) = oneshot::channel();
         self.push_syscall(Syscall::TriggerJob {
             job_id:   *job_id,
             reply_tx: tx,
         })?;
-        match rx.await.context(ReplyDroppedSnafu)? {
-            Ok(()) => self.get_job(job_id).await,
-            Err(_) => Err(SchedulerError::JobNotFound {
-                job_id: job_id.to_string(),
-            }),
-        }
+        let reply = match rx.await.context(ReplyDroppedSnafu)? {
+            Ok(r) => r,
+            Err(_) => {
+                return Err(SchedulerError::JobNotFound {
+                    job_id: job_id.to_string(),
+                });
+            }
+        };
+        let view = self.get_job(job_id).await?;
+        let triggered = matches!(reply, TriggerJobReply::Fired);
+        Ok(TriggerJobView { view, triggered })
     }
 
     /// Read up to `limit` most recent execution results for `job_id`,

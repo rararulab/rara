@@ -237,12 +237,17 @@ pub enum Syscall {
     /// wheel's original schedule is untouched — recurring jobs still fire at
     /// their next regular `next_at`.
     ///
+    /// Reply shape mirrors [`crate::schedule::TriggerOutcome`] so callers can
+    /// distinguish a fresh dispatch from a deduplicated no-op (job already
+    /// in-flight) and from a missing job. `NotFound` is the only error; the
+    /// other two outcomes are both `Ok`.
+    ///
     /// [`JobWheel::drain_expired`]: crate::schedule::JobWheel::drain_expired
     TriggerJob {
         job_id:   crate::schedule::JobId,
         #[debug(skip)]
         #[serde(skip_serializing)]
-        reply_tx: oneshot::Sender<crate::error::Result<()>>,
+        reply_tx: oneshot::Sender<crate::error::Result<TriggerJobReply>>,
     },
 
     // -- Task Report & Subscription --
@@ -270,6 +275,21 @@ pub enum Syscall {
         #[serde(skip_serializing)]
         reply_tx: oneshot::Sender<crate::error::Result<()>>,
     },
+}
+
+/// Reply for [`Syscall::TriggerJob`] distinguishing a fresh dispatch from a
+/// deduplicated no-op. Mirrors the success arms of
+/// [`crate::schedule::TriggerOutcome`] — the `NotFound` case is surfaced as
+/// the `Err` half of `Result<TriggerJobReply, KernelError>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerJobReply {
+    /// The job was cloned into the in-flight ledger and a `ScheduledTask`
+    /// event has been published.
+    Fired,
+    /// A prior trigger is still executing. No new dispatch happened; the
+    /// caller can treat this as a successful idempotent operation and the
+    /// HTTP layer maps it to a `triggered: false` discriminator.
+    AlreadyInFlight,
 }
 
 impl Syscall {

@@ -19,7 +19,7 @@ import { CalendarClock, History, Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import { api } from '@/api/client';
-import type { Job, JobResult, Trigger } from '@/api/types';
+import type { Job, JobResult, Trigger, TriggerJobResponse } from '@/api/types';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -174,8 +174,14 @@ function JobCard({ job }: { job: Job }) {
   const [expandMessage, setExpandMessage] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // Both `triggered: true` (fresh dispatch) and `triggered: false`
+  // (deduplicated because a prior run is still in-flight) come back as
+  // HTTP 200 so spam-clicks don't surface as errors. Cache invalidation
+  // runs on either outcome — the UI picks up the fresh `last_run_at` when
+  // the in-flight agent eventually publishes its report, regardless of
+  // which click actually started it.
   const triggerMutation = useMutation({
-    mutationFn: () => api.post<Job>(`/api/v1/scheduler/jobs/${job.id}/trigger`),
+    mutationFn: () => api.post<TriggerJobResponse>(`/api/v1/scheduler/jobs/${job.id}/trigger`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: JOBS_KEY });
       void queryClient.invalidateQueries({ queryKey: ['scheduler', 'history', job.id] });
