@@ -76,6 +76,8 @@ import Skills from '@/pages/Skills';
 /** Admin settings section identifiers. Exported so the floating modal can deep-link into a specific tab. */
 export type SettingsPage =
   | 'general'
+  | 'appearance'
+  | 'connection'
   | 'providers'
   | 'agents'
   | 'skills'
@@ -349,10 +351,8 @@ function KvGroup({
   return (
     <Card className="app-surface border-border/60">
       <CardHeader className="pb-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-            {icon}
-          </div>
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 text-muted-foreground [&>svg]:h-5 [&>svg]:w-5">{icon}</span>
           <div>
             <CardTitle className="text-base">{title}</CardTitle>
             <CardDescription>{description}</CardDescription>
@@ -427,10 +427,8 @@ function ConnectionCard() {
   return (
     <Card className="app-surface border-border/60">
       <CardHeader>
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-            <Wifi className="h-4 w-4" />
-          </div>
+        <div className="flex items-start gap-3">
+          <Wifi className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
           <div className="flex-1">
             <CardTitle className="text-base">Connection</CardTitle>
             <CardDescription>Backend server URL</CardDescription>
@@ -584,6 +582,8 @@ function AddProviderButton({
 
 const SETTINGS_PAGES: readonly SettingsPage[] = [
   'general',
+  'appearance',
+  'connection',
   'providers',
   'agents',
   'skills',
@@ -594,6 +594,18 @@ const SETTINGS_PAGES: readonly SettingsPage[] = [
   'data-feeds',
   'scheduler',
 ];
+
+/** Settings nav groups rendered as labelled sections in the sidebar. */
+type SettingsNavItem = {
+  id: SettingsPage;
+  label: string;
+  icon: ReactNode;
+};
+
+type SettingsNavGroup = {
+  label: string;
+  items: SettingsNavItem[];
+};
 
 /**
  * Renders the rara admin settings UI (sidebar + content). Section state is
@@ -719,820 +731,783 @@ export default function SettingsPanel({
 
   const original: SettingsMap = settingsQuery.data ?? {};
 
-  const settingsNavItems: Array<{
-    id: SettingsPage;
-    label: string;
-    icon: ReactNode;
-    summary: string;
-  }> = [
+  const settingsNavGroups: SettingsNavGroup[] = [
     {
-      id: 'general',
-      label: 'General',
-      icon: <Palette className="h-4 w-4" />,
-      summary: 'Appearance and documentation',
+      label: 'Workspace',
+      items: [
+        { id: 'general', label: 'General', icon: <Settings2 className="h-4 w-4" /> },
+        { id: 'appearance', label: 'Appearance', icon: <Palette className="h-4 w-4" /> },
+        { id: 'connection', label: 'Connection', icon: <Wifi className="h-4 w-4" /> },
+      ],
     },
     {
-      id: 'providers',
-      label: 'Providers',
-      icon: <Sparkles className="h-4 w-4" />,
-      summary: 'LLM provider and model config',
+      label: 'AI',
+      items: [
+        { id: 'providers', label: 'Providers', icon: <Sparkles className="h-4 w-4" /> },
+        { id: 'agents', label: 'Agents', icon: <Users className="h-4 w-4" /> },
+        { id: 'skills', label: 'Skills', icon: <Bot className="h-4 w-4" /> },
+      ],
     },
     {
-      id: 'agents',
-      label: 'Agents',
-      icon: <Users className="h-4 w-4" />,
-      summary: 'Agent definitions and overrides',
+      label: 'Integrations',
+      items: [
+        { id: 'mcp', label: 'MCP Servers', icon: <ExternalLink className="h-4 w-4" /> },
+        { id: 'channels', label: 'Channels', icon: <MessageSquare className="h-4 w-4" /> },
+        { id: 'tools', label: 'Tools', icon: <Mail className="h-4 w-4" /> },
+        { id: 'data-feeds', label: 'Data Feeds', icon: <Radio className="h-4 w-4" /> },
+      ],
     },
     {
-      id: 'skills',
-      label: 'Skills',
-      icon: <Bot className="h-4 w-4" />,
-      summary: 'Installed skills and management',
-    },
-    {
-      id: 'mcp',
-      label: 'MCP Servers',
-      icon: <ExternalLink className="h-4 w-4" />,
-      summary: 'Tool server connections',
-    },
-    {
-      id: 'channels',
-      label: 'Channels',
-      icon: <MessageSquare className="h-4 w-4" />,
-      summary: 'Telegram, Gmail',
-    },
-    {
-      id: 'tools',
-      label: 'Tools',
-      icon: <Settings2 className="h-4 w-4" />,
-      summary: 'Composio, memory integrations',
-    },
-    {
-      id: 'security',
-      label: 'Security',
-      icon: <Shield className="h-4 w-4" />,
-      summary: 'Filesystem sandbox',
-    },
-    {
-      id: 'data-feeds',
-      label: 'Data Feeds',
-      icon: <Radio className="h-4 w-4" />,
-      summary: 'External event sources',
-    },
-    {
-      id: 'scheduler',
-      label: 'Scheduler',
-      icon: <CalendarClock className="h-4 w-4" />,
-      summary: 'Agent-scheduled tasks',
+      label: 'Operations',
+      items: [
+        { id: 'security', label: 'Security', icon: <Shield className="h-4 w-4" /> },
+        { id: 'scheduler', label: 'Scheduler', icon: <CalendarClock className="h-4 w-4" /> },
+      ],
     },
   ];
 
   return (
-    <div className="flex h-full gap-4 overflow-hidden p-4">
-      {/* Sidebar */}
-      <aside className="data-panel w-64 shrink-0 overflow-y-auto">
-        <div className="border-b border-border/70 px-4 py-4">
-          <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Configure runtime credentials and workspace behavior.
-          </p>
-        </div>
-        <div className="p-2">
-          <nav className="space-y-1">
-            {settingsNavItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveCategory(item.id)}
-                className={cn(
-                  'group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all',
-                  activeCategory === item.id
-                    ? 'bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/15'
-                    : 'text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70',
-                )}
-              >
-                <span
-                  className={cn(
-                    'inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 bg-background/70',
-                    activeCategory === item.id
-                      ? 'text-primary'
-                      : 'text-muted-foreground group-hover:text-foreground',
-                  )}
-                >
-                  {item.icon}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate font-medium">{item.label}</span>
-                  <span className="block truncate text-xs text-muted-foreground/80">
-                    {item.summary}
-                  </span>
-                </span>
-              </button>
-            ))}
-          </nav>
-        </div>
-      </aside>
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Page header */}
+      <div className="border-b px-6 pt-6 pb-4">
+        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Configure runtime & workspace</p>
+      </div>
 
-      {/* Content */}
-      <div className="flex-1 space-y-6 overflow-y-auto pr-1">
-        {/* Toast */}
-        {toast && (
-          <div
-            className={cn(
-              'rounded-lg border px-4 py-2 text-sm',
-              toast.kind === 'success'
-                ? 'border-green-200 bg-green-50 text-green-700'
-                : 'border-destructive/30 bg-destructive/5 text-destructive',
-            )}
-          >
-            {toast.message}
-          </div>
-        )}
-
-        {/* ── General ── */}
-        {activeCategory === 'general' && (
-          <>
-            {/* Connection */}
-            <ConnectionCard />
-
-            {/* Appearance */}
-            <Card className="app-surface border-border/60">
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                    <Palette className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base">Appearance</CardTitle>
-                    <CardDescription>Theme and display preferences</CardDescription>
-                  </div>
+      <div className="flex h-full min-h-0 gap-6 overflow-hidden px-6 py-4">
+        {/* Sidebar */}
+        <aside className="w-56 shrink-0 overflow-y-auto">
+          <nav className="space-y-4">
+            {settingsNavGroups.map((group) => (
+              <div key={group.label} className="space-y-0.5">
+                <div className="px-2 pt-1 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                  {group.label}
                 </div>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <p className="font-medium">Theme</p>
-                    <p className="text-xs text-muted-foreground">
-                      Choose how the UI looks across all pages.
-                    </p>
-                  </div>
-                  <Badge variant="secondary" className="capitalize">
-                    {theme}
-                  </Badge>
-                </div>
-                <div className="grid gap-2 md:grid-cols-3">
-                  {THEME_OPTIONS.map((option) => (
+                {group.items.map((item) => {
+                  const isActive = activeCategory === item.id;
+                  return (
                     <button
-                      key={option.key}
+                      key={item.id}
                       type="button"
-                      onClick={() => setTheme(option.key)}
+                      onClick={() => setActiveCategory(item.id)}
                       className={cn(
-                        'group rounded-xl border p-3 text-left transition-all',
-                        theme === option.key
-                          ? 'border-primary/30 bg-primary/8 shadow-sm ring-1 ring-primary/10'
-                          : 'hover:bg-accent/40',
+                        'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                        isActive
+                          ? 'border-l-2 border-brand bg-muted text-foreground'
+                          : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
                       )}
                     >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            'inline-flex h-8 w-8 items-center justify-center rounded-lg border',
-                            theme === option.key
-                              ? 'border-primary/20 bg-primary/10 text-primary'
-                              : 'border-border/70 bg-background/70 text-muted-foreground',
-                          )}
-                        >
-                          {option.icon}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium">{option.label}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {option.description}
-                          </p>
-                        </div>
-                      </div>
+                      {item.icon}
+                      <span>{item.label}</span>
                     </button>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        </aside>
 
-            {/* Documentation */}
-            <Card className="app-surface border-border/60">
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                    <BookOpen className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base">Documentation</CardTitle>
-                    <CardDescription>Project guides and backend API reference</CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-2 lg:grid-cols-2">
-                  <a
-                    href="/book/"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <BookOpen className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <p className="font-medium">Guides</p>
-                          <p className="text-xs text-muted-foreground">mdBook</p>
-                        </div>
-                      </div>
-                      <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        {/* Content */}
+        <div className="flex-1 space-y-6 overflow-y-auto pr-1">
+          {/* Toast */}
+          {toast && (
+            <div
+              className={cn(
+                'rounded-lg border px-4 py-2 text-sm',
+                toast.kind === 'success'
+                  ? 'border-green-200 bg-green-50 text-green-700'
+                  : 'border-destructive/30 bg-destructive/5 text-destructive',
+              )}
+            >
+              {toast.message}
+            </div>
+          )}
+
+          {/* ── General (documentation) ── */}
+          {activeCategory === 'general' && (
+            <>
+              {/* Documentation */}
+              <Card className="app-surface border-border/60">
+                <CardHeader>
+                  <div className="flex items-start gap-3">
+                    <BookOpen className="mt-0.5 h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <CardTitle className="text-base">Documentation</CardTitle>
+                      <CardDescription>Project guides and backend API reference</CardDescription>
                     </div>
-                  </a>
-                </div>
-              </CardContent>
-            </Card>
-          </>
-        )}
-
-        {/* ── Providers ── */}
-        {activeCategory === 'providers' && (
-          <>
-            {/* Global Defaults */}
-            <Card className="app-surface border-border/60">
-              <CardHeader className="pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                    <Sparkles className="h-4 w-4" />
                   </div>
-                  <div>
-                    <CardTitle className="text-base">Global Defaults</CardTitle>
-                    <CardDescription>
-                      Default provider and model used across the platform
-                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    <a
+                      href="/book/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <BookOpen className="h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Guides</p>
+                            <p className="text-xs text-muted-foreground">mdBook</p>
+                          </div>
+                        </div>
+                        <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                      </div>
+                    </a>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="default-provider" className="text-sm font-medium">
-                    Default Provider
-                  </Label>
-                  <Select
-                    value={draft[KEYS.LLM_DEFAULT_PROVIDER] ?? ''}
-                    onValueChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_PROVIDER, v)}
-                  >
-                    <SelectTrigger id="default-provider" className="h-9 font-mono text-sm">
-                      <SelectValue placeholder="Select a provider" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {getProviderList(settingsQuery.data).map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Applies to new sessions and sessions with no explicit model override. Use the
-                    model picker&apos;s &quot;Use rara&apos;s default&quot; entry to clear a pinned
-                    session.
-                  </p>
-                </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
 
-                <div className="flex items-center justify-between pt-2">
-                  <div>
-                    {groupToasts['global-defaults'] && (
-                      <p
+          {/* ── Connection ── */}
+          {activeCategory === 'connection' && <ConnectionCard />}
+
+          {/* ── Appearance ── */}
+          {activeCategory === 'appearance' && (
+            <>
+              <Card className="app-surface border-border/60">
+                <CardHeader>
+                  <div className="flex items-start gap-3">
+                    <Palette className="mt-0.5 h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <CardTitle className="text-base">Appearance</CardTitle>
+                      <CardDescription>Theme and display preferences</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="font-medium">Theme</p>
+                      <p className="text-xs text-muted-foreground">
+                        Choose how the UI looks across all pages.
+                      </p>
+                    </div>
+                    <Badge variant="secondary" className="capitalize">
+                      {theme}
+                    </Badge>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {THEME_OPTIONS.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => setTheme(option.key)}
                         className={cn(
-                          'text-sm',
-                          groupToasts['global-defaults'].kind === 'success'
-                            ? 'text-green-600'
-                            : 'text-destructive',
+                          'group rounded-xl border p-3 text-left transition-all',
+                          theme === option.key
+                            ? 'border-primary/30 bg-primary/8 shadow-sm ring-1 ring-primary/10'
+                            : 'hover:bg-accent/40',
                         )}
                       >
-                        {groupToasts['global-defaults'].message}
-                      </p>
-                    )}
-                  </div>
-                  <Button
-                    onClick={() =>
-                      handleGroupSave(
-                        [KEYS.LLM_DEFAULT_PROVIDER, KEYS.LLM_DEFAULT_MODEL],
-                        'global-defaults',
-                      )
-                    }
-                    disabled={
-                      ((draft[KEYS.LLM_DEFAULT_PROVIDER] ?? '') ===
-                        (original[KEYS.LLM_DEFAULT_PROVIDER] ?? '') &&
-                        (draft[KEYS.LLM_DEFAULT_MODEL] ?? '') ===
-                          (original[KEYS.LLM_DEFAULT_MODEL] ?? '')) ||
-                      saveMutation.isPending
-                    }
-                    size="sm"
-                  >
-                    <Save className="mr-1.5 h-3.5 w-3.5" />
-                    {saveMutation.isPending ? 'Saving...' : 'Save'}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Provider Cards — collapsible, no enable/disable toggle */}
-            {getProviderList(settingsQuery.data).map((provider) => {
-              const allKeys = [provider.enabledKey, ...provider.fields.map((f) => f.key)];
-              const groupId = `provider-${provider.id}`;
-              const hasChanges = allKeys.some((k) => (draft[k] ?? '') !== (original[k] ?? ''));
-              const isDefault = (draft[KEYS.LLM_DEFAULT_PROVIDER] ?? '') === provider.id;
-              const hasApiKey = provider.fields.some(
-                (f) => f.sensitive && (draft[f.key] ?? '').length > 0,
-              );
-              const isConnected = hasApiKey || provider.fields.length === 0;
-              const isExpanded = expandedProviders.has(provider.id);
-
-              const toggleExpanded = () => {
-                setExpandedProviders((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(provider.id)) next.delete(provider.id);
-                  else next.add(provider.id);
-                  return next;
-                });
-              };
-
-              return (
-                <Card key={provider.id} className="app-surface border-border/60">
-                  <CardHeader className="cursor-pointer select-none pb-4" onClick={toggleExpanded}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                          <Sparkles className="h-4 w-4" />
-                        </div>
-                        <div>
-                          <CardTitle className="text-base">{provider.name}</CardTitle>
-                          <CardDescription>{provider.description}</CardDescription>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        {isDefault && <Badge variant="secondary">Default</Badge>}
-                        {!isDefault && isConnected && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={async () => {
-                              await settingsApi.batchUpdate({
-                                [KEYS.LLM_DEFAULT_PROVIDER]: provider.id,
-                              });
-                              await queryClient.invalidateQueries({ queryKey: ['settings'] });
-                            }}
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              'inline-flex h-8 w-8 items-center justify-center rounded-lg border',
+                              theme === option.key
+                                ? 'border-primary/20 bg-primary/10 text-primary'
+                                : 'border-border/70 bg-background/70 text-muted-foreground',
+                            )}
                           >
-                            Set as default
-                          </Button>
-                        )}
-                        {provider.isCustom && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={async () => {
-                              const keysToDelete: Record<string, string | null> = {};
-                              for (const key of Object.keys(settingsQuery.data ?? {})) {
-                                if (key.startsWith(`llm.providers.${provider.id}.`)) {
-                                  keysToDelete[key] = null;
-                                }
-                              }
-                              if (isDefault) {
-                                keysToDelete[KEYS.LLM_DEFAULT_PROVIDER] = null;
-                              }
-                              await settingsApi.batchUpdate(keysToDelete);
-                              await queryClient.invalidateQueries({ queryKey: ['settings'] });
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                        <Badge
-                          variant="outline"
-                          className={
-                            isConnected
-                              ? 'border-green-300 bg-green-50 text-green-700'
-                              : 'border-border text-muted-foreground'
-                          }
-                        >
-                          {isConnected ? 'Connected' : 'Not configured'}
-                        </Badge>
-                        <ChevronDown
-                          className={cn(
-                            'h-4 w-4 text-muted-foreground transition-transform',
-                            isExpanded && 'rotate-180',
-                          )}
-                        />
-                      </div>
-                    </div>
-                  </CardHeader>
-                  {isExpanded && (
-                    <CardContent className="space-y-4">
-                      {provider.fields.length > 0 && (
-                        <div className="space-y-4">
-                          {provider.fields.map((field) => (
-                            <KvField
-                              key={field.key}
-                              settingKey={field.key}
-                              label={field.label}
-                              value={draft[field.key] ?? ''}
-                              placeholder={field.placeholder}
-                              onChange={(v) => handleFieldChange(field.key, v)}
-                              sensitive={SENSITIVE_KEYS.has(field.key)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between pt-2">
-                        <div>
-                          {groupToasts[groupId] && (
-                            <p
-                              className={cn(
-                                'text-sm',
-                                groupToasts[groupId].kind === 'success'
-                                  ? 'text-green-600'
-                                  : 'text-destructive',
-                              )}
-                            >
-                              {groupToasts[groupId].message}
+                            {option.icon}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium">{option.label}</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {option.description}
                             </p>
-                          )}
+                          </div>
                         </div>
-                        <Button
-                          onClick={() => handleGroupSave(allKeys, groupId)}
-                          disabled={!hasChanges || saveMutation.isPending}
-                          size="sm"
+                      </button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
+
+          {/* ── Providers ── */}
+          {activeCategory === 'providers' && (
+            <>
+              {/* Global Defaults */}
+              <Card className="app-surface border-border/60">
+                <CardHeader className="pb-4">
+                  <div className="flex items-start gap-3">
+                    <Sparkles className="mt-0.5 h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <CardTitle className="text-base">Global Defaults</CardTitle>
+                      <CardDescription>
+                        Default provider and model used across the platform
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="default-provider" className="text-sm font-medium">
+                      Default Provider
+                    </Label>
+                    <Select
+                      value={draft[KEYS.LLM_DEFAULT_PROVIDER] ?? ''}
+                      onValueChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_PROVIDER, v)}
+                    >
+                      <SelectTrigger id="default-provider" className="h-9 font-mono text-sm">
+                        <SelectValue placeholder="Select a provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {getProviderList(settingsQuery.data).map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Applies to new sessions and sessions with no explicit model override. Use the
+                      model picker&apos;s &quot;Use rara&apos;s default&quot; entry to clear a
+                      pinned session.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <div>
+                      {groupToasts['global-defaults'] && (
+                        <p
+                          className={cn(
+                            'text-sm',
+                            groupToasts['global-defaults'].kind === 'success'
+                              ? 'text-green-600'
+                              : 'text-destructive',
+                          )}
                         >
-                          <Save className="mr-1.5 h-3.5 w-3.5" />
-                          {saveMutation.isPending ? 'Saving...' : 'Save'}
-                        </Button>
-                      </div>
-                    </CardContent>
-                  )}
-                </Card>
-              );
-            })}
+                          {groupToasts['global-defaults'].message}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      onClick={() =>
+                        handleGroupSave(
+                          [KEYS.LLM_DEFAULT_PROVIDER, KEYS.LLM_DEFAULT_MODEL],
+                          'global-defaults',
+                        )
+                      }
+                      disabled={
+                        ((draft[KEYS.LLM_DEFAULT_PROVIDER] ?? '') ===
+                          (original[KEYS.LLM_DEFAULT_PROVIDER] ?? '') &&
+                          (draft[KEYS.LLM_DEFAULT_MODEL] ?? '') ===
+                            (original[KEYS.LLM_DEFAULT_MODEL] ?? '')) ||
+                        saveMutation.isPending
+                      }
+                      size="sm"
+                    >
+                      <Save className="mr-1.5 h-3.5 w-3.5" />
+                      {saveMutation.isPending ? 'Saving...' : 'Save'}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
 
-            {/* Add Provider */}
-            <AddProviderButton
-              onAdd={async (name, baseUrl, apiKey, defaultModel) => {
-                const patch: Record<string, string> = {
-                  [`llm.providers.${name}.api_key`]: apiKey,
-                  [`llm.providers.${name}.base_url`]: baseUrl,
-                  [`llm.providers.${name}.enabled`]: 'true',
+              {/* Provider Cards — collapsible, no enable/disable toggle */}
+              {getProviderList(settingsQuery.data).map((provider) => {
+                const allKeys = [provider.enabledKey, ...provider.fields.map((f) => f.key)];
+                const groupId = `provider-${provider.id}`;
+                const hasChanges = allKeys.some((k) => (draft[k] ?? '') !== (original[k] ?? ''));
+                const isDefault = (draft[KEYS.LLM_DEFAULT_PROVIDER] ?? '') === provider.id;
+                const hasApiKey = provider.fields.some(
+                  (f) => f.sensitive && (draft[f.key] ?? '').length > 0,
+                );
+                const isConnected = hasApiKey || provider.fields.length === 0;
+                const isExpanded = expandedProviders.has(provider.id);
+
+                const toggleExpanded = () => {
+                  setExpandedProviders((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(provider.id)) next.delete(provider.id);
+                    else next.add(provider.id);
+                    return next;
+                  });
                 };
-                if (defaultModel) {
-                  patch[`llm.providers.${name}.default_model`] = defaultModel;
+
+                return (
+                  <Card key={provider.id} className="app-surface border-border/60">
+                    <CardHeader
+                      className="cursor-pointer select-none pb-4"
+                      onClick={toggleExpanded}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-start gap-3">
+                          <Sparkles className="mt-0.5 h-5 w-5 text-muted-foreground" />
+                          <div>
+                            <CardTitle className="text-base">{provider.name}</CardTitle>
+                            <CardDescription>{provider.description}</CardDescription>
+                          </div>
+                        </div>
+                        <div
+                          className="flex items-center gap-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {isDefault && <Badge variant="secondary">Default</Badge>}
+                          {!isDefault && isConnected && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={async () => {
+                                await settingsApi.batchUpdate({
+                                  [KEYS.LLM_DEFAULT_PROVIDER]: provider.id,
+                                });
+                                await queryClient.invalidateQueries({ queryKey: ['settings'] });
+                              }}
+                            >
+                              Set as default
+                            </Button>
+                          )}
+                          {provider.isCustom && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={async () => {
+                                const keysToDelete: Record<string, string | null> = {};
+                                for (const key of Object.keys(settingsQuery.data ?? {})) {
+                                  if (key.startsWith(`llm.providers.${provider.id}.`)) {
+                                    keysToDelete[key] = null;
+                                  }
+                                }
+                                if (isDefault) {
+                                  keysToDelete[KEYS.LLM_DEFAULT_PROVIDER] = null;
+                                }
+                                await settingsApi.batchUpdate(keysToDelete);
+                                await queryClient.invalidateQueries({ queryKey: ['settings'] });
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Badge
+                            variant="outline"
+                            className={
+                              isConnected
+                                ? 'border-green-300 bg-green-50 text-green-700'
+                                : 'border-border text-muted-foreground'
+                            }
+                          >
+                            {isConnected ? 'Connected' : 'Not configured'}
+                          </Badge>
+                          <ChevronDown
+                            className={cn(
+                              'h-4 w-4 text-muted-foreground transition-transform',
+                              isExpanded && 'rotate-180',
+                            )}
+                          />
+                        </div>
+                      </div>
+                    </CardHeader>
+                    {isExpanded && (
+                      <CardContent className="space-y-4">
+                        {provider.fields.length > 0 && (
+                          <div className="space-y-4">
+                            {provider.fields.map((field) => (
+                              <KvField
+                                key={field.key}
+                                settingKey={field.key}
+                                label={field.label}
+                                value={draft[field.key] ?? ''}
+                                placeholder={field.placeholder}
+                                onChange={(v) => handleFieldChange(field.key, v)}
+                                sensitive={SENSITIVE_KEYS.has(field.key)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between pt-2">
+                          <div>
+                            {groupToasts[groupId] && (
+                              <p
+                                className={cn(
+                                  'text-sm',
+                                  groupToasts[groupId].kind === 'success'
+                                    ? 'text-green-600'
+                                    : 'text-destructive',
+                                )}
+                              >
+                                {groupToasts[groupId].message}
+                              </p>
+                            )}
+                          </div>
+                          <Button
+                            onClick={() => handleGroupSave(allKeys, groupId)}
+                            disabled={!hasChanges || saveMutation.isPending}
+                            size="sm"
+                          >
+                            <Save className="mr-1.5 h-3.5 w-3.5" />
+                            {saveMutation.isPending ? 'Saving...' : 'Save'}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    )}
+                  </Card>
+                );
+              })}
+
+              {/* Add Provider */}
+              <AddProviderButton
+                onAdd={async (name, baseUrl, apiKey, defaultModel) => {
+                  const patch: Record<string, string> = {
+                    [`llm.providers.${name}.api_key`]: apiKey,
+                    [`llm.providers.${name}.base_url`]: baseUrl,
+                    [`llm.providers.${name}.enabled`]: 'true',
+                  };
+                  if (defaultModel) {
+                    patch[`llm.providers.${name}.default_model`] = defaultModel;
+                  }
+                  await settingsApi.batchUpdate(patch);
+                  void queryClient.invalidateQueries({ queryKey: ['settings'] });
+                }}
+              />
+            </>
+          )}
+
+          {/* ── Agents ── */}
+          {activeCategory === 'agents' && (
+            <div className="data-panel flex flex-col overflow-hidden">
+              <Agents />
+            </div>
+          )}
+
+          {/* ── Skills ── */}
+          {activeCategory === 'skills' && (
+            <div className="data-panel p-4">
+              <Skills />
+            </div>
+          )}
+
+          {/* ── MCP Servers ── */}
+          {activeCategory === 'mcp' && (
+            <div className="data-panel p-4">
+              <McpServers />
+            </div>
+          )}
+
+          {/* ── Channels ── */}
+          {activeCategory === 'channels' && (
+            <>
+              <KvGroup
+                title="Telegram"
+                description="Bot token and chat IDs for Telegram integration"
+                icon={<MessageSquare className="h-4 w-4" />}
+                fields={[
+                  {
+                    key: KEYS.TELEGRAM_BOT_TOKEN,
+                    label: 'Bot Token',
+                    placeholder: '123456:ABC-DEF...',
+                  },
+                  { key: KEYS.TELEGRAM_CHAT_ID, label: 'Chat ID', placeholder: 'e.g. 123456789' },
+                  {
+                    key: KEYS.TELEGRAM_ALLOWED_GROUP_CHAT_ID,
+                    label: 'Allowed Group Chat ID',
+                    placeholder: 'e.g. -100123456789',
+                  },
+                  {
+                    key: KEYS.TELEGRAM_NOTIFICATION_CHANNEL_ID,
+                    label: 'Notification Channel ID',
+                    placeholder: 'e.g. -100123456789',
+                  },
+                ]}
+                values={draft}
+                original={original}
+                onFieldChange={handleFieldChange}
+                onSave={() =>
+                  handleGroupSave(
+                    [
+                      KEYS.TELEGRAM_BOT_TOKEN,
+                      KEYS.TELEGRAM_CHAT_ID,
+                      KEYS.TELEGRAM_ALLOWED_GROUP_CHAT_ID,
+                      KEYS.TELEGRAM_NOTIFICATION_CHANNEL_ID,
+                    ],
+                    'telegram',
+                  )
                 }
-                await settingsApi.batchUpdate(patch);
-                void queryClient.invalidateQueries({ queryKey: ['settings'] });
-              }}
-            />
-          </>
-        )}
+                saving={saveMutation.isPending}
+                toast={groupToasts['telegram'] ?? null}
+              />
 
-        {/* ── Agents ── */}
-        {activeCategory === 'agents' && (
-          <div className="data-panel flex flex-col overflow-hidden">
-            <Agents />
-          </div>
-        )}
+              <KvGroup
+                title="Gmail"
+                description="SMTP credentials for sending emails"
+                icon={<Mail className="h-4 w-4" />}
+                fields={[
+                  { key: KEYS.GMAIL_ADDRESS, label: 'Email Address', placeholder: 'you@gmail.com' },
+                  {
+                    key: KEYS.GMAIL_APP_PASSWORD,
+                    label: 'App Password',
+                    placeholder: 'xxxx xxxx xxxx xxxx',
+                  },
+                  {
+                    key: KEYS.GMAIL_AUTO_SEND_ENABLED,
+                    label: 'Auto-Send Enabled',
+                    placeholder: 'true or false',
+                    description: "Set to 'true' to enable auto-sending",
+                  },
+                ]}
+                values={draft}
+                original={original}
+                onFieldChange={handleFieldChange}
+                onSave={() =>
+                  handleGroupSave(
+                    [KEYS.GMAIL_ADDRESS, KEYS.GMAIL_APP_PASSWORD, KEYS.GMAIL_AUTO_SEND_ENABLED],
+                    'gmail',
+                  )
+                }
+                saving={saveMutation.isPending}
+                toast={groupToasts['gmail'] ?? null}
+              />
+            </>
+          )}
 
-        {/* ── Skills ── */}
-        {activeCategory === 'skills' && (
-          <div className="data-panel p-4">
-            <Skills />
-          </div>
-        )}
+          {/* ── Tools ── */}
+          {activeCategory === 'tools' && (
+            <>
+              <KvGroup
+                title="Composio"
+                description="Tool orchestration platform credentials"
+                icon={<Settings2 className="h-4 w-4" />}
+                fields={[
+                  { key: KEYS.COMPOSIO_API_KEY, label: 'API Key', placeholder: 'cmp-...' },
+                  { key: KEYS.COMPOSIO_ENTITY_ID, label: 'Entity ID', placeholder: 'default' },
+                ]}
+                values={draft}
+                original={original}
+                onFieldChange={handleFieldChange}
+                onSave={() =>
+                  handleGroupSave([KEYS.COMPOSIO_API_KEY, KEYS.COMPOSIO_ENTITY_ID], 'composio')
+                }
+                saving={saveMutation.isPending}
+                toast={groupToasts['composio'] ?? null}
+              />
+              <KvGroup
+                title="Memory"
+                description="External memory service connections"
+                icon={<Bot className="h-4 w-4" />}
+                fields={[
+                  {
+                    key: KEYS.MEMORY_MEM0_BASE_URL,
+                    label: 'Mem0 Base URL',
+                    placeholder: 'http://localhost:...',
+                  },
+                  {
+                    key: KEYS.MEMORY_MEMOS_BASE_URL,
+                    label: 'Memos Base URL',
+                    placeholder: 'http://localhost:5230',
+                  },
+                  { key: KEYS.MEMORY_MEMOS_TOKEN, label: 'Memos Token' },
+                  {
+                    key: KEYS.MEMORY_HINDSIGHT_BASE_URL,
+                    label: 'Hindsight Base URL',
+                    placeholder: 'http://localhost:...',
+                  },
+                  { key: KEYS.MEMORY_HINDSIGHT_BANK_ID, label: 'Hindsight Bank ID' },
+                ]}
+                values={draft}
+                original={original}
+                onFieldChange={handleFieldChange}
+                onSave={() =>
+                  handleGroupSave(
+                    [
+                      KEYS.MEMORY_MEM0_BASE_URL,
+                      KEYS.MEMORY_MEMOS_BASE_URL,
+                      KEYS.MEMORY_MEMOS_TOKEN,
+                      KEYS.MEMORY_HINDSIGHT_BASE_URL,
+                      KEYS.MEMORY_HINDSIGHT_BANK_ID,
+                    ],
+                    'memory',
+                  )
+                }
+                saving={saveMutation.isPending}
+                toast={groupToasts['memory'] ?? null}
+              />
+            </>
+          )}
 
-        {/* ── MCP Servers ── */}
-        {activeCategory === 'mcp' && (
-          <div className="data-panel p-4">
-            <McpServers />
-          </div>
-        )}
-
-        {/* ── Channels ── */}
-        {activeCategory === 'channels' && (
-          <>
-            <KvGroup
-              title="Telegram"
-              description="Bot token and chat IDs for Telegram integration"
-              icon={<MessageSquare className="h-4 w-4" />}
-              fields={[
-                {
-                  key: KEYS.TELEGRAM_BOT_TOKEN,
-                  label: 'Bot Token',
-                  placeholder: '123456:ABC-DEF...',
-                },
-                { key: KEYS.TELEGRAM_CHAT_ID, label: 'Chat ID', placeholder: 'e.g. 123456789' },
-                {
-                  key: KEYS.TELEGRAM_ALLOWED_GROUP_CHAT_ID,
-                  label: 'Allowed Group Chat ID',
-                  placeholder: 'e.g. -100123456789',
-                },
-                {
-                  key: KEYS.TELEGRAM_NOTIFICATION_CHANNEL_ID,
-                  label: 'Notification Channel ID',
-                  placeholder: 'e.g. -100123456789',
-                },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() =>
-                handleGroupSave(
-                  [
-                    KEYS.TELEGRAM_BOT_TOKEN,
-                    KEYS.TELEGRAM_CHAT_ID,
-                    KEYS.TELEGRAM_ALLOWED_GROUP_CHAT_ID,
-                    KEYS.TELEGRAM_NOTIFICATION_CHANNEL_ID,
-                  ],
-                  'telegram',
-                )
-              }
-              saving={saveMutation.isPending}
-              toast={groupToasts['telegram'] ?? null}
-            />
-
-            <KvGroup
-              title="Gmail"
-              description="SMTP credentials for sending emails"
-              icon={<Mail className="h-4 w-4" />}
-              fields={[
-                { key: KEYS.GMAIL_ADDRESS, label: 'Email Address', placeholder: 'you@gmail.com' },
-                {
-                  key: KEYS.GMAIL_APP_PASSWORD,
-                  label: 'App Password',
-                  placeholder: 'xxxx xxxx xxxx xxxx',
-                },
-                {
-                  key: KEYS.GMAIL_AUTO_SEND_ENABLED,
-                  label: 'Auto-Send Enabled',
-                  placeholder: 'true or false',
-                  description: "Set to 'true' to enable auto-sending",
-                },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() =>
-                handleGroupSave(
-                  [KEYS.GMAIL_ADDRESS, KEYS.GMAIL_APP_PASSWORD, KEYS.GMAIL_AUTO_SEND_ENABLED],
-                  'gmail',
-                )
-              }
-              saving={saveMutation.isPending}
-              toast={groupToasts['gmail'] ?? null}
-            />
-          </>
-        )}
-
-        {/* ── Tools ── */}
-        {activeCategory === 'tools' && (
-          <>
-            <KvGroup
-              title="Composio"
-              description="Tool orchestration platform credentials"
-              icon={<Settings2 className="h-4 w-4" />}
-              fields={[
-                { key: KEYS.COMPOSIO_API_KEY, label: 'API Key', placeholder: 'cmp-...' },
-                { key: KEYS.COMPOSIO_ENTITY_ID, label: 'Entity ID', placeholder: 'default' },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() =>
-                handleGroupSave([KEYS.COMPOSIO_API_KEY, KEYS.COMPOSIO_ENTITY_ID], 'composio')
-              }
-              saving={saveMutation.isPending}
-              toast={groupToasts['composio'] ?? null}
-            />
-            <KvGroup
-              title="Memory"
-              description="External memory service connections"
-              icon={<Bot className="h-4 w-4" />}
-              fields={[
-                {
-                  key: KEYS.MEMORY_MEM0_BASE_URL,
-                  label: 'Mem0 Base URL',
-                  placeholder: 'http://localhost:...',
-                },
-                {
-                  key: KEYS.MEMORY_MEMOS_BASE_URL,
-                  label: 'Memos Base URL',
-                  placeholder: 'http://localhost:5230',
-                },
-                { key: KEYS.MEMORY_MEMOS_TOKEN, label: 'Memos Token' },
-                {
-                  key: KEYS.MEMORY_HINDSIGHT_BASE_URL,
-                  label: 'Hindsight Base URL',
-                  placeholder: 'http://localhost:...',
-                },
-                { key: KEYS.MEMORY_HINDSIGHT_BANK_ID, label: 'Hindsight Bank ID' },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() =>
-                handleGroupSave(
-                  [
-                    KEYS.MEMORY_MEM0_BASE_URL,
-                    KEYS.MEMORY_MEMOS_BASE_URL,
-                    KEYS.MEMORY_MEMOS_TOKEN,
-                    KEYS.MEMORY_HINDSIGHT_BASE_URL,
-                    KEYS.MEMORY_HINDSIGHT_BANK_ID,
-                  ],
-                  'memory',
-                )
-              }
-              saving={saveMutation.isPending}
-              toast={groupToasts['memory'] ?? null}
-            />
-          </>
-        )}
-
-        {/* ── Security ── */}
-        {activeCategory === 'security' && (
-          <>
-            <KvGroup
-              title="Filesystem Sandbox"
-              description="Control which directories agents can access. Values are JSON arrays of directory paths."
-              icon={<Shield className="h-4 w-4" />}
-              fields={[
-                {
-                  key: KEYS.FS_ALLOWED_DIRECTORIES,
-                  label: 'Allowed Directories (Read/Write)',
-                  placeholder: '["/tmp/workspace", "/data/shared"]',
-                  description: 'Directories where agents can read and write files',
-                },
-                {
-                  key: KEYS.FS_READ_ONLY_DIRECTORIES,
-                  label: 'Read-Only Directories',
-                  placeholder: '["/etc/config"]',
-                  description: 'Directories where agents can only read files',
-                },
-                {
-                  key: KEYS.FS_DENIED_DIRECTORIES,
-                  label: 'Denied Directories',
-                  placeholder: '["/etc/secrets", "/root"]',
-                  description: 'Directories that agents are explicitly blocked from accessing',
-                },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() => {
-                const fsKeys = [
-                  KEYS.FS_ALLOWED_DIRECTORIES,
-                  KEYS.FS_READ_ONLY_DIRECTORIES,
-                  KEYS.FS_DENIED_DIRECTORIES,
-                ];
-                for (const key of fsKeys) {
-                  const val = (draft[key] ?? '').trim();
-                  if (val === '') continue;
-                  try {
-                    const parsed = JSON.parse(val);
-                    if (
-                      !Array.isArray(parsed) ||
-                      !parsed.every((v: unknown) => typeof v === 'string')
-                    ) {
+          {/* ── Security ── */}
+          {activeCategory === 'security' && (
+            <>
+              <KvGroup
+                title="Filesystem Sandbox"
+                description="Control which directories agents can access. Values are JSON arrays of directory paths."
+                icon={<Shield className="h-4 w-4" />}
+                fields={[
+                  {
+                    key: KEYS.FS_ALLOWED_DIRECTORIES,
+                    label: 'Allowed Directories (Read/Write)',
+                    placeholder: '["/tmp/workspace", "/data/shared"]',
+                    description: 'Directories where agents can read and write files',
+                  },
+                  {
+                    key: KEYS.FS_READ_ONLY_DIRECTORIES,
+                    label: 'Read-Only Directories',
+                    placeholder: '["/etc/config"]',
+                    description: 'Directories where agents can only read files',
+                  },
+                  {
+                    key: KEYS.FS_DENIED_DIRECTORIES,
+                    label: 'Denied Directories',
+                    placeholder: '["/etc/secrets", "/root"]',
+                    description: 'Directories that agents are explicitly blocked from accessing',
+                  },
+                ]}
+                values={draft}
+                original={original}
+                onFieldChange={handleFieldChange}
+                onSave={() => {
+                  const fsKeys = [
+                    KEYS.FS_ALLOWED_DIRECTORIES,
+                    KEYS.FS_READ_ONLY_DIRECTORIES,
+                    KEYS.FS_DENIED_DIRECTORIES,
+                  ];
+                  for (const key of fsKeys) {
+                    const val = (draft[key] ?? '').trim();
+                    if (val === '') continue;
+                    try {
+                      const parsed = JSON.parse(val);
+                      if (
+                        !Array.isArray(parsed) ||
+                        !parsed.every((v: unknown) => typeof v === 'string')
+                      ) {
+                        setToast({
+                          kind: 'error',
+                          message: `Invalid value for ${key}: must be a JSON array of strings.`,
+                        });
+                        return;
+                      }
+                    } catch {
                       setToast({
                         kind: 'error',
-                        message: `Invalid value for ${key}: must be a JSON array of strings.`,
+                        message: `Invalid JSON for ${key}. Expected a JSON array like ["/path/a", "/path/b"].`,
                       });
                       return;
                     }
-                  } catch {
-                    setToast({
-                      kind: 'error',
-                      message: `Invalid JSON for ${key}. Expected a JSON array like ["/path/a", "/path/b"].`,
-                    });
-                    return;
                   }
-                }
-                handleGroupSave(fsKeys, 'fs-sandbox');
-              }}
-              saving={saveMutation.isPending}
-              toast={groupToasts['fs-sandbox'] ?? null}
-            />
+                  handleGroupSave(fsKeys, 'fs-sandbox');
+                }}
+                saving={saveMutation.isPending}
+                toast={groupToasts['fs-sandbox'] ?? null}
+              />
 
-            {/* Current Status */}
-            <Card className="app-surface border-border/60">
-              <CardHeader className="pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                    <Shield className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base">Current Status</CardTitle>
-                    <CardDescription>Active filesystem access rules</CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {(() => {
-                  const parseJsonArray = (key: string): string[] => {
-                    const val = (original[key] ?? '').trim();
-                    if (!val) return [];
-                    try {
-                      const parsed = JSON.parse(val);
-                      if (Array.isArray(parsed))
-                        return parsed.filter((v): v is string => typeof v === 'string');
-                    } catch {
-                      /* ignore */
-                    }
-                    return [];
-                  };
-                  const allowed = parseJsonArray(KEYS.FS_ALLOWED_DIRECTORIES);
-                  const readOnly = parseJsonArray(KEYS.FS_READ_ONLY_DIRECTORIES);
-                  const denied = parseJsonArray(KEYS.FS_DENIED_DIRECTORIES);
-                  const hasAny = allowed.length > 0 || readOnly.length > 0 || denied.length > 0;
-
-                  if (!hasAny) {
-                    return (
-                      <p className="text-sm text-muted-foreground">
-                        No restrictions configured — agents have unrestricted file access.
-                      </p>
-                    );
-                  }
-
-                  return (
-                    <div className="space-y-3">
-                      {allowed.length > 0 && (
-                        <div className="space-y-1.5">
-                          <p className="text-xs font-medium text-muted-foreground">
-                            Allowed (Read/Write)
-                          </p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {allowed.map((dir) => (
-                              <Badge
-                                key={dir}
-                                variant="outline"
-                                className="border-green-300 bg-green-50 text-green-700"
-                              >
-                                {dir}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {readOnly.length > 0 && (
-                        <div className="space-y-1.5">
-                          <p className="text-xs font-medium text-muted-foreground">Read-Only</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {readOnly.map((dir) => (
-                              <Badge
-                                key={dir}
-                                variant="outline"
-                                className="border-amber-300 bg-amber-50 text-amber-700"
-                              >
-                                {dir}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {denied.length > 0 && (
-                        <div className="space-y-1.5">
-                          <p className="text-xs font-medium text-muted-foreground">Denied</p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {denied.map((dir) => (
-                              <Badge
-                                key={dir}
-                                variant="outline"
-                                className="border-red-300 bg-red-50 text-red-700"
-                              >
-                                {dir}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+              {/* Current Status */}
+              <Card className="app-surface border-border/60">
+                <CardHeader className="pb-4">
+                  <div className="flex items-start gap-3">
+                    <Shield className="mt-0.5 h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <CardTitle className="text-base">Current Status</CardTitle>
+                      <CardDescription>Active filesystem access rules</CardDescription>
                     </div>
-                  );
-                })()}
-              </CardContent>
-            </Card>
-          </>
-        )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    const parseJsonArray = (key: string): string[] => {
+                      const val = (original[key] ?? '').trim();
+                      if (!val) return [];
+                      try {
+                        const parsed = JSON.parse(val);
+                        if (Array.isArray(parsed))
+                          return parsed.filter((v): v is string => typeof v === 'string');
+                      } catch {
+                        /* ignore */
+                      }
+                      return [];
+                    };
+                    const allowed = parseJsonArray(KEYS.FS_ALLOWED_DIRECTORIES);
+                    const readOnly = parseJsonArray(KEYS.FS_READ_ONLY_DIRECTORIES);
+                    const denied = parseJsonArray(KEYS.FS_DENIED_DIRECTORIES);
+                    const hasAny = allowed.length > 0 || readOnly.length > 0 || denied.length > 0;
 
-        {/* ── Data Feeds ── */}
-        {activeCategory === 'data-feeds' && (
-          <div className="data-panel p-4">
-            <DataFeedsPanel />
-          </div>
-        )}
+                    if (!hasAny) {
+                      return (
+                        <p className="text-sm text-muted-foreground">
+                          No restrictions configured — agents have unrestricted file access.
+                        </p>
+                      );
+                    }
 
-        {/* ── Scheduler ── */}
-        {activeCategory === 'scheduler' && (
-          <div className="data-panel p-4">
-            <Scheduler />
-          </div>
-        )}
+                    return (
+                      <div className="space-y-3">
+                        {allowed.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-xs font-medium text-muted-foreground">
+                              Allowed (Read/Write)
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {allowed.map((dir) => (
+                                <Badge
+                                  key={dir}
+                                  variant="outline"
+                                  className="border-green-300 bg-green-50 text-green-700"
+                                >
+                                  {dir}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {readOnly.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-xs font-medium text-muted-foreground">Read-Only</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {readOnly.map((dir) => (
+                                <Badge
+                                  key={dir}
+                                  variant="outline"
+                                  className="border-amber-300 bg-amber-50 text-amber-700"
+                                >
+                                  {dir}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {denied.length > 0 && (
+                          <div className="space-y-1.5">
+                            <p className="text-xs font-medium text-muted-foreground">Denied</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {denied.map((dir) => (
+                                <Badge
+                                  key={dir}
+                                  variant="outline"
+                                  className="border-red-300 bg-red-50 text-red-700"
+                                >
+                                  {dir}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+            </>
+          )}
+
+          {/* ── Data Feeds ── */}
+          {activeCategory === 'data-feeds' && (
+            <div className="data-panel p-4">
+              <DataFeedsPanel />
+            </div>
+          )}
+
+          {/* ── Scheduler ── */}
+          {activeCategory === 'scheduler' && (
+            <div className="data-panel p-4">
+              <Scheduler />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
