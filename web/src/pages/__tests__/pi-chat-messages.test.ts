@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assistantSeqByRef,
   finalAssistantIndices,
+  isFirstAssistantOfTurn,
   messagesForArtifactReconstruction,
   toAgentMessages,
   toolResultByCallId,
@@ -217,5 +218,42 @@ describe('toAgentMessages — tool-result side-channel (#1718)', () => {
     const roles = woven.map((m) => m.role);
     // Expect: user, assistant(toolCall), toolResult, assistant(text)
     expect(roles).toEqual(['user', 'assistant', 'toolResult', 'assistant']);
+  });
+});
+
+describe('isFirstAssistantOfTurn (#1727)', () => {
+  it('flags the sole assistant after a user as first-of-turn', () => {
+    const out = toAgentMessages([user(1), assistantText(2)]);
+    const [a] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(a), out)).toBe(true);
+  });
+
+  it('flags the first assistant of a multi-iteration turn, not the later ones', () => {
+    const out = toAgentMessages([user(1), assistantToolCall(2), assistantText(3)]);
+    const [first, second] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+  });
+
+  it('treats intervening toolResult frames as transparent to turn position', () => {
+    const out = messagesForArtifactReconstruction(
+      toAgentMessages([user(1), assistantToolCall(2), toolResult(3, 2), assistantText(4)]),
+    );
+    const [first, second] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+  });
+
+  it('restores first-of-turn after a new user message', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantToolCall(2),
+      assistantText(3),
+      user(4),
+      assistantText(5),
+    ]);
+    const [, second, third] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(third), out)).toBe(true);
   });
 });

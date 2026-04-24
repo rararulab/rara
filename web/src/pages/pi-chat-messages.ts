@@ -126,6 +126,43 @@ export const assistantSeqByRef = new WeakMap<AgentMessage, number>();
 export const toolResultByCallId = new Map<string, ToolResultMessage>();
 
 /**
+ * True when `msg` is the **first** assistant message of its turn inside
+ * the provided live `AgentMessage[]` — i.e. the closest preceding
+ * non-tool-result / non-assistant message is either absent (list head)
+ * or a user/user-with-attachments message.
+ *
+ * The avatar + top-of-bubble chrome is painted only for this frame; every
+ * subsequent assistant message in the same turn renders as a "continuation"
+ * (no avatar, collapsed top margin) so the whole turn reads as one bubble
+ * (#1727). Works uniformly for persisted history (emitted by
+ * {@link toAgentMessages}) and live streaming (pi-agent-core pushes each
+ * agentic-loop iteration as its own `AssistantMessage` into
+ * `agent.state.messages`).
+ *
+ * `toolResult` frames — pi-agent-core appends them post-stream for live
+ * turns — are transparent to the turn boundary: they neither open nor
+ * close a turn. Only user messages do.
+ *
+ * `O(n)` on the message list; called at render time per assistant row.
+ * For pi-web-ui's typical 200-message ceiling this is trivially cheap and
+ * avoids maintaining a parallel cache that could desync from streaming
+ * appends.
+ */
+export function isFirstAssistantOfTurn(msg: AgentMessage, all: readonly AgentMessage[]): boolean {
+  const idx = all.indexOf(msg);
+  if (idx < 0) return true;
+  for (let j = idx - 1; j >= 0; j--) {
+    const prev = all[j];
+    if (!prev) continue;
+    if (prev.role === 'toolResult') continue;
+    if (prev.role === 'assistant') return false;
+    // user / user-with-attachments / anything else is a turn boundary.
+    return true;
+  }
+  return true;
+}
+
+/**
  * For each turn (a contiguous run of non-user messages bounded by the
  * next user message or the end of the list), return the index in `msgs`
  * of the last `assistant`-role message in that turn. Indices not in the
