@@ -12,6 +12,13 @@
 
 http:
   bind_address: "127.0.0.1:25555"
+  # Browser origins permitted to call `/api/v1/*`. At least one entry is
+  # required — the server refuses to boot with an empty list. Add every host
+  # the Vite dev server is reachable from (localhost plus any LAN IPs used to
+  # open the UI from other devices).
+  cors_allowed_origins:
+    - "http://localhost:5173"
+    - "http://10.0.0.183:5173"
 
 grpc:
   bind_address: "127.0.0.1:50051"
