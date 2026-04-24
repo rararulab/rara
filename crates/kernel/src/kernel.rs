@@ -228,11 +228,16 @@ pub struct Kernel {
     feed_store:            Option<crate::data_feed::FeedStoreRef>,
 }
 
+#[bon::bon]
 impl Kernel {
     /// Construct a kernel from core infrastructure dependencies.
     ///
     /// Registries are loaded separately via `load_*` methods before `start()`.
-    #[allow(clippy::too_many_arguments)]
+    /// Callers use the generated builder: `Kernel::builder().config(...). ...
+    /// .scheduler_dir(...).build()`. The builder rejects incomplete
+    /// construction at compile time, making future argument additions safe —
+    /// positional `new(...)` would silently drift on any added parameter.
+    #[builder(start_fn = builder, finish_fn = build)]
     pub fn new(
         config: KernelConfig,
         driver_registry: DriverRegistryRef,

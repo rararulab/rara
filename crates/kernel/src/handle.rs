@@ -432,11 +432,13 @@ impl KernelHandle {
     /// Seed a pre-built [`crate::schedule::JobEntry`] onto the wheel, bypassing
     /// the `RegisterJob` syscall path.
     ///
-    /// Crate-private by design: test helpers in [`crate::testing`] wrap this
-    /// so the capability isn't reachable from every downstream crate. The
-    /// syscall path remains the only way production callers register jobs,
-    /// because it is the only path that supplies a real session principal.
-    pub(crate) fn seed_job(&self, entry: crate::schedule::JobEntry) {
+    /// The deliberately-ugly name signals to humans (including future in-crate
+    /// test files) that this is a test-harness hatch, not a general API: the
+    /// syscall path is the only supported way to register jobs in production
+    /// because it supplies a real session principal. The sole legitimate caller
+    /// is [`crate::testing::TestKernel::seed_job`], which wraps this so
+    /// downstream crates cannot reach it at all.
+    pub(crate) fn __seed_job_unsafe_test_harness(&self, entry: crate::schedule::JobEntry) {
         let mut wheel = self.job_wheel.lock();
         wheel.add(entry);
         wheel.persist();
