@@ -393,7 +393,8 @@ pub fn workspace_dir() -> &'static PathBuf {
 
 /// Returns the path to the main YAML configuration file.
 ///
-/// Resolves to `<config_dir>/config.yaml`.
+/// Resolves to `<config_dir>/config.yaml`. The value is cached for the lifetime
+/// of the process.
 pub fn config_file() -> &'static PathBuf {
     static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
     CONFIG_FILE.get_or_init(|| config_dir().join("config.yaml"))
