@@ -72,12 +72,12 @@
     'Courier New', monospace;
 
   /*
-   * Brand accent — warm coral/orange in the HeroUI admin family. Intentionally
+   * Brand accent — pink, balanced near Tailwind pink-500 (#EC4899). Intentionally
    * separate from `--color-primary` so admin surfaces (rose) and accent marks
-   * (coral) can coexist on the same page without fighting. Use `bg-brand`,
+   * (pink) can coexist on the same page without fighting. Use `bg-brand`,
    * `text-brand`, `border-brand` in markup.
    */
-  --color-brand: oklch(0.72 0.18 35);
+  --color-brand: oklch(0.68 0.22 0);
   --color-brand-foreground: oklch(0.99 0 0);
 
   /* Radius scale — cards stay compact (0.75rem) to match hero admin. */
