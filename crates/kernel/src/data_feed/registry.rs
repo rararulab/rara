@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::{DataFeedConfig, FeedEvent};
+use super::{DataFeedConfig, FeedEvent, StatusReporterRef};
 
 /// Manages registered data feeds and their runtime state.
 ///
@@ -50,6 +50,11 @@ pub struct DataFeedRegistry {
     /// Cancel tokens for running feed tasks, keyed by feed name.
     /// Populated externally when a concrete feed task is spawned.
     running:  Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Optional hook for persisting status transitions to the `data_feeds`
+    /// table. When absent, runtime status lives only in memory — callers
+    /// can still drive DB writes manually, but the kernel will not nudge
+    /// them.
+    reporter: Arc<Mutex<Option<StatusReporterRef>>>,
 }
 
 impl DataFeedRegistry {
@@ -62,8 +67,22 @@ impl DataFeedRegistry {
             configs: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
             running: Arc::new(Mutex::new(HashMap::new())),
+            reporter: Arc::new(Mutex::new(None)),
         }
     }
+
+    /// Install a [`StatusReporter`](super::StatusReporter) for DB
+    /// write-back of runtime status transitions.
+    ///
+    /// Intended to be called once during bootstrap by the application
+    /// layer (e.g. backend-admin) that owns the persistence service.
+    pub fn set_reporter(&self, reporter: StatusReporterRef) {
+        *self.reporter.lock() = Some(reporter);
+    }
+
+    /// Return a clone of the installed
+    /// [`StatusReporter`](super::StatusReporter), if any.
+    pub fn reporter(&self) -> Option<StatusReporterRef> { self.reporter.lock().clone() }
 
     /// Register a new data feed configuration.
     ///
@@ -139,9 +158,13 @@ impl DataFeedRegistry {
     /// Register a cancellation token for a running feed task.
     ///
     /// Called by the feed spawner after `tokio::spawn`-ing the feed's
-    /// `run` future.
+    /// `run` future. If a [`StatusReporter`](super::StatusReporter) is
+    /// installed, this spawns a best-effort report of
+    /// [`FeedStatus::Running`](super::FeedStatus::Running) so the DB
+    /// reflects reality.
     pub fn set_running(&self, name: String, token: CancellationToken) {
-        self.running.lock().insert(name, token);
+        self.running.lock().insert(name.clone(), token);
+        self.spawn_report(name, super::FeedStatus::Running, None);
     }
 
     /// Check whether a feed has a running task.
@@ -150,7 +173,31 @@ impl DataFeedRegistry {
     /// Remove the cancellation token for a feed that has stopped.
     ///
     /// Called when a feed task completes (either normally or due to error).
-    pub fn clear_running(&self, name: &str) { self.running.lock().remove(name); }
+    /// Reports [`FeedStatus::Idle`](super::FeedStatus::Idle) through the
+    /// installed reporter. Use [`report_error`](Self::report_error) instead
+    /// if the task exited due to a fatal error.
+    pub fn clear_running(&self, name: &str) {
+        self.running.lock().remove(name);
+        self.spawn_report(name.to_owned(), super::FeedStatus::Idle, None);
+    }
+
+    /// Report a terminal error for a feed's runtime. Clears the cancel
+    /// token and persists `FeedStatus::Error` with `last_error = message`.
+    pub fn report_error(&self, name: &str, message: String) {
+        self.running.lock().remove(name);
+        self.spawn_report(name.to_owned(), super::FeedStatus::Error, Some(message));
+    }
+
+    /// Spawn a fire-and-forget status report. Does nothing when no
+    /// reporter is installed; the kernel must never block or panic on a
+    /// failed DB write.
+    fn spawn_report(&self, name: String, status: super::FeedStatus, last_error: Option<String>) {
+        if let Some(reporter) = self.reporter() {
+            tokio::spawn(async move {
+                reporter.report(&name, status, last_error).await;
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -257,5 +304,83 @@ mod tests {
 
         registry.register(make_config("x")).unwrap();
         assert_eq!(registry.configs().len(), registry.list().len());
+    }
+
+    // ---- Reporter wiring ---------------------------------------------------
+
+    use async_trait::async_trait;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    use crate::data_feed::StatusReporter;
+
+    #[derive(Default)]
+    struct RecordingReporter {
+        events: AsyncMutex<Vec<(String, FeedStatus, Option<String>)>>,
+    }
+
+    #[async_trait]
+    impl StatusReporter for RecordingReporter {
+        async fn report(&self, name: &str, status: FeedStatus, last_error: Option<String>) {
+            self.events
+                .lock()
+                .await
+                .push((name.to_owned(), status, last_error));
+        }
+    }
+
+    #[tokio::test]
+    async fn set_running_reports_running_through_reporter() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+        let reporter = Arc::new(RecordingReporter::default());
+        registry.set_reporter(reporter.clone());
+
+        let token = CancellationToken::new();
+        registry.set_running("alpha".to_owned(), token);
+
+        // Give the spawned report a tick to land.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let events = reporter.events.lock().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "alpha");
+        assert_eq!(events[0].1, FeedStatus::Running);
+        assert!(events[0].2.is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_running_reports_idle_through_reporter() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+        let reporter = Arc::new(RecordingReporter::default());
+        registry.set_reporter(reporter.clone());
+
+        registry.set_running("beta".to_owned(), CancellationToken::new());
+        registry.clear_running("beta");
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let events = reporter.events.lock().await;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].1, FeedStatus::Idle);
+        assert!(events[1].2.is_none());
+    }
+
+    #[tokio::test]
+    async fn report_error_propagates_message() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+        let reporter = Arc::new(RecordingReporter::default());
+        registry.set_reporter(reporter.clone());
+
+        registry.set_running("gamma".to_owned(), CancellationToken::new());
+        registry.report_error("gamma", "boom".to_owned());
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let events = reporter.events.lock().await;
+        assert_eq!(events.last().unwrap().1, FeedStatus::Error);
+        assert_eq!(events.last().unwrap().2.as_deref(), Some("boom"));
     }
 }

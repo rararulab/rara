@@ -18,7 +18,14 @@
 //! [`FeedEvent`] payload. No response parsing — the subscribing agent
 //! interprets the payload with its own intelligence.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use jiff::Timestamp;
@@ -28,7 +35,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
 
-use super::{DataFeed, DataFeedConfig, FeedEvent, FeedEventId, config::AuthConfig};
+use super::{
+    DataFeed, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, StatusReporterRef,
+    config::AuthConfig,
+};
 
 // ---------------------------------------------------------------------------
 // PollingTransport — transport-specific config
@@ -88,6 +98,12 @@ pub struct PollingSource {
     auth:      Option<AuthConfig>,
     /// Shared HTTP client.
     client:    reqwest::Client,
+    /// Optional status reporter for DB write-back of fetch errors.
+    reporter:  Option<StatusReporterRef>,
+    /// Latched flag: the last reported status was [`FeedStatus::Error`].
+    /// Used to debounce the reporter — we only write on transitions, not
+    /// on every poll.
+    in_error:  Arc<AtomicBool>,
 }
 
 impl PollingSource {
@@ -107,7 +123,48 @@ impl PollingSource {
             transport,
             auth: config.auth.clone(),
             client,
+            reporter: None,
+            in_error: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Attach a [`StatusReporter`](super::StatusReporter) so transient
+    /// fetch failures are persisted to the `data_feeds` row as
+    /// [`FeedStatus::Error`] with the error message, and the first
+    /// success afterwards clears the error.
+    #[must_use]
+    pub fn with_reporter(mut self, reporter: StatusReporterRef) -> Self {
+        self.reporter = Some(reporter);
+        self
+    }
+
+    /// Record a fetch error: persist [`FeedStatus::Error`] only on the
+    /// first failure in a streak (transitions), and log on every one.
+    fn record_error(&self, message: String) {
+        warn!(error = %message, "poll fetch failed");
+        if !self.in_error.swap(true, Ordering::SeqCst)
+            && let Some(reporter) = self.reporter.clone()
+        {
+            let name = self.name.clone();
+            tokio::spawn(async move {
+                reporter
+                    .report(&name, FeedStatus::Error, Some(message))
+                    .await;
+            });
+        }
+    }
+
+    /// Record a successful poll. If the previous state was error, push
+    /// [`FeedStatus::Running`] with cleared `last_error`.
+    fn record_success(&self) {
+        if self.in_error.swap(false, Ordering::SeqCst)
+            && let Some(reporter) = self.reporter.clone()
+        {
+            let name = self.name.clone();
+            tokio::spawn(async move {
+                reporter.report(&name, FeedStatus::Running, None).await;
+            });
+        }
     }
 }
 
@@ -175,7 +232,7 @@ impl PollingSource {
         let url = match self.build_url() {
             Ok(u) => u,
             Err(e) => {
-                warn!(error = %e, "failed to build poll URL");
+                self.record_error(format!("failed to build poll URL: {e}"));
                 return true;
             }
         };
@@ -200,21 +257,21 @@ impl PollingSource {
         let response = match request.send().await {
             Ok(r) => r,
             Err(e) => {
-                warn!(error = %e, "poll fetch failed");
+                self.record_error(format!("poll fetch failed: {e}"));
                 return true;
             }
         };
 
         let status = response.status();
         if !status.is_success() {
-            warn!(%status, "poll received non-success status");
+            self.record_error(format!("poll received non-success status: {status}"));
             return true;
         }
 
         let body = match response.bytes().await {
             Ok(b) => b,
             Err(e) => {
-                warn!(error = %e, "failed to read poll response body");
+                self.record_error(format!("failed to read poll response body: {e}"));
                 return true;
             }
         };
@@ -245,6 +302,10 @@ impl PollingSource {
             tracing::info!("event channel closed, stopping poll loop");
             return false;
         }
+
+        // Fetch + parse succeeded — clear any prior error latch so the DB
+        // reflects a healthy feed again.
+        self.record_success();
 
         true
     }
