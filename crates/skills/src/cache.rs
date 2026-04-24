@@ -20,39 +20,49 @@
 
 use std::{collections::HashMap, path::PathBuf};
 
-use chrono::{DateTime, Utc};
+use diesel::{
+    ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper, sql_types::Text,
+    upsert::excluded,
+};
+use diesel_async::RunQueryDsl;
+use rara_model::schema::skill_cache;
 use snafu::ResultExt;
-use sqlx::SqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 use crate::{
-    error::{InvalidInputSnafu, Result, SqlxSnafu},
+    error::{DieselPoolSnafu, DieselSnafu, InvalidInputSnafu, Result},
     types::{SkillMetadata, SkillSource},
 };
 
 // ---------------------------------------------------------------------------
-// DB row type (sqlx::FromRow)
+// DB row type
 // ---------------------------------------------------------------------------
 
 /// Cached skill metadata row from `skill_cache` table.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = skill_cache)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub(crate) struct SkillCacheRow {
-    pub name:          String,
+    // `name` is the primary key — reported as `Nullable<Text>` by
+    // `diesel print-schema` on SQLite but always present in practice.
+    pub name:          Option<String>,
     pub description:   String,
     pub homepage:      Option<String>,
     pub license:       Option<String>,
     pub compatibility: Option<String>,
     pub allowed_tools: String,
     pub dockerfile:    Option<String>,
-    pub requires:      serde_json::Value,
+    pub requires:      String,
     pub path:          String,
-    pub source:        i16,
+    pub source:        i32,
     pub content_hash:  String,
-    pub cached_at:     DateTime<Utc>,
+    #[allow(dead_code)]
+    pub cached_at:     String,
 }
 
 /// SQLite-backed skill cache (backing store, not a SkillRegistry).
 pub struct SqliteSkillCache {
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
 }
 
 /// Cached skill with hash for change detection.
@@ -63,14 +73,17 @@ pub struct CachedSkill {
 }
 
 impl SqliteSkillCache {
-    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
+    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
 
     /// Load all cached skill metadata from the database.
     pub async fn load_all(&self) -> Result<HashMap<String, CachedSkill>> {
-        let rows = sqlx::query_as::<_, SkillCacheRow>("SELECT * FROM skill_cache ORDER BY name")
-            .fetch_all(&self.pool)
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let rows: Vec<SkillCacheRow> = skill_cache::table
+            .select(SkillCacheRow::as_select())
+            .order(skill_cache::name.asc())
+            .load(&mut *conn)
             .await
-            .context(SqlxSnafu)?;
+            .context(DieselSnafu)?;
 
         let mut map = HashMap::with_capacity(rows.len());
         for row in rows {
@@ -82,7 +95,7 @@ impl SqliteSkillCache {
 
     /// Upsert a skill into the cache.
     pub async fn upsert(&self, meta: &SkillMetadata, hash: &str) -> Result<()> {
-        let requires_json = serde_json::to_value(&meta.requires).map_err(|e| {
+        let requires_json = serde_json::to_string(&meta.requires).map_err(|e| {
             InvalidInputSnafu {
                 message: format!("failed to serialize requires: {e}"),
             }
@@ -96,61 +109,69 @@ impl SqliteSkillCache {
             .build()
         })?;
 
-        let source_i16: i16 = meta.source.map(|s| s as u8 as i16).unwrap_or(-1);
+        let source_i32: i32 = meta.source.map(|s| s as u8 as i32).unwrap_or(-1);
+        let path_str = meta.path.to_string_lossy().into_owned();
 
-        sqlx::query(
-            r#"INSERT INTO skill_cache
-               (name, description, homepage, license, compatibility, allowed_tools,
-                dockerfile, requires, path, source, content_hash, cached_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
-               ON CONFLICT (name) DO UPDATE SET
-                 description   = EXCLUDED.description,
-                 homepage      = EXCLUDED.homepage,
-                 license       = EXCLUDED.license,
-                 compatibility = EXCLUDED.compatibility,
-                 allowed_tools = EXCLUDED.allowed_tools,
-                 dockerfile    = EXCLUDED.dockerfile,
-                 requires      = EXCLUDED.requires,
-                 path          = EXCLUDED.path,
-                 source        = EXCLUDED.source,
-                 content_hash  = EXCLUDED.content_hash,
-                 cached_at     = datetime('now')
-            "#,
-        )
-        .bind(&meta.name)
-        .bind(&meta.description)
-        .bind(&meta.homepage)
-        .bind(&meta.license)
-        .bind(&meta.compatibility)
-        .bind(&allowed_tools_json)
-        .bind(&meta.dockerfile)
-        .bind(&requires_json)
-        .bind(meta.path.to_string_lossy().as_ref())
-        .bind(source_i16)
-        .bind(hash)
-        .execute(&self.pool)
-        .await
-        .context(SqlxSnafu)?;
+        // SQLite `datetime('now')` has no cross-backend DSL — emit via the
+        // sanctioned `sql::<Text>` escape hatch per
+        // docs/guides/db-diesel-migration.md.
+        let now_expr = diesel::dsl::sql::<Text>("datetime('now')");
+
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        diesel::insert_into(skill_cache::table)
+            .values((
+                skill_cache::name.eq(&meta.name),
+                skill_cache::description.eq(&meta.description),
+                skill_cache::homepage.eq(&meta.homepage),
+                skill_cache::license.eq(&meta.license),
+                skill_cache::compatibility.eq(&meta.compatibility),
+                skill_cache::allowed_tools.eq(&allowed_tools_json),
+                skill_cache::dockerfile.eq(&meta.dockerfile),
+                skill_cache::requires.eq(&requires_json),
+                skill_cache::path.eq(&path_str),
+                skill_cache::source.eq(source_i32),
+                skill_cache::content_hash.eq(hash),
+                skill_cache::cached_at.eq(now_expr.clone()),
+            ))
+            .on_conflict(skill_cache::name)
+            .do_update()
+            .set((
+                skill_cache::description.eq(excluded(skill_cache::description)),
+                skill_cache::homepage.eq(excluded(skill_cache::homepage)),
+                skill_cache::license.eq(excluded(skill_cache::license)),
+                skill_cache::compatibility.eq(excluded(skill_cache::compatibility)),
+                skill_cache::allowed_tools.eq(excluded(skill_cache::allowed_tools)),
+                skill_cache::dockerfile.eq(excluded(skill_cache::dockerfile)),
+                skill_cache::requires.eq(excluded(skill_cache::requires)),
+                skill_cache::path.eq(excluded(skill_cache::path)),
+                skill_cache::source.eq(excluded(skill_cache::source)),
+                skill_cache::content_hash.eq(excluded(skill_cache::content_hash)),
+                skill_cache::cached_at.eq(now_expr),
+            ))
+            .execute(&mut *conn)
+            .await
+            .context(DieselSnafu)?;
 
         Ok(())
     }
 
     /// Remove a skill from the cache by name.
     pub async fn remove(&self, name: &str) -> Result<()> {
-        sqlx::query("DELETE FROM skill_cache WHERE name = ?1")
-            .bind(name)
-            .execute(&self.pool)
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        diesel::delete(skill_cache::table.filter(skill_cache::name.eq(name)))
+            .execute(&mut *conn)
             .await
-            .context(SqlxSnafu)?;
+            .context(DieselSnafu)?;
         Ok(())
     }
 
     /// Remove all skills from the cache.
     pub async fn clear(&self) -> Result<()> {
-        sqlx::query("DELETE FROM skill_cache")
-            .execute(&self.pool)
+        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        diesel::delete(skill_cache::table)
+            .execute(&mut *conn)
             .await
-            .context(SqlxSnafu)?;
+            .context(DieselSnafu)?;
         Ok(())
     }
 }
@@ -163,7 +184,7 @@ impl SqliteSkillCache {
 /// 1. **Phase 1** — load cached metadata from DB → fill registry (fast).
 /// 2. **Phase 2** — FS scan + SHA-256 hash comparison → upsert changed skills.
 /// 3. **Phase 3** — garbage-collect stale cache entries no longer on disk.
-pub fn spawn_background_sync(pool: SqlitePool, registry: crate::registry::InMemoryRegistry) {
+pub fn spawn_background_sync(pool: DieselSqlitePool, registry: crate::registry::InMemoryRegistry) {
     use std::collections::HashSet;
 
     use tracing::{info, warn};
@@ -258,7 +279,7 @@ pub fn spawn_background_sync(pool: SqlitePool, registry: crate::registry::InMemo
 
 impl CachedSkill {
     fn from_db_row(row: SkillCacheRow) -> Result<Self> {
-        let requires = serde_json::from_value(row.requires).map_err(|e| {
+        let requires = serde_json::from_str(&row.requires).map_err(|e| {
             InvalidInputSnafu {
                 message: format!("failed to deserialize requires: {e}"),
             }
@@ -272,9 +293,16 @@ impl CachedSkill {
             .build()
         })?;
 
+        let name = row.name.ok_or_else(|| {
+            InvalidInputSnafu {
+                message: "skill_cache row missing primary-key `name`".to_owned(),
+            }
+            .build()
+        })?;
+
         Ok(Self {
             metadata:     SkillMetadata {
-                name: row.name,
+                name,
                 description: row.description,
                 homepage: row.homepage,
                 license: row.license,

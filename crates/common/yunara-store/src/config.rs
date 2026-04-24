@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sqlx::sqlite::SqlitePoolOptions;
-
-use crate::{db::DBStore, error::Result};
+use crate::{
+    db::DBStore,
+    diesel_pool::{DieselPoolConfig, build_sqlite_pool},
+    error::Result,
+};
 
 /// Database configuration for SQLite.
 ///
 /// The database URL is determined by the caller (typically from
-/// `rara_paths::database_dir()`).  Migrations are embedded at compile time.
+/// `rara_paths::database_dir()`). Migrations are embedded at compile time by
+/// the consuming binary via `diesel_migrations::embed_migrations!`.
 #[derive(Debug, Clone, bon::Builder, serde::Serialize, serde::Deserialize)]
 pub struct DatabaseConfig {
     /// Maximum number of connections in the pool.
@@ -33,8 +36,10 @@ fn default_max_connections() -> u32 { 5 }
 impl DatabaseConfig {
     /// Open a SQLite database at the given URL.
     ///
-    /// Sets WAL mode, busy timeout and foreign key pragmas.
-    /// The caller is responsible for running migrations afterwards.
+    /// Builds a diesel-async bb8 pool and applies the `WAL` / `busy_timeout`
+    /// / `foreign_keys` pragmas once per physical connection via the pool's
+    /// `custom_setup` hook. The caller is responsible for running
+    /// migrations afterwards.
     #[tracing::instrument(
         level = "trace",
         skip(self),
@@ -42,19 +47,13 @@ impl DatabaseConfig {
         err
     )]
     pub async fn open(&self, database_url: &str) -> Result<DBStore> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(self.max_connections)
-            .connect(database_url)
-            .await?;
-
-        // Set recommended SQLite pragmas for WAL mode and concurrency.
-        sqlx::query("PRAGMA journal_mode=WAL")
-            .execute(&pool)
-            .await?;
-        sqlx::query("PRAGMA busy_timeout=5000")
-            .execute(&pool)
-            .await?;
-        sqlx::query("PRAGMA foreign_keys=ON").execute(&pool).await?;
+        let pool = build_sqlite_pool(
+            &DieselPoolConfig::builder()
+                .database_url(database_url.to_owned())
+                .max_connections(self.max_connections)
+                .build(),
+        )
+        .await?;
 
         tracing::info!("SQLite database initialized: {database_url}");
 

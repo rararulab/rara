@@ -16,7 +16,7 @@ fts/
 
 - `TapeFts` is owned by `TapeService` as `Option<TapeFts>` — FTS is opt-in.
 - `TapeService::with_fts(store, pool)` enables it; `TapeService::new(store)` disables it.
-- All SQL lives in `repo.rs` as standalone async functions accepting `&SqlitePool` or `&mut Transaction`.
+- All SQL lives in `repo.rs` as standalone async functions accepting `&mut DieselSqliteConnection`.
 - `mod.rs` contains only business logic: HWM filtering, Message-kind filtering, text extraction, query sanitization.
 
 ### Data flow
@@ -38,13 +38,13 @@ fts/
 
 ## What NOT To Do
 
-- Do NOT put `sqlx::query` calls in `mod.rs` — all SQL goes in `repo.rs`.
+- Do NOT put diesel query calls in `mod.rs` — all SQL goes in `repo.rs`.
 - Do NOT make FTS failures break the search path — always fall through to brute-force.
 - Do NOT index non-Message entries — only `TapEntryKind::Message` is searchable.
 - Do NOT reset the HWM to the max *indexed* ID — set it to the max *seen* ID, so skipped non-Message entries are not re-scanned.
 
 ## Dependencies
 
-- **Upstream**: `sqlx::SqlitePool` from `rara-model` (shared pool), `jieba-rs` (dictionary ~7 MB, one-time load)
+- **Upstream**: `yunara_store::DieselSqlitePool` (shared diesel-async pool), `jieba-rs` (dictionary ~7 MB, one-time load)
 - **Downstream**: consumed by `TapeService` in `service.rs`
 - **Schema**: `tape_fts` (FTS5 virtual table) + `tape_fts_meta`, created by migration `20260415042041_tape_fts_init` and rebuilt by `20260418182710_tape_fts_rebuild_jieba` to re-index under the jieba-segmented surface

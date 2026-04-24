@@ -61,7 +61,6 @@ bb8 = "0.9"
 diesel.workspace = true
 diesel-async.workspace = true
 rara-model.workspace = true
-sqlx.workspace = true
 yunara-store.workspace = true
 strum = { workspace = true, features = ["derive"] }
 subtle.workspace = true

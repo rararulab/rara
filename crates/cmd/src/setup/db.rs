@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use snafu::{ResultExt, Whatever};
 use yunara_store::config::DatabaseConfig;
 
 use super::prompt::{self, SetupMode};
+
+/// Diesel-embedded SQLite migrations, matching the set run by `rara-app`.
+const EMBEDDED_MIGRATIONS: EmbeddedMigrations = embed_migrations!("../rara-model/migrations");
 
 /// Database setup result.
 pub struct DbResult {
@@ -31,7 +35,7 @@ pub async fn setup_database(mode: SetupMode) -> Result<Option<DbResult>, Whateve
     prompt::print_step("Database (SQLite)");
 
     let db_dir = rara_paths::database_dir();
-    let default_url = format!("sqlite:{}/rara.db?mode=rwc", db_dir.display());
+    let default_url = format!("{}/rara.db", db_dir.display());
 
     if mode == SetupMode::FillMissing && db_dir.join("rara.db").exists() {
         prompt::print_ok("database file already exists, skipping");
@@ -39,7 +43,7 @@ pub async fn setup_database(mode: SetupMode) -> Result<Option<DbResult>, Whateve
     }
 
     loop {
-        let url = prompt::ask("SQLite URL", Some(&default_url));
+        let url = prompt::ask("SQLite path", Some(&default_url));
 
         match validate_database(&url).await {
             Ok(count) => {
@@ -62,27 +66,37 @@ pub async fn setup_database(mode: SetupMode) -> Result<Option<DbResult>, Whateve
     }
 }
 
-/// Open the SQLite database and run pending migrations.
+/// Open the SQLite database and run pending migrations via diesel.
 async fn validate_database(url: &str) -> Result<usize, Whatever> {
     // Ensure the database directory exists.
     let db_dir = rara_paths::database_dir();
     std::fs::create_dir_all(db_dir).whatever_context("failed to create database directory")?;
 
+    // Run migrations on a blocking diesel `SqliteConnection` — the harness
+    // API is sync-only.
+    let migrate_url = url.to_owned();
+    let count = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        use diesel::Connection;
+        let mut conn = diesel::SqliteConnection::establish(&migrate_url)?;
+        let already = conn
+            .applied_migrations()
+            .map_err(|e| anyhow::anyhow!("list applied migrations: {e}"))?
+            .len();
+        let newly = conn
+            .run_pending_migrations(EMBEDDED_MIGRATIONS)
+            .map_err(|e| anyhow::anyhow!("run pending migrations: {e}"))?;
+        Ok(already + newly.len())
+    })
+    .await
+    .whatever_context("migration task join failed")?
+    .whatever_context("migration failed")?;
+
+    // Sanity-check the pool opens after migrations.
     let config = DatabaseConfig::builder().build();
-    let db_store = config
+    let _db_store = config
         .open(url)
         .await
         .whatever_context("failed to open SQLite database")?;
 
-    sqlx::migrate!("../rara-model/migrations")
-        .run(db_store.pool())
-        .await
-        .whatever_context("migration failed")?;
-
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
-        .fetch_one(db_store.pool())
-        .await
-        .whatever_context("failed to count migrations")?;
-
-    Ok(count.0 as usize)
+    Ok(count)
 }

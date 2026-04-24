@@ -14,20 +14,17 @@
 
 //! Diesel-async + bb8 connection pools.
 //!
-//! Introduced as part of the sqlx → diesel migration (#1702). The sqlx pool
-//! in [`crate::db`] and the diesel pools defined here live side-by-side
-//! during the transition. Consumer crates are migrated one at a time; the
-//! sqlx pool is removed in the final cutover PR.
-//!
-//! SQLite uses [`SyncConnectionWrapper`] because SQLite itself is
-//! single-threaded and has no native async driver. Postgres uses the native
-//! [`AsyncPgConnection`].
+//! Introduced as part of the sqlx → diesel migration (#1702). SQLite uses
+//! [`SyncConnectionWrapper`] because SQLite itself is single-threaded and has
+//! no native async driver. Postgres uses the native [`AsyncPgConnection`].
 
 use diesel::SqliteConnection;
 use diesel_async::{
-    AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager,
+    AsyncConnection, AsyncPgConnection, RunQueryDsl,
+    pooled_connection::{AsyncDieselConnectionManager, ManagerConfig},
     sync_connection_wrapper::SyncConnectionWrapper,
 };
+use futures::FutureExt;
 use snafu::ResultExt;
 
 use crate::error::{BuildDieselPoolSnafu, Result};
@@ -63,13 +60,31 @@ pub struct DieselPoolConfig {
 
 /// Build a bb8 pool of diesel-async SQLite connections.
 ///
-/// Migrations are **not** applied here — migration is still driven by
-/// `rara-app::init_infra` via `sqlx::migrate!` until the cutover PR
-/// replaces it with `diesel_migrations::embed_migrations!`.
+/// Each newly-established connection has `PRAGMA journal_mode=WAL`,
+/// `PRAGMA busy_timeout=5000`, and `PRAGMA foreign_keys=ON` applied via the
+/// manager's `custom_setup` hook so pragmas are set exactly once per
+/// physical connection rather than on every checkout.
 #[tracing::instrument(level = "trace", skip(config), fields(url = %config.database_url), err)]
 pub async fn build_sqlite_pool(config: &DieselPoolConfig) -> Result<DieselSqlitePool> {
-    let manager =
-        AsyncDieselConnectionManager::<DieselSqliteConnection>::new(config.database_url.clone());
+    let mut manager_config = ManagerConfig::<DieselSqliteConnection>::default();
+    manager_config.custom_setup = Box::new(|url| {
+        let url = url.to_owned();
+        async move {
+            let mut conn = DieselSqliteConnection::establish(&url).await?;
+            for pragma in SQLITE_PRAGMAS {
+                diesel::sql_query(*pragma)
+                    .execute(&mut conn)
+                    .await
+                    .map_err(diesel::ConnectionError::CouldntSetupConfiguration)?;
+            }
+            Ok(conn)
+        }
+        .boxed()
+    });
+    let manager = AsyncDieselConnectionManager::<DieselSqliteConnection>::new_with_config(
+        config.database_url.clone(),
+        manager_config,
+    );
     let mut builder = ::bb8::Pool::builder().max_size(config.max_connections);
     if let Some(min_idle) = config.min_idle {
         builder = builder.min_idle(Some(min_idle));
@@ -88,6 +103,15 @@ pub async fn build_pg_pool(config: &DieselPoolConfig) -> Result<DieselPgPool> {
     }
     builder.build(manager).await.context(BuildDieselPoolSnafu)
 }
+
+/// SQLite pragmas applied to every newly-established connection. Order
+/// matches the sqlx-era setup: WAL journaling, a 5s busy wait, and enforced
+/// foreign keys.
+const SQLITE_PRAGMAS: &[&str] = &[
+    "PRAGMA journal_mode=WAL",
+    "PRAGMA busy_timeout=5000",
+    "PRAGMA foreign_keys=ON",
+];
 
 /// Re-export of the bb8 runtime pool error so consumers don't have to
 /// depend on `bb8` directly to name it in signatures.

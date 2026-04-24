@@ -81,7 +81,12 @@ pub enum SkillError {
     Install { message: String },
 
     #[snafu(display("database error: {source}"))]
-    Sqlx { source: sqlx::Error },
+    Diesel { source: diesel::result::Error },
+
+    #[snafu(display("diesel-async pool error: {source}"))]
+    DieselPool {
+        source: bb8::RunError<diesel_async::pooled_connection::PoolError>,
+    },
 
     #[snafu(display("base64 decode failed: {source}"))]
     Base64 { source: base64::DecodeError },

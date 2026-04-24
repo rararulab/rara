@@ -95,17 +95,12 @@ pub struct PlatformBindingConfig {
 /// `browser_manager` is optional — pass `Some` when Lightpanda started
 /// successfully; browser tools are registered into the tool registry when set.
 pub(crate) async fn boot(
-    pool: sqlx::SqlitePool,
     diesel_pool: yunara_store::diesel_pool::DieselSqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
     browser_manager: Option<rara_browser::BrowserManagerRef>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
-    //
-    // Credential store migrated to diesel as part of #1702 — its pool lives
-    // side-by-side with the sqlx pool until the cutover PR consolidates
-    // every call site onto diesel.
     let credential_store: rara_keyring_store::KeyringStoreRef = Arc::new(
         rara_pg_credential_store::PgKeyringStore::new(diesel_pool.clone()),
     );
@@ -163,7 +158,7 @@ pub(crate) async fn boot(
     // -- skills registry ---------------------------------------------------
 
     let skill_registry = rara_skills::registry::InMemoryRegistry::new();
-    rara_skills::cache::spawn_background_sync(pool.clone(), skill_registry.clone());
+    rara_skills::cache::spawn_background_sync(diesel_pool.clone(), skill_registry.clone());
     info!("skill registry initialized with background sync");
 
     // -- marketplace service -----------------------------------------------

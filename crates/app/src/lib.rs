@@ -327,24 +327,10 @@ pub async fn start_with_options(
     let db_store = init_infra(&config)
         .await
         .whatever_context("Failed to initialize infrastructure services")?;
-    let pool = db_store.pool().clone();
-
-    // Parallel diesel-async pool for crates migrated off sqlx (#1702).
-    // Lives side-by-side with the sqlx pool until every call site is
-    // migrated and the sqlx pool is retired in the cutover PR.
-    let db_dir = rara_paths::database_dir();
-    let database_url = format!("sqlite:{}/rara.db?mode=rwc", db_dir.display());
-    let diesel_pool = yunara_store::diesel_pool::build_sqlite_pool(
-        &yunara_store::diesel_pool::DieselPoolConfig::builder()
-            .database_url(database_url)
-            .max_connections(config.database.max_connections)
-            .build(),
-    )
-    .await
-    .whatever_context("Failed to build diesel-async sqlite pool")?;
+    let diesel_pool = db_store.pool().clone();
 
     let settings_svc =
-        rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
+        rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), diesel_pool.clone())
             .await
             .whatever_context("Failed to initialize runtime settings")?;
 
@@ -383,7 +369,6 @@ pub async fn start_with_options(
         };
 
     let rara = crate::boot::boot(
-        pool.clone(),
         diesel_pool.clone(),
         settings_provider.clone(),
         &config.users,
@@ -400,8 +385,8 @@ pub async fn start_with_options(
         tokio::sync::mpsc::channel::<rara_kernel::data_feed::FeedEvent>(256);
     let feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(feed_event_tx));
     let feed_store: rara_kernel::data_feed::FeedStoreRef =
-        Arc::new(crate::feed_store::SqliteFeedStore::new(pool.clone()));
-    let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pool.clone());
+        Arc::new(crate::feed_store::SqliteFeedStore::new(diesel_pool.clone()));
+    let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(diesel_pool.clone());
 
     // Restore feed configs from database into registry.
     match feed_svc.list_feeds().await {
@@ -1054,19 +1039,39 @@ async fn try_build_wechat(
     Ok(Some(adapter))
 }
 
+/// Diesel-embedded SQLite migrations, shipped inside the binary at build time.
+const EMBEDDED_MIGRATIONS: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("../rara-model/migrations");
+
 async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
     let db_dir = rara_paths::database_dir();
     std::fs::create_dir_all(db_dir).whatever_context("Failed to create database directory")?;
-    let database_url = format!("sqlite:{}/rara.db?mode=rwc", db_dir.display());
+    let database_url = format!("{}/rara.db", db_dir.display());
+
+    // Run migrations on a synchronous SqliteConnection before any async
+    // pool sees the DB — diesel_migrations' `MigrationHarness` trait is
+    // implemented on the blocking driver, so we open a one-shot connection
+    // on a blocking task.
+    let migrate_url = database_url.clone();
+    tokio::task::spawn_blocking(move || {
+        use diesel::Connection;
+        use diesel_migrations::MigrationHarness;
+        let mut conn = diesel::SqliteConnection::establish(&migrate_url)
+            .map_err(|e| anyhow::anyhow!("open sqlite for migrations: {e}"))?;
+        conn.run_pending_migrations(EMBEDDED_MIGRATIONS)
+            .map_err(|e| anyhow::anyhow!("run pending migrations: {e}"))?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .whatever_context("migration task join failed")?
+    .whatever_context("Failed to run database migrations")?;
+
     let db_store = config
         .database
         .open(&database_url)
         .await
         .whatever_context("Failed to initialize database")?;
-    sqlx::migrate!("../rara-model/migrations")
-        .run(db_store.pool())
-        .await
-        .whatever_context("Failed to run database migrations")?;
+
     info!("Database initialized");
     Ok(db_store)
 }

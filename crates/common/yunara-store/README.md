@@ -1,10 +1,8 @@
 # yunara-store
 
-Database layer for Yunara using PostgreSQL (via `sqlx`).
+Shared diesel-async + bb8 SQLite/Postgres connection pool and a JSON
+key-value store backed by the `kv_table` schema owned by `rara-model`.
 
-Provides `DBStore` for database connections and a key-value store
-extension (`KVStoreExt`) for application identifiers and settings.
-
-## Testing
-
-Integration-style tests in `src/kv.rs` run only when either `YUNARA_STORE_TEST_DATABASE_URL` or `DATABASE_URL` is set.
+Provides `DBStore` / `DieselSqlitePool` / `DieselPgPool` for database
+connections and `KVStore` / `KVStoreExt` for application identifiers and
+runtime settings.

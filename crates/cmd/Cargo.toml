@@ -47,7 +47,9 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 shadow-rs = { workspace = true }
 snafu.workspace = true
-sqlx.workspace = true
+anyhow.workspace = true
+diesel.workspace = true
+diesel_migrations.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
