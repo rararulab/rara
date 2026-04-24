@@ -18,6 +18,7 @@ import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { describe, expect, it } from 'vitest';
 
 import {
+  aggregateTurnToolCalls,
   assistantSeqByRef,
   finalAssistantIndices,
   isFirstAssistantOfTurn,
@@ -49,6 +50,21 @@ function assistantToolCall(seq: number, toolName = 'do_thing'): ChatMessageData 
     role: 'assistant',
     content: '',
     tool_calls: [call],
+    created_at: ISO,
+  };
+}
+
+function assistantMultiToolCall(seq: number, toolNames: string[]): ChatMessageData {
+  const calls: ChatToolCallData[] = toolNames.map((name, i) => ({
+    id: `tc-${seq}-${i}`,
+    name,
+    arguments: {},
+  }));
+  return {
+    seq,
+    role: 'assistant',
+    content: '',
+    tool_calls: calls,
     created_at: ISO,
   };
 }
@@ -279,5 +295,85 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
     const [, second, third] = assistants(out);
     expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
     expect(isFirstAssistantOfTurn(expectAssistant(third), out)).toBe(true);
+  });
+});
+
+describe('aggregateTurnToolCalls (#1764)', () => {
+  it('attaches every tool call from a single-iteration turn to that assistant', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantMultiToolCall(2, ['a', 'b', 'c']),
+      toolResult(3, 2, 'a'),
+      toolResult(4, 2, 'b'),
+      toolResult(5, 2, 'c'),
+    ]);
+    const [a] = assistants(out);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    const entries = agg.get(expectAssistant(a));
+    expect(entries).toBeDefined();
+    expect(entries?.map((e) => e.call.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('collects tool calls across iterations onto the turn final assistant', () => {
+    const msgs = [
+      user(1),
+      assistantMultiToolCall(2, ['grep', 'read']),
+      toolResult(3, 2, 'grep'),
+      toolResult(4, 2, 'read'),
+      assistantToolCall(5, 'bash'),
+      toolResult(6, 5, 'bash'),
+      assistantText(7, 'done'),
+    ];
+    // The first tool_result seq must point to its call's seq; adjust.
+    msgs[2] = { ...(msgs[2] as ChatMessageData), tool_call_id: 'tc-2-0', tool_name: 'grep' };
+    msgs[3] = { ...(msgs[3] as ChatMessageData), tool_call_id: 'tc-2-1', tool_name: 'read' };
+    const out = toAgentMessages(msgs);
+    const as = assistants(out);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    // Final assistant hosts all three; others host none.
+    const last = expectAssistant(as[as.length - 1]);
+    const hosted = agg.get(last);
+    expect(hosted?.map((e) => e.call.name)).toEqual(['grep', 'read', 'bash']);
+    for (let i = 0; i < as.length - 1; i++) {
+      const intermediate = expectAssistant(as[i]);
+      expect(agg.get(intermediate)).toBeUndefined();
+    }
+  });
+
+  it('pairs tool results from the side-channel with their calls', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantToolCall(2),
+      toolResult(3, 2),
+      assistantText(4),
+    ]);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    const last = assistants(out)[1];
+    const entries = agg.get(expectAssistant(last));
+    expect(entries?.length).toBe(1);
+    expect(entries?.[0]?.result).toBeDefined();
+    expect(entries?.[0]?.result?.toolCallId).toBe('tc-2');
+  });
+
+  it('scopes each turn’s card to its own tool calls across a multi-turn sequence', () => {
+    const msgs = [
+      user(1),
+      assistantToolCall(2, 'alpha'),
+      toolResult(3, 2, 'alpha'),
+      assistantText(4, 'first reply'),
+      user(5),
+      assistantToolCall(6, 'beta'),
+      toolResult(7, 6, 'beta'),
+      assistantText(8, 'second reply'),
+    ];
+    const out = toAgentMessages(msgs);
+    const agg = aggregateTurnToolCalls(out, toolResultByCallId);
+    const as = assistants(out);
+    // Turn 1 host is the second assistant (text) — tc-2 only.
+    // Turn 2 host is the fourth assistant (text) — tc-6 only.
+    const host1 = expectAssistant(as[1]);
+    const host2 = expectAssistant(as[3]);
+    expect(agg.get(host1)?.map((e) => e.call.name)).toEqual(['alpha']);
+    expect(agg.get(host2)?.map((e) => e.call.name)).toEqual(['beta']);
   });
 });

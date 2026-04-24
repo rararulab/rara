@@ -638,8 +638,8 @@ export function createRaraStreamFn(
               const text = event.error ?? event.result_preview;
               const content: AgentToolResult<unknown>['content'] = [{ type: 'text', text }];
               // Append any buffered attachments for this tool call. Images
-              // flow into pi-ai as `image` content blocks (rendered inline
-              // by CompactToolRenderer); non-image files surface as a
+              // flow into pi-ai as `image` content blocks (surfaced inside
+              // the per-turn chip card detail view); non-image files surface as a
               // text-block download link carrying the base64 data URL so
               // the user can still retrieve them without a second trip to
               // the backend.

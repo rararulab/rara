@@ -148,14 +148,23 @@ export const toolResultByCallId = new Map<string, ToolResultMessage>();
  * avoids maintaining a parallel cache that could desync from streaming
  * appends.
  */
-export function isFirstAssistantOfTurn(msg: AgentMessage, all: readonly AgentMessage[]): boolean {
+export function isFirstAssistantOfTurn(
+  msg: AgentMessage,
+  all: readonly AgentMessage[],
+  turnHosts?: ReadonlySet<AssistantMessage>,
+): boolean {
   // pi-agent-core emits per-iteration `AssistantMessage` frames that can
   // carry only an empty thinking-block; pi-web-ui's `:has()` avatar rules
   // do not match those, so they paint no avatar. Treating them as the
   // turn's first frame would anchor the avatar to an invisible row and
   // strip it from the real content. Skip them in both the self check and
   // the backward walk so the avatar lands on the first visible frame.
-  if (msg.role === 'assistant' && !hasVisibleContent(msg)) return false;
+  //
+  // With per-turn chip cards (#1764), intermediate tool-call-only frames
+  // also render nothing — only the turn host renders text/thinking or a
+  // chip card. Callers pass `turnHosts` so the backward walk treats
+  // those non-host tool-call frames as transparent too.
+  if (msg.role === 'assistant' && !isVisibleAssistant(msg, turnHosts)) return false;
   const idx = all.indexOf(msg);
   if (idx < 0) return true;
   for (let j = idx - 1; j >= 0; j--) {
@@ -163,13 +172,25 @@ export function isFirstAssistantOfTurn(msg: AgentMessage, all: readonly AgentMes
     if (!prev) continue;
     if (prev.role === 'toolResult') continue;
     if (prev.role === 'assistant') {
-      if (!hasVisibleContent(prev)) continue;
+      if (!isVisibleAssistant(prev, turnHosts)) continue;
       return false;
     }
     // user / user-with-attachments / anything else is a turn boundary.
     return true;
   }
   return true;
+}
+
+function isVisibleAssistant(
+  msg: AssistantMessage,
+  turnHosts: ReadonlySet<AssistantMessage> | undefined,
+): boolean {
+  if (hasTextOrThinking(msg)) return true;
+  // A tool-call-only frame is visible only when it is the turn host
+  // (which renders the chip card). Callers that don't pass `turnHosts`
+  // fall back to the legacy behaviour: any tool-call part counts.
+  if (turnHosts) return turnHosts.has(msg);
+  return hasVisibleContent(msg);
 }
 
 function hasVisibleContent(msg: AssistantMessage): boolean {
@@ -181,6 +202,88 @@ function hasVisibleContent(msg: AssistantMessage): boolean {
     if (part.type === 'toolCall') return true;
     return false;
   });
+}
+
+/**
+ * Whether an assistant message carries any text or thinking the user
+ * should see rendered as a bubble body. Tool-call parts are excluded
+ * because they now flow through the per-turn chip card rather than the
+ * inline `<tool-message>` nodes.
+ */
+export function hasTextOrThinking(msg: AssistantMessage): boolean {
+  const content = msg.content;
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => {
+    if (part.type === 'text') return part.text.trim().length > 0;
+    if (part.type === 'thinking') return part.thinking.trim().length > 0;
+    return false;
+  });
+}
+
+/** Tool-call request paired with its (optional) resolved result. */
+export interface ToolCallWithResult {
+  call: ToolCall;
+  result: ToolResultMessage | undefined;
+}
+
+/**
+ * Aggregate tool-call parts from every assistant iteration of a turn
+ * onto the turn's **last** assistant message. Intermediate iterations
+ * map to an empty list — their tool-call parts are hosted elsewhere.
+ *
+ * A "turn" is a contiguous run of `assistant` / `toolResult` frames
+ * bounded by user messages. Tool results are paired to their calls via
+ * the {@link toolResultByCallId} side-channel (shared with persisted
+ * history) merged with any live `toolResult` frames still sitting in
+ * `messages` (pi-agent-core appends them post-stream).
+ *
+ * Pure function — used by both the persisted and live render paths so
+ * the chip card renders identically regardless of source.
+ */
+export function aggregateTurnToolCalls(
+  messages: readonly AgentMessage[],
+  resultsByCallId: ReadonlyMap<string, ToolResultMessage>,
+): Map<AssistantMessage, ToolCallWithResult[]> {
+  const aggregated = new Map<AssistantMessage, ToolCallWithResult[]>();
+  let turnStart = 0;
+  for (let i = 0; i <= messages.length; i++) {
+    const msg = messages[i];
+    const atBoundary =
+      i === messages.length || (msg && msg.role !== 'assistant' && msg.role !== 'toolResult');
+    if (!atBoundary) continue;
+    // Gather tool calls + find the last assistant in [turnStart, i).
+    const calls: ToolCallWithResult[] = [];
+    let lastAssistant: AssistantMessage | null = null;
+    // Inline results present in the live message list override the
+    // persisted side-channel for the same tool_call_id — the fresh
+    // frame wins on collision.
+    const inlineResults = new Map<string, ToolResultMessage>();
+    for (let j = turnStart; j < i; j++) {
+      const m = messages[j];
+      if (!m) continue;
+      if (m.role === 'toolResult') {
+        const tr = m as ToolResultMessage;
+        inlineResults.set(tr.toolCallId, tr);
+      } else if (m.role === 'assistant') {
+        lastAssistant = m;
+      }
+    }
+    if (lastAssistant) {
+      for (let j = turnStart; j < i; j++) {
+        const m = messages[j];
+        if (!m || m.role !== 'assistant') continue;
+        for (const part of m.content ?? []) {
+          if (part.type !== 'toolCall') continue;
+          const call = part;
+          const result = inlineResults.get(call.id) ?? resultsByCallId.get(call.id);
+          calls.push({ call, result });
+        }
+      }
+      aggregated.set(lastAssistant, calls);
+    }
+    turnStart = i + 1;
+  }
+  return aggregated;
 }
 
 /**
