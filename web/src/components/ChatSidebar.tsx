@@ -14,15 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  PanelLeftClose,
-  PanelLeft,
-  Plus,
-  Search,
-  Settings,
-  Trash2,
-  MessageSquare,
-} from 'lucide-react';
+import { PanelLeftClose, PanelLeft, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { SidebarRunHistory } from './SidebarRunHistory';
@@ -149,7 +141,9 @@ export function ChatSidebar({
         )}
       >
         {!collapsed && (
-          <span className="text-sm font-semibold tracking-[0.15em] text-foreground/90">RARA</span>
+          <span className="text-[20px] font-semibold leading-none tracking-tight text-foreground">
+            rara
+          </span>
         )}
         <button
           type="button"
@@ -172,14 +166,12 @@ export function ChatSidebar({
           type="button"
           onClick={onNewSession}
           className={cn(
-            'flex h-9 items-center rounded-md text-sm font-medium transition-colors cursor-pointer',
-            collapsed
-              ? 'w-9 justify-center text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
-              : 'w-full gap-2 px-3 text-foreground bg-secondary/40 hover:bg-secondary/70',
+            'flex h-9 items-center rounded-md text-sm font-medium text-foreground transition-colors cursor-pointer hover:bg-secondary/60',
+            collapsed ? 'w-9 justify-center' : 'w-full gap-2 px-3',
           )}
           title="新建会话"
         >
-          <Plus className="h-4 w-4 shrink-0" />
+          <Plus className="h-4 w-4 shrink-0 text-brand" />
           {!collapsed && <span className="truncate">新建会话</span>}
         </button>
         <button
@@ -211,8 +203,7 @@ export function ChatSidebar({
       {/* History list */}
       {!collapsed && (
         <>
-          <div className="mt-2 flex shrink-0 items-center gap-2 px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
-            <MessageSquare className="h-3 w-3" />
+          <div className="mb-1 mt-4 shrink-0 px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
             历史会话
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -225,10 +216,10 @@ export function ChatSidebar({
                 <div
                   key={s.key}
                   className={cn(
-                    'group mx-2 flex items-start gap-2 rounded-md text-sm transition-colors',
+                    'group mx-2 flex items-start gap-2 rounded-md border-l-2 text-sm transition-colors',
                     s.key === activeSessionKey
-                      ? 'bg-secondary/70 text-foreground'
-                      : 'text-foreground/80 hover:bg-secondary/50 hover:text-foreground',
+                      ? 'border-brand bg-secondary/70 text-foreground'
+                      : 'border-transparent text-foreground/80 hover:bg-secondary/50 hover:text-foreground',
                   )}
                 >
                   <button

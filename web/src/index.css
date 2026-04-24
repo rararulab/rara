@@ -70,6 +70,23 @@
   --font-mono:
     'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
+
+  /*
+   * Brand accent — pink, balanced near Tailwind pink-500 (#EC4899). Intentionally
+   * separate from `--color-primary` so admin surfaces (rose) and accent marks
+   * (pink) can coexist on the same page without fighting. Use `bg-brand`,
+   * `text-brand`, `border-brand` in markup.
+   */
+  --color-brand: oklch(0.68 0.22 0);
+  --color-brand-foreground: oklch(0.99 0 0);
+
+  /* Radius scale — cards stay compact (0.75rem) to match hero admin. */
+  --radius-card: 0.75rem;
+  --radius-pill: 9999px;
+
+  /* Shadow scale — very light by default, slightly lifted on hover. */
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+  --shadow-hover: 0 4px 12px 0 rgb(0 0 0 / 0.06);
 }
 
 /*
@@ -522,6 +539,29 @@
 .dark .user-message-container {
   background: color-mix(in oklab, oklch(0.65 0.18 250) 6%, transparent);
   border-color: color-mix(in oklab, oklch(0.65 0.18 250) 24%, transparent);
+}
+
+/*
+ * Flatten pi-web-ui's composer card. Upstream `<message-editor>` renders
+ * with `bg-card rounded-xl border shadow-sm`, which reads as a heavy
+ * floating card on top of the chat page. We neutralise the ring and
+ * corner-rounding so the composer sits as a simple region with only a
+ * top rule separating it from the messages above — matches the calm
+ * page header landed in #1774.
+ *
+ * Scoped to `.rara-chat` so admin/surface usages of `message-editor`
+ * (if any ever appear) keep their default look.
+ *
+ * Invariant: targets pi-web-ui ≥0.63 `<message-editor>` light DOM
+ * structure (first child div carrying the card classes). If upstream
+ * reworks this wrapper the rule silently no-ops and the card returns.
+ */
+.rara-chat message-editor > div:first-child {
+  border-radius: 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  box-shadow: none;
+  background: transparent;
 }
 
 @layer components {
