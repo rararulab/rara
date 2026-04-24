@@ -31,6 +31,7 @@ import {
   // pi-mono can render server-triggered document-extraction tool calls.
   extractDocumentTool,
 } from '@mariozechner/pi-web-ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { html } from 'lit';
 import { useEffect, useRef, useCallback, useState } from 'react';
 
@@ -294,6 +295,12 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
  * wiring it up to rara's storage backend and WebSocket stream function.
  */
 export default function PiChat() {
+  const queryClient = useQueryClient();
+  // Stashed in a ref so the long-lived `useEffect([])` init block can call
+  // `invalidateQueries` without triggering exhaustive-deps or re-running.
+  // The `QueryClient` instance is stable for the app's lifetime.
+  const queryClientRef = useRef(queryClient);
+  queryClientRef.current = queryClient;
   const containerRef = useRef<HTMLDivElement>(null);
   // Live-card scroll-padding wiring: `liveCardEl` measures the rendered
   // card; `mainEl` receives the `--rara-live-card-h` CSS variable that
@@ -779,8 +786,17 @@ export default function PiChat() {
             },
             // Feed the agent-live store with every WS frame so the card
             // can render in parallel to pi-chat-panel without opening a
-            // second WebSocket (see #1615).
-            (sessionKey, event) => liveRunStore.publish(sessionKey, event),
+            // second WebSocket (see #1615). Also listen for approval
+            // lifecycle events pushed by the backend (see #1745) and
+            // invalidate the `kernel-approvals` query so the admin
+            // drawer refreshes immediately instead of waiting for the
+            // next 5s poll.
+            (sessionKey, event) => {
+              liveRunStore.publish(sessionKey, event);
+              if (event.type === 'approval_requested' || event.type === 'approval_resolved') {
+                void queryClientRef.current.invalidateQueries({ queryKey: ['kernel-approvals'] });
+              }
+            },
           ),
           convertToLlm: defaultConvertToLlm,
           sessionId: initialSession.key,
