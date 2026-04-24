@@ -23,8 +23,8 @@ permissions:
   contents: read
 
 jobs:
-  clippy-test:
-    name: Clippy & Test
+  clippy:
+    name: Clippy
     runs-on: arc-runner-set
     steps:
       - name: Checkout code
@@ -37,6 +37,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
 
+      - name: Setup mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+
       - name: Rust cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -45,6 +48,29 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+  test:
+    name: Test
+    runs-on: arc-runner-set
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install diesel system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+
+      - name: Setup mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: rust-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
         run: cargo nextest run --workspace
@@ -57,6 +83,9 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      - name: Setup mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
 
       - name: Rust cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -72,19 +101,22 @@ jobs:
   rust-success:
     name: Rust Success
     runs-on: arc-runner-set
-    needs: [clippy-test, docs]
+    needs: [clippy, test, docs]
     if: always()
     steps:
       - name: Check all Rust jobs status
         env:
-          CLIPPY_TEST_RESULT: ${{ needs.clippy-test.result }}
+          CLIPPY_RESULT: ${{ needs.clippy.result }}
+          TEST_RESULT: ${{ needs.test.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
         run: |
-          if [[ "$CLIPPY_TEST_RESULT" != "success" || \
+          if [[ "$CLIPPY_RESULT" != "success" || \
+                "$TEST_RESULT" != "success" || \
                 "$DOCS_RESULT" != "success" ]]; then
             echo "One or more Rust jobs failed"
-            echo "  clippy-test: $CLIPPY_TEST_RESULT"
-            echo "  docs:        $DOCS_RESULT"
+            echo "  clippy: $CLIPPY_RESULT"
+            echo "  test:   $TEST_RESULT"
+            echo "  docs:   $DOCS_RESULT"
             exit 1
           fi
           echo "All Rust jobs passed successfully"
