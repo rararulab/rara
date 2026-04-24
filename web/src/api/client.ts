@@ -164,14 +164,24 @@ class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * `AbortSignal.any` is part of ES2024 / WHATWG DOM but our `lib` target
+ * is ES2022, so the method isn't in the builtin typings yet. Declare a
+ * narrow structural type for the optional static method — this keeps
+ * the feature-detect branch fully typed without reaching for `as any`.
+ */
+interface AbortSignalWithAny {
+  any?: (signals: AbortSignal[]) => AbortSignal;
+}
+
 /** Combine an internal timeout signal with a caller-provided signal so
  *  aborting either cancels the underlying fetch. `AbortSignal.any` is
  *  available in modern browsers; we fall back to a manual relay when the
  *  runtime doesn't expose it. */
 function composeSignals(internal: AbortSignal, external?: AbortSignal | null): AbortSignal {
   if (!external) return internal;
-  const any = (AbortSignal as any).any as ((signals: AbortSignal[]) => AbortSignal) | undefined;
-  if (any) return any([internal, external]);
+  const native: AbortSignalWithAny = AbortSignal;
+  if (native.any) return native.any([internal, external]);
   const relay = new AbortController();
   const onAbort = () => relay.abort();
   if (internal.aborted || external.aborted) {
