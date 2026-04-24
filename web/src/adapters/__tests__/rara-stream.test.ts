@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { Context, Model } from '@mariozechner/pi-ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildWsUrl } from '../rara-stream';
+import { buildWsUrl, createRaraStreamFn } from '../rara-stream';
 
 const STORAGE_KEY = 'rara_backend_url';
 
@@ -92,5 +94,139 @@ describe('buildWsUrl — backend override resolution (#1622)', () => {
     expect(buildWsUrl('sess/with spaces')).toBe(
       'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess%2Fwith+spaces&user_id=alice&token=test-token',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Relay Map stability across StreamFn invocations (#1732)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal mock WebSocket that exposes `onopen` / `onmessage` / `onclose`
+ * callbacks so tests can drive the rara-stream state machine directly
+ * without a live backend. Each constructed instance is tracked on
+ * {@link MockWebSocket.instances} so the active test can reach in and
+ * emit frames.
+ */
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+  onopen: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  sent: string[] = [];
+  readyState = 1;
+  url: string;
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+  send(data: string) {
+    this.sent.push(data);
+  }
+  close() {
+    this.readyState = 3;
+    this.onclose?.(new CloseEvent('close'));
+  }
+  emit(payload: unknown) {
+    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(payload) }));
+  }
+}
+
+function fakeModel(): Model<any> {
+  return {
+    id: 'test-model',
+    api: 'test',
+    provider: 'test',
+    name: 'Test',
+    baseUrl: 'http://test',
+    contextWindow: 1000,
+    maxTokens: 1000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  } as unknown as Model<any>;
+}
+
+function userContext(text: string): Context {
+  return {
+    systemPrompt: '',
+    messages: [{ role: 'user', content: text }],
+    tools: [],
+  } as unknown as Context;
+}
+
+describe('createRaraStreamFn — relay Map stability across invocations (#1732)', () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+    MockWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('relay shim installed on first invocation resolves tool calls from a second invocation', async () => {
+    const streamFn = createRaraStreamFn(() => 'sess-1');
+
+    // --- First invocation: tool_call_start + tool_call_end for id "t1" ---
+    const ctx = userContext('hello');
+    void streamFn(fakeModel(), ctx);
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.onopen?.(new Event('open'));
+    ws1.emit({
+      type: 'tool_call_start',
+      id: 't1',
+      name: 'search',
+      arguments: { q: 'first' },
+    });
+    ws1.emit({
+      type: 'tool_call_end',
+      id: 't1',
+      result_preview: 'first-result',
+      success: true,
+      error: null,
+    });
+    ws1.emit({ type: 'done' });
+
+    // Shim was installed into context.tools on first invocation.
+    expect(ctx.tools?.map((t) => t.name)).toContain('search');
+    const shim = ctx.tools?.find((t) => t.name === 'search') as AgentTool | undefined;
+    expect(shim).toBeDefined();
+    // First id resolves via the shim's execute().
+    await expect(shim!.execute('t1', {}, {} as never)).resolves.toMatchObject({
+      content: [{ type: 'text', text: 'first-result' }],
+    });
+
+    // --- Second invocation: new tool_call_start for a fresh id "t2" ---
+    // pi-agent-core reuses the same `context` and its existing tool
+    // entry, so rara-stream must not allocate a new pendingToolResults
+    // Map — otherwise shim.execute('t2') throws "No kernel result ...".
+    void streamFn(fakeModel(), ctx);
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.onopen?.(new Event('open'));
+    ws2.emit({
+      type: 'tool_call_start',
+      id: 't2',
+      name: 'search',
+      arguments: { q: 'second' },
+    });
+    ws2.emit({
+      type: 'tool_call_end',
+      id: 't2',
+      result_preview: 'second-result',
+      success: true,
+      error: null,
+    });
+    ws2.emit({ type: 'done' });
+
+    // Same shim reference (not re-pushed) — confirms dedup across turns.
+    const shim2 = ctx.tools?.find((t) => t.name === 'search') as AgentTool | undefined;
+    expect(shim2).toBe(shim);
+    expect(ctx.tools?.filter((t) => t.name === 'search').length).toBe(1);
+
+    // Critical: the shim must resolve the new id from the shared Map.
+    await expect(shim!.execute('t2', {}, {} as never)).resolves.toMatchObject({
+      content: [{ type: 'text', text: 'second-result' }],
+    });
   });
 });
