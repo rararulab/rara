@@ -41,6 +41,8 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              - '.github/workflows/rust.yml'
+              - '.github/workflows/ci.yml'
 
   lint:
     name: Lint
