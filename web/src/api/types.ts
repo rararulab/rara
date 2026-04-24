@@ -14,26 +14,6 @@
  * limitations under the License.
  */
 
-// Scheduler
-export interface ScheduledTask {
-  id: string;
-  name: string;
-  cron_expression: string;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
-  created_at: string;
-}
-
-export interface TaskRunRecord {
-  id: string;
-  task_id: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  error_message: string | null;
-}
-
 // Flat KV Settings
 export type SettingsMap = Record<string, string>;
 export interface SettingValue {
