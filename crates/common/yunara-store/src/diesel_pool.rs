@@ -16,11 +16,11 @@
 //!
 //! Introduced as part of the sqlx → diesel migration (#1702). SQLite uses
 //! [`SyncConnectionWrapper`] because SQLite itself is single-threaded and has
-//! no native async driver. Postgres uses the native [`AsyncPgConnection`].
+//! no native async driver.
 
 use diesel::SqliteConnection;
 use diesel_async::{
-    AsyncConnection, AsyncPgConnection, RunQueryDsl,
+    AsyncConnection, RunQueryDsl,
     pooled_connection::{AsyncDieselConnectionManager, ManagerConfig},
     sync_connection_wrapper::SyncConnectionWrapper,
 };
@@ -36,20 +36,14 @@ pub type DieselSqliteConnection = SyncConnectionWrapper<SqliteConnection>;
 /// bb8-managed diesel-async pool for SQLite.
 pub type DieselSqlitePool = ::bb8::Pool<AsyncDieselConnectionManager<DieselSqliteConnection>>;
 
-/// Postgres diesel-async connection.
-pub type DieselPgConnection = AsyncPgConnection;
-
-/// bb8-managed diesel-async pool for Postgres.
-pub type DieselPgPool = ::bb8::Pool<AsyncDieselConnectionManager<DieselPgConnection>>;
-
 /// Pool sizing and connection parameters for the diesel-async pools.
 ///
 /// Defaults are deliberately absent — this struct is populated from the YAML
 /// config (per the no-hardcoded-defaults invariant) by the caller and handed
-/// to [`build_sqlite_pool`] / [`build_pg_pool`].
+/// to [`build_sqlite_pool`].
 #[derive(Debug, Clone, bon::Builder, serde::Serialize, serde::Deserialize)]
 pub struct DieselPoolConfig {
-    /// Database URL (`sqlite://…` or `postgres://…`).
+    /// Database URL (`sqlite://…`).
     pub database_url:    String,
     /// Maximum number of pooled connections.
     pub max_connections: u32,
@@ -85,18 +79,6 @@ pub async fn build_sqlite_pool(config: &DieselPoolConfig) -> Result<DieselSqlite
         config.database_url.clone(),
         manager_config,
     );
-    let mut builder = ::bb8::Pool::builder().max_size(config.max_connections);
-    if let Some(min_idle) = config.min_idle {
-        builder = builder.min_idle(Some(min_idle));
-    }
-    builder.build(manager).await.context(BuildDieselPoolSnafu)
-}
-
-/// Build a bb8 pool of diesel-async Postgres connections.
-#[tracing::instrument(level = "trace", skip(config), fields(url = %config.database_url), err)]
-pub async fn build_pg_pool(config: &DieselPoolConfig) -> Result<DieselPgPool> {
-    let manager =
-        AsyncDieselConnectionManager::<DieselPgConnection>::new(config.database_url.clone());
     let mut builder = ::bb8::Pool::builder().max_size(config.max_connections);
     if let Some(min_idle) = config.min_idle {
         builder = builder.min_idle(Some(min_idle));
