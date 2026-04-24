@@ -301,8 +301,8 @@ migrate-reset:
     else
         DB_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/rara"
     fi
-    echo "🧹 Removing $DB_DIR/rara.db* ..."
-    rm -f "$DB_DIR/rara.db" "$DB_DIR/rara.db-wal" "$DB_DIR/rara.db-shm"
+    echo "🧹 Removing $DB_DIR/db/rara.db* ..."
+    rm -f "$DB_DIR/db/rara.db" "$DB_DIR/db/rara.db-wal" "$DB_DIR/db/rara.db-shm"
     echo "✅ Next rara start-up will re-run every diesel migration from scratch."
 
 [doc("reset rara data directory (drops database, agentfs, etc.)")]
