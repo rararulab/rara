@@ -1,2 +1,0 @@
-DROP TABLE IF EXISTS tape_fts_meta;
-DROP TABLE IF EXISTS tape_fts;
