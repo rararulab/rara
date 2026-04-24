@@ -98,6 +98,7 @@ pub(crate) async fn boot(
     diesel_pool: yunara_store::diesel_pool::DieselSqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
+    owner_user_id: &str,
     browser_manager: Option<rara_browser::BrowserManagerRef>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
@@ -258,7 +259,7 @@ pub(crate) async fn boot(
     // -- identity resolver -------------------------------------------------
 
     let identity_resolver: Arc<dyn rara_kernel::io::IdentityResolver> =
-        Arc::new(PlatformIdentityResolver::new(users));
+        Arc::new(PlatformIdentityResolver::new(users, owner_user_id));
 
     // -- agent registry ----------------------------------------------------
 
@@ -660,8 +661,22 @@ struct PlatformIdentityResolver {
 
 impl PlatformIdentityResolver {
     /// Build the resolver from the configured user list.
-    fn new(users: &[UserConfig]) -> Self {
+    ///
+    /// `owner_user_id` is the server-trusted owner identity from
+    /// `AppConfig::owner_user_id`. An implicit `("web", owner_user_id) ->
+    /// owner_user_id` mapping is injected so the web channel — which already
+    /// authenticates via owner-token and passes the owner identity directly —
+    /// resolves without requiring a redundant `type: web` entry in
+    /// `users[].platforms`. Explicit `type: web` entries in config still win
+    /// if the user declares them (e.g. for multi-user deployments).
+    fn new(users: &[UserConfig], owner_user_id: &str) -> Self {
         let mut mappings = HashMap::new();
+        // Implicit mapping first so any explicit `type: web` entry in config
+        // overrides it via the later `insert`.
+        mappings.insert(
+            ("web".to_string(), owner_user_id.to_string()),
+            owner_user_id.to_string(),
+        );
         for u in users {
             mappings.insert(("cli".to_string(), u.name.clone()), u.name.clone());
             mappings.insert(
@@ -977,5 +992,56 @@ mod boot_fallback_tests {
         // with what `kernel.rs` actually resolves via `resolve_agent`.
         assert!(BACKGROUND_AGENTS_WITH_FALLBACK.contains(&"knowledge_extractor"));
         assert!(BACKGROUND_AGENTS_WITH_FALLBACK.contains(&"title_gen"));
+    }
+}
+
+#[cfg(test)]
+mod identity_resolver_tests {
+    use super::*;
+
+    fn user(name: &str) -> UserConfig {
+        UserConfig {
+            name:      name.to_string(),
+            role:      "root".to_string(),
+            platforms: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn implicit_web_mapping_for_owner_resolves_without_config_entry() {
+        // alice is the owner with no `type: web` platform entry.
+        let resolver = PlatformIdentityResolver::new(&[user("alice")], "alice");
+        let resolved = resolver
+            .resolve(ChannelType::Web, "alice", None)
+            .await
+            .expect("implicit web mapping must resolve owner");
+        assert_eq!(resolved, UserId("alice".to_string()));
+    }
+
+    #[tokio::test]
+    async fn implicit_web_mapping_does_not_leak_to_other_users() {
+        // bob is configured but is not the owner — resolving ("web", "bob")
+        // must still fail when no explicit `type: web` entry exists.
+        let resolver = PlatformIdentityResolver::new(&[user("alice"), user("bob")], "alice");
+        let err = resolver
+            .resolve(ChannelType::Web, "bob", None)
+            .await
+            .expect_err("non-owner must not inherit implicit web mapping");
+        assert!(matches!(err, IOError::IdentityResolutionFailed { .. }));
+    }
+
+    #[tokio::test]
+    async fn explicit_web_entry_still_works() {
+        let mut alice = user("alice");
+        alice.platforms.push(PlatformBindingConfig {
+            channel_type: "web".to_string(),
+            user_id:      "alice-web-handle".to_string(),
+        });
+        let resolver = PlatformIdentityResolver::new(&[alice], "alice");
+        let resolved = resolver
+            .resolve(ChannelType::Web, "alice-web-handle", None)
+            .await
+            .expect("explicit web entry must resolve");
+        assert_eq!(resolved, UserId("alice".to_string()));
     }
 }

@@ -36,6 +36,14 @@ grpc:
 # `owner_user_id` must reference a `users[].name` below whose role is
 # `root` or `admin`. The backend admin middleware resolves every
 # authenticated request to this principal.
+#
+# The web channel (frontend + WebSocket) authenticates via `owner_token`
+# and, after auth, uses `owner_user_id` directly as the kernel identity,
+# so an implicit `(web, owner_user_id) -> owner_user_id` mapping is
+# registered automatically. You do NOT need a redundant `type: web`
+# entry under `users[].platforms` for the owner. An explicit entry is
+# still accepted (useful for multi-user deployments where each user has
+# a distinct web handle).
 
 owner_token: "change-me-to-a-long-random-string"
 owner_user_id: "you"

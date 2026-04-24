@@ -387,6 +387,7 @@ pub async fn start_with_options(
         diesel_pool.clone(),
         settings_provider.clone(),
         &config.users,
+        &config.owner_user_id,
         browser_manager,
     )
     .await
