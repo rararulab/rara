@@ -14,9 +14,11 @@
 
 //! SQLite-backed [`FeedStore`] implementation.
 //!
-//! Persists [`FeedEvent`]s to the `feed_events` table and tracks per-subscriber
-//! read cursors in `feed_read_cursors`. Both tables are created by the
-//! `20260414125453_feed_events` migration.
+//! Persists [`FeedEvent`]s to the `data_feed_events` table and tracks
+//! per-subscriber read cursors in `feed_read_cursors`. The events table is
+//! created by the `20260414125453_feed_events` migration and renamed to
+//! `data_feed_events` by
+//! `20260424074904_rename_feed_events_to_data_feed_events`.
 
 use async_trait::async_trait;
 use jiff::Timestamp;
@@ -30,8 +32,8 @@ use tracing::instrument;
 
 /// SQLite-backed feed event store.
 ///
-/// Implements [`FeedStore`] using the `feed_events` and `feed_read_cursors`
-/// tables. All operations use the shared connection pool.
+/// Implements [`FeedStore`] using the `data_feed_events` and
+/// `feed_read_cursors` tables. All operations use the shared connection pool.
 pub struct SqliteFeedStore {
     pool: SqlitePool,
 }
@@ -54,7 +56,7 @@ impl FeedStore for SqliteFeedStore {
 
         // INSERT OR IGNORE for idempotency on event.id.
         sqlx::query(
-            "INSERT OR IGNORE INTO feed_events (id, source_name, event_type, tags, payload, \
+            "INSERT OR IGNORE INTO data_feed_events (id, source_name, event_type, tags, payload, \
              received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(&id)
@@ -65,7 +67,7 @@ impl FeedStore for SqliteFeedStore {
         .bind(&received_at)
         .execute(&self.pool)
         .await
-        .whatever_context("feed_events insert failed")?;
+        .whatever_context("data_feed_events insert failed")?;
 
         Ok(())
     }
@@ -73,7 +75,7 @@ impl FeedStore for SqliteFeedStore {
     #[instrument(skip_all)]
     async fn query(&self, filter: FeedFilter) -> rara_kernel::Result<Vec<FeedEvent>> {
         let mut sql = String::from(
-            "SELECT id, source_name, event_type, tags, payload, received_at FROM feed_events \
+            "SELECT id, source_name, event_type, tags, payload, received_at FROM data_feed_events \
              WHERE 1=1",
         );
         let mut binds: Vec<String> = Vec::new();
@@ -101,7 +103,7 @@ impl FeedStore for SqliteFeedStore {
         let rows: Vec<FeedEventRow> = query
             .fetch_all(&self.pool)
             .await
-            .whatever_context("feed_events query failed")?;
+            .whatever_context("data_feed_events query failed")?;
 
         let mut events: Vec<FeedEvent> = Vec::with_capacity(rows.len());
         for row in rows {
@@ -127,11 +129,11 @@ impl FeedStore for SqliteFeedStore {
         let event_id = up_to.to_string();
 
         let source: Option<(String,)> =
-            sqlx::query_as("SELECT source_name FROM feed_events WHERE id = ?1")
+            sqlx::query_as("SELECT source_name FROM data_feed_events WHERE id = ?1")
                 .bind(&event_id)
                 .fetch_optional(&self.pool)
                 .await
-                .whatever_context("feed_events lookup failed")?;
+                .whatever_context("data_feed_events lookup failed")?;
 
         let source_name = source.map(|s| s.0).unwrap_or_else(|| "unknown".to_owned());
 
@@ -156,9 +158,9 @@ impl FeedStore for SqliteFeedStore {
         let sub_id = subscriber.to_string();
 
         let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM feed_events e WHERE NOT EXISTS (SELECT 1 FROM feed_read_cursors \
-             c WHERE c.subscriber_id = ?1 AND c.source_name = e.source_name AND c.last_read_id >= \
-             e.id)",
+            "SELECT COUNT(*) FROM data_feed_events e WHERE NOT EXISTS (SELECT 1 FROM \
+             feed_read_cursors c WHERE c.subscriber_id = ?1 AND c.source_name = e.source_name AND \
+             c.last_read_id >= e.id)",
         )
         .bind(&sub_id)
         .fetch_one(&self.pool)

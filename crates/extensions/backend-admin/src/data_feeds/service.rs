@@ -14,7 +14,7 @@
 
 //! Persistence layer for data feed CRUD and event queries.
 //!
-//! [`DataFeedSvc`] operates directly on the `data_feeds` and `feed_events`
+//! [`DataFeedSvc`] operates directly on the `data_feeds` and `data_feed_events`
 //! SQLite tables. It does not depend on [`DataFeedRegistry`] — the registry
 //! manages in-memory runtime state while this service manages persistence.
 //!
@@ -30,7 +30,7 @@ use tracing::instrument;
 /// Service for data feed persistence operations.
 ///
 /// Holds a SQLite connection pool and provides CRUD on the `data_feeds`
-/// table plus paginated queries on the `feed_events` table.
+/// table plus paginated queries on the `data_feed_events` table.
 #[derive(Clone)]
 pub struct DataFeedSvc {
     pool: SqlitePool,
@@ -202,14 +202,15 @@ impl DataFeedSvc {
         // Count total matching events for pagination metadata.
         let total: (i64,) = if let Some(ref ts) = since {
             sqlx::query_as(
-                "SELECT COUNT(*) FROM feed_events WHERE source_name = ?1 AND received_at >= ?2",
+                "SELECT COUNT(*) FROM data_feed_events WHERE source_name = ?1 AND received_at >= \
+                 ?2",
             )
             .bind(source_name)
             .bind(ts.to_string())
             .fetch_one(&self.pool)
             .await?
         } else {
-            sqlx::query_as("SELECT COUNT(*) FROM feed_events WHERE source_name = ?1")
+            sqlx::query_as("SELECT COUNT(*) FROM data_feed_events WHERE source_name = ?1")
                 .bind(source_name)
                 .fetch_one(&self.pool)
                 .await?
@@ -217,9 +218,9 @@ impl DataFeedSvc {
 
         let rows: Vec<EventRow> = if let Some(ref ts) = since {
             sqlx::query_as(
-                "SELECT id, source_name, event_type, tags, payload, received_at FROM feed_events \
-                 WHERE source_name = ?1 AND received_at >= ?2 ORDER BY received_at DESC LIMIT ?3 \
-                 OFFSET ?4",
+                "SELECT id, source_name, event_type, tags, payload, received_at FROM \
+                 data_feed_events WHERE source_name = ?1 AND received_at >= ?2 ORDER BY \
+                 received_at DESC LIMIT ?3 OFFSET ?4",
             )
             .bind(source_name)
             .bind(ts.to_string())
@@ -229,8 +230,9 @@ impl DataFeedSvc {
             .await?
         } else {
             sqlx::query_as(
-                "SELECT id, source_name, event_type, tags, payload, received_at FROM feed_events \
-                 WHERE source_name = ?1 ORDER BY received_at DESC LIMIT ?2 OFFSET ?3",
+                "SELECT id, source_name, event_type, tags, payload, received_at FROM \
+                 data_feed_events WHERE source_name = ?1 ORDER BY received_at DESC LIMIT ?2 \
+                 OFFSET ?3",
             )
             .bind(source_name)
             .bind(limit)
@@ -261,7 +263,7 @@ impl DataFeedSvc {
         event_id: &str,
     ) -> anyhow::Result<Option<FeedEvent>> {
         let row: Option<EventRow> = sqlx::query_as(
-            "SELECT id, source_name, event_type, tags, payload, received_at FROM feed_events \
+            "SELECT id, source_name, event_type, tags, payload, received_at FROM data_feed_events \
              WHERE id = ?1 AND source_name = ?2",
         )
         .bind(event_id)
