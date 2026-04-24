@@ -409,6 +409,12 @@ pub async fn start_with_options(
         rara_backend_admin::data_feeds::SvcStatusReporter::new(feed_svc.clone()),
     ));
 
+    // Install the status reporter so runtime transitions (running / idle /
+    // error + last_error) persist back to the `data_feeds` table.
+    feed_registry.set_reporter(Arc::new(
+        rara_backend_admin::data_feeds::SvcStatusReporter::new(feed_svc.clone()),
+    ));
+
     // Restore feed configs from database into registry.
     match feed_svc.list_feeds().await {
         Ok(configs) => {
