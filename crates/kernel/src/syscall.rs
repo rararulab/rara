@@ -559,10 +559,10 @@ impl SyscallDispatcher {
                                 Ok(crate::event::TriggerJobReply::Fired(job))
                             }
                             Err(e) => {
-                                let wheel_ref = self.job_wheel.clone();
                                 let cancel_id = job.id;
+                                let wheel = self.job_wheel.clone();
                                 let cancelled = tokio::task::spawn_blocking(move || {
-                                    wheel_ref.lock().cancel_in_flight(&cancel_id)
+                                    wheel.lock().cancel_in_flight(&cancel_id)
                                 })
                                 .await
                                 .unwrap_or(false);
