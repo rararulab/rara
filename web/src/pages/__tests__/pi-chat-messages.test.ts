@@ -244,6 +244,30 @@ describe('isFirstAssistantOfTurn (#1727)', () => {
     expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
   });
 
+  it('treats an empty-thinking assistant frame as transparent so the next visible assistant owns the avatar', () => {
+    const emptyThinking: AssistantMessage = {
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: '' }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop',
+      api: 'anthropic',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet',
+      timestamp: Date.parse(ISO),
+    };
+    const visible = expectAssistant(assistants(toAgentMessages([user(1), assistantText(2)]))[0]);
+    const list = [...toAgentMessages([user(1)]), emptyThinking, visible];
+    expect(isFirstAssistantOfTurn(emptyThinking, list)).toBe(false);
+    expect(isFirstAssistantOfTurn(visible, list)).toBe(true);
+  });
+
   it('restores first-of-turn after a new user message', () => {
     const out = toAgentMessages([
       user(1),

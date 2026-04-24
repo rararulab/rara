@@ -149,17 +149,38 @@ export const toolResultByCallId = new Map<string, ToolResultMessage>();
  * appends.
  */
 export function isFirstAssistantOfTurn(msg: AgentMessage, all: readonly AgentMessage[]): boolean {
+  // pi-agent-core emits per-iteration `AssistantMessage` frames that can
+  // carry only an empty thinking-block; pi-web-ui's `:has()` avatar rules
+  // do not match those, so they paint no avatar. Treating them as the
+  // turn's first frame would anchor the avatar to an invisible row and
+  // strip it from the real content. Skip them in both the self check and
+  // the backward walk so the avatar lands on the first visible frame.
+  if (msg.role === 'assistant' && !hasVisibleContent(msg)) return false;
   const idx = all.indexOf(msg);
   if (idx < 0) return true;
   for (let j = idx - 1; j >= 0; j--) {
     const prev = all[j];
     if (!prev) continue;
     if (prev.role === 'toolResult') continue;
-    if (prev.role === 'assistant') return false;
+    if (prev.role === 'assistant') {
+      if (!hasVisibleContent(prev)) continue;
+      return false;
+    }
     // user / user-with-attachments / anything else is a turn boundary.
     return true;
   }
   return true;
+}
+
+function hasVisibleContent(msg: AssistantMessage): boolean {
+  const content = msg.content;
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => {
+    if (part.type === 'text') return part.text.trim().length > 0;
+    if (part.type === 'thinking') return part.thinking.trim().length > 0;
+    if (part.type === 'toolCall') return true;
+    return false;
+  });
 }
 
 /**
