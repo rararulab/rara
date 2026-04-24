@@ -1470,6 +1470,87 @@ mod tests {
         assert_eq!(wheel.in_flight.len(), 1);
     }
 
+    /// `cancel_in_flight` must undo a `trigger_now` insertion so a
+    /// subsequent `trigger_now` dispatches freshly instead of replying
+    /// `AlreadyInFlight` against a phantom lease. Exercises the rollback
+    /// path used by `Syscall::TriggerJob` when the downstream
+    /// `ScheduledTask` dispatch fails (queue full, etc.).
+    #[test]
+    fn cancel_in_flight_rolls_back_trigger() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+        let mut wheel = JobWheel::load_with_clock(path, clock.clone());
+
+        let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+        let entry = cron_entry("0 * * * * *", future_fire);
+        let id = entry.id;
+        wheel.add(entry);
+
+        assert!(matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)));
+        assert_eq!(wheel.in_flight.len(), 1);
+
+        // Rollback: ledger must be cleared, and the return value reflects
+        // that an entry was present.
+        assert!(
+            wheel.cancel_in_flight(&id),
+            "rollback should report an entry was removed"
+        );
+        assert!(wheel.in_flight.is_empty());
+
+        // After rollback, trigger_now must not return AlreadyInFlight —
+        // that would mask the real failure behind a phantom dedupe.
+        assert!(
+            matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)),
+            "post-rollback trigger must dispatch, not dedupe"
+        );
+        assert_eq!(wheel.in_flight.len(), 1);
+    }
+
+    /// `cancel_in_flight` on a job with no in-flight entry must return
+    /// `false` and not mutate the ledger — the rollback is idempotent on
+    /// absent keys so the syscall handler can call it unconditionally
+    /// without risking persistence churn.
+    #[test]
+    fn cancel_in_flight_on_absent_is_noop() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let mut wheel = JobWheel::load(path);
+
+        let ghost = JobId::new();
+        assert!(!wheel.cancel_in_flight(&ghost));
+        assert!(wheel.in_flight.is_empty());
+    }
+
+    /// The rollback must persist to disk so a reload does not resurrect
+    /// the cancelled lease. Without this, a crash between `cancel_in_flight`
+    /// and the next write would leave the phantom entry hanging across
+    /// restart.
+    #[test]
+    fn cancel_in_flight_persists_removal() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("jobs.json");
+        let clock = Arc::new(FakeClock::new(t0()));
+
+        let id = {
+            let mut wheel = JobWheel::load_with_clock(path.clone(), clock.clone());
+            let future_fire = Timestamp::from_second(t0().as_second() + 3600).unwrap();
+            let entry = cron_entry("0 * * * * *", future_fire);
+            let id = entry.id;
+            wheel.add(entry);
+            wheel.persist();
+            assert!(matches!(wheel.trigger_now(&id), TriggerOutcome::Fired(_)));
+            assert!(wheel.cancel_in_flight(&id));
+            id
+        };
+
+        let reloaded = JobWheel::load_with_clock(path, clock);
+        assert!(
+            !reloaded.in_flight.contains_key(&id),
+            "cancelled lease must not reappear after reload"
+        );
+    }
+
     /// `list(None)` returns jobs from every session — exercised by the
     /// admin-only `Syscall::ListAllJobs` variant.
     #[test]
