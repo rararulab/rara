@@ -1,10 +1,9 @@
 # Yunara Store Migration Tasks
 #
-# This crate uses `sqlx::migrate!` at runtime. These tasks are optional
-# helpers if you have `sqlx-cli` installed.
+# This crate uses diesel_migrations::embed_migrations! at runtime. These
+# tasks are optional helpers if you have diesel_cli installed.
 
-# Database URL (PostgreSQL)
-DATABASE_URL := env('DATABASE_URL', 'postgres://postgres:postgres@localhost:5432/rara')
+DATABASE_URL := env('DATABASE_URL', 'sqlite://./rara.db')
 MIGRATION_DIRECTORY := env('MIGRATION_DIRECTORY', '../../rara-model/migrations')
 
 [group("📒 Help")]
@@ -14,14 +13,14 @@ default:
 
 # Create a new migration
 migrate-create name:
-    DATABASE_URL={{DATABASE_URL}} sqlx migrate add -r --source {{MIGRATION_DIRECTORY}} {{name}}
+    diesel migration generate --migration-dir {{MIGRATION_DIRECTORY}} {{name}}
 
 alias mc := migrate-create
 
 # Run all pending migrations
 migrate:
-    DATABASE_URL={{DATABASE_URL}} sqlx migrate run --source {{MIGRATION_DIRECTORY}}
+    DATABASE_URL={{DATABASE_URL}} diesel migration run --migration-dir {{MIGRATION_DIRECTORY}}
 
 # Revert the most recent migration
 migrate-revert:
-    DATABASE_URL={{DATABASE_URL}} sqlx migrate revert --source {{MIGRATION_DIRECTORY}}
+    DATABASE_URL={{DATABASE_URL}} diesel migration revert --migration-dir {{MIGRATION_DIRECTORY}}

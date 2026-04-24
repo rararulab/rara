@@ -95,15 +95,15 @@ pub struct PlatformBindingConfig {
 /// `browser_manager` is optional — pass `Some` when Lightpanda started
 /// successfully; browser tools are registered into the tool registry when set.
 pub(crate) async fn boot(
-    pool: sqlx::SqlitePool,
+    diesel_pool: yunara_store::diesel_pool::DieselSqlitePool,
     settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     users: &[UserConfig],
     browser_manager: Option<rara_browser::BrowserManagerRef>,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
-
-    let credential_store: rara_keyring_store::KeyringStoreRef =
-        Arc::new(rara_pg_credential_store::PgKeyringStore::new(pool.clone()));
+    let credential_store: rara_keyring_store::KeyringStoreRef = Arc::new(
+        rara_pg_credential_store::PgKeyringStore::new(diesel_pool.clone()),
+    );
 
     // -- LLM driver registry -----------------------------------------------
 
@@ -146,7 +146,7 @@ pub(crate) async fn boot(
         rara_kernel::memory::FileTapeStore::new(rara_paths::memory_dir(), &workspace_path)
             .await
             .whatever_context("Failed to initialize FileTapeStore")?,
-        pool.clone(),
+        diesel_pool.clone(),
     );
     info!("TapeService initialized (FTS5 enabled)");
 
@@ -158,7 +158,7 @@ pub(crate) async fn boot(
     // -- skills registry ---------------------------------------------------
 
     let skill_registry = rara_skills::registry::InMemoryRegistry::new();
-    rara_skills::cache::spawn_background_sync(pool.clone(), skill_registry.clone());
+    rara_skills::cache::spawn_background_sync(diesel_pool.clone(), skill_registry.clone());
     info!("skill registry initialized with background sync");
 
     // -- marketplace service -----------------------------------------------
@@ -314,9 +314,10 @@ pub(crate) async fn boot(
 
     // -- knowledge layer ------------------------------------------------------
 
-    let knowledge_service = init_knowledge_service(pool, settings_provider.as_ref(), embedder)
-        .await
-        .whatever_context("Failed to initialize knowledge layer")?;
+    let knowledge_service =
+        init_knowledge_service(diesel_pool.clone(), settings_provider.as_ref(), embedder)
+            .await
+            .whatever_context("Failed to initialize knowledge layer")?;
 
     info!("Boot completed");
 
@@ -896,7 +897,7 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 /// Initialize the knowledge layer — all configuration read from settings,
 /// reuses the application's shared SQLite pool.
 async fn init_knowledge_service(
-    pool: sqlx::SqlitePool,
+    pool: yunara_store::diesel_pool::DieselSqlitePool,
     settings: &dyn rara_domain_shared::settings::SettingsProvider,
     embedder: rara_kernel::llm::LlmEmbedderRef,
 ) -> anyhow::Result<rara_kernel::memory::knowledge::KnowledgeServiceRef> {

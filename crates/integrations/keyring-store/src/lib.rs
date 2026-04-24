@@ -29,10 +29,25 @@ pub enum Error {
         location: snafu::Location,
     },
 
-    /// Database error from the PostgreSQL credential store.
+    /// Database error from the DB-backed credential store.
+    ///
+    /// The variant name is retained for source-compatibility with existing
+    /// `.context(PgSnafu)?` call sites across the workspace; the underlying
+    /// driver has moved from sqlx to diesel as part of #1702.
     #[snafu(display("database error: {source}"), visibility(pub))]
     Pg {
-        source:   sqlx::Error,
+        source:   diesel::result::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    /// Failed to acquire a diesel-async connection from the bb8 pool.
+    #[snafu(
+        display("failed to acquire database connection: {source}"),
+        visibility(pub)
+    )]
+    Pool {
+        source:   bb8::RunError<diesel_async::pooled_connection::PoolError>,
         #[snafu(implicit)]
         location: snafu::Location,
     },

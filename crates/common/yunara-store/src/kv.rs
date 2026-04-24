@@ -15,40 +15,46 @@
 use std::collections::HashMap;
 
 use bon::Builder;
+use diesel::{ExpressionMethods, QueryDsl, upsert::excluded};
+use diesel_async::{RunQueryDsl, scoped_futures::ScopedFutureExt};
+use rara_model::schema::kv_table;
 use serde::{Serialize, de::DeserializeOwned};
 use snafu::ResultExt;
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::error::*;
+use crate::{
+    diesel_pool::DieselSqlitePool,
+    error::{CodecSnafu, DieselPoolRunSnafu, DieselSnafu, Result},
+};
 
-/// Key-value store backed by SQLite.
+/// Key-value store backed by SQLite via diesel-async.
 ///
 /// All values are serialized to JSON before storage.
 #[derive(Clone)]
 pub struct KVStore {
-    pool: SqlitePool,
+    pool: DieselSqlitePool,
 }
 
 impl KVStore {
-    /// Create a new KV store from a SQLite pool.
-    pub(crate) fn new(pool: SqlitePool) -> Self { Self { pool } }
+    /// Create a new KV store from a diesel-async SQLite pool.
+    pub(crate) fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
 
     /// Set a key-value pair.
     ///
     /// The value will be serialized to JSON before storage.
     pub async fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         let value_json = serde_json::to_string(value).context(CodecSnafu)?;
+        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
 
-        sqlx::query(
-            "INSERT INTO kv_table (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET \
-             value = EXCLUDED.value",
-        )
-        .bind(key)
-        .bind(value_json)
-        .execute(&self.pool)
-        .await?;
+        diesel::insert_into(kv_table::table)
+            .values((kv_table::key.eq(key), kv_table::value.eq(&value_json)))
+            .on_conflict(kv_table::key)
+            .do_update()
+            .set(kv_table::value.eq(excluded(kv_table::value)))
+            .execute(&mut *conn)
+            .await
+            .context(DieselSnafu)?;
 
         Ok(())
     }
@@ -57,13 +63,19 @@ impl KVStore {
     ///
     /// Returns `None` if the key does not exist.
     pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM kv_table WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await?;
+        use diesel::OptionalExtension;
 
-        match row {
-            Some((value_json,)) => {
+        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let row: Option<Option<String>> = kv_table::table
+            .filter(kv_table::key.eq(key))
+            .select(kv_table::value)
+            .first::<Option<String>>(&mut *conn)
+            .await
+            .optional()
+            .context(DieselSnafu)?;
+
+        match row.flatten() {
+            Some(value_json) => {
                 let value = serde_json::from_str(&value_json).context(CodecSnafu)?;
                 Ok(Some(value))
             }
@@ -73,11 +85,11 @@ impl KVStore {
 
     /// Remove a key-value pair.
     pub async fn remove(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM kv_table WHERE key = ?")
-            .bind(key)
-            .execute(&self.pool)
-            .await?;
-
+        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        diesel::delete(kv_table::table.filter(kv_table::key.eq(key)))
+            .execute(&mut *conn)
+            .await
+            .context(DieselSnafu)?;
         Ok(())
     }
 
@@ -101,15 +113,25 @@ impl KVStore {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await?;
-
-        let mut builder = QueryBuilder::<Sqlite>::new("INSERT INTO kv_table (key, value) ");
-        builder.push_values(serialized_pairs.iter(), |mut row, (key, value_json)| {
-            row.push_bind(key).push_bind(value_json);
-        });
-        builder.push(" ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
-        builder.build().execute(&mut *tx).await?;
-        tx.commit().await?;
+        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        use diesel_async::AsyncConnection;
+        conn.transaction::<_, diesel::result::Error, _>(|tx| {
+            async move {
+                for (key, value_json) in &serialized_pairs {
+                    diesel::insert_into(kv_table::table)
+                        .values((kv_table::key.eq(key), kv_table::value.eq(value_json)))
+                        .on_conflict(kv_table::key)
+                        .do_update()
+                        .set(kv_table::value.eq(excluded(kv_table::value)))
+                        .execute(tx)
+                        .await?;
+                }
+                Ok(())
+            }
+            .scope_boxed()
+        })
+        .await
+        .context(DieselSnafu)?;
 
         Ok(())
     }
@@ -127,20 +149,19 @@ impl KVStore {
             return Ok(HashMap::new());
         }
 
-        // SQLite does not support ANY($1) with array binding.
-        // Build a dynamic IN (?, ?, ...) clause instead.
-        let mut builder =
-            QueryBuilder::<Sqlite>::new("SELECT key, value FROM kv_table WHERE key IN (");
-        let mut separated = builder.separated(", ");
-        for key in &keys {
-            separated.push_bind(key);
-        }
-        separated.push_unseparated(")");
-
-        let rows: Vec<(String, String)> = builder.build_query_as().fetch_all(&self.pool).await?;
+        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let rows: Vec<(String, Option<String>)> = kv_table::table
+            .filter(kv_table::key.eq_any(&keys))
+            .select((kv_table::key, kv_table::value))
+            .load::<(String, Option<String>)>(&mut *conn)
+            .await
+            .context(DieselSnafu)?;
 
         let mut result = HashMap::new();
-        for (key, value_json) in rows {
+        for (key, value_opt) in rows {
+            let Some(value_json) = value_opt else {
+                continue;
+            };
             let value = serde_json::from_str(&value_json).context(CodecSnafu)?;
             result.insert(key, value);
         }

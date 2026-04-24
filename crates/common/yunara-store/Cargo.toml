@@ -15,11 +15,15 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+bb8 = "0.9"
 bon.workspace = true
+diesel = { workspace = true }
+diesel-async = { workspace = true }
+futures.workspace = true
+rara-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
-sqlx = { workspace = true }
 tracing.workspace = true
 uuid = { workspace = true }
 

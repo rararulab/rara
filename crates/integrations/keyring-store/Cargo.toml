@@ -15,9 +15,11 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+bb8 = "0.9"
+diesel.workspace = true
+diesel-async.workspace = true
 keyring = { version = "^3.6", default-features = false }
 snafu.workspace = true
-sqlx.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -26,7 +26,7 @@ use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sqlx::SqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePool;
 
 use super::{categories, embedding::EmbeddingService, items};
 use crate::tool::{ToolContext, ToolExecute};
@@ -40,14 +40,14 @@ use crate::tool::{ToolContext, ToolExecute};
     tier = "deferred"
 )]
 pub struct MemoryTool {
-    pool:          SqlitePool,
+    pool:          DieselSqlitePool,
     embedding_svc: Arc<EmbeddingService>,
 }
 
 impl MemoryTool {
     /// Create a new `MemoryTool` with the given database pool and embedding
     /// service.
-    pub fn new(pool: SqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
+    pub fn new(pool: DieselSqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
         Self {
             pool,
             embedding_svc,

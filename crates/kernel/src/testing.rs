@@ -26,6 +26,7 @@ use std::{
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
+use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePool, build_sqlite_pool};
 
 use crate::{
     agent::{AgentManifest, AgentRegistry, AgentRole, ManifestLoader},
@@ -39,6 +40,55 @@ use crate::{
     session::test_utils::InMemorySessionIndex,
     tool::{AgentTool, AgentToolRef, ToolContext, ToolOutput, ToolRegistry},
 };
+
+/// Build an in-memory-ish diesel-async SQLite pool pre-populated with the
+/// schema the kernel's DB-backed services touch (tape FTS, traces, memory
+/// items).
+///
+/// Uses a per-pool unique temp file rather than `:memory:` because diesel's
+/// SQLite URL handling opens literal paths (so `:memory:` collides across
+/// parallel tests) and because `bb8` may open multiple connections that must
+/// see the same database — shared in-memory SQLite across connections
+/// requires URI filename tricks we don't need here. A temp file is deleted
+/// when the pool drops in practice (OS cleanup on test process exit).
+pub async fn build_memory_diesel_pool() -> DieselSqlitePool {
+    use diesel_async::RunQueryDsl as _;
+    let db_path = std::env::temp_dir().join(format!("rara-test-{}.sqlite", uuid::Uuid::new_v4()));
+    let pool = build_sqlite_pool(
+        &DieselPoolConfig::builder()
+            .database_url(db_path.to_string_lossy().into_owned())
+            .max_connections(1)
+            .build(),
+    )
+    .await
+    .expect("in-memory diesel pool");
+    let mut conn = pool.get().await.expect("pool conn");
+    for ddl in MEMORY_TEST_SCHEMA {
+        diesel::sql_query(*ddl)
+            .execute(&mut *conn)
+            .await
+            .expect("bootstrap schema");
+    }
+    drop(conn);
+    pool
+}
+
+/// DDL the in-memory test pool installs on boot. Mirrors the production
+/// migrations needed by the kernel's test surface (tape FTS, traces,
+/// memory items). Kept inline because `diesel_migrations::embed_migrations!`
+/// has not landed yet (see #1702 cutover step).
+const MEMORY_TEST_SCHEMA: &[&str] = &[
+    "CREATE VIRTUAL TABLE tape_fts USING fts5(content, tape_name UNINDEXED, entry_kind UNINDEXED, \
+     entry_id UNINDEXED, session_key UNINDEXED, tokenize = 'unicode61 remove_diacritics 2')",
+    "CREATE TABLE tape_fts_meta (tape_name TEXT PRIMARY KEY, last_indexed_id INTEGER NOT NULL \
+     DEFAULT 0)",
+    "CREATE TABLE execution_traces (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, trace_data \
+     TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))",
+    "CREATE TABLE memory_items (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, \
+     content TEXT NOT NULL, memory_type TEXT NOT NULL, category TEXT NOT NULL, source_tape TEXT, \
+     source_entry_id INTEGER, embedding BLOB, created_at TEXT NOT NULL DEFAULT (datetime('now')), \
+     updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
+];
 
 // ---------------------------------------------------------------------------
 // Stub SettingsProvider
@@ -159,9 +209,7 @@ impl crate::io::IdentityResolver for StubIdentityResolver {
 /// Build a minimal knowledge service backed by in-memory SQLite and a noop
 /// embedder.
 async fn stub_knowledge_service() -> crate::memory::knowledge::KnowledgeServiceRef {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-        .await
-        .expect("in-memory SQLite pool");
+    let pool = build_memory_diesel_pool().await;
 
     let config = crate::memory::knowledge::KnowledgeConfig::builder()
         .embedding_dimensions(64_usize)
@@ -385,10 +433,8 @@ impl TestKernelBuilder {
         // Knowledge service
         let knowledge = stub_knowledge_service().await;
 
-        // Trace service (in-memory SQLite)
-        let trace_pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("in-memory SQLite for traces");
+        // Trace service (in-memory diesel SQLite)
+        let trace_pool = build_memory_diesel_pool().await;
         let trace_service = crate::trace::TraceService::new(trace_pool);
 
         // Skills prompt (empty)
