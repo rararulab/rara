@@ -1039,6 +1039,9 @@ fn stream_event_to_cli_event(event: StreamEvent) -> Option<CliEvent> {
         StreamEvent::TraceReady { trace_id } => CliEvent::Progress {
             text: format!("Trace saved: {trace_id}"),
         },
+        // CLI chat has no inline attachment rendering surface today — skip
+        // the binary payload rather than crash the exhaustive match.
+        StreamEvent::Attachment { .. } => return None,
         // The CLI forwarder observes stream closure via RecvError::Closed
         // and emits its own Done — returning None here prevents a duplicate
         // Done from the explicit terminal marker (see fn doc comment).
