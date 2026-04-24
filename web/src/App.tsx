@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router';
 
 import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
+import { RequireAuth } from '@/components/RequireAuth';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import {
   SettingsModalProvider,
@@ -29,7 +30,9 @@ import DashboardLayout from '@/layouts/DashboardLayout';
 import Dock from '@/pages/Dock';
 import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
+import Login from '@/pages/Login';
 import PiChat from '@/pages/PiChat';
+import Subscriptions from '@/pages/Subscriptions';
 
 const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
@@ -80,17 +83,41 @@ export default function App() {
         <BrowserRouter>
           <SettingsModalProvider>
             <Routes>
+              {/* Owner-token login — public route, must not be guarded. */}
+              <Route path="login" element={<Login />} />
+
               {/* Fullscreen pi-web-ui chat */}
-              <Route index element={<PiChat />} />
+              <Route
+                index
+                element={
+                  <RequireAuth>
+                    <PiChat />
+                  </RequireAuth>
+                }
+              />
 
               {/* Deep-link redirect — see SettingsRoute */}
-              <Route path="settings" element={<SettingsRoute />} />
+              <Route
+                path="settings"
+                element={
+                  <RequireAuth>
+                    <SettingsRoute />
+                  </RequireAuth>
+                }
+              />
 
               {/* Admin pages with dashboard layout */}
-              <Route element={<DashboardLayout />}>
+              <Route
+                element={
+                  <RequireAuth>
+                    <DashboardLayout />
+                  </RequireAuth>
+                }
+              >
                 <Route path="docs" element={<Docs />} />
                 <Route path="kernel-top" element={<KernelTop />} />
                 <Route path="dock" element={<Dock />} />
+                <Route path="subscriptions" element={<Subscriptions />} />
               </Route>
             </Routes>
           </SettingsModalProvider>

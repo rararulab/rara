@@ -52,11 +52,33 @@ impl ProblemDetails {
         }
     }
 
+    /// Build a 403 Forbidden problem response.
+    pub fn forbidden(detail: impl Into<String>) -> Self {
+        Self {
+            problem_type: "https://rara.dev/problems/forbidden".to_string(),
+            title:        "Forbidden".to_string(),
+            status:       403,
+            detail:       Some(detail.into()),
+        }
+    }
+
     pub fn internal(detail: impl Into<String>) -> Self {
         Self {
             problem_type: "https://rara.dev/problems/internal-error".to_string(),
             title:        "Internal Server Error".to_string(),
             status:       500,
+            detail:       Some(detail.into()),
+        }
+    }
+
+    /// 503 Service Unavailable — a transient backpressure condition
+    /// (e.g. the kernel event queue rejected a dispatch). Clients should
+    /// retry rather than treat it as a persistent failure.
+    pub fn service_unavailable(detail: impl Into<String>) -> Self {
+        Self {
+            problem_type: "https://rara.dev/problems/service-unavailable".to_string(),
+            title:        "Service Unavailable".to_string(),
+            status:       503,
             detail:       Some(detail.into()),
         }
     }

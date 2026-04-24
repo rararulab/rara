@@ -201,10 +201,18 @@ export function reduce(
   const type = event.type;
 
   if (type === '__stream_started') {
-    // Retire any run that was left dangling (e.g. WS reconnect) before
-    // opening a new active run. `cancelled` rather than `completed` so
-    // history UI reads accurately.
-    const retired = slice.active ? finalize(slice.active, 'cancelled', 'Stream restarted') : null;
+    // Retire the previous active run before opening a new one. If the run
+    // already terminated (`completed` / `failed`), keep its recorded
+    // status; only dangling `running` runs flip to `cancelled`. The
+    // reducer keeps terminal runs in the `active` slot until the next
+    // stream starts so the UI can render a persistent "last completed"
+    // card instead of an abrupt unmount on `done`.
+    const prev = slice.active;
+    const retired = prev
+      ? prev.status === 'running'
+        ? finalize(prev, 'cancelled', 'Stream restarted')
+        : prev
+      : null;
     const history = retired ? [retired, ...slice.history] : slice.history;
     const active: LiveRun = {
       runId: nextRunId(sessionKey),
@@ -222,13 +230,17 @@ export function reduce(
 
   if (type === '__stream_closed') {
     if (!slice.active) return slice;
-    // Close the run if no terminal `done`/`error` has arrived yet — the
-    // WebSocket hung up mid-flight, treat as cancelled.
+    // Already terminal (done/error arrived before close) — nothing to do;
+    // the card stays pinned in the active slot until the next run.
     if (slice.active.status !== 'running') {
-      return { active: null, history: [slice.active, ...slice.history] };
+      return slice;
     }
-    const retired = finalize(slice.active, 'cancelled', 'Stream closed');
-    return { active: null, history: [retired, ...slice.history] };
+    // WebSocket hung up mid-flight — mark cancelled but keep visible so
+    // the viewer can inspect what ran before the drop.
+    return {
+      ...slice,
+      active: finalize(slice.active, 'cancelled', 'Stream closed'),
+    };
   }
 
   // All remaining events need an active run.
@@ -237,13 +249,17 @@ export function reduce(
 
   switch (type) {
     case 'done': {
-      const retired = finalize(run, 'completed', null);
-      return { active: null, history: [retired, ...slice.history] };
+      // Keep the run in the active slot so the card persists as a
+      // "last completed" summary until the next stream starts. History
+      // still gets populated when a new run replaces this one.
+      return { ...slice, active: finalize(run, 'completed', null) };
     }
     case 'error': {
       const message = readString(event, 'message') ?? 'Unknown error';
-      const retired = finalize({ ...run, error: message }, 'failed', message);
-      return { active: null, history: [retired, ...slice.history] };
+      return {
+        ...slice,
+        active: finalize({ ...run, error: message }, 'failed', message),
+      };
     }
     case 'reasoning_delta': {
       const text = readString(event, 'text') ?? '';

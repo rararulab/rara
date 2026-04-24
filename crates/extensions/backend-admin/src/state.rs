@@ -80,6 +80,7 @@ impl BackendState {
         kernel_handle: &rara_kernel::handle::KernelHandle,
         skill_registry: &rara_skills::registry::InMemoryRegistry,
         mcp_manager: &rara_mcp::manager::mgr::McpManager,
+        auth_state: crate::auth::AuthState,
     ) -> (axum::Router, utoipa::openapi::OpenApi) {
         let mut api = Self::api_doc();
 
@@ -95,6 +96,7 @@ impl BackendState {
             crate::chat::routes(self.session_service.clone()),
         );
         merge_openapi_router(&mut router, &mut api, crate::system_routes::routes());
+        merge_openapi_router(&mut router, &mut api, crate::auth::routes());
 
         // skill_routes returns a plain axum::Router (no OpenAPI metadata).
         router = router.merge(crate::skills::skill_routes(skill_registry.clone()));
@@ -108,9 +110,29 @@ impl BackendState {
         // Kernel observability routes (stats, sessions, approvals, audit).
         router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
 
+        // Scheduler admin routes — read-only curation of kernel jobs.
+        router = router.merge(crate::scheduler::scheduler_routes(kernel_handle.clone()));
+
         // Data feed management routes (with registry sync).
         router = router.merge(crate::data_feeds::data_feed_routes(
             self.feed_router_state.clone(),
+        ));
+
+        // Subscription management routes — wrap the kernel's subscription
+        // registry with a REST surface so operators can create the
+        // subscriptions that drive ProactiveTurn / SilentAppend fan-out.
+        router = router.merge(crate::subscriptions::subscription_routes(
+            crate::subscriptions::SubscriptionRouterState {
+                registry: kernel_handle.subscription_registry().clone(),
+            },
+        ));
+
+        // Wrap every admin route with the bearer-auth middleware. Handlers
+        // pull `Extension<Principal<Resolved>>` out of request extensions for
+        // authorization checks; the middleware itself enforces the token.
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            crate::auth::auth_layer,
         ));
 
         (router, api)

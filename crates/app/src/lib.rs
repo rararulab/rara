@@ -72,9 +72,18 @@ pub struct AppConfig {
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
     pub telemetry:              TelemetryConfig,
-    /// Static bearer token for owner authentication (Web UI).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_token:            Option<String>,
+    /// Static bearer token for owner authentication (Web UI + admin API).
+    ///
+    /// Required. The same token is accepted via `Authorization: Bearer`
+    /// on admin HTTP endpoints and via `?token=` on the legacy WebSocket
+    /// upgrade. Missing/empty at startup is a fatal config error.
+    pub owner_token:            String,
+    /// Kernel username resolved for authenticated owner requests.
+    ///
+    /// Must reference an entry in [`AppConfig::users`] whose role is
+    /// `root` or `admin`. Validated at startup; boot fails if the user
+    /// is missing or lacks admin privileges.
+    pub owner_user_id:          String,
     /// LLM provider configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm:                    Option<flatten::LlmConfig>,
@@ -287,6 +296,12 @@ pub async fn start_with_options(
 ) -> Result<AppHandle, Whatever> {
     info!("Initializing job application");
 
+    // Validate owner auth config before any subsystem starts. The backend
+    // admin middleware resolves every authenticated request against this
+    // identity, so a missing or under-privileged owner is a fatal config
+    // error — not a runtime 500 per request.
+    validate_owner_auth(&config)?;
+
     // Validate STT config: if section is present, base_url must be non-empty.
     if let Some(ref stt) = config.stt {
         snafu::ensure_whatever!(
@@ -387,6 +402,12 @@ pub async fn start_with_options(
     let feed_store: rara_kernel::data_feed::FeedStoreRef =
         Arc::new(crate::feed_store::SqliteFeedStore::new(diesel_pool.clone()));
     let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(diesel_pool.clone());
+
+    // Install the status reporter so runtime transitions (running / idle /
+    // error + last_error) persist back to the `data_feeds` table.
+    feed_registry.set_reporter(Arc::new(
+        rara_backend_admin::data_feeds::SvcStatusReporter::new(feed_svc.clone()),
+    ));
 
     // Restore feed configs from database into registry.
     match feed_svc.list_feeds().await {
@@ -511,26 +532,27 @@ pub async fn start_with_options(
         })
     };
 
-    let mut kernel = rara_kernel::kernel::Kernel::new(
-        kernel_config,
-        rara.driver_registry.clone(),
-        rara.tool_registry.clone(),
-        rara.agent_registry.clone(),
-        rara.session_index.clone(),
-        rara.tape_service.clone(),
-        settings_provider.clone(),
-        Arc::new(rara_kernel::security::SecuritySubsystem::new(
+    let mut kernel = rara_kernel::kernel::Kernel::builder()
+        .config(kernel_config)
+        .driver_registry(rara.driver_registry.clone())
+        .tool_registry(rara.tool_registry.clone())
+        .agent_registry(rara.agent_registry.clone())
+        .session_index(rara.session_index.clone())
+        .tape_service(rara.tape_service.clone())
+        .settings(settings_provider.clone())
+        .security(Arc::new(rara_kernel::security::SecuritySubsystem::new(
             rara.user_store.clone(),
             Arc::new(rara_kernel::security::ApprovalManager::new(
                 rara_kernel::security::ApprovalPolicy::default(),
             )),
-        )),
-        io,
-        rara.knowledge_service.clone(),
-        mcp_tool_provider,
-        trace_service,
-        skill_prompt_provider,
-    );
+        )))
+        .io(io)
+        .knowledge(rara.knowledge_service.clone())
+        .maybe_dynamic_tool_provider(mcp_tool_provider)
+        .trace_service(trace_service)
+        .skill_prompt_provider(skill_prompt_provider)
+        .scheduler_dir(rara_paths::workspace_dir().join("scheduler"))
+        .build();
 
     let cancellation_token = CancellationToken::new();
 
@@ -560,7 +582,7 @@ pub async fn start_with_options(
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
     // Spawn the feed dispatch task — consumes events from all transports,
-    // persists them to the feed_events table, and routes matching events
+    // persists them to the data_feed_events table, and routes matching events
     // to subscribing sessions via SubscriptionRegistry.
     {
         let store = feed_store.clone();
@@ -696,8 +718,17 @@ pub async fn start_with_options(
         });
     }
 
-    let (domain_routes, _openapi) =
-        backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
+    let auth_state = rara_backend_admin::auth::AuthState::new(
+        config.owner_token.clone(),
+        config.owner_user_id.clone(),
+        &kernel_handle,
+    );
+    let (domain_routes, _openapi) = backend.routes(
+        &kernel_handle,
+        &rara.skill_registry,
+        &rara.mcp_manager,
+        auth_state,
+    );
 
     let dock_store_path = rara_paths::data_dir().join("dock");
     let dock_state = rara_dock::DockRouterState {
@@ -1043,6 +1074,42 @@ async fn try_build_wechat(
 const EMBEDDED_MIGRATIONS: diesel_migrations::EmbeddedMigrations =
     diesel_migrations::embed_migrations!("../rara-model/migrations");
 
+/// Validate that [`AppConfig::owner_token`] is non-empty and
+/// [`AppConfig::owner_user_id`] references a configured user whose role is
+/// `root` or `admin`.
+///
+/// Exposed to tests via `pub(crate)` so we can assert failure shape without
+/// booting the whole kernel.
+pub(crate) fn validate_owner_auth(config: &AppConfig) -> Result<(), Whatever> {
+    snafu::ensure_whatever!(
+        !config.owner_token.trim().is_empty(),
+        "owner_token must not be empty"
+    );
+    snafu::ensure_whatever!(
+        !config.owner_user_id.trim().is_empty(),
+        "owner_user_id must not be empty"
+    );
+    let Some(user) = config.users.iter().find(|u| u.name == config.owner_user_id) else {
+        snafu::whatever!(
+            "owner_user_id '{}' does not match any entry in users[]",
+            config.owner_user_id
+        );
+    };
+    let role = user.role.to_lowercase();
+    snafu::ensure_whatever!(
+        matches!(role.as_str(), "root" | "admin"),
+        "owner_user_id '{}' must have role root or admin (got '{}')",
+        config.owner_user_id,
+        user.role
+    );
+    info!(
+        owner = %config.owner_user_id,
+        role = %user.role,
+        "owner auth validated"
+    );
+    Ok(())
+}
+
 async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
     let db_dir = rara_paths::database_dir();
     std::fs::create_dir_all(db_dir).whatever_context("Failed to create database directory")?;
@@ -1154,6 +1221,8 @@ http:
 grpc:
   bind_address: "127.0.0.1:50051"
   server_address: "127.0.0.1:50051"
+owner_token: "test-owner-token"
+owner_user_id: "test"
 users:
   - name: test
     role: root
@@ -1171,6 +1240,45 @@ mita:
 
         let config = AppConfig::load_from_paths(&global, &local).expect("load config");
         assert_eq!(config.http.bind_address, "127.0.0.1:25555");
+    }
+
+    #[test]
+    fn validate_owner_auth_accepts_admin_user() {
+        let cfg: AppConfig = serde_yaml::from_str(BASE_YAML).expect("base yaml");
+        super::validate_owner_auth(&cfg).expect("valid");
+    }
+
+    #[test]
+    fn validate_owner_auth_rejects_missing_user() {
+        let yaml = BASE_YAML.replace(r#"owner_user_id: "test""#, r#"owner_user_id: "ghost""#);
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let err = super::validate_owner_auth(&cfg).expect_err("ghost user");
+        assert!(
+            err.to_string().contains("does not match any entry"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_owner_auth_rejects_non_admin_role() {
+        let yaml = BASE_YAML.replace("role: root", "role: user");
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let err = super::validate_owner_auth(&cfg).expect_err("user role");
+        assert!(
+            err.to_string().contains("must have role root or admin"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_owner_auth_rejects_empty_token() {
+        let yaml = BASE_YAML.replace(r#"owner_token: "test-owner-token""#, r#"owner_token: """#);
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let err = super::validate_owner_auth(&cfg).expect_err("empty token");
+        assert!(
+            err.to_string().contains("owner_token must not be empty"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

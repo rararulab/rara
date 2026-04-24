@@ -16,6 +16,19 @@
 
 const STORAGE_KEY = 'rara_backend_url';
 
+/** localStorage key holding the owner bearer token entered at /login. */
+export const ACCESS_TOKEN_KEY = 'access_token';
+
+/** localStorage key holding the authenticated principal `{ user_id, role, is_admin }`. */
+export const AUTH_USER_KEY = 'auth_user';
+
+/** Shape of the authenticated principal cached in localStorage. */
+export interface AuthUser {
+  user_id: string;
+  role: string;
+  is_admin: boolean;
+}
+
 /** Derive a sensible default backend URL from the current page hostname. */
 function defaultBackendUrl(): string {
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
@@ -58,10 +71,83 @@ export function resolveUrl(path: string): string {
 
 export const BASE_URL = '';
 
-/** Build common request headers. */
+/** Read the access token from localStorage, or `null` if the user is logged out. */
+export function getAccessToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+/** Read the cached authenticated principal, or `null` if the user is logged out. */
+export function getAuthUser(): AuthUser | null {
+  if (typeof window === 'undefined') return null;
+  const raw = localStorage.getItem(AUTH_USER_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as AuthUser).user_id === 'string' &&
+      typeof (parsed as AuthUser).role === 'string'
+    ) {
+      return parsed as AuthUser;
+    }
+  } catch {
+    // Malformed entry — treat as logged out.
+  }
+  return null;
+}
+
+/**
+ * Read both the access token and authenticated principal from localStorage.
+ *
+ * Returns `null` if either is missing, if `auth_user` is malformed JSON, or if
+ * the cached principal has an empty `user_id`. Shared by the fetch helper and
+ * the `<RequireAuth>` route guard so there is a single source of truth for
+ * "is the user logged in".
+ */
+export function getStoredAuth(): { token: string; user: AuthUser } | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  const user = getAuthUser();
+  if (!user || user.user_id === '') return null;
+  return { token, user };
+}
+
+/** Persist the access token and principal after a successful login. */
+export function setAuth(token: string, user: AuthUser): void {
+  localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+}
+
+/** Clear auth state (token + principal). */
+export function clearAuth(): void {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+}
+
+/**
+ * Clear auth state and redirect to `/login?redirect=<current-path>` unless
+ * we're already there. Intended for 401 responses from admin endpoints.
+ */
+export function redirectToLogin(): void {
+  clearAuth();
+  if (typeof window === 'undefined') return;
+  if (window.location.pathname === '/login') return;
+  const redirect = encodeURIComponent(window.location.pathname + window.location.search);
+  window.location.href = `/login?redirect=${redirect}`;
+}
+
+/**
+ * Build common request headers, including the `Authorization: Bearer` header
+ * when an access token is present.
+ */
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getAccessToken();
+  const auth: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   return {
     'Content-Type': 'application/json',
+    ...auth,
     ...extra,
   };
 }
@@ -78,14 +164,24 @@ class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * `AbortSignal.any` is part of ES2024 / WHATWG DOM but our `lib` target
+ * is ES2022, so the method isn't in the builtin typings yet. Declare a
+ * narrow structural type for the optional static method — this keeps
+ * the feature-detect branch fully typed without reaching for `as any`.
+ */
+interface AbortSignalWithAny {
+  any?: (signals: AbortSignal[]) => AbortSignal;
+}
+
 /** Combine an internal timeout signal with a caller-provided signal so
  *  aborting either cancels the underlying fetch. `AbortSignal.any` is
  *  available in modern browsers; we fall back to a manual relay when the
  *  runtime doesn't expose it. */
 function composeSignals(internal: AbortSignal, external?: AbortSignal | null): AbortSignal {
   if (!external) return internal;
-  const any = (AbortSignal as any).any as ((signals: AbortSignal[]) => AbortSignal) | undefined;
-  if (any) return any([internal, external]);
+  const native: AbortSignalWithAny = AbortSignal;
+  if (native.any) return native.any([internal, external]);
   const relay = new AbortController();
   const onAbort = () => relay.abort();
   if (internal.aborted || external.aborted) {
@@ -97,6 +193,15 @@ function composeSignals(internal: AbortSignal, external?: AbortSignal | null): A
   return relay.signal;
 }
 
+/**
+ * Handle a 401 response from any admin endpoint by clearing auth state and
+ * redirecting to the login page. Exported so callers that hand-roll `fetch`
+ * (e.g. SSE / streaming endpoints) can funnel through the same policy.
+ */
+export function handleUnauthorized(): void {
+  redirectToLogin();
+}
+
 async function request<T>(
   path: string,
   options?: RequestInit & { timeoutMs?: number },
@@ -106,8 +211,10 @@ async function request<T>(
   const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
   const signal = composeSignals(timeoutController.signal, externalSignal);
 
+  const token = getAccessToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(fetchOptions?.headers as Record<string, string>),
   };
 
@@ -117,6 +224,11 @@ async function request<T>(
       headers,
       signal,
     });
+
+    if (res.status === 401) {
+      handleUnauthorized();
+      throw new ApiError(401, 'Unauthorized');
+    }
 
     if (!res.ok) {
       const text = await res.text();
@@ -145,11 +257,22 @@ async function requestBlob(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  const token = getAccessToken();
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(fetchOptions?.headers as Record<string, string>),
+  };
+
   try {
     const res = await fetch(resolveUrl(path), {
       ...fetchOptions,
+      headers,
       signal: controller.signal,
     });
+    if (res.status === 401) {
+      handleUnauthorized();
+      throw new ApiError(401, 'Unauthorized');
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new ApiError(res.status, text || res.statusText);

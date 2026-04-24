@@ -18,11 +18,14 @@
 //! models, MCP servers, skills, data feeds, and domain routes (chat).
 
 pub mod agents;
+pub mod auth;
 pub mod chat;
 pub mod data_feeds;
 pub mod kernel;
 pub mod mcp;
+pub mod scheduler;
 pub mod settings;
 pub mod skills;
 pub mod state;
+pub mod subscriptions;
 pub mod system_routes;

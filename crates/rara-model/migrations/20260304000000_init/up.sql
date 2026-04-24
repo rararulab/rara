@@ -174,56 +174,6 @@ CREATE TABLE credential_store (
 );
 
 --------------------------------------------------------------------------------
--- scheduler_task: cron task metadata
--- last_status INTEGER: success=0, failed=1, running=2
---------------------------------------------------------------------------------
-
-CREATE TABLE scheduler_task (
-    id            TEXT NOT NULL PRIMARY KEY,
-    name          TEXT NOT NULL UNIQUE,
-    cron_expr     TEXT NOT NULL,
-    enabled       INTEGER NOT NULL DEFAULT 1,
-    last_run_at   TEXT,
-    last_status   INTEGER,
-    last_error    TEXT,
-    run_count     INTEGER NOT NULL DEFAULT 0,
-    failure_count INTEGER NOT NULL DEFAULT 0,
-    is_deleted    INTEGER NOT NULL DEFAULT 0,
-    deleted_at    TEXT,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX idx_scheduler_task_name ON scheduler_task(name);
-CREATE INDEX idx_scheduler_task_enabled ON scheduler_task(enabled)
-    WHERE is_deleted = 0;
-
-CREATE TRIGGER set_scheduler_task_updated_at AFTER UPDATE ON scheduler_task
-BEGIN
-    UPDATE scheduler_task SET updated_at = datetime('now') WHERE id = NEW.id;
-END;
-
---------------------------------------------------------------------------------
--- task_run_history: scheduler execution log
--- status INTEGER: success=0, failed=1, running=2
---------------------------------------------------------------------------------
-
-CREATE TABLE task_run_history (
-    id          TEXT NOT NULL PRIMARY KEY,
-    task_id     TEXT NOT NULL REFERENCES scheduler_task(id),
-    status      INTEGER NOT NULL,
-    started_at  TEXT NOT NULL,
-    finished_at TEXT,
-    duration_ms INTEGER,
-    error       TEXT,
-    output      TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX idx_task_run_history_task_id ON task_run_history(task_id);
-CREATE INDEX idx_task_run_history_started_at ON task_run_history(started_at DESC);
-
---------------------------------------------------------------------------------
 -- memory_items: knowledge-layer memory entries (with embeddings)
 --------------------------------------------------------------------------------
 
@@ -265,10 +215,10 @@ CREATE TABLE execution_traces (
 CREATE INDEX idx_execution_traces_session ON execution_traces(session_id);
 
 --------------------------------------------------------------------------------
--- feed_events: external data ingested by the data feed subsystem
+-- data_feed_events: external data ingested by the data feed subsystem
 --------------------------------------------------------------------------------
 
-CREATE TABLE feed_events (
+CREATE TABLE data_feed_events (
     id          TEXT PRIMARY KEY NOT NULL,
     source_name TEXT NOT NULL,
     event_type  TEXT NOT NULL,
@@ -278,8 +228,8 @@ CREATE TABLE feed_events (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX idx_feed_events_source ON feed_events(source_name);
-CREATE INDEX idx_feed_events_received ON feed_events(received_at);
+CREATE INDEX idx_data_feed_events_source ON data_feed_events(source_name);
+CREATE INDEX idx_data_feed_events_received ON data_feed_events(received_at);
 
 -- Per-subscriber read cursors for tracking consumption progress.
 CREATE TABLE feed_read_cursors (

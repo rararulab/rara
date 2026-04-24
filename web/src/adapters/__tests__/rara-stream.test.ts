@@ -48,10 +48,19 @@ function installLocalStorageStub() {
 describe('buildWsUrl — backend override resolution (#1622)', () => {
   beforeEach(() => {
     installLocalStorageStub();
+    // Seed an authenticated principal + token so the WS URL builder does
+    // not redirect to /login during these override-resolution tests.
+    localStorage.setItem('access_token', 'test-token');
+    localStorage.setItem(
+      'auth_user',
+      JSON.stringify({ user_id: 'alice', role: 'Admin', is_admin: true }),
+    );
   });
 
   afterEach(() => {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('auth_user');
     vi.unstubAllGlobals();
   });
 
@@ -60,28 +69,28 @@ describe('buildWsUrl — backend override resolution (#1622)', () => {
     const loc = window.location;
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
     expect(url).toBe(
-      `${proto}//${loc.host}/api/v1/kernel/chat/ws?session_key=sess-abc&user_id=web_ryan`,
+      `${proto}//${loc.host}/api/v1/kernel/chat/ws?session_key=sess-abc&user_id=alice&token=test-token`,
     );
   });
 
   it('honors rara_backend_url override (http -> ws)', () => {
     localStorage.setItem(STORAGE_KEY, 'http://10.0.0.183:25555');
     expect(buildWsUrl('sess-abc')).toBe(
-      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess-abc&user_id=web_ryan',
+      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess-abc&user_id=alice&token=test-token',
     );
   });
 
   it('honors rara_backend_url override with https and trims trailing slash', () => {
     localStorage.setItem(STORAGE_KEY, 'https://backend.example.com/');
     expect(buildWsUrl('sess-xyz')).toBe(
-      'wss://backend.example.com/api/v1/kernel/chat/ws?session_key=sess-xyz&user_id=web_ryan',
+      'wss://backend.example.com/api/v1/kernel/chat/ws?session_key=sess-xyz&user_id=alice&token=test-token',
     );
   });
 
   it('URL-encodes session keys containing special characters', () => {
     localStorage.setItem(STORAGE_KEY, 'http://10.0.0.183:25555');
     expect(buildWsUrl('sess/with spaces')).toBe(
-      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess%2Fwith%20spaces&user_id=web_ryan',
+      'ws://10.0.0.183:25555/api/v1/kernel/chat/ws?session_key=sess%2Fwith+spaces&user_id=alice&token=test-token',
     );
   });
 });

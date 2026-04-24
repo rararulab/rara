@@ -14,6 +14,7 @@ Unified HTTP admin routes for all backend subsystems — settings management, mo
 - `src/agents/` — Agent manifest listing and management routes.
 - `src/mcp/` — MCP server management routes (list, add, remove, reconnect).
 - `src/skills/` — Skills registry HTTP routes.
+- `src/subscriptions/` — Tag-based notification subscription management. Thin HTTP facade over the kernel `SubscriptionRegistry`; DELETE is admin-gated with an audit log.
 - `src/state.rs` — `BackendState` that holds shared references to all backend services.
 - `src/system_routes.rs` — System-level routes (version, health).
 - `src/lib.rs` — Crate root, re-exports all modules.

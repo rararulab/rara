@@ -57,6 +57,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    data_feed_events (id) {
+        id -> Text,
+        source_name -> Text,
+        event_type -> Text,
+        tags -> Text,
+        payload -> Text,
+        received_at -> Text,
+        created_at -> Text,
+    }
+}
+
+diesel::table! {
     data_feeds (id) {
         id -> Text,
         name -> Text,
@@ -77,18 +89,6 @@ diesel::table! {
         id -> Text,
         session_id -> Text,
         trace_data -> Text,
-        created_at -> Text,
-    }
-}
-
-diesel::table! {
-    feed_events (id) {
-        id -> Text,
-        source_name -> Text,
-        event_type -> Text,
-        tags -> Text,
-        payload -> Text,
-        received_at -> Text,
         created_at -> Text,
     }
 }
@@ -163,24 +163,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    scheduler_task (id) {
-        id -> Text,
-        name -> Text,
-        cron_expr -> Text,
-        enabled -> Integer,
-        last_run_at -> Nullable<Text>,
-        last_status -> Nullable<Integer>,
-        last_error -> Nullable<Text>,
-        run_count -> Integer,
-        failure_count -> Integer,
-        is_deleted -> Integer,
-        deleted_at -> Nullable<Text>,
-        created_at -> Text,
-        updated_at -> Text,
-    }
-}
-
-diesel::table! {
     skill_cache (name) {
         name -> Nullable<Text>,
         description -> Text,
@@ -204,39 +186,22 @@ diesel::table! {
     }
 }
 
-diesel::table! {
-    task_run_history (id) {
-        id -> Text,
-        task_id -> Text,
-        status -> Integer,
-        started_at -> Text,
-        finished_at -> Nullable<Text>,
-        duration_ms -> Nullable<Integer>,
-        error -> Nullable<Text>,
-        output -> Nullable<Text>,
-        created_at -> Text,
-    }
-}
-
 diesel::joinable!(channel_binding -> chat_session (session_key));
-diesel::joinable!(task_run_history -> scheduler_task (task_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     channel_binding,
     chat_session,
     coding_task,
     credential_store,
+    data_feed_events,
     data_feeds,
     execution_traces,
-    feed_events,
     feed_read_cursors,
     kernel_audit_events,
     kernel_outbox,
     kernel_users,
     kv_table,
     memory_items,
-    scheduler_task,
     skill_cache,
     tape_fts_meta,
-    task_run_history,
 );

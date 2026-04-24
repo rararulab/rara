@@ -17,7 +17,14 @@
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { describe, expect, it } from 'vitest';
 
-import { assistantSeqByRef, finalAssistantIndices, toAgentMessages } from '../pi-chat-messages';
+import {
+  assistantSeqByRef,
+  finalAssistantIndices,
+  isFirstAssistantOfTurn,
+  messagesForArtifactReconstruction,
+  toAgentMessages,
+  toolResultByCallId,
+} from '../pi-chat-messages';
 
 import type { ChatMessageData, ChatToolCallData } from '@/api/types';
 
@@ -158,5 +165,119 @@ describe('toAgentMessages — trace button registration (#1672)', () => {
     const [a] = assistants(out);
     expect(isRegistered(a)).toBe(true);
     expect(assistantSeqByRef.get(expectAssistant(a))).toBe(2);
+  });
+});
+
+describe('toAgentMessages — tool-result side-channel (#1718)', () => {
+  it('does NOT emit standalone ToolResultMessage entries into the display list', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantToolCall(2),
+      toolResult(3, 2),
+      assistantText(4),
+    ]);
+    expect(out.some((m) => m.role === 'toolResult')).toBe(false);
+  });
+
+  it('populates toolResultByCallId so the assistant renderer can pair results to calls', () => {
+    toAgentMessages([user(1), assistantToolCall(2), toolResult(3, 2), assistantText(4)]);
+    const tr = toolResultByCallId.get('tc-2');
+    expect(tr).toBeDefined();
+    expect(tr?.toolName).toBe('do_thing');
+    expect(tr?.isError).toBe(false);
+  });
+
+  it('marks kernel-style failure JSON results as errors', () => {
+    const errorResult: ChatMessageData = {
+      seq: 3,
+      role: 'tool_result',
+      content: '{"error": "boom"}',
+      tool_call_id: 'tc-2',
+      tool_name: 'do_thing',
+      created_at: ISO,
+    };
+    toAgentMessages([user(1), assistantToolCall(2), errorResult]);
+    expect(toolResultByCallId.get('tc-2')?.isError).toBe(true);
+  });
+
+  it('clears stale side-channel entries across conversions', () => {
+    toAgentMessages([user(1), assistantToolCall(2), toolResult(3, 2)]);
+    expect(toolResultByCallId.has('tc-2')).toBe(true);
+    toAgentMessages([user(1), assistantText(2)]);
+    expect(toolResultByCallId.has('tc-2')).toBe(false);
+  });
+
+  it('messagesForArtifactReconstruction re-weaves tool results after their paired assistant', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantToolCall(2),
+      toolResult(3, 2),
+      assistantText(4),
+    ]);
+    const woven = messagesForArtifactReconstruction(out);
+    const roles = woven.map((m) => m.role);
+    // Expect: user, assistant(toolCall), toolResult, assistant(text)
+    expect(roles).toEqual(['user', 'assistant', 'toolResult', 'assistant']);
+  });
+});
+
+describe('isFirstAssistantOfTurn (#1727)', () => {
+  it('flags the sole assistant after a user as first-of-turn', () => {
+    const out = toAgentMessages([user(1), assistantText(2)]);
+    const [a] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(a), out)).toBe(true);
+  });
+
+  it('flags the first assistant of a multi-iteration turn, not the later ones', () => {
+    const out = toAgentMessages([user(1), assistantToolCall(2), assistantText(3)]);
+    const [first, second] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+  });
+
+  it('treats intervening toolResult frames as transparent to turn position', () => {
+    const out = messagesForArtifactReconstruction(
+      toAgentMessages([user(1), assistantToolCall(2), toolResult(3, 2), assistantText(4)]),
+    );
+    const [first, second] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(first), out)).toBe(true);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+  });
+
+  it('treats an empty-thinking assistant frame as transparent so the next visible assistant owns the avatar', () => {
+    const emptyThinking: AssistantMessage = {
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: '' }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop',
+      api: 'anthropic',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet',
+      timestamp: Date.parse(ISO),
+    };
+    const visible = expectAssistant(assistants(toAgentMessages([user(1), assistantText(2)]))[0]);
+    const list = [...toAgentMessages([user(1)]), emptyThinking, visible];
+    expect(isFirstAssistantOfTurn(emptyThinking, list)).toBe(false);
+    expect(isFirstAssistantOfTurn(visible, list)).toBe(true);
+  });
+
+  it('restores first-of-turn after a new user message', () => {
+    const out = toAgentMessages([
+      user(1),
+      assistantToolCall(2),
+      assistantText(3),
+      user(4),
+      assistantText(5),
+    ]);
+    const [, second, third] = assistants(out);
+    expect(isFirstAssistantOfTurn(expectAssistant(second), out)).toBe(false);
+    expect(isFirstAssistantOfTurn(expectAssistant(third), out)).toBe(true);
   });
 });

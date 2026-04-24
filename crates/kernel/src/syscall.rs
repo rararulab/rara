@@ -84,6 +84,12 @@ pub(crate) struct SyscallDispatcher {
 
 impl SyscallDispatcher {
     /// Create a new syscall dispatcher.
+    ///
+    /// `scheduler_dir` is where the job wheel, in-flight ledger, and
+    /// subscription registry persist their JSON state. Production callers
+    /// pass `rara_paths::workspace_dir().join("scheduler")`; integration
+    /// tests pass a per-test tempdir so parallel tests don't stomp on one
+    /// another's `jobs.json`.
     pub fn new(
         shared_kv: SharedKv,
         pipe_registry: PipeRegistry,
@@ -93,8 +99,8 @@ impl SyscallDispatcher {
         config: KernelConfig,
         tape_service: TapeService,
         dynamic_tool_provider: Option<DynamicToolProviderRef>,
+        scheduler_dir: std::path::PathBuf,
     ) -> Self {
-        let scheduler_dir = rara_paths::workspace_dir().join("scheduler");
         let jobs_path = scheduler_dir.join("jobs.json");
         let subs_path = scheduler_dir.join("subscriptions.json");
         let job_wheel = Arc::new(parking_lot::Mutex::new(crate::schedule::JobWheel::load(
@@ -130,6 +136,11 @@ impl SyscallDispatcher {
     /// Access the job wheel (for tick-based drain in the event loop).
     pub fn job_wheel(&self) -> &Arc<parking_lot::Mutex<crate::schedule::JobWheel>> {
         &self.job_wheel
+    }
+
+    /// Access the job result store (for admin-surface history reads).
+    pub fn job_result_store(&self) -> &Arc<crate::schedule::JobResultStore> {
+        &self.job_result_store
     }
 
     // -- Dispatch -----------------------------------------------------------
@@ -474,10 +485,9 @@ impl SyscallDispatcher {
             }
             Syscall::RemoveJob { job_id, reply_tx } => {
                 let wheel_ref = self.job_wheel.clone();
-                let job_id_clone = job_id.clone();
                 let result = tokio::task::spawn_blocking(move || {
                     let mut wheel = wheel_ref.lock();
-                    match wheel.remove(&job_id_clone) {
+                    match wheel.remove(&job_id) {
                         Some(_) => {
                             wheel.persist();
                             true
@@ -504,6 +514,87 @@ impl SyscallDispatcher {
                 let wheel = self.job_wheel.lock();
                 let jobs = wheel.list(None);
                 let _ = reply_tx.send(Ok(jobs));
+            }
+            Syscall::ListAllJobs { reply_tx } => {
+                // Admin-only surface: the backend HTTP route is responsible
+                // for permission checks. The kernel itself is auth-agnostic
+                // here so the call stays a pure data read.
+                let wheel = self.job_wheel.lock();
+                let jobs = wheel.list(None);
+                let _ = reply_tx.send(Ok(jobs));
+            }
+            Syscall::TriggerJob { job_id, reply_tx } => {
+                let wheel_ref = self.job_wheel.clone();
+                let outcome = tokio::task::spawn_blocking(move || {
+                    let mut wheel = wheel_ref.lock();
+                    wheel.trigger_now(&job_id)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "spawn_blocking panicked during TriggerJob");
+                    // Panic during trigger_now is indistinguishable from an
+                    // infrastructure fault — surface as NotFound rather than
+                    // a hollow success so the HTTP layer returns an error.
+                    crate::schedule::TriggerOutcome::NotFound
+                });
+
+                let result = match outcome {
+                    crate::schedule::TriggerOutcome::Fired(job) => {
+                        // Dispatch via the same ScheduledTask event path
+                        // drain_expired uses so manual triggers and automatic
+                        // fires share one execution pipeline. If the queue
+                        // rejects the push we must roll back the in-flight
+                        // ledger entry `trigger_now` just wrote — otherwise
+                        // the lease would hold for 5 minutes while no agent
+                        // is actually running, making subsequent triggers
+                        // return `AlreadyInFlight` on a phantom execution.
+                        let envelope =
+                            crate::event::KernelEventEnvelope::scheduled_task(job.clone());
+                        match kernel_handle.event_queue().try_push(envelope) {
+                            Ok(()) => {
+                                info!(
+                                    job_id = %job.id,
+                                    "manually triggered scheduled job"
+                                );
+                                Ok(crate::event::TriggerJobReply::Fired(job))
+                            }
+                            Err(e) => {
+                                let cancel_id = job.id;
+                                let wheel = self.job_wheel.clone();
+                                let cancelled = tokio::task::spawn_blocking(move || {
+                                    wheel.lock().cancel_in_flight(&cancel_id)
+                                })
+                                .await
+                                .unwrap_or(false);
+                                warn!(
+                                    job_id = %job.id,
+                                    error = %e,
+                                    cancelled_ledger = cancelled,
+                                    "trigger_now: event queue rejected ScheduledTask dispatch; \
+                                     rolled back in-flight ledger"
+                                );
+                                Err(KernelError::QueueFull {
+                                    message: format!("event queue rejected dispatch: {e}"),
+                                })
+                            }
+                        }
+                    }
+                    crate::schedule::TriggerOutcome::AlreadyInFlight(job) => {
+                        info!(
+                            job_id = %job.id,
+                            "trigger_now deduplicated — prior execution still in-flight"
+                        );
+                        // Deliberately do NOT push a ScheduledTask event —
+                        // that would spawn a second overlapping agent session
+                        // for the same job. The existing in-flight agent
+                        // will publish its report when it finishes.
+                        Ok(crate::event::TriggerJobReply::AlreadyInFlight(job))
+                    }
+                    crate::schedule::TriggerOutcome::NotFound => Err(KernelError::Other {
+                        message: format!("job not found: {job_id}").into(),
+                    }),
+                };
+                let _ = reply_tx.send(result);
             }
             Syscall::Subscribe {
                 match_tags,
