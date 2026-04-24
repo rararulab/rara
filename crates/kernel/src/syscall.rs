@@ -479,10 +479,9 @@ impl SyscallDispatcher {
             }
             Syscall::RemoveJob { job_id, reply_tx } => {
                 let wheel_ref = self.job_wheel.clone();
-                let job_id_clone = job_id.clone();
                 let result = tokio::task::spawn_blocking(move || {
                     let mut wheel = wheel_ref.lock();
-                    match wheel.remove(&job_id_clone) {
+                    match wheel.remove(&job_id) {
                         Some(_) => {
                             wheel.persist();
                             true
@@ -520,10 +519,9 @@ impl SyscallDispatcher {
             }
             Syscall::TriggerJob { job_id, reply_tx } => {
                 let wheel_ref = self.job_wheel.clone();
-                let job_id_clone = job_id;
                 let outcome = tokio::task::spawn_blocking(move || {
                     let mut wheel = wheel_ref.lock();
-                    wheel.trigger_now(&job_id_clone)
+                    wheel.trigger_now(&job_id)
                 })
                 .await
                 .unwrap_or_else(|e| {
