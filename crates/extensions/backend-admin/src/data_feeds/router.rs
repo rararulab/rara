@@ -37,9 +37,10 @@ use axum::{
     http::StatusCode,
     routing::{get, put},
 };
-use jiff::{Timestamp, ToSpan};
+use jiff::Timestamp;
 use rara_kernel::data_feed::{
-    DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, polling::PollingSource,
+    DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, parse_duration_ago,
+    polling::PollingSource,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -470,34 +471,4 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &DataFeedRegistry) {
             );
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Parse a human-friendly duration string (e.g. `"1h"`, `"24h"`, `"7d"`)
-/// and return the timestamp that many units ago from now.
-fn parse_duration_ago(s: &str) -> anyhow::Result<Timestamp> {
-    let s = s.trim();
-    if s.is_empty() {
-        anyhow::bail!("empty duration string");
-    }
-
-    let (num_str, unit) = s.split_at(s.len() - 1);
-    let n: i64 = num_str
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid number in duration: {s}"))?;
-
-    let span = match unit {
-        "s" => n.seconds(),
-        "m" => n.minutes(),
-        "h" => n.hours(),
-        "d" => n.days(),
-        _ => anyhow::bail!("unsupported duration unit '{unit}', expected s/m/h/d"),
-    };
-
-    let now = Timestamp::now();
-    let past = now.checked_sub(span)?;
-    Ok(past)
 }
