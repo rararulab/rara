@@ -77,7 +77,7 @@ describe('LiveRunStore', () => {
     expect(run.toolCalls).toBe(1);
   });
 
-  it('moves an active run into history on done and clears active slot', () => {
+  it('keeps a completed run pinned in the active slot after done', () => {
     const store = new LiveRunStore();
     const sk = 's3';
     store.publish(sk, startEvent);
@@ -85,20 +85,31 @@ describe('LiveRunStore', () => {
     store.publish(sk, toolEnd('a', 'done'));
     store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
     const slice = store.snapshot(sk);
-    expect(slice.active).toBeNull();
+    expect(slice.active?.status).toBe('completed');
+    expect(slice.history).toHaveLength(0);
+  });
+
+  it('retires the completed run to history when the next stream starts', () => {
+    const store = new LiveRunStore();
+    const sk = 's3b';
+    store.publish(sk, startEvent);
+    store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
+    store.publish(sk, startEvent);
+    const slice = store.snapshot(sk);
+    expect(slice.active?.status).toBe('running');
     expect(slice.history).toHaveLength(1);
     expect(slice.history[0]?.status).toBe('completed');
   });
 
-  it('marks a stream_closed without done as cancelled', () => {
+  it('marks a stream_closed without done as cancelled and keeps it visible', () => {
     const store = new LiveRunStore();
     const sk = 's4';
     store.publish(sk, startEvent);
     store.publish(sk, toolStart('a', 'Grep'));
     store.publish(sk, closeEvent);
     const slice = store.snapshot(sk);
-    expect(slice.active).toBeNull();
-    expect(slice.history[0]?.status).toBe('cancelled');
+    expect(slice.active?.status).toBe('cancelled');
+    expect(slice.history).toHaveLength(0);
   });
 
   it('tracks the latest progress.stage on the active run', () => {

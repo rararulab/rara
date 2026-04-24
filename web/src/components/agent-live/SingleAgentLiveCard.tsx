@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import type { LiveRun } from './live-run-store';
 import { formatDuration } from './time-format';
+import { ToolChip, buildToolChips } from './tool-chips';
 
 import type { TimelineItem } from '@/api/kernel-types';
 import { redactObject } from '@/lib/redact';
@@ -67,10 +68,22 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
     setShowLatest(!atBottom);
   };
 
+  const isRunning = run.status === 'running';
   const elapsed = (run.endedAt ?? nowTick) - run.startedAt;
-  const headerLabel = `${agentName} is working`;
+  const headerLabel = isRunning
+    ? `${agentName} is working`
+    : run.status === 'failed'
+      ? `${agentName} encountered an error`
+      : run.status === 'cancelled'
+        ? `${agentName} was interrupted`
+        : `${agentName} finished`;
   const redactedItems = useMemo(() => run.items.map(redactItem), [run.items]);
-  const chips = useMemo(() => buildToolChips(redactedItems), [redactedItems]);
+  // Newest chip first (hermes pattern) while running; chronological order is
+  // nicer once the turn settles so the viewer can read the recap top-down.
+  const chips = useMemo(() => {
+    const built = buildToolChips(redactedItems);
+    return isRunning ? built.slice().reverse() : built;
+  }, [redactedItems, isRunning]);
 
   const onHeaderKey = (ev: KeyboardEvent<HTMLDivElement>) => {
     if (ev.key === 'Enter' || ev.key === ' ') {
@@ -91,13 +104,10 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
         className="flex cursor-pointer items-center gap-2 px-3 py-2 hover:bg-accent/40"
       >
         <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span
-          className="flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-500"
-          aria-hidden
-        />
+        <RunStatusDot status={run.status} />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {headerLabel}
-          {run.currentStage && (
+          {isRunning && run.currentStage && (
             <span className="ml-2 font-normal text-muted-foreground">
               · {stageLabel(run.currentStage)}
             </span>
@@ -121,19 +131,21 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
         >
           <Maximize2 className="h-3.5 w-3.5" />
         </button>
-        <button
-          type="button"
-          disabled={!onStop}
-          onClick={(e) => {
-            e.stopPropagation();
-            onStop?.();
-          }}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          aria-label="Stop task"
-          title={onStop ? 'Stop' : 'Cancel not yet wired'}
-        >
-          <Square className="h-3.5 w-3.5" />
-        </button>
+        {isRunning && (
+          <button
+            type="button"
+            disabled={!onStop}
+            onClick={(e) => {
+              e.stopPropagation();
+              onStop?.();
+            }}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Stop task"
+            title={onStop ? 'Stop' : 'Cancel not yet wired'}
+          >
+            <Square className="h-3.5 w-3.5" />
+          </button>
+        )}
         <ChevronDown
           className={cn(
             'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
@@ -152,11 +164,15 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
           >
             {redactedItems.length === 0 ? (
               <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
-                <span
-                  className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
-                  aria-hidden
-                />
-                <span className="truncate">{stageLabel(run.currentStage)}</span>
+                {isRunning && (
+                  <span
+                    className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
+                    aria-hidden
+                  />
+                )}
+                <span className="truncate">
+                  {isRunning ? stageLabel(run.currentStage) : 'No tool calls in this run'}
+                </span>
               </div>
             ) : (
               <div className="flex flex-col gap-1 px-3 py-2">
@@ -195,133 +211,32 @@ function redactItem(item: TimelineItem): TimelineItem {
   return item;
 }
 
-interface ToolChipModel {
-  /** Source `tool_use` seq — used as React key. */
-  seq: number;
-  tool: string;
-  /** Derived short preview from the (redacted) input. Empty if nothing useful. */
-  preview: string;
-  status: 'running' | 'completed' | 'errored';
-  /** Short error text when `status === 'errored'`. Replaces the preview in the UI. */
-  errorText?: string;
-}
-
 /**
- * Fold timeline items into one chip per `tool_use`, pairing each use with the
- * nearest following `tool_result` / `error` that shares the same `tool` name.
- *
- * Pairing note: `TimelineItem` deliberately does not expose the backend
- * `tool_call_id` (see `live-run-store.ts` WeakMap comment), so pairing is a
- * best-effort name-order heuristic. If the same tool is invoked twice before
- * the first result lands, chips briefly share state — acceptable for a live
- * indicator.
- *
- * Newest chip first (hermes pattern) so the most recent activity sits at the
- * top of the compact panel.
+ * Leading indicator dot in the header. Pulses while running; shows a
+ * solid success/error/cancelled marker once the run terminates so the
+ * card remains visually distinguishable after `done`/`error`.
  */
-function buildToolChips(items: readonly TimelineItem[]): ToolChipModel[] {
-  const chips: ToolChipModel[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const use = items[i];
-    if (!use || use.kind !== 'tool_use' || !use.tool) continue;
-    const toolName = use.tool;
-    // Default to running when no pairing follow-up is found; a tool_use
-    // without a matching tool_result/error is still in-flight from the UI's
-    // perspective even if streaming has technically stopped.
-    let status: ToolChipModel['status'] = 'running';
-    let errorText: string | undefined;
-    for (let j = i + 1; j < items.length; j++) {
-      const follow = items[j];
-      if (!follow) continue;
-      if (follow.kind === 'tool_result' && follow.tool === toolName) {
-        status = follow.success === false ? 'errored' : 'completed';
-        if (status === 'errored' && follow.output) errorText = clip(follow.output);
-        break;
-      }
-      if (follow.kind === 'error') {
-        status = 'errored';
-        errorText = clip(follow.content ?? '');
-        break;
-      }
-    }
-    const chip: ToolChipModel = {
-      seq: use.seq,
-      tool: toolName,
-      preview: derivePreview(use.input),
-      status,
-    };
-    if (errorText !== undefined) chip.errorText = errorText;
-    chips.push(chip);
-  }
-  return chips.reverse();
-}
-
-/** Keys to try in priority order when deriving a short preview from tool input. */
-const PREVIEW_KEYS = [
-  'query',
-  'file_path',
-  'path',
-  'pattern',
-  'description',
-  'command',
-  'prompt',
-  'skill',
-] as const;
-
-function derivePreview(input: Record<string, unknown> | undefined): string {
-  if (!input) return '';
-  for (const key of PREVIEW_KEYS) {
-    const v = input[key];
-    if (typeof v === 'string' && v.length > 0) {
-      const shaped = key === 'file_path' || key === 'path' ? shortenPath(v) : v;
-      return clip(shaped);
-    }
-  }
-  for (const v of Object.values(input)) {
-    if (typeof v === 'string' && v.length > 0) return clip(v);
-  }
-  return '';
-}
-
-/** Clip long strings to ~110 chars with a trailing ellipsis. */
-function clip(s: string): string {
-  const limit = 110;
-  const flat = s.replace(/\s+/g, ' ').trim();
-  return flat.length > limit ? flat.slice(0, limit) + '…' : flat;
-}
-
-/** Render long paths as `…/<last-two-segments>` to keep chips one-line. */
-function shortenPath(p: string): string {
-  const parts = p.split('/').filter(Boolean);
-  if (parts.length <= 2) return p;
-  return '…/' + parts.slice(-2).join('/');
-}
-
-function ToolChip({ chip }: { chip: ToolChipModel }) {
-  const body = chip.status === 'errored' && chip.errorText ? chip.errorText : chip.preview;
-  return (
-    <div className="flex items-center gap-2 rounded-sm bg-muted/40 px-2 py-1 text-[11px]">
-      <StatusIcon status={chip.status} />
-      <span className="shrink-0 font-mono text-foreground">{chip.tool}</span>
-      {body && <span className="min-w-0 flex-1 truncate text-muted-foreground">{body}</span>}
-    </div>
-  );
-}
-
-function StatusIcon({ status }: { status: ToolChipModel['status'] }) {
+function RunStatusDot({ status }: { status: LiveRun['status'] }) {
   if (status === 'running') {
     return (
       <span
-        role="status"
-        aria-label="running"
-        className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border border-muted-foreground/30 border-t-muted-foreground"
+        className="flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-500"
+        aria-hidden
       />
     );
   }
   if (status === 'completed') {
     return <CheckCircle2 aria-label="completed" className="h-3 w-3 shrink-0 text-emerald-500" />;
   }
-  return <AlertCircle aria-label="errored" className="h-3 w-3 shrink-0 text-destructive" />;
+  if (status === 'failed') {
+    return <AlertCircle aria-label="failed" className="h-3 w-3 shrink-0 text-destructive" />;
+  }
+  return (
+    <span
+      className="flex h-2 w-2 shrink-0 rounded-full bg-muted-foreground/50"
+      aria-label="cancelled"
+    />
+  );
 }
 
 /**
