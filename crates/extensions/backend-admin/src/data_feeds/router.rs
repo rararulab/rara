@@ -147,11 +147,7 @@ struct EventListResponse {
 async fn list_feeds(
     State(state): State<DataFeedRouterState>,
 ) -> Result<Json<Vec<DataFeedConfig>>, ProblemDetails> {
-    let feeds = state
-        .svc
-        .list_feeds()
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    let feeds = state.svc.list_feeds().await?;
     Ok(Json(feeds))
 }
 
@@ -181,11 +177,7 @@ async fn create_feed(
         .build();
 
     // 1. Persist to database.
-    state
-        .svc
-        .create_feed(&config)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    state.svc.create_feed(&config).await?;
 
     // 2. Sync to in-memory registry.
     if let Err(e) = state.registry.register(config.clone()) {
@@ -206,14 +198,9 @@ async fn get_feed(
     State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
     Ok(Json(feed))
 }
 
@@ -226,14 +213,9 @@ async fn update_feed(
     Path(id): Path<String>,
     Json(body): Json<UpdateFeedRequest>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let existing = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let existing = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     // Merge: supplied field wins, otherwise keep existing.
     let new_name = body.name.unwrap_or(existing.name.clone());
@@ -265,11 +247,7 @@ async fn update_feed(
         .build();
 
     // 1. Persist to database.
-    state
-        .svc
-        .update_feed(&updated)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    state.svc.update_feed(&updated).await?;
 
     // 2. Sync registry: remove old entry (cancels running task), re-register.
     let _ = state.registry.remove(&existing.name);
@@ -316,11 +294,7 @@ async fn delete_feed(
     }
 
     // 2. Delete from database.
-    let deleted = state
-        .svc
-        .delete_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    let deleted = state.svc.delete_feed(&id).await?;
 
     if deleted {
         Ok(StatusCode::NO_CONTENT)
@@ -338,11 +312,7 @@ async fn toggle_feed(
     State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let toggled = state
-        .svc
-        .toggle_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    let toggled = state.svc.toggle_feed(&id).await?;
 
     if !toggled {
         return Err(ProblemDetails::not_found(
@@ -352,14 +322,9 @@ async fn toggle_feed(
     }
 
     // Fetch updated config.
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     // Sync registry: remove (cancels running task), re-register with new state.
     let _ = state.registry.remove(&feed.name);
@@ -392,14 +357,9 @@ async fn query_events(
     Path(id): Path<String>,
     Query(params): Query<EventQueryParams>,
 ) -> Result<Json<EventListResponse>, ProblemDetails> {
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     let since = params
         .since
@@ -414,8 +374,7 @@ async fn query_events(
     let page = state
         .svc
         .query_events(&feed.name, since, limit, offset)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+        .await?;
 
     Ok(Json(EventListResponse {
         events:   page.events,
@@ -429,20 +388,14 @@ async fn get_event(
     State(state): State<DataFeedRouterState>,
     Path((id, event_id)): Path<(String, String)>,
 ) -> Result<Json<rara_kernel::data_feed::FeedEvent>, ProblemDetails> {
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     let event = state
         .svc
         .get_event(&feed.name, &event_id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
+        .await?
         .ok_or_else(|| {
             ProblemDetails::not_found("Event Not Found", format!("no event with id: {event_id}"))
         })?;
