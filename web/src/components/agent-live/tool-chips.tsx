@@ -209,7 +209,7 @@ export function ToolChip({ chip, expandable = false }: ToolChipProps) {
             )}
             {chip.output && chip.output.length > 0 && (
               <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all border-t p-3 text-[11px] text-muted-foreground">
-                {truncate(chip.output)}
+                {truncate(formatMaybeJson(chip.output))}
               </pre>
             )}
           </div>
@@ -238,4 +238,19 @@ function StatusIcon({ status }: { status: ToolChipStatus }) {
 function truncate(s: string): string {
   if (s.length <= DETAIL_MAX_CHARS) return s;
   return s.slice(0, DETAIL_MAX_CHARS) + '\n... (truncated)';
+}
+
+/**
+ * Pretty-print tool output when it's a JSON document, leave it untouched
+ * otherwise. Tool outputs arrive as opaque strings — most kernel tools return
+ * a JSON payload, but some return Markdown / plain text we must not reformat.
+ */
+export function formatMaybeJson(s: string): string {
+  const trimmed = s.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return s;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return s;
+  }
 }
