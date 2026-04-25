@@ -809,6 +809,10 @@ pub async fn start_with_options(
     let webhook_router =
         (rara_kernel::data_feed::webhook::webhook_routes(webhook_state))(axum::Router::new());
 
+    // CORS wraps the outermost composed router so every public surface
+    // (health, dock, webhook, kernel chat, admin) shares one allow-list.
+    // See `rara_backend_admin::state::build_cors_layer` for the rationale.
+    let cors_origins = config.http.cors_allowed_origins.clone();
     let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
         Box::new(move |router| {
             health_routes(router)
@@ -816,6 +820,7 @@ pub async fn start_with_options(
                 .merge(dock_routes.clone())
                 .merge(webhook_router.clone())
                 .nest("/api/v1/kernel/chat", web_router.clone())
+                .layer(rara_backend_admin::state::build_cors_layer(&cors_origins))
         });
 
     info!("Application initialized successfully");

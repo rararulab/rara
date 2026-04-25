@@ -30,7 +30,7 @@ Unified HTTP admin routes for all backend subsystems — settings management, mo
 - `SettingsSvc` is the single source of truth for runtime-mutable settings (LLM keys, Telegram tokens, etc.).
 - Settings changes are broadcast via `tokio::sync::watch` — subscribers get notified of all changes.
 - Admin routes should not bypass `SettingsSvc` to read/write settings directly in the KV store.
-- CORS (`CorsLayer`) MUST wrap OUTSIDE `auth_layer` in `state.rs` so browser preflight `OPTIONS` (which carries no `Authorization` header) bypasses the bearer-token check. Allowed origins come from `http.cors_allowed_origins` in YAML — never hardcode them in Rust.
+- CORS (`CorsLayer`) is built here via `state::build_cors_layer` (`pub`) but applied by `rara-app` to the outermost composed router — NOT inside `BackendState::routes`. This way every public route (health, dock, webhook, kernel chat, admin) shares one allow-list and browser preflight `OPTIONS` (no `Authorization` header) is answered before any auth middleware can 401 it. Allowed origins come from `http.cors_allowed_origins` in YAML — never hardcode them in Rust.
 
 ## What NOT To Do
 
