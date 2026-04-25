@@ -163,6 +163,15 @@ pub struct InboundMessage {
     /// `None` on ingress when no channel binding exists (first message).
     /// Always `Some` after the kernel runs session resolution.
     session_key: Option<SessionKey>,
+
+    /// Explicit origin endpoint override.
+    ///
+    /// Set on synthetic messages (e.g. background-task completion triggers)
+    /// so that downstream reply routing can reach the channel that
+    /// originally triggered the work, even when the synthetic message's
+    /// `source.channel_type` is `Internal`. When `Some`, it takes priority
+    /// over the derivation performed by [`Self::origin_endpoint`].
+    origin_endpoint_override: Option<Endpoint>,
 }
 
 impl InboundMessage {
@@ -193,6 +202,7 @@ impl InboundMessage {
             timestamp,
             metadata,
             session_key,
+            origin_endpoint_override: None,
         }
     }
 
@@ -256,7 +266,20 @@ impl InboundMessage {
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
+            origin_endpoint_override: None,
         }
+    }
+
+    /// Attach an explicit origin endpoint to this message.
+    ///
+    /// Used for synthetic re-entry messages (e.g. background-task
+    /// completion triggers) so that the agent's reply inherits the
+    /// routing target of the original user-facing message, even though
+    /// the synthetic message itself has `ChannelType::Internal`.
+    #[must_use]
+    pub fn with_origin_endpoint(mut self, endpoint: Option<Endpoint>) -> Self {
+        self.origin_endpoint_override = endpoint;
+        self
     }
 
     /// Build the originating endpoint for session-scoped reply routing.
@@ -264,7 +287,15 @@ impl InboundMessage {
     /// Returns `Some(Endpoint)` for channel types that support multiple
     /// chat destinations per user (e.g. Telegram private vs group chats).
     /// Returns `None` for internal/synthetic messages.
+    ///
+    /// When an explicit override has been set via
+    /// [`Self::with_origin_endpoint`], the override takes priority over
+    /// the derivation from `source` — this is how synthetic trigger
+    /// messages inherit the triggering turn's routing target.
     pub fn origin_endpoint(&self) -> Option<Endpoint> {
+        if let Some(ref ep) = self.origin_endpoint_override {
+            return Some(ep.clone());
+        }
         match self.source.channel_type {
             ChannelType::Telegram => {
                 let chat_id = self.source.platform_chat_id.as_ref()?.parse::<i64>().ok()?;
@@ -2899,5 +2930,52 @@ mod inbound_message_tests {
         assert_eq!(blocks.len(), 2);
         assert!(matches!(blocks[0], ContentBlock::Text { .. }));
         assert!(matches!(blocks[1], ContentBlock::ImageUrl { .. }));
+    }
+
+    #[test]
+    fn synthetic_without_override_has_no_origin_endpoint() {
+        let msg = InboundMessage::synthetic(
+            "hello".to_string(),
+            UserId("system".to_string()),
+            SessionKey::new(),
+        );
+        // Synthetic messages are ChannelType::Internal, which does not
+        // derive an endpoint from `source`.
+        assert!(msg.origin_endpoint().is_none());
+    }
+
+    #[test]
+    fn synthetic_with_origin_override_propagates_to_reply_envelope() {
+        // Background-task completion wiring: the synthetic trigger must
+        // carry the originating turn's endpoint so the reply envelope
+        // routes back to the same channel (Web, CLI, Telegram, ...).
+        let origin = Endpoint {
+            channel_type: ChannelType::Web,
+            address:      EndpointAddress::Web {
+                connection_id: "conn-1794".to_string(),
+            },
+        };
+        let session_key = SessionKey::new();
+        let msg = InboundMessage::synthetic(
+            "[Background Task completed]".to_string(),
+            UserId("system".to_string()),
+            session_key,
+        )
+        .with_origin_endpoint(Some(origin.clone()));
+
+        assert_eq!(msg.origin_endpoint(), Some(origin.clone()));
+
+        // The kernel constructs reply envelopes via
+        // `with_origin(msg.origin_endpoint())`. Confirm the override flows
+        // end-to-end into the envelope.
+        let envelope = OutboundEnvelope::reply(
+            msg.id.clone(),
+            msg.user.clone(),
+            session_key,
+            crate::channel::types::MessageContent::Text("done".to_string()),
+            vec![],
+        )
+        .with_origin(msg.origin_endpoint());
+        assert_eq!(envelope.origin_endpoint, Some(origin));
     }
 }
