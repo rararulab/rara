@@ -372,6 +372,15 @@ export default function PiChatV2() {
     return activeSession.title || activeSession.preview || '新对话';
   }, [activeSession]);
 
+  // Only the elevated thinking buckets get a header pill — `off`/`minimal`/
+  // `low` are noise on the title row, and `null` means the session inherits
+  // `llm.default_provider`'s level so the UI has nothing concrete to label.
+  const thinkingPillLevel = useMemo(() => {
+    const level = activeSession?.thinking_level;
+    if (level === 'medium' || level === 'high' || level === 'xhigh') return level;
+    return null;
+  }, [activeSession?.thinking_level]);
+
   return (
     <div className="flex h-screen w-screen">
       <ChatSidebar
@@ -387,8 +396,13 @@ export default function PiChatV2() {
       />
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
-          <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-            {headerTitle}
+          <h1 className="flex min-w-0 flex-1 items-center gap-2 truncate text-sm font-semibold text-foreground">
+            <span className="truncate">{headerTitle}</span>
+            {thinkingPillLevel ? (
+              <span className="bg-brand/10 text-brand ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium">
+                {thinkingPillLevel} thinking
+              </span>
+            ) : null}
           </h1>
           <span className="shrink-0 truncate rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-xs text-amber-700 dark:text-amber-300">
             chat-v2 preview
