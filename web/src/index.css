@@ -795,3 +795,32 @@
     animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
+
+/*
+ * Chat-v2 markdown headings — opt-in serif via Fraunces with a Noto Serif SC
+ * fallback for CJK glyphs. Scoped to `.rara-chat-v2` so the legacy /chat
+ * surface is untouched, and matches both Tailwind Typography's `.prose`
+ * wrapper (used by RenderPart in PiChatV2) and any `[data-markdown]` blocks
+ * in case Streamdown surfaces ever drop the prose class.
+ */
+.rara-chat-v2 .prose :is(h1, h2, h3),
+.rara-chat-v2 [data-markdown] :is(h1, h2, h3) {
+  font-family: Fraunces, 'Noto Serif SC', ui-serif, Georgia, serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.rara-chat-v2 .prose h1,
+.rara-chat-v2 [data-markdown] h1 {
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+.rara-chat-v2 .prose h2,
+.rara-chat-v2 [data-markdown] h2 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+.rara-chat-v2 .prose h3,
+.rara-chat-v2 [data-markdown] h3 {
+  font-size: 1.05rem;
+  line-height: 1.35;
+}

@@ -382,7 +382,7 @@ export default function PiChatV2() {
   }, [activeSession?.thinking_level]);
 
   return (
-    <div className="flex h-screen w-screen">
+    <div className="rara-chat-v2 flex h-screen w-screen">
       <ChatSidebar
         activeSessionKey={activeSession?.key}
         onSelect={(s) => void selectSession(s)}
