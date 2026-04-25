@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { onlineManager } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -36,13 +35,10 @@ export function ServerStatusProvider({ children }: { children: ReactNode }) {
       try {
         const res = await fetch(resolveUrl('/api/v1/health'), { signal: controller.signal });
         if (cancelled) return;
-        const online = res.ok;
-        setIsOnline(online);
-        onlineManager.setOnline(online);
+        setIsOnline(res.ok);
       } catch {
         if (cancelled) return;
         setIsOnline(false);
-        onlineManager.setOnline(false);
       } finally {
         clearTimeout(timer);
         if (!cancelled) {
