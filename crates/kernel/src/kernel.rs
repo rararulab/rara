@@ -3232,6 +3232,119 @@ impl Kernel {
 /// YAML override clears the field.
 const TITLE_GEN_FALLBACK_MAX_CHARS: usize = 50;
 
+/// Narrator prefixes that thinking models leak when asked for a title. The
+/// list is lowercase; matching is case-insensitive on the Latin prefixes. The
+/// Chinese prefixes are already case-free.
+///
+/// Order matters: longer / more specific prefixes must come before shorter
+/// ones so `"The user wrote:"` is stripped in one pass rather than leaving
+/// `"wrote:"` behind after `"The user "` is removed.
+const NARRATOR_PREFIXES: &[&str] = &[
+    "the user wrote:",
+    "the user wrote",
+    "the user is asking me to",
+    "the user is asking me",
+    "the user wants me to",
+    "the user wants to",
+    "the user wants",
+    "the user said:",
+    "the user said",
+    "the user asks:",
+    "the user asks",
+    "the user is",
+    "the user ",
+    "user wrote:",
+    "user wrote",
+    "user said:",
+    "user said",
+    "user ",
+    "the assistant ",
+    "assistant ",
+    "用户想让我",
+    "用户想要",
+    "用户希望",
+    "用户说",
+    "用户问",
+    "用户",
+];
+
+/// Strip wrapping quote pairs (ASCII + CJK) and narrator prefixes from a raw
+/// title candidate. Returns the trimmed residue — possibly empty when the
+/// entire response was narrator boilerplate.
+fn sanitize_title_candidate(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+
+    // Strip matched wrapping quote pairs. Multiple passes handle the case
+    // where the model emits `"「foo」"` or similar nested wrapping.
+    for _ in 0..3 {
+        let before = s.clone();
+        s = strip_wrapping_quotes(&s).trim().to_string();
+        if s == before {
+            break;
+        }
+    }
+
+    // Narrator-prefix strip, iterated so `"The user wrote: \"foo\""` → `foo`
+    // after prefix removal + another quote unwrap.
+    for _ in 0..3 {
+        let lower = s.to_lowercase();
+        let trimmed = NARRATOR_PREFIXES
+            .iter()
+            .find_map(|p| lower.strip_prefix(*p).map(|rest| (p.len(), rest)));
+        match trimmed {
+            Some((prefix_len, _)) => {
+                // Slice on the original string using the matched byte length
+                // (lowercasing an ASCII prefix preserves byte length; CJK
+                // prefixes in the list are already case-free so their
+                // lowercase form is byte-identical to the source).
+                s = s[prefix_len..].trim().to_string();
+                s = strip_wrapping_quotes(&s).trim().to_string();
+            }
+            None => break,
+        }
+    }
+
+    // Trailing punctuation: a title never ends with a sentence terminator.
+    while let Some(last) = s.chars().last() {
+        if matches!(
+            last,
+            '.' | '。' | '…' | ',' | '，' | ':' | '：' | ';' | '；'
+        ) {
+            s.pop();
+            s = s.trim_end().to_string();
+        } else {
+            break;
+        }
+    }
+
+    s
+}
+
+/// Strip a single layer of matched wrapping quotes (`"…"`, `'…'`, `「…」`,
+/// `"…"`, `'…'`, `『…』`).
+fn strip_wrapping_quotes(s: &str) -> String {
+    const PAIRS: &[(char, char)] = &[
+        ('"', '"'),
+        ('\'', '\''),
+        ('“', '”'),
+        ('‘', '’'),
+        ('「', '」'),
+        ('『', '』'),
+        ('《', '》'),
+    ];
+    let first = s.chars().next();
+    let last = s.chars().last();
+    if let (Some(f), Some(l)) = (first, last)
+        && s.chars().count() >= 2
+        && PAIRS.iter().any(|(a, b)| *a == f && *b == l)
+    {
+        let start = f.len_utf8();
+        let end = s.len() - l.len_utf8();
+        return s[start..end].to_string();
+    }
+    s.to_string()
+}
+
 /// Normalize a raw LLM response into a bounded session title.
 ///
 /// Returns `None` only when both the model output and the fallback user
@@ -3248,9 +3361,12 @@ fn finalize_title(
     session_key: &SessionKey,
 ) -> Option<String> {
     let max_chars = max_chars.max(1);
-    let cleaned = raw
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty());
+    // Narrator-prefix scrub: thinking models (gpt-5-thinking, qwen3, deepseek-r1
+    // with chat template leakage) often emit third-person framings like
+    // `The user wrote: "..."` or `用户想让我...` that escape even an explicit
+    // "no narration" instruction. Strip these before the length gate so a
+    // clean title can still be recovered (#1787).
+    let cleaned = raw.map(sanitize_title_candidate).filter(|s| !s.is_empty());
 
     let (source, candidate) = match cleaned {
         Some(t) => ("model", t),
@@ -3362,10 +3478,23 @@ async fn generate_session_title(
 
     let assistant_preview: String = first_assistant_msg.chars().take(500).collect();
 
+    // Prompt is framed as a chat-app sidebar title (ChatGPT / Claude-style)
+    // with explicit anti-narrator rules + few-shot examples. Thinking models
+    // otherwise leak third-person framings like `The user wrote: "..."` into
+    // the session list (#1787). The examples cover Chinese + English so the
+    // language-matching rule has a concrete anchor.
     let prompt = format!(
-        "Given this conversation opening, generate a concise title (max {max_chars} \
-         characters).\nMatch the language of the user's message.\nReturn ONLY the title, nothing \
-         else.\n\nUser: {first_user_msg}\nAssistant: {assistant_preview}"
+        "You are generating a short sidebar title for a chat conversation, like ChatGPT or Claude \
+         shows in its session list.\n\nRules:\n- Output ONLY the title text. No preamble, no \
+         explanation, no quotes.\n- Maximum {max_chars} characters.\n- Match the language of the \
+         user's first message (Chinese in, Chinese out; English in, English out).\n- Write the \
+         title as a noun phrase or topic label — NOT a sentence about what the user did.\n- Do \
+         NOT start with \"The user\", \"User\", \"用户\", \"The assistant\", \"Assistant\", or \
+         any narrator phrasing.\n- Do NOT wrap the title in quotes.\n- Do NOT end with a period, \
+         句号, or ellipsis.\n\nExamples:\nUser: 我要开始准备面试\nTitle: 面试准备\n\nUser: help \
+         me write a Rust macro for deriving Debug\nTitle: Rust Debug derive macro\n\nUser: \
+         帮我生成一个记录饮食的 skill\nTitle: 饮食记录 skill\n\nNow generate the title for this \
+         conversation:\nUser: {first_user_msg}\nAssistant: {assistant_preview}\nTitle:"
     );
 
     let request = crate::llm::CompletionRequest {
@@ -3562,6 +3691,91 @@ mod tests {
         let got = finalize_title(Some("  \"short title\" "), "unused", 50, &sk)
             .expect("short title must pass through");
         assert_eq!(got, "short title");
+    }
+
+    /// Thinking-model narrator leakage: `The user wrote: "<actual content>"`
+    /// must be stripped down to the quoted content so the session sidebar
+    /// shows the topic, not the meta-commentary (#1787).
+    #[test]
+    fn finalize_title_strips_narrator_wrote_prefix() {
+        let sk = SessionKey::new();
+        let got = finalize_title(
+            Some("The user wrote: \"我要开始准备面试\""),
+            "我要开始准备面试",
+            50,
+            &sk,
+        )
+        .expect("narrator-stripped title must be persisted");
+        assert_eq!(got, "我要开始准备面试");
+        assert!(!got.is_empty());
+        assert!(got.chars().count() <= 50);
+    }
+
+    /// "The user is asking me to generate..." → falls back to user message
+    /// because no quoted content follows the narrator phrase. Must NOT emit
+    /// the narrator text as the title.
+    #[test]
+    fn finalize_title_falls_back_when_narrator_is_everything() {
+        let sk = SessionKey::new();
+        let user_msg = "帮我生成一个记录饮食的 skill";
+        let got = finalize_title(
+            Some("The user is asking me to generate a skill for tracking meals."),
+            user_msg,
+            50,
+            &sk,
+        )
+        .expect("must produce a title");
+        assert!(
+            !got.to_lowercase().starts_with("the user"),
+            "narrator prefix leaked: {got:?}"
+        );
+        assert!(!got.is_empty());
+        assert!(got.chars().count() <= 50);
+    }
+
+    /// "The user wants me to..." with trailing period — narrator prefix +
+    /// trailing punctuation both stripped.
+    #[test]
+    fn finalize_title_strips_wants_me_to_prefix() {
+        let sk = SessionKey::new();
+        let got = finalize_title(
+            Some("The user wants me to refactor the kernel event loop."),
+            "please refactor the kernel event loop",
+            50,
+            &sk,
+        )
+        .expect("must produce a title");
+        let lower = got.to_lowercase();
+        assert!(!lower.starts_with("the user"), "leaked: {got:?}");
+        assert!(!lower.starts_with("user "), "leaked: {got:?}");
+        assert!(!got.ends_with('.'), "trailing period kept: {got:?}");
+        assert!(!got.is_empty());
+        assert!(got.chars().count() <= 50);
+    }
+
+    /// Chinese narrator prefix `用户` is stripped.
+    #[test]
+    fn finalize_title_strips_chinese_narrator_prefix() {
+        let sk = SessionKey::new();
+        let got = finalize_title(
+            Some("用户想让我生成一个饮食记录 skill"),
+            "fallback",
+            50,
+            &sk,
+        )
+        .expect("must produce a title");
+        assert!(!got.starts_with("用户"), "leaked: {got:?}");
+        assert!(!got.is_empty());
+        assert!(got.chars().count() <= 50);
+    }
+
+    /// Wrapping CJK quote pairs are stripped.
+    #[test]
+    fn finalize_title_strips_cjk_quote_wrapping() {
+        let sk = SessionKey::new();
+        let got =
+            finalize_title(Some("「面试准备」"), "unused", 50, &sk).expect("must produce a title");
+        assert_eq!(got, "面试准备");
     }
 
     /// The title_gen manifest resolves its driver + model via
