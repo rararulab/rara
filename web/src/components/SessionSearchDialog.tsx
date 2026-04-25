@@ -150,7 +150,12 @@ export function SessionSearchDialog({
   const showRecents = trimmed.length === 0;
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange}>
+    // `shouldFilter={false}` — results come pre-filtered from the backend
+    // search API. cmdk's default fuzzy filter scores composite values like
+    // `${session_key}:${seq}:${title}:${snippet}` poorly (especially for
+    // CJK queries against snippets containing `<mark>` tags), so leaving it
+    // on hides genuine hits. See issue #1795.
+    <CommandDialog open={open} onOpenChange={onOpenChange} shouldFilter={false}>
       <CommandInput placeholder="搜索会话 (Cmd+K)…" value={query} onValueChange={setQuery} />
       <CommandList>
         {showRecents ? (
