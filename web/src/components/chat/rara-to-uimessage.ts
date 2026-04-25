@@ -38,8 +38,24 @@ type AssistantPart = TextUIPart | ReasoningUIPart | DynamicToolUIPart;
 /** All parts a rara `UIMessage` can carry — user messages are text-only. */
 type RaraPart = TextUIPart | ReasoningUIPart | DynamicToolUIPart;
 
-/** Stable id generator. UIMessage requires unique ids; rara messages are
- *  sequenced by `seq` for history, and synthesised for live streaming. */
+/**
+ * Stable id generator. UIMessage requires unique ids. We keep a single
+ * `live-` prefix across both REST history (`live-history-...` would still
+ * remount on refetch) and the streaming reducer — the goal is that ids
+ * generated for a freshly-streamed turn don't visually collide with the ids
+ * a subsequent history refetch will produce, so React's key-based
+ * reconciliation does not remount the message.
+ *
+ * In practice rara's REST history numbers messages by `seq`, and live
+ * streams don't know that seq up-front. We bridge by minting a synthetic
+ * `live-${counter}` for the streaming tail; once the turn finalises and
+ * history is refetched, the message is rebuilt with `msg-${seq}`. This
+ * still causes one remount on history refetch — acceptable for now because
+ * (a) the user has stopped typing, (b) the part contents are identical, and
+ * (c) callers who want zero flicker can keep streaming-only state without
+ * refetching. PR3+ replaces this with a stable backend-provided message id
+ * threaded through the first delta.
+ */
 let liveCounter = 0;
 function nextLiveId(prefix: string): string {
   liveCounter += 1;
@@ -164,7 +180,13 @@ export function historyToUIMessages(history: ChatMessageData[]): UIMessage[] {
       const id = row.tool_call_id;
       if (!id) continue;
       const slot = toolCallIndex.get(id);
-      if (!slot) continue;
+      if (!slot) {
+        // History row references a tool call we never saw — log once for
+        // observability so we notice if the backend stops emitting the
+        // assistant frame that introduces the call.
+        warnUnknown(`tool_result without matching tool_call: ${id}`);
+        continue;
+      }
       const msg = messages[slot.msg];
       if (!msg) continue;
       const part = msg.parts[slot.part] as DynamicToolUIPart | undefined;
@@ -190,43 +212,57 @@ export function historyToUIMessages(history: ChatMessageData[]): UIMessage[] {
 // Live stream reducer
 // ---------------------------------------------------------------------------
 
-/** Find or insert the tail assistant message we should append to. */
+/**
+ * Return a fresh copy of `messages` where the tail assistant message has
+ * been cloned (or appended if missing). The returned `msg` and its `parts`
+ * array are safe to mutate — callers should mutate ONLY this clone, never
+ * the original objects, so React reconciliation sees a new reference.
+ */
 function ensureAssistantTail(messages: UIMessage[]): {
+  next: UIMessage[];
   msg: UIMessage;
   index: number;
-  created: boolean;
 } {
   const last = messages[messages.length - 1];
   if (last && last.role === 'assistant') {
-    return { msg: last, index: messages.length - 1, created: false };
+    const cloned: UIMessage = { ...last, parts: [...last.parts] };
+    const next = [...messages.slice(0, -1), cloned];
+    return { next, msg: cloned, index: next.length - 1 };
   }
-  const next: UIMessage = {
+  const created: UIMessage = {
     id: nextLiveId('assistant'),
     role: 'assistant',
     parts: [],
   };
-  messages.push(next);
-  return { msg: next, index: messages.length - 1, created: true };
+  const next = [...messages, created];
+  return { next, msg: created, index: next.length - 1 };
 }
 
 /** Append text onto the trailing text part of an assistant message, creating
- *  a new text part if the last one is something else (e.g. a tool call). */
+ *  a new text part if the last one is something else (e.g. a tool call).
+ *  MUTATES the passed `msg.parts` — caller must have already cloned it. */
 function appendText(msg: UIMessage, delta: string): void {
   const tail = msg.parts[msg.parts.length - 1] as RaraPart | undefined;
   if (tail && tail.type === 'text') {
-    tail.text += delta;
-    tail.state = 'streaming';
+    msg.parts[msg.parts.length - 1] = {
+      ...tail,
+      text: tail.text + delta,
+      state: 'streaming',
+    };
     return;
   }
   msg.parts.push({ type: 'text', text: delta, state: 'streaming' });
 }
 
-/** Append reasoning text similarly. */
+/** Append reasoning text similarly. MUTATES the passed `msg.parts`. */
 function appendReasoning(msg: UIMessage, delta: string): void {
   const tail = msg.parts[msg.parts.length - 1] as RaraPart | undefined;
   if (tail && tail.type === 'reasoning') {
-    tail.text += delta;
-    tail.state = 'streaming';
+    msg.parts[msg.parts.length - 1] = {
+      ...tail,
+      text: tail.text + delta,
+      state: 'streaming',
+    };
     return;
   }
   msg.parts.push({ type: 'reasoning', text: delta, state: 'streaming' });
@@ -234,13 +270,11 @@ function appendReasoning(msg: UIMessage, delta: string): void {
 
 /** Mark every still-streaming text/reasoning part on the assistant tail as
  *  done. Called when the run finishes so the renderer can drop streaming
- *  affordances (cursors, shimmer, etc). */
+ *  affordances (cursors, shimmer, etc). MUTATES the passed `msg.parts`. */
 function markAssistantDone(msg: UIMessage): void {
-  for (const part of msg.parts) {
-    if (part.type === 'text' || part.type === 'reasoning') {
-      part.state = 'done';
-    }
-  }
+  msg.parts = msg.parts.map((part) =>
+    part.type === 'text' || part.type === 'reasoning' ? { ...part, state: 'done' } : part,
+  );
 }
 
 /** Locate a `dynamic-tool` part by its tool-call id across the message list,
@@ -248,14 +282,14 @@ function markAssistantDone(msg: UIMessage): void {
 function findToolCall(
   messages: UIMessage[],
   toolCallId: string,
-): { msg: UIMessage; part: DynamicToolUIPart; index: number } | null {
+): { msg: UIMessage; part: DynamicToolUIPart; msgIndex: number; partIndex: number } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || msg.role !== 'assistant') continue;
     for (let j = msg.parts.length - 1; j >= 0; j--) {
       const part = msg.parts[j];
       if (part && part.type === 'dynamic-tool' && part.toolCallId === toolCallId) {
-        return { msg, part, index: j };
+        return { msg, part, msgIndex: i, partIndex: j };
       }
     }
   }
@@ -263,38 +297,37 @@ function findToolCall(
 }
 
 /**
- * Pure reducer: apply one `PublicWebEvent` to a `UIMessage[]` and return the
- * updated list. The function MUTATES message and part objects in-place but
- * always returns a fresh outer array so React `setState(prev => ...)` still
- * triggers a re-render.
+ * Pure reducer: apply one `PublicWebEvent` to a `UIMessage[]` and return a
+ * new list with the touched message + its parts array cloned. Untouched
+ * messages are referentially shared with the input so React memoisation on
+ * unchanged messages still works, while reconciliation correctly invalidates
+ * the message that actually changed.
  *
  * Variants we cannot map cleanly are logged (once) and skipped — never
  * thrown — so a stale frontend doesn't crash on a new backend variant.
  */
 export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UIMessage[] {
-  const next = [...messages];
-
   switch (event.type) {
     case '__stream_started':
     case '__stream_closed':
       // Lifecycle bookends. The caller may want these for connection state
       // but they do not change the message list.
-      return next;
+      return messages;
 
     case 'text_delta': {
-      const { msg } = ensureAssistantTail(next);
+      const { next, msg } = ensureAssistantTail(messages);
       appendText(msg, event.text);
       return next;
     }
 
     case 'reasoning_delta': {
-      const { msg } = ensureAssistantTail(next);
+      const { next, msg } = ensureAssistantTail(messages);
       appendReasoning(msg, event.text);
       return next;
     }
 
     case 'tool_call_start': {
-      const { msg } = ensureAssistantTail(next);
+      const { next, msg } = ensureAssistantTail(messages);
       msg.parts.push({
         type: 'dynamic-tool',
         toolName: event.name,
@@ -306,10 +339,12 @@ export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UI
     }
 
     case 'tool_call_end': {
-      const found = findToolCall(next, event.id);
-      if (!found) return next;
-      const { msg, part, index } = found;
-      msg.parts[index] = event.success
+      const found = findToolCall(messages, event.id);
+      if (!found) return messages;
+      const { part, msgIndex, partIndex } = found;
+      const target = messages[msgIndex];
+      if (!target) return messages;
+      const newPart: DynamicToolUIPart = event.success
         ? {
             type: 'dynamic-tool',
             toolName: part.toolName,
@@ -326,28 +361,36 @@ export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UI
             input: part.input,
             errorText: event.error ?? event.result_preview ?? 'tool error',
           };
+      const newParts = [...target.parts];
+      newParts[partIndex] = newPart;
+      const next = [...messages];
+      next[msgIndex] = { ...target, parts: newParts };
       return next;
     }
 
     case 'message': {
       // One-shot complete message — rara collapses the whole turn into a
       // single frame. Treat it as a final text body on a fresh assistant.
-      const { msg } = ensureAssistantTail(next);
+      // The delta path above handles the streaming case; this branch only
+      // fires when the backend never emits incremental text.
+      const { next, msg } = ensureAssistantTail(messages);
       appendText(msg, event.content);
       markAssistantDone(msg);
       return next;
     }
 
     case 'done': {
-      const tail = next[next.length - 1];
-      if (tail && tail.role === 'assistant') markAssistantDone(tail);
-      return next;
+      const tail = messages[messages.length - 1];
+      if (!tail || tail.role !== 'assistant') return messages;
+      const cloned: UIMessage = { ...tail, parts: [...tail.parts] };
+      markAssistantDone(cloned);
+      return [...messages.slice(0, -1), cloned];
     }
 
     case 'error': {
       // Surface the error inline so the user sees what failed without
       // hunting in devtools. PR6 will polish the visual treatment.
-      const { msg } = ensureAssistantTail(next);
+      const { next, msg } = ensureAssistantTail(messages);
       appendText(msg, `\n\n[error] ${event.message}`);
       markAssistantDone(msg);
       return next;
@@ -366,7 +409,7 @@ export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UI
     case 'approval_resolved':
       // TODO(PR3+): surface tool attachments inline; surface approvals
       // through a UI affordance; render usage metadata in the header.
-      return next;
+      return messages;
 
     default: {
       // Exhaustiveness guard: if a new variant lands the type narrows to
@@ -375,14 +418,21 @@ export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UI
       const _exhaustive: never = event;
       void _exhaustive;
       warnUnknown(JSON.stringify(event));
-      return next;
+      return messages;
     }
   }
 }
 
 /**
- * Fold a sequence of buffered events into a fresh `UIMessage[]`. Useful for
- * tests and for replaying a captured stream.
+ * Fold a sequence of buffered events into a `UIMessage[]`.
+ *
+ * **Contract**: returns the SINGLE final-state array only. Do NOT slice or
+ * snapshot intermediate accumulator states from inside `reduce` — successive
+ * calls to {@link applyRaraEvent} share message-object references for
+ * untouched entries, so an intermediate snapshot can have its own contents
+ * change underneath you on a later iteration. For tests/replays that want
+ * intermediate states, call {@link applyRaraEvent} yourself and take fresh
+ * copies at each step.
  */
 export function raraEventsToUIMessages(events: PublicWebEvent[]): UIMessage[] {
   return events.reduce<UIMessage[]>((acc, ev) => applyRaraEvent(acc, ev), []);
