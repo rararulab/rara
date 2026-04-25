@@ -136,6 +136,30 @@ const CommandItem = React.forwardRef<
 ));
 CommandItem.displayName = CommandPrimitive.Item.displayName;
 
+/** Horizontal divider between command groups. */
+const CommandSeparator = React.forwardRef<
+  React.ComponentRef<typeof CommandPrimitive.Separator>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.Separator
+    ref={ref}
+    className={cn('-mx-1 h-px bg-border', className)}
+    {...props}
+  />
+));
+CommandSeparator.displayName = CommandPrimitive.Separator.displayName;
+
+/** Right-aligned inline hint (e.g., keyboard shortcut) inside a `CommandItem`. */
+function CommandShortcut({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <span
+      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
+      {...props}
+    />
+  );
+}
+CommandShortcut.displayName = 'CommandShortcut';
+
 export {
   Command,
   CommandDialog,
@@ -144,4 +168,6 @@ export {
   CommandEmpty,
   CommandGroup,
   CommandItem,
+  CommandSeparator,
+  CommandShortcut,
 };
