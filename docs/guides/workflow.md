@@ -8,7 +8,10 @@
 3. WORK            →  All edits happen inside the worktree
 4. VERIFY          →  cargo check + npm run build on worktree
 5. PUSH & PR       →  git push -u origin + gh pr create
-6. CLEANUP         →  git worktree remove + git branch -d (after PR merged)
+6. WAIT FOR CI     →  gh pr checks {N} --watch (must be green)
+7. CODE REVIEW     →  /code-review-expert skill, fix findings, loop until APPROVE
+8. MERGE           →  gh pr merge {N} --squash --delete-branch
+9. CLEANUP         →  git worktree remove + git branch -d
 ```
 
 ## Step 1: Create Issue
@@ -151,22 +154,43 @@ EOF
   - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
   - Note: a `labeler.yml` workflow auto-labels PRs by file path, but agents must still add type + component labels explicitly via `--label` flags
 
-## Step 5.5: Wait for CI Green (MANDATORY)
+## Step 6: Wait for CI Green (MANDATORY)
 
-After creating the PR, **you MUST verify that all CI checks pass before reporting completion to the user.**
+After creating the PR, **you MUST verify that all CI checks pass before moving on.**
 
 ```bash
 gh pr checks {PR-number} --watch    # Wait for all checks to complete
 ```
 
 - If any check fails, investigate and fix in the worktree, push again, and re-verify
-- Do NOT report "PR created" or "task done" to the user while CI is still pending or failing
-- Only after all checks are green may you inform the user that the PR is ready
+- Do NOT proceed to review or merge while CI is still pending or failing
 
-## Step 6: Cleanup (after PR merged)
+## Step 7: Code Review (MANDATORY)
+
+After CI is green, run a structured code review with the **`/code-review-expert`** skill — the main agent invokes the skill via the `Skill` tool, or dispatches a subagent that loads the same skill. The skill produces a verdict (APPROVE / REQUEST_CHANGES / COMMENT) plus findings graded P0–P3.
+
+The agent never approves its own diff in lieu of running the skill — it comes in cold and catches what the implementer missed.
+
+- **REQUEST_CHANGES**: fix every blocking finding (P0/P1) in the worktree, push, re-run the skill. Loop until APPROVE.
+- **APPROVE with P2/P3 nits**: address only the nits that are clearly worth fixing in this PR. Don't stall on stylistic preferences.
+- **APPROVE clean**: proceed to merge.
+
+This is non-negotiable — even one-line fixes go through it. The skill is fast; the cost of skipping it (regressions like #1810) is high.
+
+## Step 8: Merge to Main
+
+Once CI is green AND the review is APPROVE (with all blocking findings handled), merge without further confirmation — green CI + clean review IS the merge signal.
+
+```bash
+gh pr merge {N} --squash --delete-branch
+```
+
+Use `--squash` so the merged commit on `main` matches the Conventional Commit subject. `--delete-branch` removes the remote branch; the local branch + worktree are removed in Step 9.
+
+## Step 9: Cleanup
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
-git branch -d issue-{N}-{short-name}
+git branch -D issue-{N}-{short-name}    # -D because the branch is gone on origin
 ```
 
 ## Parallel Execution
