@@ -25,7 +25,6 @@ import type { ChatMessageData, ChatSession, ProviderInfo } from '@/api/types';
 import {
   Conversation,
   ConversationContent,
-  ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/chat/ai-elements/conversation';
 import { Message, MessageContent, MessageResponse } from '@/components/chat/ai-elements/message';
@@ -399,9 +398,15 @@ export default function PiChatV2() {
         <Conversation className="min-h-0 flex-1">
           <ConversationContent className="mx-auto w-full max-w-3xl">
             {messages.length === 0 ? (
-              <ConversationEmptyState
-                title="No messages yet"
-                description="Type below to start a conversation."
+              <ChatEmptyState
+                disabled={!activeSession || streaming}
+                onPick={(prompt) => {
+                  // Drop the picked suggestion straight into the WebSocket
+                  // sender — feels snappier than seeding the composer and
+                  // making the user press enter, and the empty-state row
+                  // never reappears once the first turn lands.
+                  sendMessage(prompt);
+                }}
               />
             ) : (
               messages.map((msg) => {
@@ -513,6 +518,49 @@ export default function PiChatV2() {
         error={execTraceError}
         onClose={() => setExecTraceOpen(false)}
       />
+    </div>
+  );
+}
+
+/** Suggested prompts shown on the empty state. Hardcoded for PR6 — a future
+ *  PR may pull these from kernel state (recent topics, skill registry) once
+ *  the empty-state shell has stabilised. */
+const SUGGESTED_PROMPTS: readonly string[] = [
+  'What can rara do for me right now?',
+  'Show me my recent sessions',
+  "Explain rara's heartbeat architecture",
+];
+
+/** Empty-state hero rendered when the active session has no messages.
+ *  Centred lockup + tagline + 3 suggestion cards that submit straight to the
+ *  WebSocket on click. `disabled` mirrors the composer's disabled state so a
+ *  user can't fire a suggestion mid-stream or before a session exists. */
+function ChatEmptyState({
+  disabled,
+  onPick,
+}: {
+  disabled: boolean;
+  onPick: (prompt: string) => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 px-4 py-16">
+      <div className="flex flex-col items-center gap-2">
+        <div className="text-[32px] font-semibold tracking-tight text-foreground">rara</div>
+        <div className="text-sm text-muted-foreground">How can I help today?</div>
+      </div>
+      <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
+        {SUGGESTED_PROMPTS.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(prompt)}
+            className="rounded-xl border border-border/60 p-4 text-left text-sm text-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
