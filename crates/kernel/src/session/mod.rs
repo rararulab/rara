@@ -378,6 +378,12 @@ pub struct BackgroundTaskEntry {
     pub created_at:         jiff::Timestamp,
     /// The inbound message that triggered the spawn.
     pub trigger_message_id: crate::io::MessageId,
+    /// Origin endpoint of the triggering turn, propagated onto the
+    /// synthetic completion trigger so the parent's reply lands in the
+    /// channel that originally asked for the background work (Web, CLI,
+    /// Telegram, ...). `None` when the trigger itself had no origin
+    /// (e.g. spawned from another synthetic source).
+    pub origin_endpoint:    Option<crate::io::Endpoint>,
 }
 
 /// A running session instance in the session table.

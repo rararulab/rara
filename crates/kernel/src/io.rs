@@ -163,6 +163,15 @@ pub struct InboundMessage {
     /// `None` on ingress when no channel binding exists (first message).
     /// Always `Some` after the kernel runs session resolution.
     session_key: Option<SessionKey>,
+
+    /// Explicit origin endpoint override.
+    ///
+    /// Set on synthetic messages (e.g. background-task completion triggers)
+    /// so that downstream reply routing can reach the channel that
+    /// originally triggered the work, even when the synthetic message's
+    /// `source.channel_type` is `Internal`. When `Some`, it takes priority
+    /// over the derivation performed by [`Self::origin_endpoint`].
+    origin_endpoint_override: Option<Endpoint>,
 }
 
 impl InboundMessage {
@@ -193,6 +202,7 @@ impl InboundMessage {
             timestamp,
             metadata,
             session_key,
+            origin_endpoint_override: None,
         }
     }
 
@@ -256,15 +266,38 @@ impl InboundMessage {
             reply_context: None,
             timestamp: jiff::Timestamp::now(),
             metadata: HashMap::new(),
+            origin_endpoint_override: None,
         }
+    }
+
+    /// Attach an explicit origin endpoint to this message.
+    ///
+    /// Used for synthetic re-entry messages (e.g. background-task
+    /// completion triggers) so that the agent's reply inherits the
+    /// routing target of the original user-facing message, even though
+    /// the synthetic message itself has `ChannelType::Internal`.
+    #[must_use]
+    pub fn with_origin_endpoint(mut self, endpoint: Option<Endpoint>) -> Self {
+        self.origin_endpoint_override = endpoint;
+        self
     }
 
     /// Build the originating endpoint for session-scoped reply routing.
     ///
-    /// Returns `Some(Endpoint)` for channel types that support multiple
-    /// chat destinations per user (e.g. Telegram private vs group chats).
-    /// Returns `None` for internal/synthetic messages.
+    /// Returns `Some(Endpoint)` for channels that carry an externally
+    /// addressable peer (Telegram, WeChat, Web), so the kernel can route
+    /// replies back to the exact chat / connection that sent the message.
+    /// Returns `None` for `Internal` / `Api` / `Proactive` — these have no
+    /// external peer to address.
+    ///
+    /// When an explicit override has been set via
+    /// [`Self::with_origin_endpoint`], the override takes priority over
+    /// the derivation from `source` — this is how synthetic trigger
+    /// messages inherit the triggering turn's routing target.
     pub fn origin_endpoint(&self) -> Option<Endpoint> {
+        if let Some(ref ep) = self.origin_endpoint_override {
+            return Some(ep.clone());
+        }
         match self.source.channel_type {
             ChannelType::Telegram => {
                 let chat_id = self.source.platform_chat_id.as_ref()?.parse::<i64>().ok()?;
@@ -285,7 +318,14 @@ impl InboundMessage {
                     address:      EndpointAddress::Wechat { user_id },
                 })
             }
-            // Web endpoints are already per-connection; CLI/Internal don't need scoping.
+            ChannelType::Web => {
+                let connection_id = self.source.platform_chat_id.clone()?;
+                Some(Endpoint {
+                    channel_type: ChannelType::Web,
+                    address:      EndpointAddress::Web { connection_id },
+                })
+            }
+            // Internal / Api / Proactive have no external peer to address.
             _ => None,
         }
     }
@@ -1527,14 +1567,14 @@ pub enum EndpointAddress {
     },
 }
 
-/// Derive an [`Endpoint`] from inbound routing data, when the channel's
-/// address is fully determined by `(chat_id, thread_id)`.
+/// Derive an [`Endpoint`] from inbound routing data carried in
+/// `platform_chat_id`.
 ///
 /// Used by [`IOSubsystem::resolve`] to auto-register the originating endpoint
-/// for channels that have no explicit connection lifecycle (Telegram, WeChat,
-/// CLI). Returns `None` for channels whose endpoint address cannot be
-/// recovered from a raw platform message — notably [`ChannelType::Web`],
-/// whose `connection_id` is only known to the adapter at WS/SSE open time.
+/// for channels whose address is fully determined by the raw platform message
+/// (Telegram, WeChat, CLI, Web — the Web adapter writes its `connection_id`
+/// into `platform_chat_id` at WS/SSE ingress). Returns `None` for `Internal`,
+/// `Api`, and `Proactive`, which have no external peer to address.
 fn derive_endpoint(
     channel_type: ChannelType,
     platform_chat_id: Option<&str>,
@@ -1552,9 +1592,10 @@ fn derive_endpoint(
         ChannelType::Wechat => EndpointAddress::Wechat {
             user_id: chat_id.to_owned(),
         },
-        // Web needs a `connection_id` the raw message doesn't carry; the
-        // adapter registers itself on WS/SSE connect.
-        ChannelType::Web | ChannelType::Api | ChannelType::Proactive | ChannelType::Internal => {
+        ChannelType::Web => EndpointAddress::Web {
+            connection_id: chat_id.to_owned(),
+        },
+        ChannelType::Api | ChannelType::Proactive | ChannelType::Internal => {
             return None;
         }
     };
@@ -2899,5 +2940,132 @@ mod inbound_message_tests {
         assert_eq!(blocks.len(), 2);
         assert!(matches!(blocks[0], ContentBlock::Text { .. }));
         assert!(matches!(blocks[1], ContentBlock::ImageUrl { .. }));
+    }
+
+    #[test]
+    fn synthetic_without_override_has_no_origin_endpoint() {
+        let msg = InboundMessage::synthetic(
+            "hello".to_string(),
+            UserId("system".to_string()),
+            SessionKey::new(),
+        );
+        // Synthetic messages are ChannelType::Internal, which does not
+        // derive an endpoint from `source`.
+        assert!(msg.origin_endpoint().is_none());
+    }
+
+    #[test]
+    fn synthetic_with_origin_override_propagates_to_reply_envelope() {
+        // Background-task completion wiring: the synthetic trigger must
+        // carry the originating turn's endpoint so the reply envelope
+        // routes back to the same channel (Web, CLI, Telegram, ...).
+        let origin = Endpoint {
+            channel_type: ChannelType::Web,
+            address:      EndpointAddress::Web {
+                connection_id: "conn-1794".to_string(),
+            },
+        };
+        let session_key = SessionKey::new();
+        let msg = InboundMessage::synthetic(
+            "[Background Task completed]".to_string(),
+            UserId("system".to_string()),
+            session_key,
+        )
+        .with_origin_endpoint(Some(origin.clone()));
+
+        assert_eq!(msg.origin_endpoint(), Some(origin.clone()));
+
+        // The kernel constructs reply envelopes via
+        // `with_origin(msg.origin_endpoint())`. Confirm the override flows
+        // end-to-end into the envelope.
+        let envelope = OutboundEnvelope::reply(
+            msg.id.clone(),
+            msg.user.clone(),
+            session_key,
+            crate::channel::types::MessageContent::Text("done".to_string()),
+            vec![],
+        )
+        .with_origin(msg.origin_endpoint());
+        assert_eq!(envelope.origin_endpoint, Some(origin));
+    }
+
+    #[test]
+    fn web_inbound_origin_endpoint_uses_connection_id() {
+        // Web adapter writes the WS/SSE `connection_id` into
+        // `platform_chat_id`, so `origin_endpoint()` must round-trip it
+        // into an `EndpointAddress::Web` rather than returning `None`.
+        let msg = InboundMessage::unresolved(
+            MessageId::new(),
+            ChannelSource {
+                channel_type:        ChannelType::Web,
+                platform_message_id: None,
+                platform_user_id:    "user-1".to_string(),
+                platform_chat_id:    Some("conn-abc".to_string()),
+            },
+            UserId("user-1".to_string()),
+            Some(SessionKey::new()),
+            None,
+            MessageContent::Text("hi".to_string()),
+            None,
+            jiff::Timestamp::now(),
+            HashMap::new(),
+        );
+
+        assert_eq!(
+            msg.origin_endpoint(),
+            Some(Endpoint {
+                channel_type: ChannelType::Web,
+                address:      EndpointAddress::Web {
+                    connection_id: "conn-abc".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn derive_endpoint_web_uses_connection_id() {
+        // `derive_endpoint` is the IOSubsystem path: the Web adapter
+        // ingests a connection_id via `platform_chat_id`, and we must
+        // construct a matching Web endpoint for registry auto-register.
+        let endpoint = derive_endpoint(ChannelType::Web, Some("conn-xyz"), None);
+        assert_eq!(
+            endpoint,
+            Some(Endpoint {
+                channel_type: ChannelType::Web,
+                address:      EndpointAddress::Web {
+                    connection_id: "conn-xyz".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn derive_endpoint_web_without_chat_id_returns_none() {
+        // Without a connection_id we cannot build a Web endpoint.
+        assert!(derive_endpoint(ChannelType::Web, None, None).is_none());
+    }
+
+    #[test]
+    fn web_inbound_origin_endpoint_without_chat_id_returns_none() {
+        // Symmetric negative: origin_endpoint() cannot build a Web endpoint
+        // when the adapter failed to populate platform_chat_id.
+        let msg = InboundMessage::unresolved(
+            MessageId::new(),
+            ChannelSource {
+                channel_type:        ChannelType::Web,
+                platform_message_id: None,
+                platform_user_id:    "user-1".to_string(),
+                platform_chat_id:    None,
+            },
+            UserId("user-1".to_string()),
+            Some(SessionKey::new()),
+            None,
+            MessageContent::Text("hi".to_string()),
+            None,
+            jiff::Timestamp::now(),
+            HashMap::new(),
+        );
+
+        assert!(msg.origin_endpoint().is_none());
     }
 }

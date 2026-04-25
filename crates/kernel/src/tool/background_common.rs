@@ -76,6 +76,7 @@ pub(crate) async fn spawn_and_register_background(
             description: manifest.description.clone(),
             created_at: jiff::Timestamp::now(),
             trigger_message_id: context.rara_message_id.clone(),
+            origin_endpoint: context.origin_endpoint.clone(),
         },
     );
 

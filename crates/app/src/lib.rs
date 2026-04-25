@@ -93,6 +93,15 @@ pub struct AppConfig {
     /// WeChat iLink Bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wechat:                 Option<flatten::WechatConfig>,
+    /// Web channel adapter configuration.
+    ///
+    /// When present, a per-session reply buffer is wired into the
+    /// [`WebAdapter`](rara_channels::web::WebAdapter) so that
+    /// task-completion replies survive moments where no WS / SSE
+    /// listener is attached (issue #1804). When absent, buffering is
+    /// disabled and behaviour matches pre-#1804.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web:                    Option<WebConfig>,
     /// Composio credentials (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composio:               Option<flatten::ComposioConfig>,
@@ -138,6 +147,16 @@ pub struct AppConfig {
     /// rara falls back to `http-fetch` for web access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser:                Option<rara_browser::BrowserConfig>,
+}
+
+/// Web channel adapter configuration (YAML `web:` block).
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct WebConfig {
+    /// Per-session ring buffer for important outbound events
+    /// (`Message`, `Error`, `BackgroundTaskDone`, `Progress`). When
+    /// the YAML key is absent, no buffering is performed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_buffer: Option<rara_channels::web_reply_buffer::ReplyBufferConfig>,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -463,12 +482,31 @@ pub async fn start_with_options(
     .await
     .whatever_context("Failed to initialize BackendState")?;
 
+    // Created here (rather than below near `kernel.start`) so the web
+    // reply-buffer sweeper task started a few lines down can listen on
+    // the same shutdown signal as every other long-running task.
+    let cancellation_token = CancellationToken::new();
+
+    // Build the optional reply buffer and spawn its TTL sweeper. When
+    // `web.reply_buffer` is absent, buffering is disabled. The sweeper
+    // runs until the process-wide `cancellation_token` fires.
+    let reply_buffer = config
+        .web
+        .as_ref()
+        .and_then(|w| w.reply_buffer.clone())
+        .map(|cfg| {
+            let buffer = rara_channels::web_reply_buffer::ReplyBuffer::new(cfg);
+            Arc::clone(&buffer).spawn_sweeper(cancellation_token.clone());
+            buffer
+        });
+
     let web_adapter = Arc::new(
         rara_channels::web::WebAdapter::new(
             config.owner_token.clone(),
             config.owner_user_id.clone(),
         )
-        .with_stt_service(stt_service.clone()),
+        .with_stt_service(stt_service.clone())
+        .with_reply_buffer(reply_buffer),
     );
     let web_router = web_adapter.router();
 
@@ -575,8 +613,6 @@ pub async fn start_with_options(
         .skill_prompt_provider(skill_prompt_provider)
         .scheduler_dir(rara_paths::workspace_dir().join("scheduler"))
         .build();
-
-    let cancellation_token = CancellationToken::new();
 
     // Supervisor restarts whisper-server on crash, stops on app shutdown.
     let _whisper_supervisor =

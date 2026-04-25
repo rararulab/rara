@@ -1138,17 +1138,21 @@ impl Kernel {
         let is_background = self.handle().is_background_task(parent_id, child_id);
 
         if is_background {
-            // Capture trigger_message_id before removing from active list.
-            let trigger_message_id = self
+            // Capture trigger metadata before removing from active list so
+            // the synthetic completion message inherits the originating
+            // turn's routing context.
+            let (trigger_message_id, trigger_origin_endpoint) = self
                 .handle()
                 .process_table()
                 .with(&parent_id, |p| {
                     p.background_tasks
                         .iter()
                         .find(|t| t.child_key == child_id)
-                        .map(|t| t.trigger_message_id.clone())
+                        .map(|t| (t.trigger_message_id.clone(), t.origin_endpoint.clone()))
                 })
-                .flatten();
+                .flatten()
+                .map(|(id, ep)| (Some(id), ep))
+                .unwrap_or((None, None));
 
             // Remove from active list.
             self.handle().remove_background_task(parent_id, child_id);
@@ -1205,7 +1209,8 @@ impl Kernel {
             );
 
             let system_user = crate::identity::UserId("system".to_string());
-            let mut msg = crate::io::InboundMessage::synthetic(directive, system_user, parent_id);
+            let mut msg = crate::io::InboundMessage::synthetic(directive, system_user, parent_id)
+                .with_origin_endpoint(trigger_origin_endpoint);
             msg.metadata.insert(
                 "background_task_done".to_string(),
                 serde_json::json!(child_id.to_string()),
