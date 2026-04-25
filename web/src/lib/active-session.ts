@@ -16,8 +16,8 @@
 
 /**
  * Shared persistence key + helpers for the "currently active chat session"
- * used by both `PiChat` and `PiChatV2`. PR7 deletes the legacy page; this
- * module remains as the single source of truth for the storage key.
+ * consumed by `PiChat`. The module is the single source of truth for the
+ * `localStorage` key.
  */
 
 export const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';

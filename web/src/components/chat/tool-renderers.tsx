@@ -15,7 +15,7 @@
  */
 
 /**
- * Per-tool rich content renderers for the new chat UI (`/chat-v2`).
+ * Per-tool rich content renderers for the chat UI (mounted at `/`).
  *
  * Layout strategy:
  * - The expanded body of a `<Tool>` card delegates to a per-tool component
