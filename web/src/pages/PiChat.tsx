@@ -75,26 +75,9 @@ import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
+import { readStoredSessionKey, writeStoredSessionKey } from '@/lib/active-session';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { renderTurnChipCard } from '@/tools/turn-chip-card';
-const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
-
-function readStoredSessionKey(): string | null {
-  try {
-    return localStorage.getItem(ACTIVE_SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredSessionKey(key: string | null): void {
-  try {
-    if (key) localStorage.setItem(ACTIVE_SESSION_KEY, key);
-    else localStorage.removeItem(ACTIVE_SESSION_KEY);
-  } catch {
-    /* ignore */
-  }
-}
 
 /**
  * True when the given provider id is still present in rara's routable
