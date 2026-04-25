@@ -1,0 +1,28 @@
+[package]
+name = "rara-sandbox"
+description = "Hardware-isolated code execution sandbox backed by boxlite (microVM)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+bon = { workspace = true }
+boxlite = { git = "https://github.com/boxlite-ai/boxlite", tag = "v0.8.2" }
+futures = { workspace = true }
+serde = { workspace = true }
+snafu = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

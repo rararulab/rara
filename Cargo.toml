@@ -134,6 +134,7 @@ members = [
     "crates/soul",
     "crates/rara-vault",
     "crates/rara-dock",
+    "crates/rara-sandbox",
     "crates/rara-acp",
     "crates/drivers/browser",
     "crates/drivers/stt",
@@ -276,6 +277,7 @@ rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
 rara-soul = { path = "crates/soul" }
+rara-sandbox = { path = "crates/rara-sandbox" }
 rara-vault = { path = "crates/rara-vault" }
 
 # fff (Fast File Finder) — Cargo git dependencies (not vendored).
