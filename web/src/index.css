@@ -110,6 +110,14 @@
    * as the tool-call glass bubble so the page reads as one palette.
    */
   --canvas: oklch(0.96 0.005 250);
+
+  /*
+   * Darken pi-web-ui's stock `--muted-foreground` (oklch 55.6%) to clear
+   * WCAG AA 4.5:1 against the cooler `--canvas`. Pi's value barely
+   * passes against pure white (4.57:1) — the canvas is darker, so 11px
+   * timestamps and meta copy fall under without this override.
+   */
+  --muted-foreground: oklch(45% 0 0);
 }
 
 .dark {
