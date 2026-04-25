@@ -284,9 +284,11 @@ impl InboundMessage {
 
     /// Build the originating endpoint for session-scoped reply routing.
     ///
-    /// Returns `Some(Endpoint)` for channel types that support multiple
-    /// chat destinations per user (e.g. Telegram private vs group chats).
-    /// Returns `None` for internal/synthetic messages.
+    /// Returns `Some(Endpoint)` for channels that carry an externally
+    /// addressable peer (Telegram, WeChat, Web), so the kernel can route
+    /// replies back to the exact chat / connection that sent the message.
+    /// Returns `None` for `Internal` / `Api` / `Proactive` — these have no
+    /// external peer to address.
     ///
     /// When an explicit override has been set via
     /// [`Self::with_origin_endpoint`], the override takes priority over
@@ -316,7 +318,14 @@ impl InboundMessage {
                     address:      EndpointAddress::Wechat { user_id },
                 })
             }
-            // Web endpoints are already per-connection; CLI/Internal don't need scoping.
+            ChannelType::Web => {
+                let connection_id = self.source.platform_chat_id.clone()?;
+                Some(Endpoint {
+                    channel_type: ChannelType::Web,
+                    address:      EndpointAddress::Web { connection_id },
+                })
+            }
+            // Internal / Api / Proactive have no external peer to address.
             _ => None,
         }
     }
@@ -1558,14 +1567,14 @@ pub enum EndpointAddress {
     },
 }
 
-/// Derive an [`Endpoint`] from inbound routing data, when the channel's
-/// address is fully determined by `(chat_id, thread_id)`.
+/// Derive an [`Endpoint`] from inbound routing data carried in
+/// `platform_chat_id`.
 ///
 /// Used by [`IOSubsystem::resolve`] to auto-register the originating endpoint
-/// for channels that have no explicit connection lifecycle (Telegram, WeChat,
-/// CLI). Returns `None` for channels whose endpoint address cannot be
-/// recovered from a raw platform message — notably [`ChannelType::Web`],
-/// whose `connection_id` is only known to the adapter at WS/SSE open time.
+/// for channels whose address is fully determined by the raw platform message
+/// (Telegram, WeChat, CLI, Web — the Web adapter writes its `connection_id`
+/// into `platform_chat_id` at WS/SSE ingress). Returns `None` for `Internal`,
+/// `Api`, and `Proactive`, which have no external peer to address.
 fn derive_endpoint(
     channel_type: ChannelType,
     platform_chat_id: Option<&str>,
@@ -1583,9 +1592,10 @@ fn derive_endpoint(
         ChannelType::Wechat => EndpointAddress::Wechat {
             user_id: chat_id.to_owned(),
         },
-        // Web needs a `connection_id` the raw message doesn't carry; the
-        // adapter registers itself on WS/SSE connect.
-        ChannelType::Web | ChannelType::Api | ChannelType::Proactive | ChannelType::Internal => {
+        ChannelType::Web => EndpointAddress::Web {
+            connection_id: chat_id.to_owned(),
+        },
+        ChannelType::Api | ChannelType::Proactive | ChannelType::Internal => {
             return None;
         }
     };
@@ -2977,5 +2987,61 @@ mod inbound_message_tests {
         )
         .with_origin(msg.origin_endpoint());
         assert_eq!(envelope.origin_endpoint, Some(origin));
+    }
+
+    #[test]
+    fn web_inbound_origin_endpoint_uses_connection_id() {
+        // Web adapter writes the WS/SSE `connection_id` into
+        // `platform_chat_id`, so `origin_endpoint()` must round-trip it
+        // into an `EndpointAddress::Web` rather than returning `None`.
+        let msg = InboundMessage::unresolved(
+            MessageId::new(),
+            ChannelSource {
+                channel_type:        ChannelType::Web,
+                platform_message_id: None,
+                platform_user_id:    "user-1".to_string(),
+                platform_chat_id:    Some("conn-abc".to_string()),
+            },
+            UserId("user-1".to_string()),
+            Some(SessionKey::new()),
+            None,
+            MessageContent::Text("hi".to_string()),
+            None,
+            jiff::Timestamp::now(),
+            HashMap::new(),
+        );
+
+        assert_eq!(
+            msg.origin_endpoint(),
+            Some(Endpoint {
+                channel_type: ChannelType::Web,
+                address:      EndpointAddress::Web {
+                    connection_id: "conn-abc".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn derive_endpoint_web_uses_connection_id() {
+        // `derive_endpoint` is the IOSubsystem path: the Web adapter
+        // ingests a connection_id via `platform_chat_id`, and we must
+        // construct a matching Web endpoint for registry auto-register.
+        let endpoint = derive_endpoint(ChannelType::Web, Some("conn-xyz"), None);
+        assert_eq!(
+            endpoint,
+            Some(Endpoint {
+                channel_type: ChannelType::Web,
+                address:      EndpointAddress::Web {
+                    connection_id: "conn-xyz".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn derive_endpoint_web_without_chat_id_returns_none() {
+        // Without a connection_id we cannot build a Web endpoint.
+        assert!(derive_endpoint(ChannelType::Web, None, None).is_none());
     }
 }
