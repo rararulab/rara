@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import type { DynamicToolUIPart, ReasoningUIPart, TextUIPart, UIMessage } from 'ai';
+import type { DynamicToolUIPart, ReasoningUIPart, TextUIPart } from 'ai';
 import { Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildWsUrl, type PublicWebEvent } from '@/adapters/rara-stream';
 import { api } from '@/api/client';
+import type { CascadeTrace, ExecutionTrace } from '@/api/kernel-types';
 import type { ChatMessageData, ChatSession, ProviderInfo } from '@/api/types';
 import {
   Conversation,
@@ -37,7 +38,13 @@ import {
   PromptInputTools,
 } from '@/components/chat/ai-elements/prompt-input';
 import { Tool, ToolContent, ToolHeader } from '@/components/chat/ai-elements/tool';
-import { applyRaraEvent, historyToUIMessages } from '@/components/chat/rara-to-uimessage';
+import { CascadeModal } from '@/components/chat/CascadeModal';
+import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
+import {
+  applyRaraEvent,
+  historyToUIMessages,
+  type RaraUIMessage,
+} from '@/components/chat/rara-to-uimessage';
 import { ToolRenderer, toolHeaderSummary } from '@/components/chat/tool-renderers';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
@@ -59,7 +66,7 @@ export default function PiChatV2() {
   const { openSettings } = useSettingsModal();
 
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
-  const [messages, setMessages] = useState<UIMessage[]>([]);
+  const [messages, setMessages] = useState<RaraUIMessage[]>([]);
   const [composerText, setComposerText] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
@@ -67,6 +74,21 @@ export default function PiChatV2() {
   // Surfaces "Use rara's default" PATCH failures inside RaraModelDialog so the
   // user can retry without the dialog dismissing.
   const [resetError, setResetError] = useState<string | null>(null);
+
+  // Cascade-trace modal state — fetched lazily when the user clicks the
+  // "🔍 Cascade" trigger on a finalised assistant turn. Mirrors the PiChat
+  // wiring (#1718): the kernel only assembles cascade entries via REST after
+  // the turn completes, so the seq → trace fetch happens here, not in-stream.
+  const [cascadeOpen, setCascadeOpen] = useState(false);
+  const [cascadeTrace, setCascadeTrace] = useState<CascadeTrace | null>(null);
+  const [cascadeLoading, setCascadeLoading] = useState(false);
+  const [cascadeError, setCascadeError] = useState<string | null>(null);
+  // Execution-trace modal state — opened from the "📊 详情" trigger and kept
+  // distinct from the cascade viewer so the user can pick the lens per-click.
+  const [execTraceOpen, setExecTraceOpen] = useState(false);
+  const [execTrace, setExecTrace] = useState<ExecutionTrace | null>(null);
+  const [execTraceLoading, setExecTraceLoading] = useState(false);
+  const [execTraceError, setExecTraceError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Tracks the session key the user most recently asked to load. A history
@@ -138,6 +160,24 @@ export default function PiChatV2() {
     [activeSession?.key, newSession, selectSession],
   );
 
+  /** Reload the active session's history — used after VoiceRecorder finishes
+   *  appending a transcribed user turn server-side, and after the WebSocket
+   *  emits `done` so each finalised assistant turn picks up its persisted
+   *  `seq` (via `RaraMessageMetadata`) for trace / cascade trigger fetches. */
+  const reloadActiveMessages = useCallback(async () => {
+    const key = activeSessionRef.current;
+    if (!key) return;
+    try {
+      const rows = await api.get<ChatMessageData[]>(
+        `/api/v1/chat/sessions/${encodeURIComponent(key)}/messages?limit=200`,
+      );
+      if (activeSessionRef.current !== key) return;
+      setMessages(historyToUIMessages(rows));
+    } catch (err) {
+      console.warn('PiChatV2: failed to reload messages', err);
+    }
+  }, []);
+
   /** Send the composer text over a fresh WebSocket. */
   const sendMessage = useCallback(
     (rawText?: string) => {
@@ -180,6 +220,13 @@ export default function PiChatV2() {
           return;
         }
         setMessages((prev) => applyRaraEvent(prev, event));
+        // The stream has no `seq` for in-flight assistant frames — rara only
+        // assigns it when the turn lands in the kernel store. Refetch history
+        // once the run finalises so the trace / cascade triggers can resolve
+        // their per-turn seq from `RaraMessageMetadata`.
+        if (event.type === 'done') {
+          void reloadActiveMessages();
+        }
       };
 
       ws.onerror = () => {
@@ -196,24 +243,8 @@ export default function PiChatV2() {
         if (wsRef.current === ws) wsRef.current = null;
       };
     },
-    [activeSession, composerText, streaming],
+    [activeSession, composerText, streaming, reloadActiveMessages],
   );
-
-  /** Reload the active session's history — used after VoiceRecorder finishes
-   *  appending a transcribed user turn server-side. */
-  const reloadActiveMessages = useCallback(async () => {
-    const key = activeSessionRef.current;
-    if (!key) return;
-    try {
-      const rows = await api.get<ChatMessageData[]>(
-        `/api/v1/chat/sessions/${encodeURIComponent(key)}/messages?limit=200`,
-      );
-      if (activeSessionRef.current !== key) return;
-      setMessages(historyToUIMessages(rows));
-    } catch (err) {
-      console.warn('PiChatV2: failed to reload messages after voice', err);
-    }
-  }, []);
 
   /** Persist a provider/model pick from RaraModelDialog onto the active session. */
   const handleSelectProvider = useCallback(async (entry: ProviderInfo) => {
@@ -279,6 +310,56 @@ export default function PiChatV2() {
     if (!modelDialogOpen) setResetError(null);
   }, [modelDialogOpen]);
 
+  /** Open the cascade modal for a given turn's `seq`, fetching the trace
+   *  lazily. A failed fetch surfaces inline inside the modal so the click is
+   *  never silently swallowed. */
+  const openCascade = useCallback((seq: number) => {
+    const sessionKey = activeSessionRef.current;
+    if (!sessionKey) return;
+    setCascadeOpen(true);
+    setCascadeTrace(null);
+    setCascadeError(null);
+    setCascadeLoading(true);
+    api
+      .get<CascadeTrace>(`/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/trace?seq=${seq}`)
+      .then((trace) => {
+        setCascadeTrace(trace);
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        setCascadeError(msg);
+      })
+      .finally(() => {
+        setCascadeLoading(false);
+      });
+  }, []);
+
+  /** Open the per-turn execution-trace modal. A 404 surfaces as an inline
+   *  error rather than silently closing — legacy turns recorded before trace
+   *  persistence existed will land here. */
+  const openExecTrace = useCallback((seq: number) => {
+    const sessionKey = activeSessionRef.current;
+    if (!sessionKey) return;
+    setExecTraceOpen(true);
+    setExecTrace(null);
+    setExecTraceError(null);
+    setExecTraceLoading(true);
+    api
+      .get<ExecutionTrace>(
+        `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/execution-trace?seq=${seq}`,
+      )
+      .then((trace) => {
+        setExecTrace(trace);
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        setExecTraceError(msg);
+      })
+      .finally(() => {
+        setExecTraceLoading(false);
+      });
+  }, []);
+
   // Cleanly close the socket when the page unmounts.
   useEffect(() => {
     return () => {
@@ -323,18 +404,27 @@ export default function PiChatV2() {
                 description="Type below to start a conversation."
               />
             ) : (
-              messages.map((msg) => (
-                <Message key={msg.id} from={msg.role}>
-                  <MessageContent>
-                    {msg.parts.map((part, i) => (
-                      <RenderPart
-                        key={`${msg.id}-${i}`}
-                        part={part as TextUIPart | ReasoningUIPart | DynamicToolUIPart}
-                      />
-                    ))}
-                  </MessageContent>
-                </Message>
-              ))
+              messages.map((msg) => {
+                const seq = msg.role === 'assistant' ? msg.metadata?.seq : undefined;
+                return (
+                  <Message key={msg.id} from={msg.role}>
+                    <MessageContent>
+                      {msg.parts.map((part, i) => (
+                        <RenderPart
+                          key={`${msg.id}-${i}`}
+                          part={part as TextUIPart | ReasoningUIPart | DynamicToolUIPart}
+                        />
+                      ))}
+                      {seq !== undefined ? (
+                        <TraceTriggerRow
+                          onOpenTrace={() => openExecTrace(seq)}
+                          onOpenCascade={() => openCascade(seq)}
+                        />
+                      ) : null}
+                    </MessageContent>
+                  </Message>
+                );
+              })
             )}
           </ConversationContent>
           <ConversationScrollButton />
@@ -409,6 +499,56 @@ export default function PiChatV2() {
         }}
         resetError={resetError}
       />
+      <CascadeModal
+        open={cascadeOpen}
+        trace={cascadeTrace}
+        loading={cascadeLoading}
+        error={cascadeError}
+        onClose={() => setCascadeOpen(false)}
+      />
+      <ExecutionTraceModal
+        open={execTraceOpen}
+        trace={execTrace}
+        loading={execTraceLoading}
+        error={execTraceError}
+        onClose={() => setExecTraceOpen(false)}
+      />
+    </div>
+  );
+}
+
+/** Inline trigger row rendered below each finalised assistant turn. Mirrors
+ *  PiChat's "📊 详情" / "🔍 Cascade" buttons (#1718) but rendered as plain
+ *  React rather than via the Lit message-renderer hijack. Only mounted when
+ *  the turn has a persisted `seq` — otherwise the trace endpoints would 404
+ *  and the buttons would mislead the user. */
+function TraceTriggerRow({
+  onOpenTrace,
+  onOpenCascade,
+}: {
+  onOpenTrace: () => void;
+  onOpenCascade: () => void;
+}) {
+  return (
+    <div className="mt-1 flex gap-1.5 text-xs">
+      <button
+        type="button"
+        onClick={onOpenTrace}
+        className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        title="详情"
+      >
+        <span aria-hidden>📊</span>
+        <span>详情</span>
+      </button>
+      <button
+        type="button"
+        onClick={onOpenCascade}
+        className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        title="Cascade"
+      >
+        <span aria-hidden>🔍</span>
+        <span>Cascade</span>
+      </button>
     </div>
   );
 }

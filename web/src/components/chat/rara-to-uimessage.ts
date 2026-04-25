@@ -39,6 +39,22 @@ type AssistantPart = TextUIPart | ReasoningUIPart | DynamicToolUIPart;
 type RaraPart = TextUIPart | ReasoningUIPart | DynamicToolUIPart;
 
 /**
+ * Metadata threaded onto persisted rara `UIMessage`s so the renderer can wire
+ * trace / cascade triggers without re-deriving the row's `seq`.
+ *
+ * Live-streamed assistant frames don't know their seq (rara assigns it when
+ * the turn lands in the kernel store); the value materialises only after
+ * `historyToUIMessages` rebuilds the list from a REST refetch. Renderers
+ * therefore gate trigger buttons on `metadata.seq !== undefined`.
+ */
+export interface RaraMessageMetadata {
+  seq?: number;
+}
+
+/** UIMessage flavour used throughout the rara adapter + chat shell. */
+export type RaraUIMessage = UIMessage<RaraMessageMetadata>;
+
+/**
  * Stable id generator. UIMessage requires unique ids. We keep a single
  * `live-` prefix across both REST history (`live-history-...` would still
  * remount on refetch) and the streaming reducer — the goal is that ids
@@ -131,8 +147,8 @@ function toolCallToPart(call: ChatToolCallData): DynamicToolUIPart {
  * assistant message that requested them; we resolve each result onto the
  * matching `dynamic-tool` part by `toolCallId`.
  */
-export function historyToUIMessages(history: ChatMessageData[]): UIMessage[] {
-  const messages: UIMessage[] = [];
+export function historyToUIMessages(history: ChatMessageData[]): RaraUIMessage[] {
+  const messages: RaraUIMessage[] = [];
   // Index of the assistant message holding each pending tool call so we can
   // resolve a later `tool` / `tool_result` row in-place.
   const toolCallIndex = new Map<string, { msg: number; part: number }>();
@@ -165,7 +181,12 @@ export function historyToUIMessages(history: ChatMessageData[]): UIMessage[] {
         }
       }
       const msgIdx = messages.length;
-      messages.push({ id: `msg-${row.seq}`, role: 'assistant', parts });
+      messages.push({
+        id: `msg-${row.seq}`,
+        role: 'assistant',
+        parts,
+        metadata: { seq: row.seq },
+      });
       // Register tool-call slots so a subsequent `tool` / `tool_result` row
       // can attach its output.
       parts.forEach((part, partIdx) => {
@@ -218,18 +239,18 @@ export function historyToUIMessages(history: ChatMessageData[]): UIMessage[] {
  * array are safe to mutate — callers should mutate ONLY this clone, never
  * the original objects, so React reconciliation sees a new reference.
  */
-function ensureAssistantTail(messages: UIMessage[]): {
-  next: UIMessage[];
-  msg: UIMessage;
+function ensureAssistantTail(messages: RaraUIMessage[]): {
+  next: RaraUIMessage[];
+  msg: RaraUIMessage;
   index: number;
 } {
   const last = messages[messages.length - 1];
   if (last && last.role === 'assistant') {
-    const cloned: UIMessage = { ...last, parts: [...last.parts] };
+    const cloned: RaraUIMessage = { ...last, parts: [...last.parts] };
     const next = [...messages.slice(0, -1), cloned];
     return { next, msg: cloned, index: next.length - 1 };
   }
-  const created: UIMessage = {
+  const created: RaraUIMessage = {
     id: nextLiveId('assistant'),
     role: 'assistant',
     parts: [],
@@ -241,7 +262,7 @@ function ensureAssistantTail(messages: UIMessage[]): {
 /** Append text onto the trailing text part of an assistant message, creating
  *  a new text part if the last one is something else (e.g. a tool call).
  *  MUTATES the passed `msg.parts` — caller must have already cloned it. */
-function appendText(msg: UIMessage, delta: string): void {
+function appendText(msg: RaraUIMessage, delta: string): void {
   const tail = msg.parts[msg.parts.length - 1] as RaraPart | undefined;
   if (tail && tail.type === 'text') {
     msg.parts[msg.parts.length - 1] = {
@@ -255,7 +276,7 @@ function appendText(msg: UIMessage, delta: string): void {
 }
 
 /** Append reasoning text similarly. MUTATES the passed `msg.parts`. */
-function appendReasoning(msg: UIMessage, delta: string): void {
+function appendReasoning(msg: RaraUIMessage, delta: string): void {
   const tail = msg.parts[msg.parts.length - 1] as RaraPart | undefined;
   if (tail && tail.type === 'reasoning') {
     msg.parts[msg.parts.length - 1] = {
@@ -271,7 +292,7 @@ function appendReasoning(msg: UIMessage, delta: string): void {
 /** Mark every still-streaming text/reasoning part on the assistant tail as
  *  done. Called when the run finishes so the renderer can drop streaming
  *  affordances (cursors, shimmer, etc). MUTATES the passed `msg.parts`. */
-function markAssistantDone(msg: UIMessage): void {
+function markAssistantDone(msg: RaraUIMessage): void {
   msg.parts = msg.parts.map((part) =>
     part.type === 'text' || part.type === 'reasoning' ? { ...part, state: 'done' } : part,
   );
@@ -280,9 +301,9 @@ function markAssistantDone(msg: UIMessage): void {
 /** Locate a `dynamic-tool` part by its tool-call id across the message list,
  *  searching backwards because the active call is almost always on the tail. */
 function findToolCall(
-  messages: UIMessage[],
+  messages: RaraUIMessage[],
   toolCallId: string,
-): { msg: UIMessage; part: DynamicToolUIPart; msgIndex: number; partIndex: number } | null {
+): { msg: RaraUIMessage; part: DynamicToolUIPart; msgIndex: number; partIndex: number } | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || msg.role !== 'assistant') continue;
@@ -306,7 +327,7 @@ function findToolCall(
  * Variants we cannot map cleanly are logged (once) and skipped — never
  * thrown — so a stale frontend doesn't crash on a new backend variant.
  */
-export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UIMessage[] {
+export function applyRaraEvent(messages: RaraUIMessage[], event: PublicWebEvent): RaraUIMessage[] {
   switch (event.type) {
     case '__stream_started':
     case '__stream_closed':
@@ -382,7 +403,7 @@ export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UI
     case 'done': {
       const tail = messages[messages.length - 1];
       if (!tail || tail.role !== 'assistant') return messages;
-      const cloned: UIMessage = { ...tail, parts: [...tail.parts] };
+      const cloned: RaraUIMessage = { ...tail, parts: [...tail.parts] };
       markAssistantDone(cloned);
       return [...messages.slice(0, -1), cloned];
     }
@@ -434,6 +455,6 @@ export function applyRaraEvent(messages: UIMessage[], event: PublicWebEvent): UI
  * intermediate states, call {@link applyRaraEvent} yourself and take fresh
  * copies at each step.
  */
-export function raraEventsToUIMessages(events: PublicWebEvent[]): UIMessage[] {
-  return events.reduce<UIMessage[]>((acc, ev) => applyRaraEvent(acc, ev), []);
+export function raraEventsToUIMessages(events: PublicWebEvent[]): RaraUIMessage[] {
+  return events.reduce<RaraUIMessage[]>((acc, ev) => applyRaraEvent(acc, ev), []);
 }
