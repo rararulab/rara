@@ -43,7 +43,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 
 import { settingsApi } from '@/api/client';
-import { getBackendUrl, setBackendUrl } from '@/api/client';
+import { getBackendUrl, resolveUrl, setBackendUrl } from '@/api/client';
 import type { SettingsMap } from '@/api/types';
 import DataFeedsPanel from '@/components/DataFeedsPanel';
 import { Badge } from '@/components/ui/badge';
@@ -67,7 +67,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useServerStatus } from '@/hooks/use-server-status';
 import { useTheme, type Theme } from '@/hooks/use-theme';
 import { cn } from '@/lib/utils';
 import Agents from '@/pages/Agents';
@@ -408,34 +407,94 @@ function KvGroup({
   );
 }
 
-/** Backend URL configuration card for the General settings tab. */
-function ConnectionCard() {
-  const { isOnline } = useServerStatus();
-  const [url, setUrl] = useState(() => getBackendUrl());
-  const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+/** Health probe result: backend version + measured round-trip latency + capture timestamp. */
+interface HealthProbe {
+  version: string;
+  status: string;
+  latencyMs: number;
+  fetchedAt: number;
+}
 
-  async function saveAndReconnect() {
-    setSaving(true);
-    setResult(null);
-    try {
-      const res = await fetch(`${url}/api/v1/settings`, {
+/** Format epoch-millis as a relative "Ns ago" string, falling back to minutes/hours. */
+function formatRelative(fromMs: number, nowMs: number): string {
+  const deltaSec = Math.max(0, Math.floor((nowMs - fromMs) / 1000));
+  if (deltaSec < 60) return `${deltaSec}s ago`;
+  const min = Math.floor(deltaSec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ago`;
+}
+
+/** Backend URL configuration card with live version/latency/heartbeat metrics. */
+function ConnectionCard() {
+  const queryClient = useQueryClient();
+  const savedUrl = getBackendUrl();
+  const [url, setUrl] = useState(savedUrl);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Tick state forces re-render every second so "Last heartbeat" stays fresh
+  // without having to refetch the health endpoint.
+  const [, setNowTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const healthQuery = useQuery<HealthProbe>({
+    queryKey: ['health-probe'],
+    queryFn: async () => {
+      const start = performance.now();
+      const res = await fetch(resolveUrl('/api/v1/health'), {
         signal: AbortSignal.timeout(5000),
       });
-      if (res.ok) {
+      if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
+      const body = (await res.json()) as { version?: string; status?: string };
+      return {
+        version: body.version ?? 'unknown',
+        status: body.status ?? 'unknown',
+        latencyMs: Math.round(performance.now() - start),
+        fetchedAt: Date.now(),
+      };
+    },
+    refetchInterval: 5000,
+    retry: false,
+  });
+
+  const isDirty = url.trim() !== savedUrl.trim();
+
+  // Status pill: explicit error after first attempt, "Connecting…" before any attempt completes.
+  const pill: { label: string; variant: 'secondary' | 'destructive' | 'outline' } =
+    healthQuery.isError
+      ? { label: 'Disconnected', variant: 'destructive' }
+      : healthQuery.data
+        ? { label: 'Connected', variant: 'secondary' }
+        : { label: 'Connecting…', variant: 'outline' };
+
+  async function reconnect() {
+    setSaving(true);
+    setError(null);
+    try {
+      if (isDirty) {
+        // Probe the new URL before persisting so we don't trap the user with a bad backend.
+        const res = await fetch(`${url}/api/v1/health`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
         setBackendUrl(url); // persists + reloads
-      } else {
-        setResult({ kind: 'error', message: `Server returned ${res.status}` });
+        return;
       }
+      await queryClient.invalidateQueries({ queryKey: ['health-probe'] });
     } catch (e) {
-      setResult({
-        kind: 'error',
-        message: `Cannot connect: ${e instanceof Error ? e.message : String(e)}`,
-      });
+      setError(`Cannot connect: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
     }
   }
+
+  const lastHeartbeatAgo = healthQuery.data
+    ? formatRelative(healthQuery.data.fetchedAt, Date.now())
+    : null;
 
   return (
     <Card className="app-surface border-border/60">
@@ -446,8 +505,8 @@ function ConnectionCard() {
             <CardTitle className="text-base">Connection</CardTitle>
             <CardDescription>Backend server URL</CardDescription>
           </div>
-          <Badge variant={isOnline ? 'secondary' : 'destructive'} className="capitalize">
-            {isOnline ? 'Connected' : 'Disconnected'}
+          <Badge variant={pill.variant} className="capitalize">
+            {pill.label}
           </Badge>
         </div>
       </CardHeader>
@@ -457,29 +516,38 @@ function ConnectionCard() {
             value={url}
             onChange={(e) => {
               setUrl(e.target.value);
-              setResult(null);
+              setError(null);
             }}
             placeholder="http://localhost:25555"
             className="h-9 font-mono text-sm"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !saving) void saveAndReconnect();
+              if (e.key === 'Enter' && !saving) void reconnect();
             }}
           />
-          <Button onClick={saveAndReconnect} disabled={saving || !url.trim()} size="sm">
+          <Button onClick={reconnect} disabled={saving || !url.trim()} size="sm">
             <Save className="mr-1.5 h-3.5 w-3.5" />
-            {saving ? 'Testing...' : 'Save & Reconnect'}
+            {saving ? 'Testing...' : isDirty ? 'Save & Reconnect' : 'Reconnect'}
           </Button>
         </div>
-        {result && (
-          <p
-            className={cn(
-              'text-sm',
-              result.kind === 'success' ? 'text-green-600' : 'text-destructive',
-            )}
-          >
-            {result.message}
-          </p>
-        )}
+
+        <div className="flex flex-wrap gap-x-6 gap-y-2 border-t pt-3 text-xs">
+          <div className="flex items-baseline gap-2">
+            <span className="text-muted-foreground">Version</span>
+            <span className="font-mono">{healthQuery.data?.version ?? '—'}</span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-muted-foreground">Latency</span>
+            <span className="font-mono">
+              {healthQuery.data ? `${healthQuery.data.latencyMs} ms` : '—'}
+            </span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-muted-foreground">Last heartbeat</span>
+            <span className="font-mono">{lastHeartbeatAgo ?? '—'}</span>
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );
