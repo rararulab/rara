@@ -17,6 +17,14 @@ env:
   # Disable the runner image's preset sccache wrapper — no backend is configured,
   # so `rustc -vV` probes (notably `cargo +nightly doc`) time out trying to start a server.
   RUSTC_WRAPPER: ""
+  # boxlite (rara-sandbox dep) builds bubblewrap + libkrun + libkrunfw natively.
+  # CI runners are Linux x86_64 without meson/ninja/patchelf and cannot run a
+  # full native boxlite build. Stub mode is upstream's documented CI escape
+  # hatch — both `bubblewrap-sys/build.rs` and `libkrun-sys/build.rs` skip
+  # the native build when this is set, so check / clippy / doc / `cargo
+  # test --no-run` still verify the Rust surface. Real boxlite execution is
+  # macOS-only today and is exercised by the (#[ignore]d) integration test.
+  BOXLITE_DEPS_STUB: "1"
 
 defaults:
   run:
