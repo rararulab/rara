@@ -21,7 +21,6 @@ import { cn } from '@/lib/utils';
 
 const DropdownMenu = DropdownMenuPrimitive.Root;
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-const DropdownMenuAnchor = DropdownMenuPrimitive.Anchor;
 
 const DropdownMenuContent = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.Content>,
@@ -58,10 +57,4 @@ const DropdownMenuItem = React.forwardRef<
 ));
 DropdownMenuItem.displayName = DropdownMenuPrimitive.Item.displayName;
 
-export {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuAnchor,
-  DropdownMenuContent,
-  DropdownMenuItem,
-};
+export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem };

@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 
 import {
   DropdownMenu,
-  DropdownMenuAnchor,
+  DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
@@ -87,7 +87,7 @@ export function TraceOverflowMenu(): React.ReactElement {
 
   return (
     <DropdownMenu open={anchor !== null} onOpenChange={(o) => !o && setAnchor(null)}>
-      <DropdownMenuAnchor asChild>
+      <DropdownMenuTrigger asChild>
         <div
           aria-hidden
           style={{
@@ -99,7 +99,7 @@ export function TraceOverflowMenu(): React.ReactElement {
             pointerEvents: 'none',
           }}
         />
-      </DropdownMenuAnchor>
+      </DropdownMenuTrigger>
       <DropdownMenuContent align="start" sideOffset={6}>
         <DropdownMenuItem onSelect={() => dispatch(EXECUTION_TRACE_EVENT)}>
           <span aria-hidden>📊</span>
