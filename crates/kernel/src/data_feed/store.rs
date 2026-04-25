@@ -17,16 +17,14 @@
 use async_trait::async_trait;
 use jiff::Timestamp;
 
-use super::event::{FeedEvent, FeedEventId};
-use crate::session::SessionKey;
+use super::event::FeedEvent;
 
 /// Persistent store for external feed events.
 ///
-/// Implementations handle event persistence, filtered queries, and
-/// per-subscriber read-cursor tracking. The kernel owns one shared `FeedStore`
-/// instance; transport layers call [`append`](Self::append) on ingestion and
-/// agent sessions call [`query`](Self::query) /
-/// [`unread_count`](Self::unread_count) to consume events.
+/// Implementations handle event persistence and filtered queries. The kernel
+/// owns one shared `FeedStore` instance; transport layers call
+/// [`append`](Self::append) on ingestion and agent sessions call
+/// [`query`](Self::query) to consume events.
 #[async_trait]
 pub trait FeedStore: Send + Sync {
     /// Persist a new event.
@@ -37,15 +35,6 @@ pub trait FeedStore: Send + Sync {
 
     /// Query events matching `filter`, returned in chronological order.
     async fn query(&self, filter: FeedFilter) -> crate::Result<Vec<FeedEvent>>;
-
-    /// Mark all events up to (and including) `up_to` as read for `subscriber`.
-    ///
-    /// The read cursor is per-subscriber, per-source so that multiple agent
-    /// sessions can independently track their consumption progress.
-    async fn mark_read(&self, subscriber: &SessionKey, up_to: FeedEventId) -> crate::Result<()>;
-
-    /// Return the number of unread events for `subscriber` across all sources.
-    async fn unread_count(&self, subscriber: &SessionKey) -> crate::Result<usize>;
 }
 
 /// Filter criteria for [`FeedStore::query`].

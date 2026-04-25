@@ -147,19 +147,29 @@ struct EventListResponse {
 async fn list_feeds(
     State(state): State<DataFeedRouterState>,
 ) -> Result<Json<Vec<DataFeedConfig>>, ProblemDetails> {
-    let feeds = state
-        .svc
-        .list_feeds()
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    let feeds = state.svc.list_feeds().await?;
     Ok(Json(feeds))
 }
 
 /// `POST /api/v1/data-feeds` — create a new feed, sync registry, start task.
 async fn create_feed(
     State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
     Json(body): Json<CreateFeedRequest>,
 ) -> Result<(StatusCode, Json<DataFeedConfig>), ProblemDetails> {
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "creating data feeds requires admin role",
+        ));
+    }
+    info!(
+        actor = %principal.user_id,
+        name = %body.name,
+        "create_feed"
+    );
+
     let auth = body
         .auth
         .map(serde_json::from_value)
@@ -181,11 +191,7 @@ async fn create_feed(
         .build();
 
     // 1. Persist to database.
-    state
-        .svc
-        .create_feed(&config)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    state.svc.create_feed(&config).await?;
 
     // 2. Sync to in-memory registry.
     if let Err(e) = state.registry.register(config.clone()) {
@@ -206,14 +212,9 @@ async fn get_feed(
     State(state): State<DataFeedRouterState>,
     Path(id): Path<String>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
     Ok(Json(feed))
 }
 
@@ -223,17 +224,26 @@ async fn get_feed(
 /// keep their current values.
 async fn update_feed(
     State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
     Path(id): Path<String>,
     Json(body): Json<UpdateFeedRequest>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let existing = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "updating data feeds requires admin role",
+        ));
+    }
+    info!(
+        actor = %principal.user_id,
+        feed_id = %id,
+        "update_feed"
+    );
+
+    let existing = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     // Merge: supplied field wins, otherwise keep existing.
     let new_name = body.name.unwrap_or(existing.name.clone());
@@ -265,11 +275,7 @@ async fn update_feed(
         .build();
 
     // 1. Persist to database.
-    state
-        .svc
-        .update_feed(&updated)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    state.svc.update_feed(&updated).await?;
 
     // 2. Sync registry: remove old entry (cancels running task), re-register.
     let _ = state.registry.remove(&existing.name);
@@ -316,11 +322,7 @@ async fn delete_feed(
     }
 
     // 2. Delete from database.
-    let deleted = state
-        .svc
-        .delete_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    let deleted = state.svc.delete_feed(&id).await?;
 
     if deleted {
         Ok(StatusCode::NO_CONTENT)
@@ -336,13 +338,23 @@ async fn delete_feed(
 /// needed).
 async fn toggle_feed(
     State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
     Path(id): Path<String>,
 ) -> Result<Json<DataFeedConfig>, ProblemDetails> {
-    let toggled = state
-        .svc
-        .toggle_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "toggling data feeds requires admin role",
+        ));
+    }
+    info!(
+        actor = %principal.user_id,
+        feed_id = %id,
+        "toggle_feed"
+    );
+
+    let toggled = state.svc.toggle_feed(&id).await?;
 
     if !toggled {
         return Err(ProblemDetails::not_found(
@@ -352,14 +364,9 @@ async fn toggle_feed(
     }
 
     // Fetch updated config.
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     // Sync registry: remove (cancels running task), re-register with new state.
     let _ = state.registry.remove(&feed.name);
@@ -392,14 +399,9 @@ async fn query_events(
     Path(id): Path<String>,
     Query(params): Query<EventQueryParams>,
 ) -> Result<Json<EventListResponse>, ProblemDetails> {
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     let since = params
         .since
@@ -414,8 +416,7 @@ async fn query_events(
     let page = state
         .svc
         .query_events(&feed.name, since, limit, offset)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?;
+        .await?;
 
     Ok(Json(EventListResponse {
         events:   page.events,
@@ -429,20 +430,14 @@ async fn get_event(
     State(state): State<DataFeedRouterState>,
     Path((id, event_id)): Path<(String, String)>,
 ) -> Result<Json<rara_kernel::data_feed::FeedEvent>, ProblemDetails> {
-    let feed = state
-        .svc
-        .get_feed(&id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
-        })?;
+    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+        ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
+    })?;
 
     let event = state
         .svc
         .get_event(&feed.name, &event_id)
-        .await
-        .map_err(|e| ProblemDetails::internal(e.to_string()))?
+        .await?
         .ok_or_else(|| {
             ProblemDetails::not_found("Event Not Found", format!("no event with id: {event_id}"))
         })?;
@@ -512,5 +507,138 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
                 "websocket feed type not yet implemented, skipping task start"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode},
+        middleware,
+    };
+    use rara_kernel::{
+        data_feed::DataFeedRegistry,
+        error::Result as KernelResult,
+        identity::{KernelUser, Permission, Role, UserStore},
+        security::{ApprovalManager, ApprovalPolicy, SecuritySubsystem},
+        testing::build_memory_diesel_pool,
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::auth::{AuthState, auth_layer};
+
+    struct TestUserStore {
+        user: KernelUser,
+    }
+
+    #[async_trait]
+    impl UserStore for TestUserStore {
+        async fn get_by_name(&self, name: &str) -> KernelResult<Option<KernelUser>> {
+            Ok((name == self.user.name).then(|| self.user.clone()))
+        }
+
+        async fn list(&self) -> KernelResult<Vec<KernelUser>> { Ok(vec![self.user.clone()]) }
+    }
+
+    fn user_of(role: Role) -> KernelUser {
+        KernelUser {
+            name: match role {
+                Role::Admin | Role::Root => "admin".into(),
+                Role::User => "alice".into(),
+            },
+            role,
+            permissions: match role {
+                Role::Admin | Role::Root => vec![Permission::All],
+                // Non-admin callers still need Spawn to resolve through the
+                // security subsystem — matches production user seeding.
+                Role::User => vec![Permission::Spawn],
+            },
+            enabled: true,
+        }
+    }
+
+    fn auth_state_direct(user: KernelUser) -> AuthState {
+        let name = user.name.clone();
+        let store: Arc<dyn UserStore> = Arc::new(TestUserStore { user });
+        let approval = Arc::new(ApprovalManager::new(ApprovalPolicy::default()));
+        let security = Arc::new(SecuritySubsystem::new(store, approval));
+        AuthState::for_tests("s3cret", &name, security)
+    }
+
+    /// Build a router whose handlers use a real (but empty / schema-less)
+    /// diesel pool. The non-admin Principal guard runs before any DB query,
+    /// so the pool is never hit on the 403 path these tests exercise.
+    async fn app_with_user(user: KernelUser) -> Router {
+        let pool = build_memory_diesel_pool().await;
+        let svc = DataFeedSvc::new(pool);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(DataFeedRegistry::new(event_tx));
+        let state = DataFeedRouterState { svc, registry };
+        let auth = auth_state_direct(user);
+        data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
+    }
+
+    #[tokio::test]
+    async fn non_admin_cannot_create_feed() {
+        let app = app_with_user(user_of(Role::User)).await;
+        let body = serde_json::json!({
+            "name": "x",
+            "feed_type": "polling",
+            "tags": [],
+            "transport": {},
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_admin_cannot_update_feed() {
+        let app = app_with_user(user_of(Role::User)).await;
+        let body = serde_json::json!({ "name": "new" });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/data-feeds/some-id")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_admin_cannot_toggle_feed() {
+        let app = app_with_user(user_of(Role::User)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/data-feeds/some-id/toggle")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 }

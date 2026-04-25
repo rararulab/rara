@@ -19,10 +19,12 @@
 //! and the in-memory
 //! [`DataFeedRegistry`](rara_kernel::data_feed::DataFeedRegistry).
 
+pub mod error;
 pub mod reporter;
 pub mod router;
 pub mod service;
 
+pub use error::{DataFeedSvcError, Result as DataFeedResult};
 pub use reporter::SvcStatusReporter;
 pub use router::{DataFeedRouterState, data_feed_routes, start_feed_task};
 pub use service::DataFeedSvc;
