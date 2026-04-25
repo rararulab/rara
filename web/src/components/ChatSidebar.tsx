@@ -129,7 +129,7 @@ export function ChatSidebar({
   return (
     <aside
       className={cn(
-        'flex h-screen shrink-0 flex-col border-r border-border/50 bg-background/40 backdrop-blur-md transition-[width] duration-200 ease-out',
+        'flex h-screen shrink-0 flex-col border-r border-border bg-canvas transition-[width] duration-200 ease-out',
         collapsed ? 'w-14' : 'w-64',
       )}
     >
@@ -203,7 +203,7 @@ export function ChatSidebar({
       {/* History list */}
       {!collapsed && (
         <>
-          <div className="mb-1 mt-4 shrink-0 px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+          <div className="mb-1 mt-4 shrink-0 px-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             历史会话
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -230,7 +230,7 @@ export function ChatSidebar({
                     <div className="truncate text-[13px] leading-tight">
                       {stripForPreview(s.title || s.preview || '新对话')}
                     </div>
-                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                       {formatRelativeDate(s.updated_at)}
                     </div>
                   </button>

@@ -69,6 +69,7 @@ import {
   TraceOverflowMenu,
 } from '@/components/chat/TraceOverflowMenu';
 import { ChatSidebar } from '@/components/ChatSidebar';
+import { ChatWelcome } from '@/components/ChatWelcome';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { SessionSearchDialog } from '@/components/SessionSearchDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
@@ -999,22 +1000,15 @@ export default function PiChat() {
           </div>
         )}
         {/*
-          Welcome overlay — rendered above pi-web-ui's empty message list
-          when the active session has no messages. Pointer-events-none so
-          clicks pass through to the composer below; flipped off the
-          moment the user commits their first message (onBeforeSend).
+          Home empty-state — greeting + starter prompts + recent sessions
+          peek, rendered above pi-web-ui's empty message column. Sits in
+          a scroll-friendly absolute layer so it doesn't displace the
+          composer (composer stays anchored at the bottom of `<main>`,
+          identical to the populated session layout).
         */}
         {showWelcome && !isInitializing && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(40vh+8rem)] z-10 flex justify-center px-6">
-            <div className="flex flex-col items-center gap-3">
-              <div
-                className="text-[32px] font-semibold leading-none tracking-tight text-foreground"
-                style={{ fontFamily: 'var(--font-sans)' }}
-              >
-                rara
-              </div>
-              <p className="text-sm text-muted-foreground">How can I help today?</p>
-            </div>
+          <div className="pointer-events-none absolute inset-0 z-10 overflow-y-auto">
+            <ChatWelcome onSelectSession={(s) => void switchSession(s)} />
           </div>
         )}
         {/*

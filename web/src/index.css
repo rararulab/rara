@@ -110,6 +110,14 @@
    * as the tool-call glass bubble so the page reads as one palette.
    */
   --canvas: oklch(0.96 0.005 250);
+
+  /*
+   * Darken pi-web-ui's stock `--muted-foreground` (oklch 55.6%) to clear
+   * WCAG AA 4.5:1 against the cooler `--canvas`. Pi's value barely
+   * passes against pure white (4.57:1) — the canvas is darker, so 11px
+   * timestamps and meta copy fall under without this override.
+   */
+  --muted-foreground: oklch(45% 0 0);
 }
 
 .dark {
@@ -130,7 +138,7 @@
   --secondary: #f0dee0;
   --secondary-foreground: #3d2b2e;
   --muted: #f0dee0;
-  --muted-foreground: #8c7478;
+  --muted-foreground: #6b5256;
   --accent: #f0dee0;
   --accent-foreground: #3d2b2e;
   --destructive: #d46a6a;
@@ -226,36 +234,19 @@
     font-family: var(--font-mono);
   }
   /*
-   * Chat-shell atmosphere: one very faint info-blue glow in the top-left
-   * corner, painted on top of the canvas. Ties the page to the same cool
-   * palette the user-message glass bubble uses, stops the chat from
-   * reading as "bare white sheet" without pulling focus from content.
+   * Chat-shell background — neutral, matches the restraint ChatGPT and
+   * Claude.ai use. The canvas already provides a slight off-white tint
+   * (see `--canvas` above); we just clear any prior gradient on
+   * `.rara-chat` so the page reads as a single calm sheet. Atmosphere
+   * for the chat now comes from the bubbles and avatar ring, not from
+   * page-level color washes.
    */
   .rara-chat {
-    background-image:
-      radial-gradient(
-        ellipse 70% 50% at 0% 0%,
-        color-mix(in oklab, oklch(0.62 0.18 250) 22%, transparent) 0%,
-        transparent 65%
-      ),
-      radial-gradient(
-        ellipse 60% 45% at 100% 100%,
-        color-mix(in oklab, oklch(0.72 0.14 340) 20%, transparent) 0%,
-        transparent 60%
-      );
+    background-image: none;
+    background-color: var(--color-background);
   }
   .dark .rara-chat {
-    background-image:
-      radial-gradient(
-        ellipse 70% 50% at 0% 0%,
-        color-mix(in oklab, oklch(0.62 0.18 250) 22%, transparent) 0%,
-        transparent 65%
-      ),
-      radial-gradient(
-        ellipse 60% 45% at 100% 100%,
-        color-mix(in oklab, oklch(0.55 0.14 340) 20%, transparent) 0%,
-        transparent 60%
-      );
+    background-color: var(--color-background);
   }
 
   /* Rara admin gradient background — only on admin pages */
@@ -420,26 +411,12 @@
 }
 
 /*
- * Welcome-state composer lift. When the session is empty we float the
- * composer (pi-web-ui's last flex-col child) up to sit near the middle
- * of the viewport, together with the RARA wordmark positioned just
- * above it. The floating voice button piggybacks on the same translate
- * so it keeps its alignment with the paperclip inside the composer.
- * Transition is long enough to read as an intentional shift when the
- * first message flips us out of welcome mode.
+ * Composer position is identical between empty (Home) and populated
+ * (Session) states — anchored to the bottom of `<main>` by pi-web-ui's
+ * own flex layout. The Home empty-state panel (`ChatWelcome`) renders
+ * in the scroll area above instead of lifting the composer, matching
+ * ChatGPT/Claude.ai. No translate needed.
  */
-.rara-chat[data-welcome='true'] agent-interface .flex-col.bg-background > *:last-child,
-.rara-chat[data-welcome='true'] .voice-float {
-  /* Lifts the composer centre close to viewport centre. Natural bottom
-     is ~8-10rem from the edge (padding + composer body), so ~40vh up
-     lands the centre near 50vh with some headroom for the wordmark. */
-  transform: translateY(-40vh);
-  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-.rara-chat agent-interface .flex-col.bg-background > *:last-child,
-.rara-chat .voice-float {
-  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
-}
 
 /*
  * Cap the composer width and centre it so a wide viewport doesn't
@@ -518,6 +495,12 @@
  */
 .rara-chat agent-interface .overflow-y-auto > .max-w-3xl {
   padding-bottom: var(--rara-live-card-h, 0);
+  /* Tighten pi-web-ui's default `p-4` (16px) on the inline axis — a
+     little less air around bubbles reads closer to ChatGPT/Claude
+     density. Vertical padding is left to pi-web-ui so its content
+     observer keeps scroll math correct. */
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
 }
 .rara-chat agent-interface .overflow-y-auto {
   scroll-padding-bottom: var(--rara-live-card-h, 0);
@@ -565,6 +548,29 @@
 }
 
 @layer components {
+  /*
+   * Typography scale (#1789). Three load-bearing classes so visual
+   * hierarchy doesn't rely on whitespace alone:
+   *   `.text-h1`            — page-level greeting / hero header
+   *   `.text-h2`            — sub-header inside a page
+   *   `.text-section-label` — uppercase tag above a list/grid section
+   *   `.text-body-lg`       — slightly relaxed body for hero subtitles
+   * Plain `text-sm` / `text-xs` continue to carry body and meta copy;
+   * the scale is intentionally narrow — three new classes, not eight.
+   */
+  .text-h1 {
+    @apply text-3xl font-semibold leading-tight tracking-tight sm:text-4xl;
+  }
+  .text-h2 {
+    @apply text-xl font-semibold leading-tight tracking-tight;
+  }
+  .text-section-label {
+    @apply text-[11px] font-medium uppercase tracking-wider;
+  }
+  .text-body-lg {
+    @apply text-base leading-relaxed;
+  }
+
   .app-surface {
     background: color-mix(in oklab, var(--color-card) 92%, transparent);
     backdrop-filter: blur(14px);
