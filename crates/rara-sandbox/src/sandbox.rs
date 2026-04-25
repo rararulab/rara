@@ -117,10 +117,4 @@ impl Sandbox {
             .context(BoxliteSnafu)?;
         Ok(())
     }
-
-    /// Read-only access to the wrapped boxlite handle.
-    ///
-    /// Exposed for integration tests and advanced callers that need a
-    /// boxlite knob we have not yet lifted into this crate's public API.
-    pub fn litebox(&self) -> &LiteBox { &self.litebox }
 }

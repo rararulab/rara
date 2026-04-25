@@ -43,6 +43,12 @@ Public surface (intentionally minimal, see #1697/#1698):
 - **All errors go through `snafu`.** Boxlite errors wrap via
   `.context(BoxliteSnafu)?`. Do not introduce `thiserror` or manual
   `impl Error`.
+- **`Sandbox` is a single-owner handle.** It inherits whatever
+  auto-traits boxlite's `LiteBox` provides — we do not add `Send`/`Sync`
+  bounds of our own. Callers that need to share a sandbox across async
+  tasks must wrap it in `Arc<tokio::Mutex<Sandbox>>` (or equivalent); do
+  not assume `Sync`. If boxlite tightens or loosens those bounds in a
+  future release, this crate's surface follows along automatically.
 
 ## What NOT To Do
 
@@ -62,6 +68,12 @@ Public surface (intentionally minimal, see #1697/#1698):
 - Do NOT call `boxlite::init_logging_for` from inside this crate —
   **why:** tracing init is an application-layer concern; library crates
   that install global subscribers fight the host's `tracing` setup.
+- Do NOT silently keep relying on `BOXLITE_DEPS_STUB="1"` in CI —
+  **why:** the stub disables native compilation of `bubblewrap-sys` and
+  `libkrun-sys`, so CI cannot catch link-time / FFI / `build.rs`
+  regressions in those crates. See #1842 for the plan to drop the env
+  var once a macOS (or properly-provisioned Linux) runner builds boxlite
+  for real.
 
 ## Dependencies
 
