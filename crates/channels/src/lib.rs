@@ -27,6 +27,7 @@
 pub mod telegram;
 pub mod terminal;
 pub mod web;
+pub mod web_reply_buffer;
 pub mod wechat;
 
 /// Tool display formatting helpers.

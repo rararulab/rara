@@ -82,6 +82,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
+use crate::web_reply_buffer::ReplyBuffer;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -507,6 +509,13 @@ pub struct WebAdapter {
     shutdown_rx:       watch::Receiver<bool>,
     /// Optional STT service for transcribing voice messages to text.
     stt_service:       Option<rara_stt::SttService>,
+    /// Per-session ring buffer for "important" `WebEvent`s. When set,
+    /// adapter publishes that match
+    /// [`ReplyBuffer::should_buffer`] are appended so that a later
+    /// WS / SSE reconnect can drain them and recover task-completion
+    /// replies that fired while no listener was attached (issue #1804).
+    /// When `None`, buffering is disabled and behaviour matches pre-#1804.
+    reply_buffer:      Option<Arc<ReplyBuffer>>,
 }
 
 impl WebAdapter {
@@ -529,6 +538,7 @@ impl WebAdapter {
             shutdown_tx,
             shutdown_rx,
             stt_service: None,
+            reply_buffer: None,
         }
     }
 
@@ -536,6 +546,15 @@ impl WebAdapter {
     #[must_use]
     pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
         self.stt_service = stt;
+        self
+    }
+
+    /// Attach a per-session [`ReplyBuffer`] so that "important" outbound
+    /// events survive periods when no WS / SSE listener is attached.
+    /// Pass `None` to disable buffering (legacy behaviour).
+    #[must_use]
+    pub fn with_reply_buffer(mut self, buffer: Option<Arc<ReplyBuffer>>) -> Self {
+        self.reply_buffer = buffer;
         self
     }
 
@@ -555,6 +574,7 @@ impl WebAdapter {
             owner_user_id:     self.owner_user_id.clone(),
             shutdown_rx:       self.shutdown_rx.clone(),
             stt_service:       self.stt_service.clone(),
+            reply_buffer:      self.reply_buffer.clone(),
         };
 
         Router::new()
@@ -602,6 +622,14 @@ impl WebAdapter {
         Ok(())
     }
 
+    /// Test-only: subscribe to the per-session adapter event bus,
+    /// creating it lazily if needed. Mirrors what the WS / SSE
+    /// handlers do at connect time.
+    #[doc(hidden)]
+    pub fn subscribe_for_test(&self, session_key: &SessionKey) -> broadcast::Receiver<WebEvent> {
+        Self::get_or_create_adapter_bus(&self.adapter_events, *session_key).subscribe()
+    }
+
     /// Get or create the per-session adapter-event broadcast sender.
     ///
     /// Kept deliberately minimal — the heavy fan-out path (kernel stream
@@ -619,29 +647,63 @@ impl WebAdapter {
     }
 
     /// Publish an adapter-local event to all WS/SSE tasks subscribed to
-    /// `session_key`. Silently drops if no bus exists (no consumers yet).
+    /// `session_key`, and optionally append it to the per-session
+    /// [`ReplyBuffer`] when [`ReplyBuffer::should_buffer`] returns `true`.
+    ///
+    /// The broadcast send always runs first so a connected receiver sees
+    /// the event with no extra latency; the buffer append happens after,
+    /// gated by `should_buffer` to avoid hoarding streaming token deltas.
+    /// Buffering is unconditional on the publish side: it does not check
+    /// `receiver_count`. Trade-off: a tab that read an event live will
+    /// see it again if it disconnects + reconnects within the TTL window.
+    /// See `web_reply_buffer.rs` module docs.
     fn publish_adapter_event(
         buses: &DashMap<SessionKey, broadcast::Sender<WebEvent>>,
+        reply_buffer: Option<&Arc<ReplyBuffer>>,
         session_key: &SessionKey,
         event: WebEvent,
     ) {
-        let Some(tx) = buses.get(session_key) else {
-            return;
-        };
         let event_kind: &'static str = (&event).into();
-        let receiver_count = tx.receiver_count();
-        tracing::debug!(
-            session_key = %session_key,
-            receiver_count,
-            event_kind,
-            "web publish_adapter_event"
-        );
-        if tx.send(event).is_err() {
-            tracing::warn!(
+        // Only clone the event when it actually needs buffering — keeps
+        // streaming hot paths (TextDelta / ReasoningDelta / …) at zero
+        // extra allocations.
+        let buffer_target = match reply_buffer {
+            Some(buf) if ReplyBuffer::should_buffer(&event) => Some(buf),
+            _ => None,
+        };
+        if let Some(tx) = buses.get(session_key) {
+            let receiver_count = tx.receiver_count();
+            tracing::debug!(
+                session_key = %session_key,
+                receiver_count,
+                event_kind,
+                "web publish_adapter_event"
+            );
+            let send_result = match buffer_target {
+                Some(buf) => {
+                    let for_buf = event.clone();
+                    let r = tx.send(event);
+                    buf.append(session_key, for_buf);
+                    r
+                }
+                None => tx.send(event),
+            };
+            if send_result.is_err() {
+                tracing::warn!(
+                    session_key = %session_key,
+                    event_kind,
+                    "web publish: no active receivers"
+                );
+            }
+        } else {
+            tracing::debug!(
                 session_key = %session_key,
                 event_kind,
-                "web publish: no active receivers"
+                "web publish_adapter_event: no bus yet"
             );
+            if let Some(buf) = buffer_target {
+                buf.append(session_key, event);
+            }
         }
     }
 }
@@ -661,6 +723,7 @@ async fn approval_listener(
     mut request_rx: tokio::sync::broadcast::Receiver<ApprovalRequest>,
     mut resolution_rx: tokio::sync::broadcast::Receiver<ApprovalResponse>,
     adapter_events: Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
+    reply_buffer: Option<Arc<ReplyBuffer>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let session_by_request: Arc<DashMap<uuid::Uuid, SessionKey>> = Arc::new(DashMap::new());
@@ -683,7 +746,12 @@ async fn approval_listener(
                             requested_at: req.requested_at.to_string(),
                             timeout_secs: req.timeout_secs,
                         };
-                        WebAdapter::publish_adapter_event(&adapter_events, &req.session_key, event);
+                        WebAdapter::publish_adapter_event(
+                            &adapter_events,
+                            reply_buffer.as_ref(),
+                            &req.session_key,
+                            event,
+                        );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -704,7 +772,12 @@ async fn approval_listener(
                             id: resp.request_id.to_string(),
                             decision,
                         };
-                        WebAdapter::publish_adapter_event(&adapter_events, &session_key, event);
+                        WebAdapter::publish_adapter_event(
+                            &adapter_events,
+                            reply_buffer.as_ref(),
+                            &session_key,
+                            event,
+                        );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -753,6 +826,8 @@ struct WebAdapterState {
     owner_user_id:     String,
     shutdown_rx:       watch::Receiver<bool>,
     stt_service:       Option<rara_stt::SttService>,
+    /// Optional per-session ring buffer; see [`WebAdapter::reply_buffer`].
+    reply_buffer:      Option<Arc<ReplyBuffer>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,6 +1089,26 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
     let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
     let mut adapter_rx = adapter_bus.subscribe();
 
+    // Drain any "important" events buffered during a no-listener window
+    // BEFORE the live forwarder starts pushing into the same mpsc, so the
+    // socket sees buffered events first in publish order. The buffer is
+    // not removed on drain — see `web_reply_buffer` module docs for why.
+    if let Some(ref buf) = state.reply_buffer {
+        let backlog = buf.snapshot(&session_key);
+        if !backlog.is_empty() {
+            debug!(
+                session_key = %session_key_str,
+                count = backlog.len(),
+                "draining web reply buffer to new WS"
+            );
+            for ev in backlog {
+                if ws_event_tx.send(ev).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
     // Forwarder: adapter bus → per-WS mpsc.
     let adapter_forwarder = {
         let ws_event_tx = ws_event_tx.clone();
@@ -1116,6 +1211,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         let session_key_str = session_key_str.clone();
         let user_id = state.owner_user_id.clone();
         let stt_service = state.stt_service.clone();
+        let reply_buffer = state.reply_buffer.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 let text = match msg {
@@ -1140,6 +1236,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                     warn!(session_key = %session_key_str, "sink not set");
                     WebAdapter::publish_adapter_event(
                         &adapter_events,
+                        reply_buffer.as_ref(),
                         &session_key,
                         WebEvent::Error {
                             message: "adapter not started".to_owned(),
@@ -1148,7 +1245,12 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                     continue;
                 };
 
-                WebAdapter::publish_adapter_event(&adapter_events, &session_key, WebEvent::Typing);
+                WebAdapter::publish_adapter_event(
+                    &adapter_events,
+                    reply_buffer.as_ref(),
+                    &session_key,
+                    WebEvent::Typing,
+                );
 
                 // When no channel binding exists yet (first message),
                 // resolve() returns session_key = None. Patch it with the
@@ -1162,6 +1264,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                             error!(session_key = %session_key_str, error = %e, "submit_message failed");
                             WebAdapter::publish_adapter_event(
                                 &adapter_events,
+                                reply_buffer.as_ref(),
                                 &session_key,
                                 WebEvent::Error {
                                     message: e.to_string(),
@@ -1177,6 +1280,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                         error!(session_key = %session_key_str, error = %e, "resolve failed");
                         WebAdapter::publish_adapter_event(
                             &adapter_events,
+                            reply_buffer.as_ref(),
                             &session_key,
                             WebEvent::Error {
                                 message: e.to_string(),
@@ -1235,6 +1339,24 @@ async fn sse_handler(
 
     let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
     let mut adapter_rx = adapter_bus.subscribe();
+
+    // Drain any buffered "important" events before live tail starts.
+    if let Some(ref buf) = state.reply_buffer {
+        let backlog = buf.snapshot(&session_key);
+        if !backlog.is_empty() {
+            debug!(
+                session_key = %params.session_key,
+                count = backlog.len(),
+                "draining web reply buffer to new SSE"
+            );
+            for ev in backlog {
+                if ev_tx.send(ev).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
     {
         let ev_tx = ev_tx.clone();
         let skey = params.session_key.clone();
@@ -1401,6 +1523,7 @@ async fn send_message_handler(
         Some(sink) => {
             WebAdapter::publish_adapter_event(
                 &state.adapter_events,
+                state.reply_buffer.as_ref(),
                 &session_key,
                 WebEvent::Typing,
             );
@@ -1480,7 +1603,12 @@ impl ChannelAdapter for WebAdapter {
         };
 
         let event = platform_outbound_to_web_event(msg);
-        WebAdapter::publish_adapter_event(&self.adapter_events, &session_key, event);
+        WebAdapter::publish_adapter_event(
+            &self.adapter_events,
+            self.reply_buffer.as_ref(),
+            &session_key,
+            event,
+        );
         Ok(())
     }
 
@@ -1502,6 +1630,7 @@ impl ChannelAdapter for WebAdapter {
                 request_rx,
                 resolution_rx,
                 events,
+                self.reply_buffer.clone(),
                 shutdown_rx,
             ));
         }
@@ -1525,7 +1654,12 @@ impl ChannelAdapter for WebAdapter {
         let Ok(key) = SessionKey::try_from_raw(session_key) else {
             return Ok(());
         };
-        WebAdapter::publish_adapter_event(&self.adapter_events, &key, WebEvent::Typing);
+        WebAdapter::publish_adapter_event(
+            &self.adapter_events,
+            self.reply_buffer.as_ref(),
+            &key,
+            WebEvent::Typing,
+        );
         Ok(())
     }
 
@@ -1535,6 +1669,7 @@ impl ChannelAdapter for WebAdapter {
         };
         WebAdapter::publish_adapter_event(
             &self.adapter_events,
+            self.reply_buffer.as_ref(),
             &key,
             WebEvent::Phase {
                 phase: phase.to_string(),

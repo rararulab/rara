@@ -131,6 +131,32 @@ agents:
     max_output_chars: 50
 
 # ---------------------------------------------------------------------------
+# Web channel adapter (optional)
+# ---------------------------------------------------------------------------
+#
+# `reply_buffer` is a per-session in-memory ring of "important" outbound
+# events (final `message`, `error`, `background_task_done`, `progress`).
+# When a long-running background task completes while the user has
+# closed the browser tab, the WS broadcast has zero receivers and the
+# event would otherwise be silently dropped. The buffer keeps the last
+# `capacity` events per session for `ttl`, so a reconnecting tab drains
+# them before live tail starts. Streaming token deltas are NOT buffered.
+#
+# Trade-off: buffer is keyed per session, not per receiver — a tab that
+# disconnects + reconnects within `ttl` will see events it already saw
+# delivered a second time. The frontend can dedupe by payload if
+# necessary.
+#
+# Omit the block entirely to disable buffering (legacy pre-#1804
+# behaviour).
+
+web:
+  reply_buffer:
+    capacity: 64
+    ttl: 10m
+    sweep_interval: 1m
+
+# ---------------------------------------------------------------------------
 # Optional integrations — remove or leave commented out if unused
 # ---------------------------------------------------------------------------
 
