@@ -24,6 +24,8 @@ import {
   EyeOff,
   Mail,
   MessageSquare,
+  Monitor,
+  Moon,
   Plus,
   Save,
   Settings2,
@@ -135,6 +137,18 @@ const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; descrip
     label: 'Light',
     icon: <Sun className="h-4 w-4" />,
     description: 'Bright workspace',
+  },
+  {
+    key: 'dark',
+    label: 'Dark',
+    icon: <Moon className="h-4 w-4" />,
+    description: 'Dim, easy on eyes',
+  },
+  {
+    key: 'system',
+    label: 'System',
+    icon: <Monitor className="h-4 w-4" />,
+    description: 'Match OS setting',
   },
 ];
 
@@ -837,50 +851,37 @@ export default function SettingsPanel({
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="font-medium">Theme</p>
-                      <p className="text-xs text-muted-foreground">
-                        Choose how the UI looks across all pages.
-                      </p>
-                    </div>
-                    <Badge variant="secondary" className="capitalize">
-                      {theme}
-                    </Badge>
+                  <div className="mb-3 space-y-1">
+                    <p className="font-medium">Theme</p>
+                    <p className="text-xs text-muted-foreground">
+                      Choose how the UI looks across all pages.
+                    </p>
                   </div>
-                  <div className="grid gap-2 md:grid-cols-3">
-                    {THEME_OPTIONS.map((option) => (
-                      <button
-                        key={option.key}
-                        type="button"
-                        onClick={() => setTheme(option.key)}
-                        className={cn(
-                          'group rounded-xl border p-3 text-left transition-all',
-                          theme === option.key
-                            ? 'border-primary/30 bg-primary/8 shadow-sm ring-1 ring-primary/10'
-                            : 'hover:bg-accent/40',
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              'inline-flex h-8 w-8 items-center justify-center rounded-lg border',
-                              theme === option.key
-                                ? 'border-primary/20 bg-primary/10 text-primary'
-                                : 'border-border/70 bg-background/70 text-muted-foreground',
-                            )}
-                          >
-                            {option.icon}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium">{option.label}</p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              {option.description}
-                            </p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {THEME_OPTIONS.map((option) => {
+                      const isActive = theme === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => setTheme(option.key)}
+                          className={cn(
+                            'flex flex-col items-start gap-1.5 rounded-card border px-3 py-3 text-left transition-colors',
+                            isActive
+                              ? 'border-brand bg-muted'
+                              : 'border-border/60 hover:bg-muted/40',
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">{option.icon}</span>
+                            <span className="text-sm font-medium">{option.label}</span>
                           </div>
-                        </div>
-                      </button>
-                    ))}
+                          <span className="text-xs text-muted-foreground">
+                            {option.description}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
