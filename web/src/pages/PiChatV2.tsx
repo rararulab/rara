@@ -27,15 +27,10 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/chat/ai-elements/conversation';
-import { Message, MessageContent } from '@/components/chat/ai-elements/message';
-import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-  ToolInput,
-  ToolOutput,
-} from '@/components/chat/ai-elements/tool';
+import { Message, MessageContent, MessageResponse } from '@/components/chat/ai-elements/message';
+import { Tool, ToolContent, ToolHeader } from '@/components/chat/ai-elements/tool';
 import { applyRaraEvent, historyToUIMessages } from '@/components/chat/rara-to-uimessage';
+import { ToolRenderer, toolHeaderSummary } from '@/components/chat/tool-renderers';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { Button } from '@/components/ui/button';
@@ -292,29 +287,39 @@ export default function PiChatV2() {
   );
 }
 
-/** Render one UIMessage part. PR3 will replace tool-card semantics with the
- *  per-tool rich renderer; this is the plaintext baseline. */
+/** Render one UIMessage part. Text/reasoning go through Streamdown so
+ *  markdown (bold, headings, code, tables) renders correctly even mid-stream;
+ *  tool calls dispatch to a per-tool rich renderer. */
 function RenderPart({ part }: { part: TextUIPart | ReasoningUIPart | DynamicToolUIPart }) {
   if (part.type === 'text') {
-    return <div className="whitespace-pre-wrap text-sm text-foreground">{part.text}</div>;
-  }
-  if (part.type === 'reasoning') {
     return (
-      <div className="whitespace-pre-wrap rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        <div className="mb-1 font-medium uppercase tracking-wide">Reasoning</div>
-        {part.text}
+      <div className="prose prose-sm dark:prose-invert max-w-none text-sm text-foreground">
+        <MessageResponse>{part.text}</MessageResponse>
       </div>
     );
   }
-  // dynamic-tool — render via the ported Tool card.
-  const errorText = part.state === 'output-error' ? part.errorText : undefined;
-  const output = part.state === 'output-available' ? part.output : undefined;
+  if (part.type === 'reasoning') {
+    return (
+      <div className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+        <div className="mb-1 font-medium uppercase tracking-wide">Reasoning</div>
+        <MessageResponse>{part.text}</MessageResponse>
+      </div>
+    );
+  }
+  // dynamic-tool — render via the ported Tool card with a per-tool body.
+  const summary = toolHeaderSummary(part);
+  const headerProps = {
+    type: 'dynamic-tool' as const,
+    toolName: part.toolName,
+    state: part.state,
+    className: '[&_span]:truncate',
+    ...(summary ? { title: `${part.toolName} · ${summary}` } : {}),
+  };
   return (
     <Tool>
-      <ToolHeader type="dynamic-tool" toolName={part.toolName} state={part.state} />
+      <ToolHeader {...headerProps} />
       <ToolContent>
-        <ToolInput input={part.input} />
-        <ToolOutput output={output} errorText={errorText} />
+        <ToolRenderer part={part} />
       </ToolContent>
     </Tool>
   );
