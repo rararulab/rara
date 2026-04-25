@@ -25,7 +25,6 @@ import type { ChatMessageData, ChatSession, ProviderInfo } from '@/api/types';
 import {
   Conversation,
   ConversationContent,
-  ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/chat/ai-elements/conversation';
 import { Message, MessageContent, MessageResponse } from '@/components/chat/ai-elements/message';
@@ -373,8 +372,17 @@ export default function PiChatV2() {
     return activeSession.title || activeSession.preview || '新对话';
   }, [activeSession]);
 
+  // Only the elevated thinking buckets get a header pill — `off`/`minimal`/
+  // `low` are noise on the title row, and `null` means the session inherits
+  // `llm.default_provider`'s level so the UI has nothing concrete to label.
+  const thinkingPillLevel = useMemo(() => {
+    const level = activeSession?.thinking_level;
+    if (level === 'medium' || level === 'high' || level === 'xhigh') return level;
+    return null;
+  }, [activeSession?.thinking_level]);
+
   return (
-    <div className="flex h-screen w-screen">
+    <div className="rara-chat-v2 flex h-screen w-screen">
       <ChatSidebar
         activeSessionKey={activeSession?.key}
         onSelect={(s) => void selectSession(s)}
@@ -388,8 +396,13 @@ export default function PiChatV2() {
       />
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
-          <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-            {headerTitle}
+          <h1 className="flex min-w-0 flex-1 items-center gap-2 truncate text-sm font-semibold text-foreground">
+            <span className="truncate">{headerTitle}</span>
+            {thinkingPillLevel ? (
+              <span className="bg-brand/10 text-brand ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium">
+                {thinkingPillLevel} thinking
+              </span>
+            ) : null}
           </h1>
           <span className="shrink-0 truncate rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-xs text-amber-700 dark:text-amber-300">
             chat-v2 preview
@@ -399,9 +412,15 @@ export default function PiChatV2() {
         <Conversation className="min-h-0 flex-1">
           <ConversationContent className="mx-auto w-full max-w-3xl">
             {messages.length === 0 ? (
-              <ConversationEmptyState
-                title="No messages yet"
-                description="Type below to start a conversation."
+              <ChatEmptyState
+                disabled={!activeSession || streaming}
+                onPick={(prompt) => {
+                  // Drop the picked suggestion straight into the WebSocket
+                  // sender — feels snappier than seeding the composer and
+                  // making the user press enter, and the empty-state row
+                  // never reappears once the first turn lands.
+                  sendMessage(prompt);
+                }}
               />
             ) : (
               messages.map((msg) => {
@@ -513,6 +532,49 @@ export default function PiChatV2() {
         error={execTraceError}
         onClose={() => setExecTraceOpen(false)}
       />
+    </div>
+  );
+}
+
+/** Suggested prompts shown on the empty state. Hardcoded for PR6 — a future
+ *  PR may pull these from kernel state (recent topics, skill registry) once
+ *  the empty-state shell has stabilised. */
+const SUGGESTED_PROMPTS: readonly string[] = [
+  'What can rara do for me right now?',
+  'Show me my recent sessions',
+  "Explain rara's heartbeat architecture",
+];
+
+/** Empty-state hero rendered when the active session has no messages.
+ *  Centred lockup + tagline + 3 suggestion cards that submit straight to the
+ *  WebSocket on click. `disabled` mirrors the composer's disabled state so a
+ *  user can't fire a suggestion mid-stream or before a session exists. */
+function ChatEmptyState({
+  disabled,
+  onPick,
+}: {
+  disabled: boolean;
+  onPick: (prompt: string) => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 px-4 py-16">
+      <div className="flex flex-col items-center gap-2">
+        <div className="text-[32px] font-semibold tracking-tight text-foreground">rara</div>
+        <div className="text-sm text-muted-foreground">How can I help today?</div>
+      </div>
+      <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
+        {SUGGESTED_PROMPTS.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(prompt)}
+            className="rounded-xl border border-border/60 p-4 text-left text-sm text-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
