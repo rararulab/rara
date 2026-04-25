@@ -16,7 +16,7 @@
 
 import { useState } from 'react';
 
-import { setBackendUrl, getBackendUrl } from '@/api/client';
+import { type AuthUser, getBackendUrl, setAuth, setBackendUrl } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -26,58 +26,98 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 interface ConnectionSetupDialogProps {
   open: boolean;
   onConnect: () => void;
 }
 
-/** First-launch dialog that prompts the user to enter their backend URL. */
-export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialogProps) {
+/**
+ * First-launch dialog that captures the backend URL and owner token in one
+ * step. Probes `/api/v1/whoami` (which lives inside the admin CORS+auth layer)
+ * to validate both at once, then persists URL + auth and reloads.
+ */
+export function ConnectionSetupDialog({ onConnect, open }: ConnectionSetupDialogProps) {
   const [url, setUrl] = useState(() => getBackendUrl());
-  const [testing, setTesting] = useState(false);
+  const [token, setToken] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function testConnection() {
-    setTesting(true);
+  async function handleConnect() {
+    const trimmedUrl = url.trim().replace(/\/+$/, '');
+    const trimmedToken = token.trim();
+    if (!trimmedUrl || !trimmedToken) return;
+
+    setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`${url}/api/v1/health`, {
+      const res = await fetch(`${trimmedUrl}/api/v1/whoami`, {
+        headers: { Authorization: `Bearer ${trimmedToken}` },
         signal: AbortSignal.timeout(5000),
       });
-      if (res.ok) {
-        setBackendUrl(url);
-        onConnect();
-      } else {
-        setError(`Server returned ${res.status}`);
+      if (res.status === 401) {
+        setError('Invalid owner token.');
+        return;
       }
-    } catch (e) {
-      setError(`Cannot connect: ${e instanceof Error ? e.message : String(e)}`);
+      if (!res.ok) {
+        setError(`Server returned ${res.status}`);
+        return;
+      }
+      const user = (await res.json()) as AuthUser;
+      setAuth(trimmedToken, user);
+      // setBackendUrl reloads; localStorage already holds auth + URL so the
+      // app boots straight into the authenticated route on the next mount.
+      setBackendUrl(trimmedUrl);
+      onConnect();
+    } catch {
+      setError('Cannot reach backend at this URL.');
     } finally {
-      setTesting(false);
+      setSubmitting(false);
     }
   }
+
+  const canSubmit = !!url.trim() && !!token.trim() && !submitting;
 
   return (
     <Dialog open={open}>
       <DialogContent className="sm:max-w-md" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>Connect to Rara</DialogTitle>
-          <DialogDescription>Enter the URL of your rara backend server.</DialogDescription>
+          <DialogDescription>
+            Enter the URL of your rara backend and your owner token.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://hostname:25555"
-            className="font-mono text-sm"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !testing) void testConnection();
-            }}
-          />
+          <div className="space-y-2">
+            <Label htmlFor="backend-url">Backend URL</Label>
+            <Input
+              id="backend-url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="http://hostname:25555"
+              className="font-mono text-sm"
+              disabled={submitting}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="owner-token">Owner token</Label>
+            <Input
+              id="owner-token"
+              type="password"
+              autoComplete="off"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="Bearer token from config.yaml"
+              disabled={submitting}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && canSubmit) void handleConnect();
+              }}
+            />
+          </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button onClick={testConnection} disabled={testing || !url.trim()} className="w-full">
-            {testing ? 'Testing...' : 'Connect'}
+          <Button onClick={handleConnect} disabled={!canSubmit} className="w-full">
+            {submitting ? 'Connecting…' : 'Connect'}
           </Button>
         </div>
       </DialogContent>
