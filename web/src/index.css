@@ -384,6 +384,21 @@
 }
 
 /*
+ * Hide pi-web-ui's inline tool-call cards while a turn is streaming.
+ * `StreamingMessageContainer.js` hardcodes `hideToolCalls=false`, so the
+ * heavy `BashRenderer` / etc. cards stack under the assistant bubble during
+ * streaming and then collapse into our compact `renderTurnChipCard` chips
+ * once the turn settles — visually jarring and redundant since the
+ * `AgentLiveCard` above already summarises in-flight tool activity.
+ *
+ * Only the streaming variant is suppressed; the historical messageRenderer
+ * already passes `hideToolCalls=true`, so this is a no-op there.
+ */
+.rara-chat streaming-message-container tool-message {
+  display: none;
+}
+
+/*
  * Pi-web-ui left-aligns user messages (`class="flex justify-start"`
  * on the bubble's parent). Flip to the right side — the standard
  * chat convention of "my messages on the right". `:has()` gives us a
