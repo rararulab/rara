@@ -47,8 +47,11 @@ test.describe('chat page with seeded sessions', () => {
   test('renders the sidebar history list with rows and passes a11y', async ({ page }, testInfo) => {
     await page.goto('/');
 
-    await expect(page.getByText('Design review')).toBeVisible();
-    await expect(page.getByText('Kernel status')).toBeVisible();
+    // Both sessions render as buttons in the sidebar. The chat header also
+    // shows the active session's title now, so plain text matches collide;
+    // pin the assertion to the sidebar's button role to keep them unique.
+    await expect(page.getByRole('button', { name: /^Design review/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Kernel status/ })).toBeVisible();
 
     await expect(page).toHaveScreenshot(`chat-sessions-${testInfo.project.name}.png`, {
       fullPage: true,
@@ -64,7 +67,7 @@ test.describe('chat page with seeded sessions', () => {
 
   test('sidebar new-session button is reachable', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByText('Design review')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Design review/ })).toBeVisible();
     // Smoke: the primary action is present on every viewport. Focus
     // probing is skipped because Mobile Safari requires user-gesture
     // emulation to move focus onto a button.
