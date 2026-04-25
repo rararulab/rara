@@ -17,7 +17,7 @@
 /**
  * Adapter: rara WebSocket events / REST history → AI SDK `UIMessage` shape.
  *
- * The new chat shell (`PiChatV2`) consumes `UIMessage[]`, but rara's backend
+ * The chat shell (`PiChat`) consumes `UIMessage[]`, but rara's backend
  * speaks its own `PublicWebEvent` discriminated union (see
  * `@/adapters/rara-stream`) and a separate REST history shape
  * (`ChatMessageData` from `@/api/types`). This module bridges both feeds so

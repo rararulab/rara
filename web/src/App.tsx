@@ -32,7 +32,6 @@ import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
 import Login from '@/pages/Login';
 import PiChat from '@/pages/PiChat';
-import PiChatV2 from '@/pages/PiChatV2';
 import Subscriptions from '@/pages/Subscriptions';
 
 const STORAGE_KEY = 'rara_backend_url';
@@ -88,21 +87,12 @@ export default function App() {
               {/* Owner-token login — public route, must not be guarded. */}
               <Route path="login" element={<Login />} />
 
-              {/* Fullscreen pi-web-ui chat */}
+              {/* Fullscreen chat */}
               <Route
                 index
                 element={
                   <RequireAuth>
                     <PiChat />
-                  </RequireAuth>
-                }
-              />
-
-              <Route
-                path="chat-v2"
-                element={
-                  <RequireAuth>
-                    <PiChatV2 />
                   </RequireAuth>
                 }
               />

@@ -14,1040 +14,501 @@
  * limitations under the License.
  */
 
-import { Agent } from '@mariozechner/pi-agent-core';
-import {
-  AppStorage,
-  setAppStorage,
-  SessionsStore,
-  SettingsStore,
-  // Stub stores only — rara's admin settings modal is the real source of
-  // truth for provider keys and custom providers (see #1581).
-  ProviderKeysStore,
-  CustomProvidersStore,
-  defaultConvertToLlm,
-  registerMessageRenderer,
-  // Importing the extract-document tool triggers a module-level
-  // `registerToolRenderer("extract_document", ...)` side effect so
-  // pi-mono can render server-triggered document-extraction tool calls.
-  extractDocumentTool,
-} from '@mariozechner/pi-web-ui';
-import { useQueryClient } from '@tanstack/react-query';
-import { html } from 'lit';
-import { useEffect, useRef, useCallback, useState } from 'react';
+import type { DynamicToolUIPart, ReasoningUIPart, TextUIPart } from 'ai';
+import { Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-// Reference the tool so Vite's tree-shaker keeps the module (and its
-// `registerToolRenderer` side effect) in the bundle. The actual tool
-// object is executed server-side; the renderer is what matters here.
-void extractDocumentTool;
-
-import {
-  aggregateTurnToolCalls,
-  assistantSeqByRef,
-  hasTextOrThinking,
-  isFirstAssistantOfTurn,
-  messagesForArtifactReconstruction,
-  toAgentMessages,
-  toolResultByCallId,
-  type ToolCallWithResult,
-} from './pi-chat-messages';
-
-import { RaraStorageBackend } from '@/adapters/rara-storage';
-import { createRaraStreamFn } from '@/adapters/rara-stream';
-import { api, settingsApi } from '@/api/client';
+import { buildWsUrl, type PublicWebEvent } from '@/adapters/rara-stream';
+import { api } from '@/api/client';
 import type { CascadeTrace, ExecutionTrace } from '@/api/kernel-types';
-import type { ProviderInfo } from '@/api/types';
-import type { ChatSession, ChatMessageData, ThinkingLevel } from '@/api/types';
-import { AgentLiveCard } from '@/components/agent-live/AgentLiveCard';
-import { liveRunStore } from '@/components/agent-live/live-run-store';
-import { AlmaCaret } from '@/components/AlmaCaret';
+import type { ChatMessageData, ChatSession, ProviderInfo } from '@/api/types';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '@/components/chat/ai-elements/conversation';
+import { Message, MessageContent, MessageResponse } from '@/components/chat/ai-elements/message';
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from '@/components/chat/ai-elements/prompt-input';
+import { Tool, ToolContent, ToolHeader } from '@/components/chat/ai-elements/tool';
 import { CascadeModal } from '@/components/chat/CascadeModal';
 import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
 import {
-  CASCADE_TRACE_EVENT,
-  EXECUTION_TRACE_EVENT,
-  TRACE_OVERFLOW_TRIGGER_CLASS,
-  TraceOverflowMenu,
-} from '@/components/chat/TraceOverflowMenu';
+  applyRaraEvent,
+  historyToUIMessages,
+  type RaraUIMessage,
+} from '@/components/chat/rara-to-uimessage';
+import { ToolRenderer, toolHeaderSummary } from '@/components/chat/tool-renderers';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
-import { SessionSearchDialog } from '@/components/SessionSearchDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
-import { useLiveCardHeight } from '@/hooks/use-live-card-height';
-import { useSessionDelete } from '@/hooks/use-session-delete';
 import { readStoredSessionKey, writeStoredSessionKey } from '@/lib/active-session';
-import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
-import { renderTurnChipCard } from '@/tools/turn-chip-card';
 
 /**
- * True when the given provider id is still present in rara's routable
- * catalog (from `/api/v1/chat/providers`). Fails open when the catalog
- * has not been loaded yet so session restore isn't blocked waiting on
- * an unrelated fetch — a stale provider caught later on send is still
- * cheaper than blocking the whole chat init.
- */
-function isRoutableProvider(
-  catalog: Set<string> | null,
-  provider: string | null | undefined,
-): boolean {
-  if (!provider) return false;
-  if (!catalog) return true;
-  return catalog.has(provider);
-}
-
-/**
- * Look up the admin-configured default `(provider, model)` pair in the
- * rara settings store. Returns `null` if the admin has not paired a
- * default model with their default provider — the caller falls back to
- * the unknown sentinel and pi-web-ui's composer pill goes blank instead
- * of inventing a model from its own hard-coded catalog (which would
- * surface a ghost "gemini-2.5-flash-lite" on a minimax-default install).
- */
-async function resolveAdminDefaultModel(): Promise<{
-  provider: string;
-  model: string;
-} | null> {
-  try {
-    const settings = await settingsApi.list();
-    const provider = settings['llm.default_provider']?.trim();
-    if (!provider) return null;
-    const model = settings[`llm.providers.${provider}.default_model`]?.trim();
-    if (!model) {
-      console.warn(
-        `Admin default provider \`${provider}\` has no default_model set — composer pill will show unknown.`,
-      );
-      return null;
-    }
-    return { provider, model };
-  } catch (e: unknown) {
-    console.warn('Failed to resolve admin default provider:', e);
-    return null;
-  }
-}
-
-/**
- * The rara backend accepts the same six buckets pi-mono exposes
- * (`off | minimal | low | medium | high | xhigh`), so the chat-panel
- * selector round-trips verbatim. This guard just narrows the type.
- */
-function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
-  switch (level) {
-    case 'off':
-    case 'minimal':
-    case 'low':
-    case 'medium':
-    case 'high':
-    case 'xhigh':
-      return level;
-    default:
-      return null;
-  }
-}
-
-/**
- * Payload of the per-turn detail / cascade CustomEvents dispatched by
- * `TraceOverflowMenu` when the user picks an entry from the `…`
- * overflow. Two parallel listeners below own one modal each so the
- * fetch + open path is isolated by lens.
- */
-interface TraceEventDetail {
-  seq: number;
-}
-
-/**
- * Register a Lit message renderer that wraps pi-web-ui's built-in
- * `<assistant-message>` element and appends two trace-detail buttons:
- *
- * - "📊 详情" → dispatches {@link EXECUTION_TRACE_EVENT}, opening a
- *   high-level per-turn summary (rationale / thinking / plan / tools /
- *   usage) matching Telegram's "📊 详情" button.
- * - "🔍 Cascade" → dispatches {@link CASCADE_TRACE_EVENT}, opening the
- *   tick-level tape replay (kept for debugging the agent loop; mirrors
- *   Telegram's "🔍 Cascade" button).
- *
- * Both dispatch a bubbling CustomEvent carrying the persisted `seq`
- * resolved via {@link assistantSeqByRef}; the React layer below owns
- * the two modals separately.
- *
- * The renderer must rebuild the same `toolResultsById` lookup that
- * `MessageList` normally hands `<assistant-message>` — otherwise paired
- * tool results would not render under the call. The `agentResolver`
- * closure gives us that map at click time without re-registering on
- * every message-list change.
- *
- * Alignment note: the button row uses `pl-[2.75rem]` to match the
- * assistant-message bubble's left padding (set in `index.css` to make
- * room for rara's avatar). Without this the buttons would stick to the
- * container's left edge and visually detach from the bubble above.
- *
- * Skips placeholder turns with no mapped seq (e.g. mid-stream assistant
- * frames not yet persisted) — there's no row to ask the trace endpoint
- * for, and showing a button that 404s would be misleading.
- *
- * Idempotent: calling this multiple times leaves only the latest
- * registration in pi-web-ui's renderer map (a Map.set overwrite), which
- * is what we want during HMR.
- */
-function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): void {
-  registerMessageRenderer('assistant', {
-    render(message) {
-      const seq = assistantSeqByRef.get(message);
-      const showButtons = seq !== undefined;
-      // Rebuild the toolResult lookup. Historical messages live in
-      // `toolResultByCallId` because `toAgentMessages` no longer emits
-      // standalone tool-result bubbles (#1718). Live streaming frames
-      // still land in `agent.state.messages` as `toolResult` entries
-      // (pi-agent-core's post-stream loop pushes them after the relay
-      // tool resolves), so we merge both sources here — streaming
-      // wins on key collision so a fresher result from the current
-      // turn can override a stale persisted one.
-      const agent = agentResolver();
-      const resultByCallId = new Map<string, import('@mariozechner/pi-ai').ToolResultMessage>(
-        toolResultByCallId,
-      );
-      if (agent) {
-        for (const m of agent.state.messages) {
-          if (m.role === 'toolResult') {
-            const tr = m as import('@mariozechner/pi-ai').ToolResultMessage;
-            resultByCallId.set(tr.toolCallId, tr);
-          }
-        }
-      }
-      // Per-turn bubble grouping (#1727): pi-agent-core pushes one
-      // `AssistantMessage` per agentic-loop iteration, so a single user
-      // turn often produces 2-5 assistant frames. We tag everything after
-      // the first frame of each turn as a "continuation" — the avatar and
-      // top-of-bubble chrome are suppressed via CSS so the turn reads as
-      // one bubble stacked under a single avatar.
-      // Per-turn chip aggregation (#1764): every tool-call part from
-      // every iteration of this turn lands on the turn's final assistant
-      // frame. Intermediate frames get an empty list and suppress their
-      // own tool-call rendering (via `hideToolCalls`), so a turn reads as
-      // one bubble (text + one chip card) instead of a stack of cards.
-      const aggregated = agent
-        ? aggregateTurnToolCalls(agent.state.messages, resultByCallId)
-        : new Map<import('@mariozechner/pi-ai').AssistantMessage, ToolCallWithResult[]>();
-      const turnHosts = new Set(aggregated.keys());
-      const isFirstOfTurn = agent
-        ? isFirstAssistantOfTurn(message, agent.state.messages, turnHosts)
-        : true;
-      const wrapperClass = isFirstOfTurn
-        ? 'rara-assistant-with-trace'
-        : 'rara-assistant-with-trace rara-assistant-continuation';
-      const chipEntries = aggregated.get(message) ?? [];
-      const isTurnHost = chipEntries.length > 0;
-      const chipCard = isTurnHost
-        ? renderTurnChipCard(chipEntries, {
-            isLive: chipEntries.some((e) => e.result === undefined),
-          })
-        : null;
-      // Drop intermediate tool-call-only iterations entirely: they carry
-      // no user-facing text, and their tool calls now belong to the turn
-      // host's chip card. Letting them render would leave a bare empty
-      // `<assistant-message>` row under a "continuation" avatar.
-      if (!isTurnHost && !hasTextOrThinking(message)) {
-        return html``;
-      }
-      return html`
-        <div class=${wrapperClass}>
-          <assistant-message
-            .message=${message}
-            .tools=${agent?.state.tools ?? []}
-            .isStreaming=${false}
-            .toolResultsById=${resultByCallId}
-            .hideToolCalls=${true}
-          ></assistant-message>
-          ${chipCard ? html`<div class="pl-[2.75rem]">${chipCard}</div>` : ''}
-          ${showButtons
-            ? html`
-                <div class="mt-1 flex justify-start pl-[2.75rem]">
-                  <button
-                    type="button"
-                    class="${TRACE_OVERFLOW_TRIGGER_CLASS} inline-flex h-6 w-6 items-center justify-center rounded-md text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    data-seq=${seq}
-                    aria-label="查看本轮详情（详情 / Cascade）"
-                    title="详情 / Cascade"
-                  >
-                    <span aria-hidden>…</span>
-                  </button>
-                </div>
-              `
-            : null}
-        </div>
-      `;
-    },
-  });
-}
-
-// Session list now lives in `ChatSidebar`; legacy slide-over deleted
-// during the persistent-sidebar refactor — see #1585.
-/**
- * Fullscreen wrapper that mounts pi-web-ui's <pi-chat-panel> Web Component,
- * wiring it up to rara's storage backend and WebSocket stream function.
+ * Primary chat page mounted at `/`. Renders the ported ai-elements
+ * `Conversation` + `Message` against rara's WebSocket chat stream, using the
+ * `rara-to-uimessage` adapter as the bridge.
  */
 export default function PiChat() {
-  const queryClient = useQueryClient();
-  // Stashed in a ref so the long-lived `useEffect([])` init block can call
-  // `invalidateQueries` without triggering exhaustive-deps or re-running.
-  // The `QueryClient` instance is stable for the app's lifetime.
-  const queryClientRef = useRef(queryClient);
-  queryClientRef.current = queryClient;
-  const containerRef = useRef<HTMLDivElement>(null);
-  // Live-card scroll-padding wiring: `liveCardEl` measures the rendered
-  // card; `mainEl` receives the `--rara-live-card-h` CSS variable that
-  // scopes the padding to this chat surface. Both are tracked via
-  // `useState` + callback refs (rather than `useRef`) because the
-  // wrapper div mounts conditionally on `!isInitializing`; effect
-  // dependencies on `useRef` objects do not re-fire when `.current`
-  // mutates, so a ref-based wiring missed the late-mounting wrapper
-  // entirely and the CSS variable was never written.
-  const [liveCardEl, setLiveCardEl] = useState<HTMLDivElement | null>(null);
-  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
-  const initRef = useRef(false);
-  const agentRef = useRef<Agent | null>(null);
-  const chatPanelRef = useRef<import('@mariozechner/pi-web-ui').ChatPanel | null>(null);
-  // Tracks the last successfully-persisted (model, provider, thinking)
-  // triple so onBeforeSend can skip no-op PATCHes on every send.
-  const lastPersistedRef = useRef<{
-    model: string | null;
-    provider: string | null;
-    thinking: string | null;
-  } | null>(null);
-  // Snapshot of rara-side provider ids currently routable by the kernel.
-  // Used to reject stale `model_provider` values persisted before the
-  // provider catalog shrank (e.g. leftover pi-mono `google` selections
-  // from the pre-#1554 selector). `null` = not yet loaded; we fail-open
-  // in that window so the restore isn't blocked on an unrelated fetch.
-  const validProvidersRef = useRef<Set<string> | null>(null);
-  // Guards against double-invocations of `handleUseDefault` while a PATCH
-  // + settings fetch is still in flight. Backend no-ops the duplicate
-  // write (see #1569 round-1 fix) but the UI would still redundantly
-  // refetch settings and reset the composer state.
-  const resetInflight = useRef(false);
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
-  // Active session metadata — surfaced in the main-area header so the
-  // current chat's title sits above its messages (kimi-style). Updated
-  // from switchSession / newSession / initial mount; a refetch fires
-  // after the first send so backend-assigned titles appear promptly.
-  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
-  // Bump to force ChatSidebar to refetch the session list (e.g. after
-  // creating a new session or sending the first message of a fresh one).
-  const [modelDialogOpen, setModelDialogOpen] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
-  // `true` when the active session has no messages — we render a welcome
-  // overlay in that window so the chat page isn't just an input box on
-  // empty canvas. Flipped off on the first send and on session switches
-  // that land on a populated session.
-  const [showWelcome, setShowWelcome] = useState(true);
   const { openSettings } = useSettingsModal();
-  // Cascade trace viewer state — opened when the user clicks the "📊 详情"
-  // button injected into each assistant message by the custom Lit renderer
-  // registered below. The seq → trace fetch is lazy: the kernel does not
-  // stream cascade data, the UI only assembles it via REST after a turn
-  // finishes (see `service.get_cascade_trace`).
+
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  const [messages, setMessages] = useState<RaraUIMessage[]>([]);
+  const [composerText, setComposerText] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  // Surfaces "Use rara's default" PATCH failures inside RaraModelDialog so the
+  // user can retry without the dialog dismissing.
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  // Cascade-trace modal state — fetched lazily when the user clicks the
+  // "🔍 Cascade" trigger on a finalised assistant turn. Mirrors the PiChat
+  // wiring (#1718): the kernel only assembles cascade entries via REST after
+  // the turn completes, so the seq → trace fetch happens here, not in-stream.
   const [cascadeOpen, setCascadeOpen] = useState(false);
   const [cascadeTrace, setCascadeTrace] = useState<CascadeTrace | null>(null);
   const [cascadeLoading, setCascadeLoading] = useState(false);
   const [cascadeError, setCascadeError] = useState<string | null>(null);
-  // Execution-trace modal state — populated from the new "📊 详情"
-  // button (kept distinct from the cascade viewer so the user can pick
-  // the right lens per-click).
+  // Execution-trace modal state — opened from the "📊 详情" trigger and kept
+  // distinct from the cascade viewer so the user can pick the lens per-click.
   const [execTraceOpen, setExecTraceOpen] = useState(false);
   const [execTrace, setExecTrace] = useState<ExecutionTrace | null>(null);
   const [execTraceLoading, setExecTraceLoading] = useState(false);
   const [execTraceError, setExecTraceError] = useState<string | null>(null);
-  // Cmd+K session-search palette.
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [recentSessions, setRecentSessions] = useState<ChatSession[]>([]);
 
-  // Global Cmd+K / Ctrl+K shortcut — toggles the search palette. We
-  // register directly on `window` (instead of a wrapper hook) because
-  // the dialog is the only consumer and there is no other keyboard
-  // shortcut story in this file yet.
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setSearchOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
+  const wsRef = useRef<WebSocket | null>(null);
+  // Tracks the session key the user most recently asked to load. A history
+  // fetch that resolves after the user has switched away must NOT clobber the
+  // newer session's state — we compare against this ref before applying.
+  const activeSessionRef = useRef<string | null>(null);
 
-  // Refetch recent sessions whenever the palette opens so the empty-query
-  // list reflects freshly-created or renamed sessions. Cheap (one
-  // request) and keeps the palette in sync with the sidebar without
-  // piping its state down.
-  useEffect(() => {
-    if (!searchOpen) return;
-    let alive = true;
-    api
-      .get<ChatSession[]>('/api/v1/chat/sessions?limit=20&offset=0')
-      .then((list) => {
-        if (alive) setRecentSessions(list);
-      })
-      .catch(() => {
-        if (alive) setRecentSessions([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [searchOpen, sidebarRefreshKey]);
+  /** Switch to a session: load its message history and update state. */
+  const selectSession = useCallback(async (session: ChatSession) => {
+    // Tear down any in-flight stream from the previous session before we
+    // start mutating state — otherwise its frames will land on the new
+    // session via `setMessages` and bleed across sessions.
+    wsRef.current?.close();
+    wsRef.current = null;
+    setStreaming(false);
 
-  // Clear any stale reset-error banner whenever the model dialog is
-  // closed — regardless of close path (backdrop click, successful
-  // select, successful reset). Co-locating the clear here prevents the
-  // banner from leaking into the next dialog opening.
-  useEffect(() => {
-    if (!modelDialogOpen) setResetError(null);
-  }, [modelDialogOpen]);
-
-  // Bridge between the Lit assistant-message renderer and React: when
-  // the user clicks a "📊 详情" button, the renderer dispatches a
-  // bubbling CustomEvent on `document` carrying the persisted `seq`
-  // (resolved via `assistantSeqByRef`). A failed/empty fetch shows an
-  // inline state in the modal rather than swallowing the click silently.
-  useEffect(() => {
-    const handler = (ev: Event) => {
-      const ce = ev as CustomEvent<TraceEventDetail>;
-      const seq = ce.detail?.seq;
-      const sessionKey = agentRef.current?.sessionId;
-      if (seq === undefined || !sessionKey) return;
-      setCascadeOpen(true);
-      setCascadeTrace(null);
-      setCascadeError(null);
-      setCascadeLoading(true);
-      api
-        .get<CascadeTrace>(
-          `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/trace?seq=${seq}`,
-        )
-        .then((trace) => {
-          setCascadeTrace(trace);
-        })
-        .catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : String(e);
-          setCascadeError(msg);
-        })
-        .finally(() => {
-          setCascadeLoading(false);
-        });
-    };
-    document.addEventListener(CASCADE_TRACE_EVENT, handler);
-    return () => document.removeEventListener(CASCADE_TRACE_EVENT, handler);
-  }, []);
-
-  // Bridge for the "📊 详情" button — fetches the persisted
-  // `ExecutionTrace` for the clicked turn. A 404 is surfaced as an
-  // inline error row rather than silently closing the modal so the
-  // user understands why the view is empty (e.g. legacy turn recorded
-  // before trace persistence existed).
-  useEffect(() => {
-    const handler = (ev: Event) => {
-      const ce = ev as CustomEvent<TraceEventDetail>;
-      const seq = ce.detail?.seq;
-      const sessionKey = agentRef.current?.sessionId;
-      if (seq === undefined || !sessionKey) return;
-      setExecTraceOpen(true);
-      setExecTrace(null);
-      setExecTraceError(null);
-      setExecTraceLoading(true);
-      api
-        .get<ExecutionTrace>(
-          `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/execution-trace?seq=${seq}`,
-        )
-        .then((trace) => {
-          setExecTrace(trace);
-        })
-        .catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : String(e);
-          setExecTraceError(msg);
-        })
-        .finally(() => {
-          setExecTraceLoading(false);
-        });
-    };
-    document.addEventListener(EXECUTION_TRACE_EVENT, handler);
-    return () => document.removeEventListener(EXECUTION_TRACE_EVENT, handler);
-  }, []);
-
-  /** Switch the agent to a different session, loading its history. */
-  const switchSession = useCallback(async (session: ChatSession) => {
-    const agent = agentRef.current;
-    if (!agent) return;
-    agent.clearMessages();
-    // Drop the agent-live card's in-memory runs for the previous session
-    // so the sticky card doesn't leak across session switches.
-    if (agent.sessionId && agent.sessionId !== session.key) {
-      liveRunStore.reset(agent.sessionId);
-    }
-    agent.sessionId = session.key;
+    activeSessionRef.current = session.key;
     setActiveSession(session);
     writeStoredSessionKey(session.key);
-    // Optimistically hide the welcome overlay during the switch: the
-    // backend's `message_count` is unreliable (always 0 in the listing
-    // for older sessions, see #1585 round-2 notes), so trusting it
-    // here would flash the RARA overlay on every click before the
-    // messages arrive. We flip it back on after `list_messages` if
-    // the session really is empty.
-    setShowWelcome(false);
-
-    // Restore the session's persisted model + thinking-level so the
-    // model pill in the composer reflects the last settings used for
-    // this conversation. We build a synthetic pi-ai Model rather than
-    // looking the pair up in pi-ai's catalog — rara's provider ids
-    // (`kimi`, `openrouter`, `scnet`, ...) do not exist there.
-    //
-    // Guard: reject restored providers that are no longer in the rara
-    // routable catalog. Stale records from older builds (e.g. pi-mono's
-    // `google`/`anthropic`) would otherwise paint a ghost selection
-    // into the composer pill.
-    if (
-      session.model &&
-      session.model_provider &&
-      isRoutableProvider(validProvidersRef.current, session.model_provider)
-    ) {
-      agent.state.model = syntheticModel(session.model_provider, session.model);
-    } else {
-      // Unpinned session — seed the composer pill with rara's admin
-      // default so it reads "minimax: MiniMax-M2.7" rather than
-      // pi-web-ui's hard-coded catalog fallback (`gemini-2.5-*`).
-      const resolved = await resolveAdminDefaultModel();
-      if (resolved && agentRef.current?.sessionId === session.key) {
-        agent.state.model = syntheticModel(resolved.provider, resolved.model);
-      }
-    }
-    if (session.thinking_level) {
-      agent.state.thinkingLevel = session.thinking_level;
-    }
-    // Reset the dedup ref to match the session that was just loaded so
-    // onBeforeSend correctly re-PATCHes if the user changes selection
-    // away from the restored values, and skips the identity write
-    // otherwise.
-    lastPersistedRef.current = {
-      model: session.model ?? null,
-      provider: session.model_provider ?? null,
-      thinking: session.thinking_level ?? null,
-    };
-
     try {
-      const msgs = await api.get<ChatMessageData[]>(
+      const rows = await api.get<ChatMessageData[]>(
         `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
       );
-      const agentMsgs = toAgentMessages(msgs);
-      if (agentMsgs.length > 0) {
-        agent.replaceMessages(agentMsgs);
-      } else if (agentRef.current?.sessionId === session.key) {
-        // Really an empty session (not just a stale backend count) —
-        // reveal the welcome overlay now that we know for sure.
-        setShowWelcome(true);
+      // Race guard: A→B→A switching can resolve B after A. If the user has
+      // moved on, drop this response on the floor.
+      if (activeSessionRef.current !== session.key) return;
+      setMessages(historyToUIMessages(rows));
+    } catch {
+      if (activeSessionRef.current !== session.key) return;
+      setMessages([]);
+    }
+  }, []);
+
+  // Initial session bootstrap: pick the stored key if it still exists,
+  // otherwise the most recent.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await api.get<ChatSession[]>('/api/v1/chat/sessions?limit=50');
+        if (cancelled) return;
+        const stored = readStoredSessionKey();
+        const initial = list.find((s) => s.key === stored) ?? list[0] ?? null;
+        if (initial) await selectSession(initial);
+      } catch (err) {
+        console.warn('PiChat: failed to load sessions', err);
       }
-      // Rebuild the artifacts panel from the same message list so switching
-      // back to a session restores every previously-created artifact.
-      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
-        messagesForArtifactReconstruction(agentMsgs),
-      );
-    } catch {
-      /* session may have no messages yet */
-    }
-    // Always trigger re-render after switching — even for empty sessions
-    // so cleared messages are reflected in the UI.
-    chatPanelRef.current?.agentInterface?.requestUpdate();
-    // Drop focus into the composer so the user can start typing
-    // immediately without a mouse click. Pi-web-ui's textarea mounts
-    // lazily so we defer to the next frame and, for added belt, again
-    // after the lit element completes its update pass.
-    requestAnimationFrame(() => {
-      const ta = document.querySelector<HTMLTextAreaElement>('textarea');
-      ta?.focus();
-    });
-  }, []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectSession]);
 
-  /** Reload current session messages (e.g. after voice message completes). */
-  const reloadMessages = useCallback(async () => {
-    const agent = agentRef.current;
-    if (!agent?.sessionId) return;
-    try {
-      const msgs = await api.get<ChatMessageData[]>(
-        `/api/v1/chat/sessions/${encodeURIComponent(agent.sessionId)}/messages?limit=200`,
-      );
-      const agentMsgs = toAgentMessages(msgs);
-      agent.replaceMessages(agentMsgs);
-      await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
-        messagesForArtifactReconstruction(agentMsgs),
-      );
-      chatPanelRef.current?.agentInterface?.requestUpdate();
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  /** Create a new empty session and switch to it. */
+  /** Create a fresh session and switch to it. */
   const newSession = useCallback(async () => {
     const created = await api.post<ChatSession>('/api/v1/chat/sessions', {});
-    void switchSession(created);
     setSidebarRefreshKey((k) => k + 1);
-  }, [switchSession]);
+    await selectSession(created);
+  }, [selectSession]);
 
-  /**
-   * Handle session deletion from the sidebar. The decision + dispatch
-   * wiring lives in `useSessionDelete` so both the pure decision and
-   * the switch/create-new side effects are covered by unit tests.
-   */
-  const handleSessionDeleted = useSessionDelete<ChatSession>({
-    activeSessionKey: activeSession?.key,
-    switchSession,
-    newSession,
-  });
+  /** After a delete, fall back to the most recent remaining session. */
+  const handleSessionDeleted = useCallback(
+    (key: string, fallback: ChatSession | null) => {
+      setSidebarRefreshKey((k) => k + 1);
+      if (activeSession?.key !== key) return;
+      if (fallback) void selectSession(fallback);
+      else void newSession();
+    },
+    [activeSession?.key, newSession, selectSession],
+  );
 
-  /**
-   * Reset the session's pinned (model, provider, thinking) triple so the
-   * backend falls back to `llm.default_provider` on the next turn, then
-   * mirror the admin-configured default into the composer pill. Guarded
-   * by `resetInflight` so a double-click cannot fire two PATCH + settings
-   * fetch round-trips. Deps are empty because the closure only reads
-   * mutable refs (`agentRef`, `chatPanelRef`, `lastPersistedRef`,
-   * `resetInflight`) and stable state setters.
-   */
+  /** Reload the active session's history — used after VoiceRecorder finishes
+   *  appending a transcribed user turn server-side, and after the WebSocket
+   *  emits `done` so each finalised assistant turn picks up its persisted
+   *  `seq` (via `RaraMessageMetadata`) for trace / cascade trigger fetches. */
+  const reloadActiveMessages = useCallback(async () => {
+    const key = activeSessionRef.current;
+    if (!key) return;
+    try {
+      const rows = await api.get<ChatMessageData[]>(
+        `/api/v1/chat/sessions/${encodeURIComponent(key)}/messages?limit=200`,
+      );
+      if (activeSessionRef.current !== key) return;
+      setMessages(historyToUIMessages(rows));
+    } catch (err) {
+      console.warn('PiChat: failed to reload messages', err);
+    }
+  }, []);
+
+  /** Send the composer text over a fresh WebSocket. */
+  const sendMessage = useCallback(
+    (rawText?: string) => {
+      const text = (rawText ?? composerText).trim();
+      if (!text || !activeSession || streaming) return;
+      setComposerText('');
+
+      // Optimistically push the user message so the UI updates immediately.
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `user-${Date.now()}`,
+          role: 'user',
+          parts: [{ type: 'text', text, state: 'done' } satisfies TextUIPart],
+        },
+      ]);
+      setStreaming(true);
+
+      let wsUrl: string;
+      try {
+        wsUrl = buildWsUrl(activeSession.key);
+      } catch (err) {
+        setStreaming(false);
+        console.error('PiChat: cannot build ws url', err);
+        return;
+      }
+
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        ws.send(text);
+      };
+
+      ws.onmessage = (ev: MessageEvent) => {
+        let event: PublicWebEvent;
+        try {
+          event = JSON.parse(ev.data as string) as PublicWebEvent;
+        } catch {
+          return;
+        }
+        setMessages((prev) => applyRaraEvent(prev, event));
+        // The stream has no `seq` for in-flight assistant frames — rara only
+        // assigns it when the turn lands in the kernel store. Refetch history
+        // once the run finalises so the trace / cascade triggers can resolve
+        // their per-turn seq from `RaraMessageMetadata`.
+        if (event.type === 'done') {
+          void reloadActiveMessages();
+        }
+      };
+
+      ws.onerror = () => {
+        setStreaming(false);
+        // Surface transport-level failures (TLS handshake, auth reject, dropped
+        // upgrade) to the user — without this they only see the spinner stop.
+        setMessages((prev) =>
+          applyRaraEvent(prev, { type: 'error', message: 'connection failed' }),
+        );
+      };
+
+      ws.onclose = () => {
+        setStreaming(false);
+        if (wsRef.current === ws) wsRef.current = null;
+      };
+    },
+    [activeSession, composerText, streaming, reloadActiveMessages],
+  );
+
+  /** Persist a provider/model pick from RaraModelDialog onto the active session. */
+  const handleSelectProvider = useCallback(async (entry: ProviderInfo) => {
+    const key = activeSessionRef.current;
+    if (!key) {
+      setModelDialogOpen(false);
+      return;
+    }
+    try {
+      await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+        model: entry.default_model,
+        model_provider: entry.id,
+      });
+      if (activeSessionRef.current !== key) {
+        setModelDialogOpen(false);
+        return;
+      }
+      setActiveSession((prev) =>
+        prev && prev.key === key
+          ? { ...prev, model: entry.default_model, model_provider: entry.id }
+          : prev,
+      );
+      setModelDialogOpen(false);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetError(`Failed to set model: ${msg}`);
+    }
+  }, []);
+
+  /** Clear the per-session pin so `llm.default_provider` takes over. */
   const handleUseDefault = useCallback(async () => {
-    if (resetInflight.current) return;
-    resetInflight.current = true;
-    const agent = agentRef.current;
-    const key = agent?.sessionId;
-    if (!agent || !key) {
-      resetInflight.current = false;
+    const key = activeSessionRef.current;
+    if (!key) {
+      setModelDialogOpen(false);
       return;
     }
     setResetError(null);
-    // PATCH with explicit nulls to clear the pinned provider/model
-    // and let `llm.default_provider` take over on the next turn.
-    // The double-option body is what makes the backend distinguish
-    // this from a leave-alone call (see #1569).
-    //
-    // Close the dialog only after the PATCH succeeds — a network
-    // failure keeps the dialog open so the error row is visible
-    // and the user can retry without chasing a dismissed toast.
     try {
       await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
         model: null,
         model_provider: null,
         thinking_level: null,
       });
-      // Race guard: the user may have switched sessions while
-      // the PATCH was in-flight. If so, the composer now
-      // reflects a different session and must not be clobbered.
-      if (agentRef.current?.sessionId !== key) {
+      if (activeSessionRef.current !== key) {
         setModelDialogOpen(false);
         return;
       }
-      // Resolve the admin-configured default so the composer pill can
-      // read e.g. "minimax: MiniMax-M2.7" instead of pi-web-ui's own
-      // hard-coded catalog default (which would otherwise surface a
-      // ghost "gemini-2.5-flash-lite" unrelated to rara's config).
-      const resolved = await resolveAdminDefaultModel();
-      const resolvedModel = resolved
-        ? syntheticModel(resolved.provider, resolved.model)
-        : syntheticModel(UNKNOWN_MODEL_SENTINEL, UNKNOWN_MODEL_SENTINEL);
-      // Re-check the race guard after the settings fetch.
-      if (agentRef.current?.sessionId !== key) {
-        setModelDialogOpen(false);
-        return;
-      }
-      agent.state.model = resolvedModel;
-      lastPersistedRef.current = { model: null, provider: null, thinking: null };
-      chatPanelRef.current?.agentInterface?.requestUpdate();
+      setActiveSession((prev) =>
+        prev && prev.key === key
+          ? { ...prev, model: null, model_provider: null, thinking_level: null }
+          : prev,
+      );
       setModelDialogOpen(false);
     } catch (e: unknown) {
-      console.warn('Failed to clear session model override:', e);
       const msg = e instanceof Error ? e.message : String(e);
       setResetError(`Failed to reset model: ${msg}`);
-    } finally {
-      resetInflight.current = false;
     }
   }, []);
 
+  // Drop any stale reset error when the dialog closes so it doesn't reappear
+  // on next open.
   useEffect(() => {
-    if (initRef.current || !containerRef.current) return;
-    initRef.current = true;
+    if (!modelDialogOpen) setResetError(null);
+  }, [modelDialogOpen]);
 
-    const container = containerRef.current;
+  /** Open the cascade modal for a given turn's `seq`, fetching the trace
+   *  lazily. A failed fetch surfaces inline inside the modal so the click is
+   *  never silently swallowed. */
+  const openCascade = useCallback((seq: number) => {
+    const sessionKey = activeSessionRef.current;
+    if (!sessionKey) return;
+    setCascadeOpen(true);
+    setCascadeTrace(null);
+    setCascadeError(null);
+    setCascadeLoading(true);
+    api
+      .get<CascadeTrace>(`/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/trace?seq=${seq}`)
+      .then((trace) => {
+        setCascadeTrace(trace);
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        setCascadeError(msg);
+      })
+      .finally(() => {
+        setCascadeLoading(false);
+      });
+  }, []);
 
-    void (async () => {
-      try {
-        // Wrap pi-web-ui's built-in `<assistant-message>` so each completed
-        // assistant turn gets a "📊 详情" trigger that opens the cascade
-        // execution-trace modal. The renderer fires a CustomEvent on the
-        // host element (which bubbles up through the light DOM since
-        // pi-web-ui's components opt out of shadow DOM) carrying the
-        // persisted `seq` (resolved via `assistantSeqByRef`) so the React
-        // layer below can call `GET /chat/sessions/{key}/trace` directly.
-        registerCascadeAssistantRenderer(() => agentRef.current);
+  /** Open the per-turn execution-trace modal. A 404 surfaces as an inline
+   *  error rather than silently closing — legacy turns recorded before trace
+   *  persistence existed will land here. */
+  const openExecTrace = useCallback((seq: number) => {
+    const sessionKey = activeSessionRef.current;
+    if (!sessionKey) return;
+    setExecTraceOpen(true);
+    setExecTrace(null);
+    setExecTraceError(null);
+    setExecTraceLoading(true);
+    api
+      .get<ExecutionTrace>(
+        `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/execution-trace?seq=${seq}`,
+      )
+      .then((trace) => {
+        setExecTrace(trace);
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        setExecTraceError(msg);
+      })
+      .finally(() => {
+        setExecTraceLoading(false);
+      });
+  }, []);
 
-        // 1. Create and initialize the rara storage backend
-        const backend = new RaraStorageBackend();
-        await backend.init();
-
-        // 2. Create store instances and wire up the backend
-        const settings = new SettingsStore();
-        settings.setBackend(backend);
-
-        const providerKeys = new ProviderKeysStore();
-        providerKeys.setBackend(backend);
-
-        const sessions = new SessionsStore();
-        sessions.setBackend(backend);
-
-        const customProviders = new CustomProvidersStore();
-        customProviders.setBackend(backend);
-
-        // 3. Create AppStorage and set it as the global instance
-        const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
-        setAppStorage(storage);
-
-        // 4a. Pull the routable provider catalog in parallel with the
-        //     session fetch. Used to reject stale `model_provider` values
-        //     persisted by older builds before we touch `agent.state.model`.
-        //     Non-fatal if it fails: downstream guards fail-open.
-        const providersPromise = api
-          .get<ProviderInfo[]>('/api/v1/chat/providers')
-          .then((list) => {
-            validProvidersRef.current = new Set(list.map((p) => p.id));
-          })
-          .catch((e: unknown) => {
-            console.warn('Failed to load provider catalog for restore guard:', e);
-          });
-
-        // 4b. Resolve the active session key before creating the agent.
-        //     Prefer the last-active session from localStorage so a
-        //     reload lands the user back on whatever they were reading,
-        //     falling back to the most recent session, finally creating
-        //     a fresh one when nothing exists.
-        const storedKey = readStoredSessionKey();
-        let initialSession: ChatSession | null = null;
-        if (storedKey) {
-          try {
-            initialSession = await api.get<ChatSession>(
-              `/api/v1/chat/sessions/${encodeURIComponent(storedKey)}`,
-            );
-          } catch {
-            // Session was deleted or the key is stale — fall through.
-            writeStoredSessionKey(null);
-          }
-        }
-        if (!initialSession) {
-          const existingSessions = await api.get<ChatSession[]>(
-            '/api/v1/chat/sessions?limit=1&offset=0',
-          );
-          initialSession = existingSessions[0] ?? null;
-        }
-        // Block on provider catalog here so the pre-mount restore step has
-        // an authoritative allowlist. It's one cheap request; running it
-        // serially after the sessions fetch keeps the code simple.
-        await providersPromise;
-        if (!initialSession) {
-          initialSession = await api.post<ChatSession>('/api/v1/chat/sessions', {});
-        }
-        setActiveSession(initialSession);
-        writeStoredSessionKey(initialSession.key);
-        setShowWelcome((initialSession.message_count ?? 0) === 0);
-        // 5. Create the Agent with rara's WebSocket-backed stream function.
-        //    The streamFn reads agent.sessionId at call time to get the active session key.
-        const agent: Agent = new Agent({
-          streamFn: createRaraStreamFn(
-            () => agent.sessionId,
-            () => {
-              // Surface raw attachments from the latest user turn so the
-              // rara-stream adapter can forward document bytes as
-              // `file_base64` blocks in addition to pi-mono's client-side
-              // extracted text.
-              for (let i = agent.state.messages.length - 1; i >= 0; i--) {
-                const m = agent.state.messages[i];
-                if (!m) continue;
-                if (m.role === 'user-with-attachments') {
-                  return m.attachments ?? [];
-                }
-                if (m.role === 'user') return [];
-              }
-              return [];
-            },
-            // Feed the agent-live store with every WS frame so the card
-            // can render in parallel to pi-chat-panel without opening a
-            // second WebSocket (see #1615). Also listen for approval
-            // lifecycle events pushed by the backend (see #1745) and
-            // invalidate the `kernel-approvals` query so the admin
-            // drawer refreshes immediately instead of waiting for the
-            // next 5s poll.
-            (sessionKey, event) => {
-              liveRunStore.publish(sessionKey, event);
-              if (event.type === 'approval_requested' || event.type === 'approval_resolved') {
-                void queryClientRef.current.invalidateQueries({ queryKey: ['kernel-approvals'] });
-              }
-            },
-          ),
-          convertToLlm: defaultConvertToLlm,
-          sessionId: initialSession.key,
-        });
-        agentRef.current = agent;
-
-        // Restore the initial session's persisted model + thinking-level
-        // BEFORE mounting the chat panel, so the composer pill reflects
-        // the real selection and `onBeforeSend` does not see pi-agent-core's
-        // "unknown" default as the first thing to persist.
-        if (
-          initialSession.model &&
-          initialSession.model_provider &&
-          isRoutableProvider(validProvidersRef.current, initialSession.model_provider)
-        ) {
-          agent.state.model = syntheticModel(initialSession.model_provider, initialSession.model);
-          lastPersistedRef.current = {
-            model: initialSession.model,
-            provider: initialSession.model_provider,
-            thinking: initialSession.thinking_level ?? null,
-          };
-        } else {
-          // Unpinned session — seed the composer pill with rara's admin
-          // default so it reads "minimax: MiniMax-M2.7" rather than
-          // pi-web-ui's hard-coded catalog fallback (`gemini-2.5-*`).
-          const resolved = await resolveAdminDefaultModel();
-          if (resolved) {
-            agent.state.model = syntheticModel(resolved.provider, resolved.model);
-          }
-        }
-        if (initialSession.thinking_level) {
-          agent.state.thinkingLevel = initialSession.thinking_level;
-        }
-
-        // 6. Mount the ChatPanel custom element
-        const chatPanel = document.createElement(
-          'pi-chat-panel',
-        ) as import('@mariozechner/pi-web-ui').ChatPanel;
-        chatPanelRef.current = chatPanel;
-        container.appendChild(chatPanel);
-
-        // 7. Wire agent into the panel — skip API key prompt since rara manages
-        //    keys server-side, and sync the current model/thinking override to
-        //    the backend before every send so the kernel sees the user's
-        //    selection for this turn. Overriding `onModelSelect` replaces
-        //    pi-mono's `ModelSelector` (which only knows its own hard-coded
-        //    `MODELS` catalog) with rara's native dialog sourced from
-        //    `/api/v1/settings` — the only place provider ids (`openrouter`,
-        //    `kimi`, `minimax`, `glm`, `scnet`, ...) align with rara's kernel
-        //    `DriverRegistry`.
-        await chatPanel.setAgent(agent, {
-          onApiKeyRequired: async () => true,
-          onModelSelect: () => setModelDialogOpen(true),
-          onBeforeSend: async () => {
-            const key = agent.sessionId;
-            if (!key) return;
-            // The user just committed their first message — no more welcome.
-            setShowWelcome(false);
-            // Nudge the sidebar to refetch so the fresh session's new
-            // title and preview surface in the history list.
-            setSidebarRefreshKey((k) => k + 1);
-            // Refetch the active session so the backend-assigned title
-            // lands in the header above the messages. Fire-and-forget;
-            // a retry happens on the next send if the backend hadn't
-            // finished assigning a title yet.
-            api
-              .get<ChatSession>(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
-              .then((fresh) => {
-                if (agentRef.current?.sessionId === key) setActiveSession(fresh);
-              })
-              .catch(() => {
-                /* non-fatal */
-              });
-
-            // Skip the PATCH when `agent.state.model` is pi-agent-core's
-            // placeholder default (id/provider = "unknown"). Persisting it
-            // would overwrite any previously saved rara provider with a
-            // sentinel the kernel's DriverRegistry cannot route to, which
-            // caused the original "LLM provider not configured" failure
-            // (see #1554). `isUnknownModel` returns true for null/undefined
-            // too, so the subsequent reads are safe without the `?.` guard.
-            const picked = !isUnknownModel(agent.state.model);
-            const model = picked ? agent.state.model.id : null;
-            const provider = picked ? agent.state.model.provider : null;
-            const thinking = asThinkingLevel(agent.state.thinkingLevel);
-
-            // Nothing worth persisting.
-            if (!model && !thinking) return;
-
-            // Dedup consecutive identical writes — the chat UI round-trips
-            // every send through this hook even when the selection hasn't
-            // changed, and the PATCH wakes up the session index for nothing.
-            const last = lastPersistedRef.current;
-            if (
-              last &&
-              last.model === model &&
-              last.provider === provider &&
-              last.thinking === thinking
-            ) {
-              return;
-            }
-
-            try {
-              await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
-                model,
-                model_provider: provider,
-                thinking_level: thinking,
-              });
-              lastPersistedRef.current = { model, provider, thinking };
-            } catch (e) {
-              console.warn('Failed to persist session LLM override:', e);
-            }
-          },
-        });
-
-        // Model and thinking selectors are enabled by default in ChatPanel.setAgent().
-        // Rara delegates model/thinking selection to the user via pi-chat-panel's
-        // built-in UI — the chosen model is passed to the backend at stream time.
-        //
-        // Surface pi-mono's built-in theme toggle in the chat header. Rara's
-        // own <ThemeToggle /> is scoped to DashboardLayout (admin pages), so
-        // there's no duplicate on the chat page.
-        if (chatPanel.agentInterface) {
-          chatPanel.agentInterface.showThemeToggle = true;
-        }
-      } finally {
-        // Clear the loading overlay even if init fails (network/CORS/etc.)
-        // so the user sees the empty chat panel rather than a spinner forever.
-        setIsInitializing(false);
-        // Focus the composer on first mount so the caret is live
-        // immediately; subsequent session switches do the same via
-        // the `switchSession` callback.
-        requestAnimationFrame(() => {
-          document.querySelector<HTMLTextAreaElement>('textarea')?.focus();
-        });
-      }
-    })();
-
+  // Cleanly close the socket when the page unmounts.
+  useEffect(() => {
     return () => {
-      // Cleanup: remove the Web Component on unmount
-      container.innerHTML = '';
+      wsRef.current?.close();
+      wsRef.current = null;
     };
   }, []);
 
-  // Reserve scroll padding inside pi-web-ui's message list equal to the
-  // live card's height while a run is active — see hook docstring and
-  // `.rara-chat agent-interface .max-w-3xl` rule in `index.css`.
-  useLiveCardHeight(liveCardEl, mainEl);
+  const headerTitle = useMemo(() => {
+    if (!activeSession) return '新对话';
+    return activeSession.title || activeSession.preview || '新对话';
+  }, [activeSession]);
+
+  // Only the elevated thinking buckets get a header pill — `off`/`minimal`/
+  // `low` are noise on the title row, and `null` means the session inherits
+  // `llm.default_provider`'s level so the UI has nothing concrete to label.
+  const thinkingPillLevel = useMemo(() => {
+    const level = activeSession?.thinking_level;
+    if (level === 'medium' || level === 'high' || level === 'xhigh') return level;
+    return null;
+  }, [activeSession?.thinking_level]);
 
   return (
-    <div
-      className="rara-chat flex h-screen w-screen"
-      data-welcome={showWelcome && !isInitializing ? 'true' : undefined}
-    >
+    <div className="rara-chat flex h-screen w-screen">
       <ChatSidebar
         activeSessionKey={activeSession?.key}
-        onSelect={switchSession}
-        onNewSession={newSession}
-        onOpenSearch={() => setSearchOpen(true)}
+        onSelect={(s) => void selectSession(s)}
+        onNewSession={() => void newSession()}
+        onOpenSearch={() => {
+          /* TODO: wire search dialog */
+        }}
         onOpenSettings={() => openSettings()}
         onDeleteSession={handleSessionDeleted}
         refreshKey={sidebarRefreshKey}
       />
-      <main ref={setMainEl} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* Session title header — shows the current conversation's
-            title above its messages (hero-style page header). Hidden
-            during the welcome state since the lowercase `rara` lockup
-            already serves as the brand marker there.
-            Height 56px (h-14), flat single bottom border via
-            `--border-subtle`, no backdrop/blur so it reads as a calm
-            page header instead of a floating chrome strip. Model badge
-            sits on the right. */}
-        {activeSession && !showWelcome && !isInitializing && (
-          <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
-            <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-              {activeSession.title || activeSession.preview || '新对话'}
-            </h1>
-            {activeSession.model && (
-              <span className="shrink-0 truncate rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
-                {activeSession.model}
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
+          <h1 className="flex min-w-0 flex-1 items-center gap-2 truncate text-sm font-semibold text-foreground">
+            <span className="truncate">{headerTitle}</span>
+            {thinkingPillLevel ? (
+              <span className="bg-brand/10 text-brand ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium">
+                {thinkingPillLevel} thinking
               </span>
+            ) : null}
+          </h1>
+        </header>
+
+        <Conversation className="min-h-0 flex-1">
+          <ConversationContent className="mx-auto w-full max-w-3xl">
+            {messages.length === 0 ? (
+              <ChatEmptyState
+                disabled={!activeSession || streaming}
+                onPick={(prompt) => {
+                  // Drop the picked suggestion straight into the WebSocket
+                  // sender — feels snappier than seeding the composer and
+                  // making the user press enter, and the empty-state row
+                  // never reappears once the first turn lands.
+                  sendMessage(prompt);
+                }}
+              />
+            ) : (
+              messages.map((msg) => {
+                const seq = msg.role === 'assistant' ? msg.metadata?.seq : undefined;
+                return (
+                  <Message key={msg.id} from={msg.role}>
+                    <MessageContent>
+                      {msg.parts.map((part, i) => (
+                        <RenderPart
+                          key={`${msg.id}-${i}`}
+                          part={part as TextUIPart | ReasoningUIPart | DynamicToolUIPart}
+                        />
+                      ))}
+                      {seq !== undefined ? (
+                        <TraceTriggerRow
+                          onOpenTrace={() => openExecTrace(seq)}
+                          onOpenCascade={() => openCascade(seq)}
+                        />
+                      ) : null}
+                    </MessageContent>
+                  </Message>
+                );
+              })
             )}
-          </header>
-        )}
-        {/* Chat panel container — takes remaining vertical space. */}
-        <div ref={containerRef} className="min-h-0 flex-1 w-full" />
-        {/* Live agent card — positioned inline with the pi-web-ui message
-            column (same 48rem cap) and anchored just above the composer,
-            so it reads as "the next assistant message" while a turn is
-            streaming. See `.rara-live-slot` in index.css for placement. */}
-        {!isInitializing && (
-          <div className="rara-live-slot pointer-events-none absolute z-10 px-2">
-            <div ref={setLiveCardEl} className="pointer-events-auto">
-              <AgentLiveCard sessionKey={activeSession?.key} />
-            </div>
-          </div>
-        )}
-        {/*
-          Welcome overlay — rendered above pi-web-ui's empty message list
-          when the active session has no messages. Pointer-events-none so
-          clicks pass through to the composer below; flipped off the
-          moment the user commits their first message (onBeforeSend).
-        */}
-        {showWelcome && !isInitializing && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(40vh+8rem)] z-10 flex justify-center px-6">
-            <div className="flex flex-col items-center gap-3">
-              <div
-                className="text-[32px] font-semibold leading-none tracking-tight text-foreground"
-                style={{ fontFamily: 'var(--font-sans)' }}
-              >
-                rara
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
+
+        <div className="mx-auto w-full max-w-3xl shrink-0 px-4 py-4">
+          <PromptInput
+            // PromptInput owns text in DOM, but we mirror it into `composerText`
+            // so the submit button's disabled state and the WebSocket sender
+            // can read the current value without poking the form ref.
+            onSubmit={(message) => {
+              sendMessage(message.text);
+            }}
+          >
+            <PromptInputBody>
+              <PromptInputTextarea
+                value={composerText}
+                onChange={(e) => setComposerText(e.currentTarget.value)}
+                placeholder={activeSession ? 'Message rara…' : 'Select a session to start.'}
+                disabled={!activeSession || streaming}
+              />
+            </PromptInputBody>
+            <PromptInputFooter>
+              <PromptInputTools>
+                {/*
+                  VoiceRecorder pushes the transcribed turn server-side, so
+                  after it completes we refetch session history rather than
+                  injecting a synthetic UIMessage. Mounted only when a session
+                  exists — otherwise `getSessionKey` would return undefined
+                  and the recorder couldn't post anywhere useful.
+                */}
+                {activeSession && (
+                  <VoiceRecorder
+                    className="!h-8 !w-8 !rounded-md !bg-transparent !shadow-none hover:!bg-accent"
+                    getSessionKey={() => activeSessionRef.current ?? undefined}
+                    onComplete={() => {
+                      void reloadActiveMessages();
+                    }}
+                  />
+                )}
+              </PromptInputTools>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setModelDialogOpen(true)}
+                  disabled={!activeSession}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border/60 px-2.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground disabled:opacity-50"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span className="max-w-[160px] truncate">
+                    {activeSession?.model_provider ?? 'auto'}
+                  </span>
+                </button>
+                <PromptInputSubmit
+                  {...(streaming ? { status: 'streaming' as const } : {})}
+                  disabled={!activeSession || streaming || composerText.trim().length === 0}
+                />
               </div>
-              <p className="text-sm text-muted-foreground">How can I help today?</p>
-            </div>
-          </div>
-        )}
-        {/*
-          Voice button floats over pi-web-ui's composer, aligned with
-          the paperclip via a calc that tracks the centred composer.
-          Lives inside `<main>` so the calc uses main's width (not the
-          viewport) — correct when the sidebar takes leftmost space.
-        */}
-        <VoiceRecorder
-          className="voice-float absolute bottom-[29px] z-20 !h-8 !w-8 !rounded-md !bg-transparent !shadow-none hover:!bg-accent"
-          getSessionKey={() => agentRef.current?.sessionId}
-          onComplete={reloadMessages}
-        />
-        {/*
-          Custom textarea caret (Alma-style): smooth moves + a cool-blue
-          comet tail. Mounts after pi-web-ui's composer is in the DOM via
-          an internal DOM query since the textarea is owned by a Lit
-          custom element we don't ref directly.
-        */}
-        {!isInitializing && <AlmaCaret measureKey={showWelcome ? 'welcome' : 'chat'} />}
-        {/* Initial load overlay — covers the empty container while sessions + agent initialize */}
-        {isInitializing && (
-          <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-background">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-            <div className="text-sm text-muted-foreground">Loading sessions…</div>
-          </div>
-        )}
+            </PromptInputFooter>
+          </PromptInput>
+        </div>
       </main>
-      {/* Rara-native model picker — replaces pi-mono's ModelSelector. */}
       <RaraModelDialog
         open={modelDialogOpen}
         onClose={() => setModelDialogOpen(false)}
-        currentProvider={agentRef.current?.state.model?.provider ?? null}
-        onSelect={(entry: ProviderInfo) => {
-          const agent = agentRef.current;
-          if (agent) {
-            agent.state.model = syntheticModel(entry.id, entry.default_model, {
-              baseUrl: entry.base_url ?? undefined,
-            });
-            // Force the next onBeforeSend to PATCH even if the new value
-            // coincidentally matches the last persisted snapshot (e.g.
-            // the user reselects the same provider after a page reload
-            // where the snapshot could have drifted from the server).
-            lastPersistedRef.current = null;
-            chatPanelRef.current?.agentInterface?.requestUpdate();
-          }
-          setModelDialogOpen(false);
+        currentProvider={activeSession?.model_provider ?? null}
+        onSelect={(entry) => {
+          void handleSelectProvider(entry);
+        }}
+        onUseDefault={() => {
+          void handleUseDefault();
         }}
         resetError={resetError}
-        onUseDefault={handleUseDefault}
       />
       <CascadeModal
         open={cascadeOpen}
@@ -1056,29 +517,6 @@ export default function PiChat() {
         error={cascadeError}
         onClose={() => setCascadeOpen(false)}
       />
-      <SessionSearchDialog
-        open={searchOpen}
-        onOpenChange={setSearchOpen}
-        recentSessions={recentSessions}
-        onSelect={(key) => {
-          // Look up the session in the currently-cached recents first
-          // (no extra request when the user picks a row they can already
-          // see in the dialog). Fall back to a GET when the key comes
-          // from a search hit the recents list doesn't cover.
-          const cached = recentSessions.find((s) => s.key === key);
-          if (cached) {
-            void switchSession(cached);
-            return;
-          }
-          api
-            .get<ChatSession>(`/api/v1/chat/sessions/${encodeURIComponent(key)}`)
-            .then((s) => switchSession(s))
-            .catch((e: unknown) => {
-              console.warn('Failed to open searched session:', e);
-            });
-        }}
-      />
-      <TraceOverflowMenu />
       <ExecutionTraceModal
         open={execTraceOpen}
         trace={execTrace}
@@ -1087,5 +525,121 @@ export default function PiChat() {
         onClose={() => setExecTraceOpen(false)}
       />
     </div>
+  );
+}
+
+/** Suggested prompts shown on the empty state. Hardcoded for now — a future
+ *  PR may pull these from kernel state (recent topics, skill registry). */
+const SUGGESTED_PROMPTS: readonly string[] = [
+  'What can rara do for me right now?',
+  'Show me my recent sessions',
+  "Explain rara's heartbeat architecture",
+];
+
+/** Empty-state hero rendered when the active session has no messages.
+ *  Centred lockup + tagline + 3 suggestion cards that submit straight to the
+ *  WebSocket on click. `disabled` mirrors the composer's disabled state so a
+ *  user can't fire a suggestion mid-stream or before a session exists. */
+function ChatEmptyState({
+  disabled,
+  onPick,
+}: {
+  disabled: boolean;
+  onPick: (prompt: string) => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 px-4 py-16">
+      <div className="flex flex-col items-center gap-2">
+        <div className="text-[32px] font-semibold tracking-tight text-foreground">rara</div>
+        <div className="text-sm text-muted-foreground">How can I help today?</div>
+      </div>
+      <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
+        {SUGGESTED_PROMPTS.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(prompt)}
+            className="rounded-xl border border-border/60 p-4 text-left text-sm text-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Inline trigger row rendered below each finalised assistant turn. Mirrors
+ *  PiChat's "📊 详情" / "🔍 Cascade" buttons (#1718) but rendered as plain
+ *  React rather than via the Lit message-renderer hijack. Only mounted when
+ *  the turn has a persisted `seq` — otherwise the trace endpoints would 404
+ *  and the buttons would mislead the user. */
+function TraceTriggerRow({
+  onOpenTrace,
+  onOpenCascade,
+}: {
+  onOpenTrace: () => void;
+  onOpenCascade: () => void;
+}) {
+  return (
+    <div className="mt-1 flex gap-1.5 text-xs">
+      <button
+        type="button"
+        onClick={onOpenTrace}
+        className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        title="详情"
+      >
+        <span aria-hidden>📊</span>
+        <span>详情</span>
+      </button>
+      <button
+        type="button"
+        onClick={onOpenCascade}
+        className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        title="Cascade"
+      >
+        <span aria-hidden>🔍</span>
+        <span>Cascade</span>
+      </button>
+    </div>
+  );
+}
+
+/** Render one UIMessage part. Text/reasoning go through Streamdown so
+ *  markdown (bold, headings, code, tables) renders correctly even mid-stream;
+ *  tool calls dispatch to a per-tool rich renderer. */
+function RenderPart({ part }: { part: TextUIPart | ReasoningUIPart | DynamicToolUIPart }) {
+  if (part.type === 'text') {
+    return (
+      <div className="prose prose-sm dark:prose-invert max-w-none text-sm text-foreground">
+        <MessageResponse>{part.text}</MessageResponse>
+      </div>
+    );
+  }
+  if (part.type === 'reasoning') {
+    return (
+      <div className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+        <div className="mb-1 font-medium uppercase tracking-wide">Reasoning</div>
+        <MessageResponse>{part.text}</MessageResponse>
+      </div>
+    );
+  }
+  // dynamic-tool — render via the ported Tool card with a per-tool body.
+  const summary = toolHeaderSummary(part);
+  const headerProps = {
+    type: 'dynamic-tool' as const,
+    toolName: part.toolName,
+    state: part.state,
+    className: '[&_span]:truncate',
+    ...(summary ? { title: `${part.toolName} · ${summary}` } : {}),
+  };
+  return (
+    <Tool>
+      <ToolHeader {...headerProps} />
+      <ToolContent>
+        <ToolRenderer part={part} />
+      </ToolContent>
+    </Tool>
   );
 }
