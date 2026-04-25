@@ -33,7 +33,7 @@ use std::{sync::Arc, time::Duration};
 use futures::{SinkExt, StreamExt};
 use rara_channels::{
     web::{WebAdapter, WebEvent},
-    web_reply_buffer::{ReplyBuffer, ReplyBufferConfig},
+    web_reply_buffer::ReplyBuffer,
 };
 use rara_kernel::{
     channel::{adapter::ChannelAdapter, types::ChannelType},
@@ -44,14 +44,6 @@ use tokio_tungstenite::tungstenite::Message;
 
 const OWNER_TOKEN: &str = "test-owner-token";
 const OWNER_USER_ID: &str = "test-user";
-
-fn buffer_config() -> ReplyBufferConfig {
-    ReplyBufferConfig::builder()
-        .capacity(32)
-        .ttl(Duration::from_mins(1))
-        .sweep_interval(Duration::from_secs(30))
-        .build()
-}
 
 fn web_endpoint(session_key: &SessionKey) -> Endpoint {
     Endpoint {
@@ -87,10 +79,10 @@ where
 
 #[tokio::test]
 async fn ws_drains_backlog_before_live_events() {
-    let buffer = ReplyBuffer::new(buffer_config());
+    let buffer = ReplyBuffer::new();
     let adapter = Arc::new(
         WebAdapter::new(OWNER_TOKEN.to_owned(), OWNER_USER_ID.to_owned())
-            .with_reply_buffer(Some(Arc::clone(&buffer))),
+            .with_reply_buffer(Arc::clone(&buffer)),
     );
 
     // Mount the adapter under /chat to mirror production wiring.

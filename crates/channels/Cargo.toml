@@ -9,12 +9,10 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 base64 = { workspace = true }
-bon = { workspace = true }
 chrono = { workspace = true }
 dashmap = "6"
 futures = { workspace = true }
 governor = "0.10"
-humantime-serde = "1"
 image = { workspace = true }
 jiff = { workspace = true }
 parking_lot = { workspace = true }
