@@ -62,6 +62,12 @@ import { liveRunStore } from '@/components/agent-live/live-run-store';
 import { AlmaCaret } from '@/components/AlmaCaret';
 import { CascadeModal } from '@/components/chat/CascadeModal';
 import { ExecutionTraceModal } from '@/components/chat/ExecutionTraceModal';
+import {
+  CASCADE_TRACE_EVENT,
+  EXECUTION_TRACE_EVENT,
+  TRACE_OVERFLOW_TRIGGER_CLASS,
+  TraceOverflowMenu,
+} from '@/components/chat/TraceOverflowMenu';
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { SessionSearchDialog } from '@/components/SessionSearchDialog';
@@ -156,17 +162,11 @@ function asThinkingLevel(level: string | undefined): ThinkingLevel | null {
 }
 
 /**
- * DOM events dispatched by the Lit assistant-message renderer when the
- * user clicks one of the per-turn detail buttons. Both carry the same
- * `seq` payload (resolved via {@link assistantSeqByRef}) and are
- * handled by parallel React effects below.
- *
- * Two separate events rather than one discriminated payload so each
- * handler can own its own modal state without switching on a tag.
+ * Payload of the per-turn detail / cascade CustomEvents dispatched by
+ * `TraceOverflowMenu` when the user picks an entry from the `…`
+ * overflow. Two parallel listeners below own one modal each so the
+ * fetch + open path is isolated by lens.
  */
-const CASCADE_TRACE_EVENT = 'rara:cascade-trace';
-const EXECUTION_TRACE_EVENT = 'rara:execution-trace';
-
 interface TraceEventDetail {
   seq: number;
 }
@@ -230,17 +230,6 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
           }
         }
       }
-      const dispatchTrace = (eventName: string) => (e: Event) => {
-        e.stopPropagation();
-        if (seq === undefined) return;
-        const detail: TraceEventDetail = { seq };
-        document.dispatchEvent(
-          new CustomEvent<TraceEventDetail>(eventName, {
-            detail,
-            bubbles: true,
-          }),
-        );
-      };
       // Per-turn bubble grouping (#1727): pi-agent-core pushes one
       // `AssistantMessage` per agentic-loop iteration, so a single user
       // turn often produces 2-5 assistant frames. We tag everything after
@@ -288,24 +277,15 @@ function registerCascadeAssistantRenderer(agentResolver: () => Agent | null): vo
           ${chipCard ?? ''}
           ${showButtons
             ? html`
-                <div class="mt-1 flex justify-start gap-1 pl-[2.75rem]">
+                <div class="mt-1 flex justify-start pl-[2.75rem]">
                   <button
                     type="button"
-                    class="rara-trace-trigger inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                    title="查看本轮执行摘要（rationale / thinking / plan / tools / usage）"
-                    @click=${dispatchTrace(EXECUTION_TRACE_EVENT)}
+                    class="${TRACE_OVERFLOW_TRIGGER_CLASS} inline-flex h-6 w-6 items-center justify-center rounded-md text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-seq=${seq}
+                    aria-label="查看本轮详情（详情 / Cascade）"
+                    title="详情 / Cascade"
                   >
-                    <span aria-hidden>📊</span>
-                    <span>详情</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="rara-cascade-trigger inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                    title="查看本轮 cascade 执行详情（tick-level tape replay）"
-                    @click=${dispatchTrace(CASCADE_TRACE_EVENT)}
-                  >
-                    <span aria-hidden>🔍</span>
-                    <span>Cascade</span>
+                    <span aria-hidden>…</span>
                   </button>
                 </div>
               `
@@ -1100,6 +1080,7 @@ export default function PiChat() {
             });
         }}
       />
+      <TraceOverflowMenu />
       <ExecutionTraceModal
         open={execTraceOpen}
         trace={execTrace}
