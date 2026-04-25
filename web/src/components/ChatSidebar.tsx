@@ -129,7 +129,7 @@ export function ChatSidebar({
   return (
     <aside
       className={cn(
-        'flex h-screen shrink-0 flex-col border-r border-border/50 bg-background/40 backdrop-blur-md transition-[width] duration-200 ease-out',
+        'flex h-screen shrink-0 flex-col border-r border-border bg-canvas transition-[width] duration-200 ease-out',
         collapsed ? 'w-14' : 'w-64',
       )}
     >
