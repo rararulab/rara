@@ -3044,4 +3044,28 @@ mod inbound_message_tests {
         // Without a connection_id we cannot build a Web endpoint.
         assert!(derive_endpoint(ChannelType::Web, None, None).is_none());
     }
+
+    #[test]
+    fn web_inbound_origin_endpoint_without_chat_id_returns_none() {
+        // Symmetric negative: origin_endpoint() cannot build a Web endpoint
+        // when the adapter failed to populate platform_chat_id.
+        let msg = InboundMessage::unresolved(
+            MessageId::new(),
+            ChannelSource {
+                channel_type:        ChannelType::Web,
+                platform_message_id: None,
+                platform_user_id:    "user-1".to_string(),
+                platform_chat_id:    None,
+            },
+            UserId("user-1".to_string()),
+            Some(SessionKey::new()),
+            None,
+            MessageContent::Text("hi".to_string()),
+            None,
+            jiff::Timestamp::now(),
+            HashMap::new(),
+        );
+
+        assert!(msg.origin_endpoint().is_none());
+    }
 }
