@@ -75,7 +75,6 @@ import Skills from '@/pages/Skills';
 
 /** Admin settings section identifiers. Exported so the floating modal can deep-link into a specific tab. */
 export type SettingsPage =
-  | 'general'
   | 'appearance'
   | 'connection'
   | 'providers'
@@ -581,7 +580,6 @@ function AddProviderButton({
 }
 
 const SETTINGS_PAGES: readonly SettingsPage[] = [
-  'general',
   'appearance',
   'connection',
   'providers',
@@ -620,7 +618,7 @@ export default function SettingsPanel({
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() =>
-    initialSection && SETTINGS_PAGES.includes(initialSection) ? initialSection : 'general',
+    initialSection && SETTINGS_PAGES.includes(initialSection) ? initialSection : 'connection',
   );
   const [toast, setToast] = useState<ToastState>(null);
 
@@ -735,7 +733,6 @@ export default function SettingsPanel({
     {
       label: 'Workspace',
       items: [
-        { id: 'general', label: 'General', icon: <Settings2 className="h-4 w-4" /> },
         { id: 'appearance', label: 'Appearance', icon: <Palette className="h-4 w-4" /> },
         { id: 'connection', label: 'Connection', icon: <Wifi className="h-4 w-4" /> },
       ],
@@ -823,45 +820,6 @@ export default function SettingsPanel({
             </div>
           )}
 
-          {/* ── General (documentation) ── */}
-          {activeCategory === 'general' && (
-            <>
-              {/* Documentation */}
-              <Card className="app-surface border-border/60">
-                <CardHeader>
-                  <div className="flex items-start gap-3">
-                    <BookOpen className="mt-0.5 h-5 w-5 text-muted-foreground" />
-                    <div>
-                      <CardTitle className="text-base">Documentation</CardTitle>
-                      <CardDescription>Project guides and backend API reference</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-2 lg:grid-cols-2">
-                    <a
-                      href="/book/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <BookOpen className="h-4 w-4 text-muted-foreground" />
-                          <div>
-                            <p className="font-medium">Guides</p>
-                            <p className="text-xs text-muted-foreground">mdBook</p>
-                          </div>
-                        </div>
-                        <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                      </div>
-                    </a>
-                  </div>
-                </CardContent>
-              </Card>
-            </>
-          )}
-
           {/* ── Connection ── */}
           {activeCategory === 'connection' && <ConnectionCard />}
 
@@ -924,6 +882,36 @@ export default function SettingsPanel({
                       </button>
                     ))}
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Documentation — subdued footer card with project links. */}
+              <Card className="app-surface border-border/60">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start gap-3">
+                    <BookOpen className="mt-0.5 h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <CardTitle className="text-base">Documentation</CardTitle>
+                      <CardDescription>Project guides and backend API reference</CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <a
+                    href="/book/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group flex items-center justify-between rounded-card border border-border/60 bg-card px-3 py-2.5 transition-colors hover:bg-muted/40"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <BookOpen className="h-4 w-4 text-muted-foreground" />
+                      <div>
+                        <p className="text-sm font-medium">Guides</p>
+                        <p className="text-xs text-muted-foreground">mdBook</p>
+                      </div>
+                    </div>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </a>
                 </CardContent>
               </Card>
             </>

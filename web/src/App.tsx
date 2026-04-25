@@ -38,7 +38,8 @@ const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
 
 const SETTINGS_PAGES: readonly SettingsPage[] = [
-  'general',
+  'appearance',
+  'connection',
   'providers',
   'agents',
   'skills',

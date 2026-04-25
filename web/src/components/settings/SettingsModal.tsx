@@ -87,7 +87,7 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
           <X className="h-4 w-4" />
         </button>
         <div className="min-h-0 flex-1 overflow-hidden">
-          <SettingsPanel key={section ?? 'general'} initialSection={section} />
+          <SettingsPanel key={section ?? 'connection'} initialSection={section} />
         </div>
       </div>
     </div>
