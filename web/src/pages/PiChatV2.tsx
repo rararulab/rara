@@ -39,24 +39,7 @@ import { applyRaraEvent, historyToUIMessages } from '@/components/chat/rara-to-u
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { Button } from '@/components/ui/button';
-
-const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
-
-function readStoredSessionKey(): string | null {
-  try {
-    return localStorage.getItem(ACTIVE_SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredSessionKey(key: string): void {
-  try {
-    localStorage.setItem(ACTIVE_SESSION_KEY, key);
-  } catch {
-    /* ignore */
-  }
-}
+import { readStoredSessionKey, writeStoredSessionKey } from '@/lib/active-session';
 
 /**
  * Parallel chat page mounted at `/chat-v2`. Renders the ported ai-elements
@@ -78,6 +61,36 @@ export default function PiChatV2() {
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
+  // Tracks the session key the user most recently asked to load. A history
+  // fetch that resolves after the user has switched away must NOT clobber the
+  // newer session's state — we compare against this ref before applying.
+  const activeSessionRef = useRef<string | null>(null);
+
+  /** Switch to a session: load its message history and update state. */
+  const selectSession = useCallback(async (session: ChatSession) => {
+    // Tear down any in-flight stream from the previous session before we
+    // start mutating state — otherwise its frames will land on the new
+    // session via `setMessages` and bleed across sessions.
+    wsRef.current?.close();
+    wsRef.current = null;
+    setStreaming(false);
+
+    activeSessionRef.current = session.key;
+    setActiveSession(session);
+    writeStoredSessionKey(session.key);
+    try {
+      const rows = await api.get<ChatMessageData[]>(
+        `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
+      );
+      // Race guard: A→B→A switching can resolve B after A. If the user has
+      // moved on, drop this response on the floor.
+      if (activeSessionRef.current !== session.key) return;
+      setMessages(historyToUIMessages(rows));
+    } catch {
+      if (activeSessionRef.current !== session.key) return;
+      setMessages([]);
+    }
+  }, []);
 
   // Initial session bootstrap: pick the stored key if it still exists,
   // otherwise the most recent.
@@ -97,23 +110,7 @@ export default function PiChatV2() {
     return () => {
       cancelled = true;
     };
-    // selectSession is stable via useCallback below
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /** Switch to a session: load its message history and update state. */
-  const selectSession = useCallback(async (session: ChatSession) => {
-    setActiveSession(session);
-    writeStoredSessionKey(session.key);
-    try {
-      const rows = await api.get<ChatMessageData[]>(
-        `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
-      );
-      setMessages(historyToUIMessages(rows));
-    } catch {
-      setMessages([]);
-    }
-  }, []);
+  }, [selectSession]);
 
   /** Create a fresh session and switch to it. */
   const newSession = useCallback(async () => {
@@ -178,6 +175,9 @@ export default function PiChatV2() {
 
     ws.onerror = () => {
       setStreaming(false);
+      // Surface transport-level failures (TLS handshake, auth reject, dropped
+      // upgrade) to the user — without this they only see the spinner stop.
+      setMessages((prev) => applyRaraEvent(prev, { type: 'error', message: 'connection failed' }));
     };
 
     ws.onclose = () => {
@@ -252,6 +252,9 @@ export default function PiChatV2() {
           <ConversationScrollButton />
         </Conversation>
 
+        {/* TODO(PR3/PR4): replace this inline composer with the ported
+         *  PromptInput shell + attachment UI. The textarea below is a
+         *  placeholder so the page is usable end-to-end during the stack. */}
         <form
           className="mx-auto w-full max-w-3xl shrink-0 px-4 py-4"
           onSubmit={(e) => {
