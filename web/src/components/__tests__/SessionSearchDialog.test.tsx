@@ -125,6 +125,40 @@ describe('SessionSearchDialog', () => {
     expect(mark?.textContent).toBe('world');
   });
 
+  it('renders backend hits for Chinese queries (no client-side filter)', async () => {
+    // Regression for #1795: cmdk's default `shouldFilter` was scoring the
+    // composite `value` (uuid + seq + Chinese title + <mark> snippet) at 0
+    // and hiding real hits. The dialog must trust the backend's results.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    searchSessionsMock.mockResolvedValue([
+      hitFixture({
+        session_key: 'cn-1',
+        session_title: '预算讨论',
+        snippet: '本月<mark>预算</mark>',
+      }),
+    ]);
+    const { SessionSearchDialog } = await import('../SessionSearchDialog');
+
+    render(
+      <SessionSearchDialog open onOpenChange={vi.fn()} onSelect={vi.fn()} recentSessions={[]} />,
+    );
+
+    const input = await screen.findByPlaceholderText(/搜索会话/);
+    act(() => {
+      fireEvent.change(input, { target: { value: '预算' } });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(260);
+    });
+
+    expect(searchSessionsMock).toHaveBeenCalledWith('预算', 20);
+    await waitFor(() => expect(screen.getByText('预算讨论')).toBeInTheDocument());
+    const mark = document.body.querySelector('mark');
+    expect(mark?.textContent).toBe('预算');
+    vi.useRealTimers();
+  });
+
   it('calls onSelect + onOpenChange(false) when a result is picked', async () => {
     searchSessionsMock.mockResolvedValue([hitFixture({ session_key: 'picked' })]);
     const onSelect = vi.fn();

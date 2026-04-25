@@ -42,16 +42,19 @@ const Command = React.forwardRef<
 ));
 Command.displayName = CommandPrimitive.displayName;
 
-/** Dialog container that hosts the command palette UI. */
-function CommandDialog({
-  children,
-  open,
-  onOpenChange,
-}: {
-  children: React.ReactNode;
+/**
+ * Dialog container that hosts the command palette UI.
+ *
+ * Forwards extra `Command` props (e.g. `shouldFilter`, `filter`, `value`)
+ * so callers can opt out of cmdk's built-in client-side filtering when
+ * the result list is already filtered upstream (e.g. server-side search).
+ */
+type CommandDialogProps = {
   open: boolean;
   onOpenChange: (value: boolean) => void;
-}) {
+} & Omit<React.ComponentProps<typeof Command>, 'open' | 'onOpenChange'>;
+
+function CommandDialog({ children, open, onOpenChange, ...commandProps }: CommandDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="overflow-hidden p-0 shadow-lg sm:max-w-[640px]">
@@ -60,7 +63,10 @@ function CommandDialog({
             itself is the label for sighted users. */}
         <DialogTitle className="sr-only">Command palette</DialogTitle>
         <DialogDescription className="sr-only">Search your sessions and messages</DialogDescription>
-        <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
+        <Command
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5"
+          {...commandProps}
+        >
           {children}
         </Command>
       </DialogContent>
