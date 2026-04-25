@@ -15,12 +15,12 @@
  */
 
 import type { DynamicToolUIPart, ReasoningUIPart, TextUIPart, UIMessage } from 'ai';
-import { Send } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildWsUrl, type PublicWebEvent } from '@/adapters/rara-stream';
 import { api } from '@/api/client';
-import type { ChatMessageData, ChatSession } from '@/api/types';
+import type { ChatMessageData, ChatSession, ProviderInfo } from '@/api/types';
 import {
   Conversation,
   ConversationContent,
@@ -28,12 +28,21 @@ import {
   ConversationScrollButton,
 } from '@/components/chat/ai-elements/conversation';
 import { Message, MessageContent, MessageResponse } from '@/components/chat/ai-elements/message';
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from '@/components/chat/ai-elements/prompt-input';
 import { Tool, ToolContent, ToolHeader } from '@/components/chat/ai-elements/tool';
 import { applyRaraEvent, historyToUIMessages } from '@/components/chat/rara-to-uimessage';
 import { ToolRenderer, toolHeaderSummary } from '@/components/chat/tool-renderers';
 import { ChatSidebar } from '@/components/ChatSidebar';
+import { RaraModelDialog } from '@/components/RaraModelDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
-import { Button } from '@/components/ui/button';
+import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { readStoredSessionKey, writeStoredSessionKey } from '@/lib/active-session';
 
 /**
@@ -54,6 +63,10 @@ export default function PiChatV2() {
   const [composerText, setComposerText] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  // Surfaces "Use rara's default" PATCH failures inside RaraModelDialog so the
+  // user can retry without the dialog dismissing.
+  const [resetError, setResetError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Tracks the session key the user most recently asked to load. A history
@@ -126,60 +139,145 @@ export default function PiChatV2() {
   );
 
   /** Send the composer text over a fresh WebSocket. */
-  const sendMessage = useCallback(() => {
-    const text = composerText.trim();
-    if (!text || !activeSession || streaming) return;
-    setComposerText('');
+  const sendMessage = useCallback(
+    (rawText?: string) => {
+      const text = (rawText ?? composerText).trim();
+      if (!text || !activeSession || streaming) return;
+      setComposerText('');
 
-    // Optimistically push the user message so the UI updates immediately.
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `user-${Date.now()}`,
-        role: 'user',
-        parts: [{ type: 'text', text, state: 'done' } satisfies TextUIPart],
-      },
-    ]);
-    setStreaming(true);
+      // Optimistically push the user message so the UI updates immediately.
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `user-${Date.now()}`,
+          role: 'user',
+          parts: [{ type: 'text', text, state: 'done' } satisfies TextUIPart],
+        },
+      ]);
+      setStreaming(true);
 
-    let wsUrl: string;
-    try {
-      wsUrl = buildWsUrl(activeSession.key);
-    } catch (err) {
-      setStreaming(false);
-      console.error('PiChatV2: cannot build ws url', err);
-      return;
-    }
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      ws.send(text);
-    };
-
-    ws.onmessage = (ev: MessageEvent) => {
-      let event: PublicWebEvent;
+      let wsUrl: string;
       try {
-        event = JSON.parse(ev.data as string) as PublicWebEvent;
-      } catch {
+        wsUrl = buildWsUrl(activeSession.key);
+      } catch (err) {
+        setStreaming(false);
+        console.error('PiChatV2: cannot build ws url', err);
         return;
       }
-      setMessages((prev) => applyRaraEvent(prev, event));
-    };
 
-    ws.onerror = () => {
-      setStreaming(false);
-      // Surface transport-level failures (TLS handshake, auth reject, dropped
-      // upgrade) to the user — without this they only see the spinner stop.
-      setMessages((prev) => applyRaraEvent(prev, { type: 'error', message: 'connection failed' }));
-    };
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.onclose = () => {
-      setStreaming(false);
-      if (wsRef.current === ws) wsRef.current = null;
-    };
-  }, [activeSession, composerText, streaming]);
+      ws.onopen = () => {
+        ws.send(text);
+      };
+
+      ws.onmessage = (ev: MessageEvent) => {
+        let event: PublicWebEvent;
+        try {
+          event = JSON.parse(ev.data as string) as PublicWebEvent;
+        } catch {
+          return;
+        }
+        setMessages((prev) => applyRaraEvent(prev, event));
+      };
+
+      ws.onerror = () => {
+        setStreaming(false);
+        // Surface transport-level failures (TLS handshake, auth reject, dropped
+        // upgrade) to the user — without this they only see the spinner stop.
+        setMessages((prev) =>
+          applyRaraEvent(prev, { type: 'error', message: 'connection failed' }),
+        );
+      };
+
+      ws.onclose = () => {
+        setStreaming(false);
+        if (wsRef.current === ws) wsRef.current = null;
+      };
+    },
+    [activeSession, composerText, streaming],
+  );
+
+  /** Reload the active session's history — used after VoiceRecorder finishes
+   *  appending a transcribed user turn server-side. */
+  const reloadActiveMessages = useCallback(async () => {
+    const key = activeSessionRef.current;
+    if (!key) return;
+    try {
+      const rows = await api.get<ChatMessageData[]>(
+        `/api/v1/chat/sessions/${encodeURIComponent(key)}/messages?limit=200`,
+      );
+      if (activeSessionRef.current !== key) return;
+      setMessages(historyToUIMessages(rows));
+    } catch (err) {
+      console.warn('PiChatV2: failed to reload messages after voice', err);
+    }
+  }, []);
+
+  /** Persist a provider/model pick from RaraModelDialog onto the active session. */
+  const handleSelectProvider = useCallback(async (entry: ProviderInfo) => {
+    const key = activeSessionRef.current;
+    if (!key) {
+      setModelDialogOpen(false);
+      return;
+    }
+    try {
+      await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+        model: entry.default_model,
+        model_provider: entry.id,
+      });
+      if (activeSessionRef.current !== key) {
+        setModelDialogOpen(false);
+        return;
+      }
+      setActiveSession((prev) =>
+        prev && prev.key === key
+          ? { ...prev, model: entry.default_model, model_provider: entry.id }
+          : prev,
+      );
+      setModelDialogOpen(false);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetError(`Failed to set model: ${msg}`);
+    }
+  }, []);
+
+  /** Clear the per-session pin so `llm.default_provider` takes over. */
+  const handleUseDefault = useCallback(async () => {
+    const key = activeSessionRef.current;
+    if (!key) {
+      setModelDialogOpen(false);
+      return;
+    }
+    setResetError(null);
+    try {
+      await api.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+        model: null,
+        model_provider: null,
+        thinking_level: null,
+      });
+      if (activeSessionRef.current !== key) {
+        setModelDialogOpen(false);
+        return;
+      }
+      setActiveSession((prev) =>
+        prev && prev.key === key
+          ? { ...prev, model: null, model_provider: null, thinking_level: null }
+          : prev,
+      );
+      setModelDialogOpen(false);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResetError(`Failed to reset model: ${msg}`);
+    }
+  }, []);
+
+  // Drop any stale reset error when the dialog closes so it doesn't reappear
+  // on next open.
+  useEffect(() => {
+    if (!modelDialogOpen) setResetError(null);
+  }, [modelDialogOpen]);
 
   // Cleanly close the socket when the page unmounts.
   useEffect(() => {
@@ -212,11 +310,6 @@ export default function PiChatV2() {
           <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
             {headerTitle}
           </h1>
-          {activeSession?.model && (
-            <span className="shrink-0 truncate rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
-              {activeSession.model}
-            </span>
-          )}
           <span className="shrink-0 truncate rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-xs text-amber-700 dark:text-amber-300">
             chat-v2 preview
           </span>
@@ -247,42 +340,75 @@ export default function PiChatV2() {
           <ConversationScrollButton />
         </Conversation>
 
-        {/* TODO(PR3/PR4): replace this inline composer with the ported
-         *  PromptInput shell + attachment UI. The textarea below is a
-         *  placeholder so the page is usable end-to-end during the stack. */}
-        <form
-          className="mx-auto w-full max-w-3xl shrink-0 px-4 py-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            sendMessage();
-          }}
-        >
-          <div className="flex items-end gap-2 rounded-lg border border-border bg-background p-2 focus-within:border-ring">
-            <textarea
-              value={composerText}
-              onChange={(e) => setComposerText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-              rows={2}
-              placeholder={activeSession ? 'Message rara…' : 'Select a session to start.'}
-              disabled={!activeSession || streaming}
-              className="min-h-[2.5rem] flex-1 resize-none border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!activeSession || streaming || composerText.trim().length === 0}
-            >
-              <Send className="size-4" />
-              <span className="sr-only">Send</span>
-            </Button>
-          </div>
-        </form>
+        <div className="mx-auto w-full max-w-3xl shrink-0 px-4 py-4">
+          <PromptInput
+            // PromptInput owns text in DOM, but we mirror it into `composerText`
+            // so the submit button's disabled state and the WebSocket sender
+            // can read the current value without poking the form ref.
+            onSubmit={(message) => {
+              sendMessage(message.text);
+            }}
+          >
+            <PromptInputBody>
+              <PromptInputTextarea
+                value={composerText}
+                onChange={(e) => setComposerText(e.currentTarget.value)}
+                placeholder={activeSession ? 'Message rara…' : 'Select a session to start.'}
+                disabled={!activeSession || streaming}
+              />
+            </PromptInputBody>
+            <PromptInputFooter>
+              <PromptInputTools>
+                {/*
+                  VoiceRecorder pushes the transcribed turn server-side, so
+                  after it completes we refetch session history rather than
+                  injecting a synthetic UIMessage. Mounted only when a session
+                  exists — otherwise `getSessionKey` would return undefined
+                  and the recorder couldn't post anywhere useful.
+                */}
+                {activeSession && (
+                  <VoiceRecorder
+                    className="!h-8 !w-8 !rounded-md !bg-transparent !shadow-none hover:!bg-accent"
+                    getSessionKey={() => activeSessionRef.current ?? undefined}
+                    onComplete={() => {
+                      void reloadActiveMessages();
+                    }}
+                  />
+                )}
+              </PromptInputTools>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setModelDialogOpen(true)}
+                  disabled={!activeSession}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border/60 px-2.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground disabled:opacity-50"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span className="max-w-[160px] truncate">
+                    {activeSession?.model_provider ?? 'auto'}
+                  </span>
+                </button>
+                <PromptInputSubmit
+                  {...(streaming ? { status: 'streaming' as const } : {})}
+                  disabled={!activeSession || streaming || composerText.trim().length === 0}
+                />
+              </div>
+            </PromptInputFooter>
+          </PromptInput>
+        </div>
       </main>
+      <RaraModelDialog
+        open={modelDialogOpen}
+        onClose={() => setModelDialogOpen(false)}
+        currentProvider={activeSession?.model_provider ?? null}
+        onSelect={(entry) => {
+          void handleSelectProvider(entry);
+        }}
+        onUseDefault={() => {
+          void handleUseDefault();
+        }}
+        resetError={resetError}
+      />
     </div>
   );
 }
