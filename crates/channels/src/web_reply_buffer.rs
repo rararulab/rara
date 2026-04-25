@@ -1,56 +1,11 @@
-// Copyright 2025 Rararulab
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-//! Per-session ring buffer for "important" `WebEvent`s so that task-completion
-//! replies survive periods where no WS / SSE listener is attached.
+//! Always-on per-session reply buffer for the Web channel.
 //!
-//! # Why this exists
-//!
-//! `WebAdapter` publishes outbound replies through a `tokio::broadcast`
-//! channel. When a long-running background task finishes while the user has
-//! closed their browser tab, `broadcast::Sender::send` returns `Err` because
-//! `receiver_count == 0`, and the `Reply` envelope is silently dropped. When
-//! the user reconnects, the kernel has no record of "you owe this socket a
-//! reply" — task output is lost forever (see issue #1804).
-//!
-//! # What is buffered
-//!
-//! Only events whose loss is user-visible:
-//!
-//! - [`WebEvent::Message`]      — final agent reply (the original #1804 case)
-//! - [`WebEvent::Error`]        — surfaced error notifications
-//! - [`WebEvent::BackgroundTaskDone`] — terminal status of a bg task
-//! - [`WebEvent::Progress`]     — terminal stage signals
-//!
-//! Streaming deltas (`TextDelta`, `ReasoningDelta`, `ToolCall*`, …) are
-//! intentionally **not** buffered: replaying a partial token stream after the
-//! fact has no useful semantics for the UI.
-//!
-//! # Replay semantics & trade-off
-//!
-//! On connect the WS / SSE handler drains the buffer into the new socket
-//! before forwarding live events. The buffer is **not** removed on drain —
-//! a session may have multiple concurrent tabs, and a brand-new tab opening
-//! mid-turn should still see the catch-up history. The cost is that an
-//! already-connected tab which read an event live will see it *again* if it
-//! reconnects (e.g. WS drop + retry inside the TTL window). Callers that
-//! cannot tolerate duplicate `WebEvent::Message` rows must dedupe by
-//! payload — there is no per-event sequence number on the wire today.
-//!
-//! Bounded capacity (oldest event is dropped on overflow) and a TTL sweep
-//! task keep memory bounded; both are configured from YAML — no defaults
-//! are hard-coded in Rust.
+//! The buffer is a structural correctness fix, not a tunable feature: when a
+//! long-running task completes while the user has closed their tab, the
+//! WS broadcast has zero receivers and the event would otherwise be silently
+//! dropped (issue #1804). Capacity, TTL, and sweeper interval are mechanism
+//! parameters that live as `const` next to the code, **not** deployment
+//! configuration — there is no YAML knob to disable buffering.
 
 use std::{
     collections::VecDeque,
@@ -61,36 +16,20 @@ use std::{
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rara_kernel::session::SessionKey;
-use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::web::WebEvent;
 
-/// Configuration for the per-session reply buffer.
-///
-/// Both fields are sourced from the YAML config file
-/// (`web.reply_buffer.*`) — see `config.example.yaml`.
-#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
-pub struct ReplyBufferConfig {
-    /// Maximum number of "important" events retained per session.
-    /// On overflow, the oldest event is evicted (FIFO).
-    pub capacity:       usize,
-    /// How long after the last write a session's buffer is kept
-    /// before the sweeper drops it.
-    #[serde(
-        deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize"
-    )]
-    pub ttl:            Duration,
-    /// Sweeper tick interval. The sweeper runs every `sweep_interval` and
-    /// removes any session whose buffer hasn't been written to within
-    /// the last `ttl`.
-    #[serde(
-        deserialize_with = "humantime_serde::deserialize",
-        serialize_with = "humantime_serde::serialize"
-    )]
-    pub sweep_interval: Duration,
-}
+/// Maximum number of "important" events retained per session before FIFO
+/// eviction.
+const REPLY_BUFFER_CAPACITY: usize = 64;
+
+/// How long after the last write a session's buffer is kept before the
+/// sweeper drops it.
+const REPLY_BUFFER_TTL: Duration = Duration::from_mins(10);
+
+/// How often the sweeper checks for expired sessions.
+const REPLY_BUFFER_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
 
 /// One session's bounded ring of important events plus a last-write
 /// timestamp used by the TTL sweeper.
@@ -103,15 +42,13 @@ struct SessionBuffer {
 /// handlers and the `ChannelAdapter::send` path.
 pub struct ReplyBuffer {
     sessions: DashMap<SessionKey, Arc<Mutex<SessionBuffer>>>,
-    config:   ReplyBufferConfig,
 }
 
 impl ReplyBuffer {
-    /// Construct a new empty buffer with the given configuration.
-    pub fn new(config: ReplyBufferConfig) -> Arc<Self> {
+    /// Construct a new empty buffer.
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: DashMap::new(),
-            config,
         })
     }
 
@@ -137,13 +74,13 @@ impl ReplyBuffer {
             .entry(session_key.clone())
             .or_insert_with(|| {
                 Arc::new(Mutex::new(SessionBuffer {
-                    events:     VecDeque::with_capacity(self.config.capacity),
+                    events:     VecDeque::with_capacity(REPLY_BUFFER_CAPACITY),
                     last_write: Instant::now(),
                 }))
             })
             .clone();
         let mut guard = entry.lock();
-        if guard.events.len() == self.config.capacity {
+        if guard.events.len() == REPLY_BUFFER_CAPACITY {
             guard.events.pop_front();
         }
         guard.events.push_back(event);
@@ -169,16 +106,14 @@ impl ReplyBuffer {
     /// Spawn the TTL sweeper. Returns immediately; the sweeper runs in
     /// the background until `cancel` fires.
     pub fn spawn_sweeper(self: Arc<Self>, cancel: CancellationToken) {
-        let interval = self.config.sweep_interval;
-        let ttl = self.config.ttl;
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(interval);
+            let mut ticker = tokio::time::interval(REPLY_BUFFER_SWEEP_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => return,
                     _ = ticker.tick() => {
-                        self.sweep_expired(ttl);
+                        self.sweep_expired(REPLY_BUFFER_TTL);
                     }
                 }
             }
@@ -210,15 +145,7 @@ mod tests {
 
     use rara_kernel::{io::BackgroundTaskStatus, session::SessionKey};
 
-    use super::{ReplyBuffer, ReplyBufferConfig, WebEvent};
-
-    fn config(capacity: usize) -> ReplyBufferConfig {
-        ReplyBufferConfig::builder()
-            .capacity(capacity)
-            .ttl(Duration::from_mins(1))
-            .sweep_interval(Duration::from_secs(10))
-            .build()
-    }
+    use super::{REPLY_BUFFER_CAPACITY, ReplyBuffer, WebEvent};
 
     fn session() -> SessionKey { SessionKey::new() }
 
@@ -256,7 +183,7 @@ mod tests {
 
     #[test]
     fn append_then_snapshot_returns_events_in_order() {
-        let buf = ReplyBuffer::new(config(8));
+        let buf = ReplyBuffer::new();
         let s = session();
         buf.append(
             &s,
@@ -284,7 +211,7 @@ mod tests {
 
     #[test]
     fn snapshot_does_not_drain() {
-        let buf = ReplyBuffer::new(config(8));
+        let buf = ReplyBuffer::new();
         let s = session();
         buf.append(
             &s,
@@ -298,9 +225,9 @@ mod tests {
 
     #[test]
     fn capacity_overflow_evicts_oldest() {
-        let buf = ReplyBuffer::new(config(2));
+        let buf = ReplyBuffer::new();
         let s = session();
-        for i in 0..3 {
+        for i in 0..=REPLY_BUFFER_CAPACITY {
             buf.append(
                 &s,
                 WebEvent::Message {
@@ -309,19 +236,17 @@ mod tests {
             );
         }
         let snap = buf.snapshot(&s);
-        assert_eq!(snap.len(), 2);
-        match (&snap[0], &snap[1]) {
-            (WebEvent::Message { content: a }, WebEvent::Message { content: b }) => {
-                assert_eq!(a, "m1");
-                assert_eq!(b, "m2");
-            }
+        assert_eq!(snap.len(), REPLY_BUFFER_CAPACITY);
+        // Oldest ("m0") should have been evicted; first remaining is "m1".
+        match &snap[0] {
+            WebEvent::Message { content } => assert_eq!(content, "m1"),
             other => panic!("unexpected: {other:?}"),
         }
     }
 
     #[test]
     fn sweep_expired_drops_idle_sessions() {
-        let buf = ReplyBuffer::new(config(4));
+        let buf = ReplyBuffer::new();
         let s = session();
         buf.append(
             &s,
@@ -331,7 +256,6 @@ mod tests {
         );
         assert_eq!(buf.session_count(), 1);
 
-        // ttl=0 makes every entry immediately eligible.
         buf.sweep_expired(Duration::from_nanos(0));
         assert_eq!(buf.session_count(), 0);
     }

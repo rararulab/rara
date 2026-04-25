@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! End-to-end coverage for the per-session reply buffer wired into
+//! End-to-end coverage for the always-on per-session reply buffer wired into
 //! `WebAdapter` (issue #1804).
 //!
 //! Two scenarios:
@@ -33,21 +33,13 @@ use std::{sync::Arc, time::Duration};
 
 use rara_channels::{
     web::{WebAdapter, WebEvent},
-    web_reply_buffer::{ReplyBuffer, ReplyBufferConfig},
+    web_reply_buffer::ReplyBuffer,
 };
 use rara_kernel::{
     channel::{adapter::ChannelAdapter, types::ChannelType},
     io::{Endpoint, EndpointAddress, PlatformOutbound},
     session::SessionKey,
 };
-
-fn buffer_config() -> ReplyBufferConfig {
-    ReplyBufferConfig::builder()
-        .capacity(32)
-        .ttl(Duration::from_mins(1))
-        .sweep_interval(Duration::from_secs(30))
-        .build()
-}
 
 fn web_endpoint(session_key: &SessionKey) -> Endpoint {
     Endpoint {
@@ -70,9 +62,9 @@ fn subscribe(
 
 #[tokio::test]
 async fn happy_path_reply_reaches_subscribed_listener() {
-    let buffer = ReplyBuffer::new(buffer_config());
-    let adapter = WebAdapter::new("tok".to_owned(), "user".to_owned())
-        .with_reply_buffer(Some(Arc::clone(&buffer)));
+    let buffer = ReplyBuffer::new();
+    let adapter =
+        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
     let mut rx = subscribe(&adapter, &session_key);
@@ -108,9 +100,9 @@ async fn happy_path_reply_reaches_subscribed_listener() {
 
 #[tokio::test]
 async fn listener_loss_is_recovered_via_buffer_snapshot() {
-    let buffer = ReplyBuffer::new(buffer_config());
-    let adapter = WebAdapter::new("tok".to_owned(), "user".to_owned())
-        .with_reply_buffer(Some(Arc::clone(&buffer)));
+    let buffer = ReplyBuffer::new();
+    let adapter =
+        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
 
@@ -142,30 +134,4 @@ async fn listener_loss_is_recovered_via_buffer_snapshot() {
         WebEvent::Message { content } => assert_eq!(content, "while-you-were-away"),
         other => panic!("expected WebEvent::Message, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn send_without_buffer_does_not_panic() {
-    // Adapter built without a buffer behaves exactly like pre-#1804:
-    // a publish with no listeners drops the event silently.
-    let adapter = WebAdapter::new("tok".to_owned(), "user".to_owned());
-
-    let session_key = SessionKey::new();
-    let endpoint = web_endpoint(&session_key);
-
-    // No subscriber → no bus → publish is a noop, but it must not panic.
-    adapter
-        .send(
-            &endpoint,
-            PlatformOutbound::Reply {
-                content:       "lost".to_owned(),
-                attachments:   Vec::new(),
-                reply_context: None,
-            },
-        )
-        .await
-        .expect("egress send without buffer");
-
-    // We can't read what's missing, but we can prove the disable path
-    // by asserting the adapter accepted the call without a panic.
 }
