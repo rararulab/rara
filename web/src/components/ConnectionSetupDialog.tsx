@@ -42,7 +42,7 @@ export function ConnectionSetupDialog({ open, onConnect }: ConnectionSetupDialog
     setTesting(true);
     setError(null);
     try {
-      const res = await fetch(`${url}/api/v1/settings`, {
+      const res = await fetch(`${url}/api/v1/health`, {
         signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
