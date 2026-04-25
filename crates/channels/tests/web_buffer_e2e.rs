@@ -17,19 +17,17 @@
 //!
 //! Two scenarios:
 //!
-//! - **Happy-path egress routing** — exercises the same code path that
-//!   `IOSubsystem` invokes for a turn reply: build a `Web` endpoint with a real
+//! - **Happy-path egress routing** — covers the egress-sink contract for an
+//!   already-routed Web `Reply`: build a `Web` endpoint with a real
 //!   `connection_id`, call `WebAdapter::send` with a `PlatformOutbound::Reply`,
-//!   and assert a live subscriber sees a matching `WebEvent::Message`. This
-//!   closes the test-coverage gap from review of #1796/#1801, where the routing
-//!   fix landed without a regression test against the egress sink.
+//!   and assert a live subscriber sees a matching `WebEvent::Message`.
 //! - **Listener-loss recovery** — same `WebAdapter::send` invocation, but the
 //!   subscriber is dropped before publish. A fresh subscriber then drains the
 //!   reply buffer and observes the missed event.
 //!
 //! These tests do not boot a kernel; they drive `ChannelAdapter::send`
-//! directly because the buffering bug lives in the adapter, not in
-//! origin-endpoint resolution (which #1796/#1801 already cover).
+//! directly because the buffering bug lives in the adapter sink, not in
+//! origin-endpoint resolution.
 
 use std::{sync::Arc, time::Duration};
 
@@ -104,7 +102,7 @@ async fn happy_path_reply_reaches_subscribed_listener() {
 
     // The buffer must also have captured the reply so a hypothetical
     // reconnecting tab could replay it.
-    let buffered = buffer.snapshot(&session_key).await;
+    let buffered = buffer.snapshot(&session_key);
     assert_eq!(buffered.len(), 1, "buffer should retain the reply");
 }
 
@@ -138,7 +136,7 @@ async fn listener_loss_is_recovered_via_buffer_snapshot() {
     // The broadcast had zero receivers at publish time, so a
     // pre-#1804 build would have lost the reply forever. With the
     // buffer, a reconnecting tab drains the snapshot.
-    let backlog = buffer.snapshot(&session_key).await;
+    let backlog = buffer.snapshot(&session_key);
     assert_eq!(backlog.len(), 1, "exactly one buffered event");
     match &backlog[0] {
         WebEvent::Message { content } => assert_eq!(content, "while-you-were-away"),
@@ -147,7 +145,7 @@ async fn listener_loss_is_recovered_via_buffer_snapshot() {
 }
 
 #[tokio::test]
-async fn buffer_disabled_when_no_config() {
+async fn send_without_buffer_does_not_panic() {
     // Adapter built without a buffer behaves exactly like pre-#1804:
     // a publish with no listeners drops the event silently.
     let adapter = WebAdapter::new("tok".to_owned(), "user".to_owned());

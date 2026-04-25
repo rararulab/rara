@@ -496,16 +496,7 @@ pub async fn start_with_options(
         .and_then(|w| w.reply_buffer.clone())
         .map(|cfg| {
             let buffer = rara_channels::web_reply_buffer::ReplyBuffer::new(cfg);
-            let (sweeper_tx, sweeper_rx) = tokio::sync::watch::channel(false);
-            // Bridge the workspace cancellation token to the sweeper's
-            // dedicated watch handle so shutdown propagates through the
-            // same signal that stops every other long-running task.
-            let token = cancellation_token.clone();
-            tokio::spawn(async move {
-                token.cancelled().await;
-                let _ = sweeper_tx.send(true);
-            });
-            Arc::clone(&buffer).spawn_sweeper(sweeper_rx);
+            Arc::clone(&buffer).spawn_sweeper(cancellation_token.clone());
             buffer
         });
 

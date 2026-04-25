@@ -59,9 +59,10 @@ use std::{
 };
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rara_kernel::session::SessionKey;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::web::WebEvent;
 
@@ -130,18 +131,18 @@ impl ReplyBuffer {
 
     /// Append an event to the session's ring, evicting the oldest entry
     /// when capacity is exceeded.
-    pub async fn append(&self, session_key: &SessionKey, event: WebEvent) {
+    pub fn append(&self, session_key: &SessionKey, event: WebEvent) {
         let entry = self
             .sessions
             .entry(session_key.clone())
             .or_insert_with(|| {
                 Arc::new(Mutex::new(SessionBuffer {
-                    events:     VecDeque::with_capacity(self.config.capacity.min(64)),
+                    events:     VecDeque::with_capacity(self.config.capacity),
                     last_write: Instant::now(),
                 }))
             })
             .clone();
-        let mut guard = entry.lock().await;
+        let mut guard = entry.lock();
         if guard.events.len() == self.config.capacity {
             guard.events.pop_front();
         }
@@ -154,21 +155,11 @@ impl ReplyBuffer {
     /// session has no buffer.
     ///
     /// The buffer is **not** drained — see module-level docs for why.
-    pub async fn snapshot(&self, session_key: &SessionKey) -> Vec<WebEvent> {
+    pub fn snapshot(&self, session_key: &SessionKey) -> Vec<WebEvent> {
         let Some(entry) = self.sessions.get(session_key).map(|e| e.clone()) else {
             return Vec::new();
         };
-        entry.lock().await.events.iter().cloned().collect()
-    }
-
-    /// Number of buffered events for `session_key` — exposed for tests
-    /// and metrics.
-    #[doc(hidden)]
-    pub async fn len(&self, session_key: &SessionKey) -> usize {
-        match self.sessions.get(session_key).map(|e| e.clone()) {
-            Some(entry) => entry.lock().await.events.len(),
-            None => 0,
-        }
+        entry.lock().events.iter().cloned().collect()
     }
 
     /// Number of currently tracked sessions — exposed for tests / metrics.
@@ -176,8 +167,8 @@ impl ReplyBuffer {
     pub fn session_count(&self) -> usize { self.sessions.len() }
 
     /// Spawn the TTL sweeper. Returns immediately; the sweeper runs in
-    /// the background until `shutdown_rx` flips to `true`.
-    pub fn spawn_sweeper(self: Arc<Self>, mut shutdown_rx: watch::Receiver<bool>) {
+    /// the background until `cancel` fires.
+    pub fn spawn_sweeper(self: Arc<Self>, cancel: CancellationToken) {
         let interval = self.config.sweep_interval;
         let ttl = self.config.ttl;
         tokio::spawn(async move {
@@ -185,9 +176,9 @@ impl ReplyBuffer {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
-                    _ = shutdown_rx.changed() => return,
+                    _ = cancel.cancelled() => return,
                     _ = ticker.tick() => {
-                        self.sweep_expired(ttl).await;
+                        self.sweep_expired(ttl);
                     }
                 }
             }
@@ -197,16 +188,16 @@ impl ReplyBuffer {
     /// Remove sessions whose `last_write` is older than `ttl`. Pulled out
     /// for direct unit testing.
     #[doc(hidden)]
-    pub async fn sweep_expired(&self, ttl: Duration) {
+    pub fn sweep_expired(&self, ttl: Duration) {
         let now = Instant::now();
-        let mut victims: Vec<SessionKey> = Vec::new();
-        for entry in &self.sessions {
-            let buf = entry.value().clone();
-            let guard = buf.lock().await;
-            if now.duration_since(guard.last_write) > ttl {
-                victims.push(entry.key().clone());
-            }
-        }
+        let victims: Vec<SessionKey> = self
+            .sessions
+            .iter()
+            .filter_map(|entry| {
+                let guard = entry.value().lock();
+                (now.duration_since(guard.last_write) > ttl).then(|| entry.key().clone())
+            })
+            .collect();
         for k in victims {
             self.sessions.remove(&k);
         }
@@ -263,8 +254,8 @@ mod tests {
         }));
     }
 
-    #[tokio::test]
-    async fn append_then_snapshot_returns_events_in_order() {
+    #[test]
+    fn append_then_snapshot_returns_events_in_order() {
         let buf = ReplyBuffer::new(config(8));
         let s = session();
         buf.append(
@@ -272,17 +263,15 @@ mod tests {
             WebEvent::Message {
                 content: "first".to_owned(),
             },
-        )
-        .await;
+        );
         buf.append(
             &s,
             WebEvent::Message {
                 content: "second".to_owned(),
             },
-        )
-        .await;
+        );
 
-        let snap = buf.snapshot(&s).await;
+        let snap = buf.snapshot(&s);
         assert_eq!(snap.len(), 2);
         match (&snap[0], &snap[1]) {
             (WebEvent::Message { content: a }, WebEvent::Message { content: b }) => {
@@ -293,8 +282,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn snapshot_does_not_drain() {
+    #[test]
+    fn snapshot_does_not_drain() {
         let buf = ReplyBuffer::new(config(8));
         let s = session();
         buf.append(
@@ -302,14 +291,13 @@ mod tests {
             WebEvent::Message {
                 content: "x".to_owned(),
             },
-        )
-        .await;
-        assert_eq!(buf.snapshot(&s).await.len(), 1);
-        assert_eq!(buf.snapshot(&s).await.len(), 1);
+        );
+        assert_eq!(buf.snapshot(&s).len(), 1);
+        assert_eq!(buf.snapshot(&s).len(), 1);
     }
 
-    #[tokio::test]
-    async fn capacity_overflow_evicts_oldest() {
+    #[test]
+    fn capacity_overflow_evicts_oldest() {
         let buf = ReplyBuffer::new(config(2));
         let s = session();
         for i in 0..3 {
@@ -318,10 +306,9 @@ mod tests {
                 WebEvent::Message {
                     content: format!("m{i}"),
                 },
-            )
-            .await;
+            );
         }
-        let snap = buf.snapshot(&s).await;
+        let snap = buf.snapshot(&s);
         assert_eq!(snap.len(), 2);
         match (&snap[0], &snap[1]) {
             (WebEvent::Message { content: a }, WebEvent::Message { content: b }) => {
@@ -332,8 +319,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn sweep_expired_drops_idle_sessions() {
+    #[test]
+    fn sweep_expired_drops_idle_sessions() {
         let buf = ReplyBuffer::new(config(4));
         let s = session();
         buf.append(
@@ -341,12 +328,11 @@ mod tests {
             WebEvent::Message {
                 content: "x".to_owned(),
             },
-        )
-        .await;
+        );
         assert_eq!(buf.session_count(), 1);
 
         // ttl=0 makes every entry immediately eligible.
-        buf.sweep_expired(Duration::from_nanos(0)).await;
+        buf.sweep_expired(Duration::from_nanos(0));
         assert_eq!(buf.session_count(), 0);
     }
 }
