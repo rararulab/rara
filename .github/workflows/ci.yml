@@ -156,6 +156,18 @@ jobs:
 
           mita:
             heartbeat_interval: "24h"
+
+          # Stub LLM provider — boot requires llm.default_provider + at least
+          # one provider to construct the driver registry. Live specs do not
+          # make real /chat/completions calls, so the unreachable base_url is
+          # fine; if a future spec needs real LLM, swap to a recorded fixture.
+          llm:
+            default_provider: "stub"
+            providers:
+              stub:
+                base_url: "http://127.0.0.1:1"
+                api_key: "stub"
+                default_model: "stub-model"
           EOF
           echo "wrote config to $XDG_CONFIG_HOME/rara/config.yaml"
 
