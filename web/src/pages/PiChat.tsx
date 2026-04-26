@@ -71,6 +71,7 @@ import {
 import { ChatSidebar } from '@/components/ChatSidebar';
 import { ChatWelcome } from '@/components/ChatWelcome';
 import { RaraModelDialog } from '@/components/RaraModelDialog';
+import { SessionMenu } from '@/components/SessionMenu';
 import { SessionSearchDialog } from '@/components/SessionSearchDialog';
 import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
@@ -354,10 +355,6 @@ export default function PiChat() {
   // creating a new session or sending the first message of a fresh one).
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
-  // Brief inline confirmation after copying the session id from the
-  // page-header title — auto-clears after ~1200ms so the title text
-  // returns to normal without any toast plumbing.
-  const [copiedSessionId, setCopiedSessionId] = useState(false);
   // `true` when the active session has no messages — we render a welcome
   // overlay in that window so the chat page isn't just an input box on
   // empty canvas. Flipped off on the first send and on session switches
@@ -1004,6 +1001,11 @@ export default function PiChat() {
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => openSettings()}
         onDeleteSession={handleSessionDeleted}
+        onSessionUpdated={(updated) => {
+          // Keep the page header in sync when the user regenerates the
+          // active session's title from the sidebar menu.
+          if (updated.key === activeSession?.key) setActiveSession(updated);
+        }}
         refreshKey={sidebarRefreshKey}
       />
       <main ref={setMainEl} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1017,25 +1019,22 @@ export default function PiChat() {
             sits on the right. */}
         {activeSession && !showWelcome && !isInitializing && (
           <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
-            <button
-              type="button"
-              className="min-w-0 flex-1 cursor-pointer select-none truncate text-left text-sm font-semibold text-foreground"
-              title={activeSession.key}
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(activeSession.key);
-                  setCopiedSessionId(true);
-                  setTimeout(() => setCopiedSessionId(false), 1200);
-                } catch {
-                  // Clipboard write may fail (insecure context, denied
-                  // permission). This is a debug affordance, so swallow.
-                }
-              }}
-            >
-              {copiedSessionId
-                ? '已复制 session id'
-                : activeSession.title || activeSession.preview || '新对话'}
-            </button>
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              <span
+                className="min-w-0 flex-1 select-text truncate text-sm font-semibold text-foreground"
+                title={activeSession.key}
+              >
+                {activeSession.title || activeSession.preview || '新对话'}
+              </span>
+              <SessionMenu
+                sessionKey={activeSession.key}
+                ariaLabel={activeSession.title ?? '当前会话'}
+                onRegenerated={(updated) => {
+                  setActiveSession(updated);
+                  setSidebarRefreshKey((k) => k + 1);
+                }}
+              />
+            </div>
             {activeSession.model && (
               <span className="shrink-0 truncate rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
                 {activeSession.model}
