@@ -88,6 +88,7 @@ export type PlanStepStatusEvent =
 export type StreamEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'reasoning_delta'; text: string }
+  | { type: 'text_clear' }
   | {
       type: 'tool_call_start';
       name: string;
