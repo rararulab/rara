@@ -12,25 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{diesel_pool::DieselSqlitePool, kv::KVStore};
+use crate::{
+    diesel_pool::{DieselSqlitePool, DieselSqlitePools},
+    kv::KVStore,
+};
 
-/// Database store that owns the shared diesel-async SQLite pool.
+/// Database store that owns the shared diesel-async SQLite pools.
 #[derive(Clone)]
 pub struct DBStore {
-    pool: DieselSqlitePool,
+    pools: DieselSqlitePools,
 }
 
 impl DBStore {
-    /// Wrap an existing diesel-async SQLite pool.
-    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
+    /// Wrap an existing reader/writer pool bundle.
+    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 
     /// Get a KV store instance.
-    pub fn kv_store(&self) -> KVStore { KVStore::new(self.pool.clone()) }
+    pub fn kv_store(&self) -> KVStore { KVStore::new(self.pools.clone()) }
 
-    /// Get the underlying diesel-async SQLite pool.
-    pub fn pool(&self) -> &DieselSqlitePool { &self.pool }
+    /// Get the underlying reader/writer pool bundle.
+    pub fn pools(&self) -> &DieselSqlitePools { &self.pools }
+
+    /// Reader pool — concurrent SELECTs.
+    pub fn reader(&self) -> &DieselSqlitePool { &self.pools.reader }
+
+    /// Writer pool — single-writer mutations.
+    pub fn writer(&self) -> &DieselSqlitePool { &self.pools.writer }
 }
 
-impl From<DBStore> for DieselSqlitePool {
-    fn from(store: DBStore) -> Self { store.pool }
+impl From<DBStore> for DieselSqlitePools {
+    fn from(store: DBStore) -> Self { store.pools }
 }

@@ -24,7 +24,7 @@ use diesel_async::RunQueryDsl;
 use rara_model::schema::kv_table;
 use snafu::Whatever;
 use tokio::sync::watch;
-use yunara_store::{KVStore, diesel_pool::DieselSqlitePool};
+use yunara_store::{KVStore, diesel_pool::DieselSqlitePools};
 
 /// Internal prefix applied to all settings keys in the KV store.
 const PREFIX: &str = "settings.";
@@ -35,18 +35,18 @@ const PREFIX: &str = "settings.";
 /// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
 #[derive(Clone)]
 pub struct SettingsSvc {
-    kv:   KVStore,
-    pool: DieselSqlitePool,
-    tx:   Arc<watch::Sender<()>>,
+    kv:    KVStore,
+    pools: DieselSqlitePools,
+    tx:    Arc<watch::Sender<()>>,
 }
 
 impl SettingsSvc {
     /// Load settings from the flat KV store.
-    pub async fn load(kv: KVStore, pool: DieselSqlitePool) -> Result<Self, Whatever> {
+    pub async fn load(kv: KVStore, pools: DieselSqlitePools) -> Result<Self, Whatever> {
         let (tx, _rx) = watch::channel(());
         Ok(Self {
             kv,
-            pool,
+            pools,
             tx: Arc::new(tx),
         })
     }
@@ -85,7 +85,7 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
     async fn list(&self) -> HashMap<String, String> {
         // Query all rows with the settings prefix.
         let pattern = format!("{PREFIX}%");
-        let mut conn = match self.pool.get().await {
+        let mut conn = match self.pools.reader.get().await {
             Ok(c) => c,
             Err(_) => return HashMap::new(),
         };

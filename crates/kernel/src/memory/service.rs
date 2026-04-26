@@ -118,14 +118,14 @@ impl TapeService {
     /// Create a service with FTS5 full-text search support.
     pub fn with_fts(
         store: FileTapeStore,
-        pool: yunara_store::diesel_pool::DieselSqlitePool,
+        pools: yunara_store::diesel_pool::DieselSqlitePools,
     ) -> Self {
         // Preload the jieba dictionary off the hot path. `warmup` is
         // idempotent — repeated `with_fts` calls do not leak threads.
         super::fts::warmup_tokenizer();
         Self {
             store,
-            fts: Some(super::fts::TapeFts::new(pool)),
+            fts: Some(super::fts::TapeFts::new(pools)),
         }
     }
 
@@ -1989,9 +1989,9 @@ mod tests {
 
     /// Create a [`TapeService`] with FTS enabled via an in-memory SQLite pool.
     async fn temp_tape_service_with_fts(dir: &Path) -> TapeService {
-        let pool = crate::testing::build_memory_diesel_pool().await;
+        let pools = crate::testing::build_memory_diesel_pools().await;
         let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
-        TapeService::with_fts(store, pool)
+        TapeService::with_fts(store, pools)
     }
 
     #[tokio::test]

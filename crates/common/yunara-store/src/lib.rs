@@ -22,7 +22,7 @@ pub use config::DatabaseConfig;
 pub use db::DBStore;
 pub use diesel_pool::{
     DieselPoolConfig, DieselPoolInitError, DieselPoolRunError, DieselSqliteConnection,
-    DieselSqlitePool, build_sqlite_pool,
+    DieselSqlitePool, DieselSqlitePools, build_sqlite_pools,
 };
 pub use error::{Error, Result};
 pub use kv::KVStore;

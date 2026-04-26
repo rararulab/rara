@@ -9,21 +9,22 @@ used for runtime settings and miscellaneous persisted state.
 
 ### Key modules
 
-- `src/diesel_pool.rs` — `DieselSqlitePool` plus `build_sqlite_pool`. The sqlite pool sets `WAL`, `busy_timeout=5000`, `foreign_keys=ON` pragmas once per physical connection via the manager's `custom_setup` hook.
-- `src/config.rs` — `DatabaseConfig` with `bon::Builder`; `open(database_url)` wraps `build_sqlite_pool` and returns a `DBStore`.
-- `src/db.rs` — `DBStore` wraps `DieselSqlitePool`; provides `pool()` and `kv_store()`.
+- `src/diesel_pool.rs` — `DieselSqlitePool` (single bb8 pool), `DieselSqlitePools` (reader + writer bundle), and `build_sqlite_pools`. The reader pool is sized by `DieselPoolConfig::max_connections`; the writer pool is hard-pinned to `max_size=1` because SQLite serialises writers at the file level (#1843). Both pools set `WAL`, `busy_timeout=5000`, `foreign_keys=ON` pragmas once per physical connection via `custom_setup`, and run a best-effort `ROLLBACK` on every checkout via a `bb8::CustomizeConnection` to scrub leaked transactions.
+- `src/config.rs` — `DatabaseConfig` with `bon::Builder`; `open(database_url)` wraps `build_sqlite_pools` and returns a `DBStore`.
+- `src/db.rs` — `DBStore` wraps `DieselSqlitePools`; exposes `reader()` (concurrent SELECTs) and `writer()` (single-writer mutations) plus `kv_store()`.
 - `src/kv.rs` — `KVStore` backed by the `kv_table` SQLite table (JSON values). Full diesel DSL; `batch_set` runs inside a transaction.
 - `src/error.rs` — `snafu` error enum covering pool, diesel, and codec failures.
 
 ### Public API
 
-- `DatabaseConfig`, `DBStore`, `KVStore`, `DieselSqlitePool`.
+- `DatabaseConfig`, `DBStore`, `KVStore`, `DieselSqlitePool`, `DieselSqlitePools`.
 
 ## Critical Invariants
 
 - No hardcoded database URLs — caller supplies the URL to `DatabaseConfig::open()`.
 - The `kv_table` schema is owned by `rara-model/migrations` and must exist before `KVStore` is used.
 - Pragmas are applied on physical-connection establishment, not on every checkout — `bb8` recycles the same connection without re-setup.
+- All mutations (`INSERT`/`UPDATE`/`DELETE`/`transaction`) MUST run on the writer pool. Pure SELECTs run on the reader pool. Routing a write to the reader pool re-introduces the contention #1843 was opened to fix.
 
 ## What NOT To Do
 

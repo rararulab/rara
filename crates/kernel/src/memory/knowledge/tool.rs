@@ -26,7 +26,7 @@ use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 use super::{categories, embedding::EmbeddingService, items};
 use crate::tool::{ToolContext, ToolExecute};
@@ -40,16 +40,16 @@ use crate::tool::{ToolContext, ToolExecute};
     tier = "deferred"
 )]
 pub struct MemoryTool {
-    pool:          DieselSqlitePool,
+    pools:         DieselSqlitePools,
     embedding_svc: Arc<EmbeddingService>,
 }
 
 impl MemoryTool {
-    /// Create a new `MemoryTool` with the given database pool and embedding
+    /// Create a new `MemoryTool` with the given pool bundle and embedding
     /// service.
-    pub fn new(pool: DieselSqlitePool, embedding_svc: Arc<EmbeddingService>) -> Self {
+    pub fn new(pools: DieselSqlitePools, embedding_svc: Arc<EmbeddingService>) -> Self {
         Self {
-            pool,
+            pools,
             embedding_svc,
         }
     }
@@ -109,7 +109,7 @@ impl MemoryTool {
 
         // Fetch matching items from SQLite.
         let ids: Vec<i64> = results.iter().map(|(key, _)| *key as i64).collect();
-        let mut matched_items = items::get_items_by_ids(&self.pool, &ids).await?;
+        let mut matched_items = items::get_items_by_ids(&self.pools.reader, &ids).await?;
 
         // Filter by username.
         matched_items.retain(|item| item.username == username);

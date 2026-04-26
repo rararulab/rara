@@ -85,13 +85,16 @@ Before restarting, **confirm with the user** — other people may be using the i
 
 ## Database & config on the remote
 
-- Config: `/Users/rara/.config/rara/config.yaml` (read-only from your side — propose YAML changes as a PR against `config.example.yaml`)
-- DB: `/Users/rara/.config/rara/rara.db` (SQLite)
+Paths are resolved via `rara_paths` — on macOS that means `dirs::config_dir()`
++ `dirs::data_local_dir()`, which both land under `Library/Application Support`.
+
+- Config: `/Users/rara/Library/Application Support/rara/config.yaml` (read-only from your side — propose YAML changes as a PR against `config.example.yaml`)
+- DB: `/Users/rara/Library/Application Support/rara/db/rara.db` (SQLite, with `-wal` / `-shm` siblings while open)
 
 Inspect DB without copying it off:
 
 ```bash
-ssh local-rara 'sqlite3 /Users/rara/.config/rara/rara.db "<query>"'
+ssh local-rara 'sqlite3 "/Users/rara/Library/Application Support/rara/db/rara.db" "<query>"'
 ```
 
 Do NOT run migrations or schema-mutating SQL on the remote manually — migrations live in `crates/rara-model/migrations/` and apply on boot.

@@ -40,7 +40,7 @@ use diesel::{
 use diesel_async::RunQueryDsl;
 use rara_model::schema::execution_traces;
 use snafu::ResultExt;
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 use crate::error::{DieselPoolSnafu, DieselSnafu, JsonSnafu, Result};
 
@@ -115,14 +115,14 @@ struct TraceSessionAndDataRow {
 /// Traces older than 30 days are automatically cleaned up every 100 saves.
 #[derive(Debug, Clone)]
 pub struct TraceService {
-    pool:       DieselSqlitePool,
+    pools:      DieselSqlitePools,
     save_count: Arc<AtomicU32>,
 }
 
 impl TraceService {
-    pub fn new(pool: DieselSqlitePool) -> Self {
+    pub fn new(pools: DieselSqlitePools) -> Self {
         Self {
-            pool,
+            pools,
             save_count: Arc::new(AtomicU32::new(0)),
         }
     }
@@ -133,7 +133,7 @@ impl TraceService {
         let id = ulid::Ulid::new().to_string();
         let trace_data = serde_json::to_string(trace).context(JsonSnafu)?;
 
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolSnafu)?;
         diesel::insert_into(execution_traces::table)
             .values((
                 execution_traces::id.eq(&id),
@@ -146,10 +146,10 @@ impl TraceService {
 
         // Periodically clean up old traces.
         if self.save_count.fetch_add(1, Ordering::Relaxed) % CLEANUP_INTERVAL == 0 {
-            let pool = self.pool.clone();
+            let writer = self.pools.writer.clone();
             tokio::spawn(async move {
                 let cutoff = format!("-{TRACE_RETENTION_DAYS} days");
-                let mut conn = match pool.get().await {
+                let mut conn = match writer.get().await {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::warn!(error = %e, "failed to acquire diesel conn for trace cleanup");
@@ -181,7 +181,7 @@ impl TraceService {
     pub async fn get(&self, id: &str) -> Result<Option<ExecutionTrace>> {
         use diesel::OptionalExtension;
 
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(DieselPoolSnafu)?;
         let row: Option<TraceDataRow> = execution_traces::table
             .filter(execution_traces::id.eq(id))
             .select(TraceDataRow::as_select())
@@ -204,7 +204,7 @@ impl TraceService {
     pub async fn get_session_id(&self, id: &str) -> Result<Option<String>> {
         use diesel::OptionalExtension;
 
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(DieselPoolSnafu)?;
         let row: Option<TraceSessionRow> = execution_traces::table
             .filter(execution_traces::id.eq(id))
             .select(TraceSessionRow::as_select())
@@ -229,7 +229,7 @@ impl TraceService {
     ) -> Result<Option<(String, ExecutionTrace)>> {
         use diesel::OptionalExtension;
 
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(DieselPoolSnafu)?;
 
         // `json_extract(trace_data, '$.rara_message_id') = ?` has no DSL
         // analogue — diesel lacks a cross-backend JSON1 helper. Emit the
@@ -261,7 +261,7 @@ impl TraceService {
     /// removed.
     #[tracing::instrument(skip_all)]
     pub async fn cleanup(&self, retention_days: u32) -> Result<u64> {
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolSnafu)?;
         let cutoff = format!("-{retention_days} days");
         let cutoff_expr = diesel::dsl::sql::<Text>("datetime('now', ")
             .bind::<Text, _>(cutoff)
