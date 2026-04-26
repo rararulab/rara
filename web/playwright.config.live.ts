@@ -22,6 +22,13 @@
 
 import { defineConfig, devices } from '@playwright/test';
 
+// The owner bearer token the live backend was booted with. CI sets
+// RARA_E2E_OWNER_TOKEN to whatever it wrote into the isolated config.yaml.
+// Locally, point this at the same value as `owner_token` in your
+// `~/.config/rara/config.yaml` (or override via env when invoking
+// `npm run test:e2e:live`).
+const ownerToken = process.env.RARA_E2E_OWNER_TOKEN ?? 'ci-e2e-token-not-a-secret';
+
 export default defineConfig({
   testDir: './e2e',
   testIgnore: /harness\/.*/,
@@ -33,6 +40,31 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
+    // APIRequestContext uses extraHTTPHeaders for every request, satisfying
+    // the backend admin auth middleware on /api/v1/* endpoints the live
+    // specs hit directly via `request`.
+    extraHTTPHeaders: {
+      Authorization: `Bearer ${ownerToken}`,
+    },
+    // Page contexts — seed localStorage so the React app picks the token
+    // up via getAccessToken() before any /api/v1/* fetch fires from the UI.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:5173',
+          localStorage: [
+            { name: 'access_token', value: ownerToken },
+            {
+              name: 'auth_user',
+              value: JSON.stringify({ user_id: 'ci-e2e', role: 'root', is_admin: true }),
+            },
+            { name: 'rara_backend_url', value: 'http://localhost:5173' },
+            { name: 'onboarding_dismissed', value: 'true' },
+          ],
+        },
+      ],
+    },
   },
   projects: [
     {

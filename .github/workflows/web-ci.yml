@@ -4,12 +4,20 @@ on:
   pull_request:
     paths:
       - 'web/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/e2e-seed.sh'
       - '.github/workflows/web-ci.yml'
   push:
     branches:
       - main
     paths:
       - 'web/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/e2e-seed.sh'
       - '.github/workflows/web-ci.yml'
 
 concurrency:
@@ -72,4 +80,149 @@ jobs:
         with:
           name: playwright-report
           path: web/playwright-report/
+          retention-days: 7
+
+  playwright-live:
+    name: Playwright (live backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Isolate the backend from any state on the runner. `rara_paths` honours
+      # XDG_{CONFIG,DATA}_HOME on Linux, so this redirects the config file,
+      # database, sessions, and per-process state into the workspace temp dir.
+      XDG_CONFIG_HOME: ${{ github.workspace }}/.e2e/config
+      XDG_DATA_HOME: ${{ github.workspace }}/.e2e/data
+      XDG_CACHE_HOME: ${{ github.workspace }}/.e2e/cache
+      RARA_LIVE_PORT: '25555'
+      # Bearer token written into the isolated config below; Playwright
+      # picks it up from this var (see web/playwright.config.live.ts).
+      RARA_E2E_OWNER_TOKEN: 'ci-e2e-token-not-a-secret'
+      # Hush the boxlite native build the same way the Rust workflow does
+      # (rara-cli depends transitively on rara-sandbox).
+      BOXLITE_DEPS_STUB: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install diesel system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+
+      - name: Setup mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: rust-ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build rara-cli
+        run: cargo build --release -p rara-cli
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate isolated rara config
+        run: |
+          mkdir -p "$XDG_CONFIG_HOME/rara" "$XDG_DATA_HOME/rara" "$XDG_CACHE_HOME/rara"
+          cat > "$XDG_CONFIG_HOME/rara/config.yaml" <<EOF
+          http:
+            bind_address: "127.0.0.1:${RARA_LIVE_PORT}"
+            cors_allowed_origins:
+              - "http://localhost:5173"
+              - "http://127.0.0.1:5173"
+
+          grpc:
+            bind_address: "127.0.0.1:50051"
+            server_address: "127.0.0.1:50051"
+
+          owner_token: "${RARA_E2E_OWNER_TOKEN}"
+          owner_user_id: "ci-e2e"
+
+          users:
+            - name: "ci-e2e"
+              role: root
+              platforms: []
+
+          mita:
+            heartbeat_interval: "24h"
+          EOF
+          echo "wrote config to $XDG_CONFIG_HOME/rara/config.yaml"
+
+      - name: Reset isolated database
+        run: ./scripts/e2e-seed.sh
+
+      - name: Boot rara server
+        run: |
+          mkdir -p "$XDG_DATA_HOME/rara/logs"
+          nohup ./target/release/rara server \
+            > "$XDG_DATA_HOME/rara/logs/server.stdout.log" \
+            2> "$XDG_DATA_HOME/rara/logs/server.stderr.log" &
+          echo $! > "$XDG_DATA_HOME/rara/server.pid"
+          echo "spawned rara server pid=$(cat $XDG_DATA_HOME/rara/server.pid)"
+
+      - name: Wait for /api/v1/health
+        run: |
+          set -eu
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 2 "http://127.0.0.1:${RARA_LIVE_PORT}/api/v1/health" > /dev/null; then
+              echo "backend healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend never came up — dumping logs" >&2
+          echo "--- stdout ---" >&2
+          tail -n 200 "$XDG_DATA_HOME/rara/logs/server.stdout.log" >&2 || true
+          echo "--- stderr ---" >&2
+          tail -n 200 "$XDG_DATA_HOME/rara/logs/server.stderr.log" >&2 || true
+          exit 1
+
+      - name: Run Playwright live suite
+        working-directory: web
+        run: npm run test:e2e:live
+
+      - name: Stop rara server
+        if: always()
+        run: |
+          PID_FILE="$XDG_DATA_HOME/rara/server.pid"
+          if [[ -f "$PID_FILE" ]]; then
+            PID=$(cat "$PID_FILE")
+            if kill -0 "$PID" 2>/dev/null; then
+              kill "$PID" || true
+              # Give the process up to 10s to exit cleanly.
+              for _ in $(seq 1 10); do
+                kill -0 "$PID" 2>/dev/null || break
+                sleep 1
+              done
+              kill -9 "$PID" 2>/dev/null || true
+            fi
+          fi
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live-report
+          path: web/playwright-report/
+          retention-days: 7
+
+      - name: Upload backend logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live-backend-logs
+          path: ${{ github.workspace }}/.e2e/data/rara/logs/
           retention-days: 7

@@ -322,6 +322,11 @@ nuke:
 
 alias ma := migrate-add
 
+[doc("reset the isolated SQLite DB used by the live Playwright suite (XDG_DATA_HOME must be set)")]
+[group("🗄️ Database")]
+e2e-seed:
+    @scripts/e2e-seed.sh
+
 # ========================================================================================
 # Worktree Management
 # ========================================================================================
