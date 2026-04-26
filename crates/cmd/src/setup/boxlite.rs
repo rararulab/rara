@@ -114,7 +114,7 @@ pub async fn run_boxlite_setup(check_only: bool) -> Result<StageOutcome, Whateve
         return Ok(StageOutcome::NoArtifacts);
     };
 
-    if dest.join(COMPLETE_STAMP).is_file() {
+    if dest.join(COMPLETE_STAMP).is_file() && has_required_files(&dest) {
         prompt::print_ok(&format!("already staged at {}", dest.display()));
         return Ok(StageOutcome::Staged { dest });
     }
@@ -197,13 +197,15 @@ fn has_required_files(dir: &Path) -> bool {
     RUNTIME_FILES.iter().all(|name| dir.join(name).is_file())
 }
 
-/// Walk `target/`. We deliberately ignore `CARGO_TARGET_DIR` —
-/// `whisper_install.rs` doesn't read it either, and adding a divergent
-/// fallback here would surprise users who have a custom target dir.
+/// Resolve the workspace target directory, honoring `CARGO_TARGET_DIR`
+/// for users who keep build artefacts outside the repo (common on shared
+/// CI runners and dev setups). Falls back to `./target` when unset; the
+/// setup binary is invoked from the workspace root via `just` or
+/// `cargo run`, so the relative path resolves correctly.
 fn workspace_target_dir() -> PathBuf {
-    // The setup binary is invoked from the workspace root via `just` or
-    // `cargo run`; both leave cwd at the workspace root.
-    PathBuf::from("target")
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"))
 }
 
 /// Copy required files from `source` to `dest`, set unix permissions to
