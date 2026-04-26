@@ -354,6 +354,10 @@ export default function PiChat() {
   // creating a new session or sending the first message of a fresh one).
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
+  // Brief inline confirmation after copying the session id from the
+  // page-header title — auto-clears after ~1200ms so the title text
+  // returns to normal without any toast plumbing.
+  const [copiedSessionId, setCopiedSessionId] = useState(false);
   // `true` when the active session has no messages — we render a welcome
   // overlay in that window so the chat page isn't just an input box on
   // empty canvas. Flipped off on the first send and on session switches
@@ -1005,12 +1009,25 @@ export default function PiChat() {
             sits on the right. */}
         {activeSession && !showWelcome && !isInitializing && (
           <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
-            <h1
-              className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
+            <button
+              type="button"
+              className="min-w-0 flex-1 cursor-pointer select-none truncate text-left text-sm font-semibold text-foreground"
               title={activeSession.key}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(activeSession.key);
+                  setCopiedSessionId(true);
+                  setTimeout(() => setCopiedSessionId(false), 1200);
+                } catch {
+                  // Clipboard write may fail (insecure context, denied
+                  // permission). This is a debug affordance, so swallow.
+                }
+              }}
             >
-              {activeSession.title || activeSession.preview || '新对话'}
-            </h1>
+              {copiedSessionId
+                ? '已复制 session id'
+                : activeSession.title || activeSession.preview || '新对话'}
+            </button>
             {activeSession.model && (
               <span className="shrink-0 truncate rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
                 {activeSession.model}
