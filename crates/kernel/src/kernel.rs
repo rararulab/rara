@@ -1259,6 +1259,15 @@ impl Kernel {
             let state = rt.state();
             let parent_id = rt.parent_id;
 
+            // Notify lifecycle hooks so consumers (e.g. the `run_code` tool)
+            // can release per-session resources (sandbox VMs, etc.).
+            self.lifecycle_hooks
+                .fire_session_end(&crate::lifecycle::SessionEndContext {
+                    session_key,
+                    manifest_name: manifest_name.clone(),
+                })
+                .await;
+
             // Clear in-flight ledger entry for scheduled job agents and
             // deliver the result to the origin session that created the job.
             if manifest_name == "scheduled_job" {

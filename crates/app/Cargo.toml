@@ -48,6 +48,8 @@ rara-keyring-store.workspace = true
 rara-mcp.workspace = true
 rara-paths = { workspace = true }
 rara-pg-credential-store.workspace = true
+rara-sandbox = { workspace = true }
+dashmap = "6"
 rara-server = { workspace = true }
 rara-sessions.workspace = true
 rara-stt = { workspace = true }

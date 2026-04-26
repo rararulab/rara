@@ -38,6 +38,7 @@ Application orchestration crate that wires all subsystems together, boots the ke
 - Migrations run from `crates/rara-model/migrations/` via `diesel_migrations::embed_migrations!` — never modify applied migrations.
 - `KernelHandle` is injected into `DispatchRaraTool` and `ListSessionsTool` after kernel start via `RwLock` slots — these tools will panic if invoked before wiring completes.
 - Mita-exclusive tools: `dispatch-rara`, `list-sessions`, `read-tape`, `write-user-note`, `distill-user-notes`, `update-soul-state`, `evolve-soul`, `update-session-title`, `write-skill-draft`. These are declared in Mita's manifest (`rara-agents`) and must not be added to Rara's tool set.
+- `run_code` (sandboxed code execution) is wired to a per-session boxlite microVM. The first call in a session creates the VM, subsequent calls reuse it, and `SandboxCleanupHook` (registered in `start_with_options`) destroys it via `LifecycleHook::on_session_end` when the kernel removes the session. The default rootfs image is required via the YAML `sandbox.default_rootfs_image` key — there is no Rust fallback. Threat model: hardware-isolated execution (Hypervisor.framework on macOS, KVM on Linux). Network egress is currently UNRESTRICTED inside the VM and there are no resource limits beyond boxlite's own defaults — both are documented as out-of-scope for #1700 and #1696.
 
 ## What NOT To Do
 

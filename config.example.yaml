@@ -131,6 +131,21 @@ agents:
     max_output_chars: 50
 
 # ---------------------------------------------------------------------------
+# Sandboxed code execution (`run_code` tool — optional)
+# ---------------------------------------------------------------------------
+#
+# When this block is present the `run_code` tool can spin up a per-session
+# boxlite microVM using the configured rootfs image. Omit the block to
+# disable code execution: the tool stays registered but every call returns
+# a clear "sandbox not configured" error so the LLM can react.
+#
+# Pre-flight: `rara setup boxlite` must have staged the runtime files (see
+# docs/guides/boxlite-runtime.md).
+
+# sandbox:
+#   default_rootfs_image: "alpine:latest"
+
+# ---------------------------------------------------------------------------
 # Optional integrations — remove or leave commented out if unused
 # ---------------------------------------------------------------------------
 

@@ -73,6 +73,15 @@ pub struct FoldContext {
     pub entries_count: usize,
 }
 
+/// Context for session-end hooks.
+#[derive(Debug, Clone)]
+pub struct SessionEndContext {
+    /// The session that just terminated.
+    pub session_key:   SessionKey,
+    /// Manifest name of the agent that owned the session.
+    pub manifest_name: String,
+}
+
 /// Context for delegation (child agent) hooks.
 #[derive(Debug, Clone)]
 pub struct DelegationResult {
@@ -126,6 +135,14 @@ pub trait LifecycleHook: Send + Sync + 'static {
 
     /// Called when a delegated child agent finishes.
     async fn delegation_done(&self, _result: &DelegationResult) {}
+
+    /// Called when a session terminates and is being removed from the
+    /// process table.
+    ///
+    /// Use this to release per-session resources owned outside the kernel
+    /// (e.g. a sandbox VM held by the `run_code` tool). Hooks must not
+    /// block — long teardown should be spawned as a background task.
+    async fn on_session_end(&self, _ctx: &SessionEndContext) {}
 }
 
 /// Shared reference to a lifecycle hook.
@@ -209,6 +226,18 @@ impl LifecycleHookRegistry {
             .await
             {
                 tracing::warn!(hook = hook.name(), "post_fold hook timed out: {e}");
+            }
+        }
+    }
+
+    /// Fire `on_session_end` on all registered hooks.
+    pub async fn fire_session_end(&self, ctx: &SessionEndContext) {
+        for hook in self.hooks.iter() {
+            if let Err(e) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), hook.on_session_end(ctx))
+                    .await
+            {
+                tracing::warn!(hook = hook.name(), "on_session_end hook timed out: {e}");
             }
         }
     }

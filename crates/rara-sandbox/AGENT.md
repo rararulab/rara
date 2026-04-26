@@ -85,11 +85,13 @@ Public surface (intentionally minimal, see #1697/#1698):
 - `bon`, `futures`, `serde`, `snafu`, `tokio`, `tracing` — standard
   workspace deps.
 
-**Downstream (crates that will depend on this one):**
+**Downstream (crates that depend on this one):**
 
-- `rara-kernel` tool subsystem — wiring happens in issue #1700. Not this
-  issue. Do not add a `rara-kernel` integration here; `rara-kernel` will
-  import `rara-sandbox` and build a `Tool` impl on top.
+- `rara-app` — `crates/app/src/tools/run_code.rs` exposes the `run_code`
+  agent-callable tool; sandboxes are stored per-session in a `DashMap`
+  shared with `SandboxCleanupHook`. The hook destroys the VM via the
+  kernel's `LifecycleHook::on_session_end` (added in #1700) so each
+  session pays the boxlite cold-start cost at most once.
 
 ## Boxlite Footguns (from the v0.8.2 spike)
 

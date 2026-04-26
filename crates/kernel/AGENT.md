@@ -429,3 +429,12 @@ Each kernel turn calls `StreamHub::open(session)` which gets-or-creates a `broad
 - Wire-shape choice at the backend admin layer: **200 + `triggered` discriminator**, not 409. Two outcomes are both success (fresh vs. deduped); the frontend doesn't need to decode a status code just to tell them apart, and there's no global toast infrastructure that would benefit from a dedicated error channel.
 - `Syscall::ListAllJobs` is an admin-only surface. The kernel does not authenticate it; the backend HTTP route is the auth boundary. Do NOT repurpose this variant for session-scoped tool calls — use `Syscall::ListJobs` there so future tightening of `ListAllJobs` permissions cannot regress tool UX.
 - `JobResultStore::read_latest` intentionally walks results newest-first and skips malformed entries, so a single corrupt tail object does not hide the rest of the history from the admin UI. Keep the fall-through behaviour when extending the store.
+
+---
+
+## Lifecycle Hooks — `lifecycle.rs`
+
+- `LifecycleHook::on_session_end` fires from `Kernel::cleanup_process` immediately after the session is removed from the process table. Use it for releasing per-session resources owned outside the kernel — the canonical example is `crates/app/src/tools/run_code.rs` destroying its boxlite microVM.
+- The hook runs in the `cleanup_process` task and is bounded to 5 s by `LifecycleHookRegistry::fire_session_end`. Long teardown (e.g. `Sandbox::destroy`) must be spawned as a detached `tokio::task` so it does not stall subsequent session cleanup.
+- Do NOT attempt to mutate the process table from inside `on_session_end` — the entry has already been removed, and the hook is invoked from the kernel's own cleanup path. Treat the context as read-only metadata.
+- `SessionEndContext` only carries `session_key` + `manifest_name`. If a future hook needs more state, add it to the context struct rather than smuggling it through global maps; the goal is for hooks to be stateless except for whatever shared handle they were registered with.

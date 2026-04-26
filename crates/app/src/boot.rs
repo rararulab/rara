@@ -100,6 +100,8 @@ pub(crate) async fn boot(
     users: &[UserConfig],
     owner_user_id: &str,
     browser_manager: Option<rara_browser::BrowserManagerRef>,
+    sandbox_config: Option<crate::SandboxToolConfig>,
+    sandbox_map: crate::tools::SandboxMap,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
     let credential_store: rara_keyring_store::KeyringStoreRef = Arc::new(
@@ -231,6 +233,8 @@ pub(crate) async fn boot(
             user_question_manager: user_question_manager.clone(),
             fff_picker,
             fff_query_tracker,
+            sandbox_config,
+            sandbox_map,
         },
     );
 
