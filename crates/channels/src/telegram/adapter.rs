@@ -4557,7 +4557,7 @@ fn spawn_stream_forwarder(
                             // and to embed in inline-button callback data.
                             completed_trace_id = Some(trace_id);
                         }
-                        // Progress, DockTurnComplete, LoopBreakerTriggered
+                        // Progress, LoopBreakerTriggered
                         // — no Telegram UX for these.
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

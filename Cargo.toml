@@ -132,7 +132,6 @@ members = [
     "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
     "crates/soul",
-    "crates/rara-dock",
     "crates/rara-sandbox",
     "crates/rara-acp",
     "crates/drivers/browser",
@@ -264,7 +263,6 @@ rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }
 rara-kimi-oauth = { path = "crates/integrations/kimi-oauth" }
 rara-composio = { path = "crates/integrations/composio" }
-rara-dock = { path = "crates/rara-dock" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-git = { path = "crates/extensions/rara-git" }

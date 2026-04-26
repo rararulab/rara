@@ -264,7 +264,6 @@ impl TraceBuilder {
             | StreamEvent::BackgroundTaskDone { .. }
             | StreamEvent::TurnUsage { .. }
             | StreamEvent::PlanReplan { .. }
-            | StreamEvent::DockTurnComplete { .. }
             | StreamEvent::ToolCallLimit { .. }
             | StreamEvent::ToolCallLimitResolved { .. }
             | StreamEvent::LoopBreakerTriggered { .. }

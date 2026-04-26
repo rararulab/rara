@@ -15,7 +15,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bell, LayoutDashboard, Settings } from 'lucide-react';
+import { Activity, Bell, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 
@@ -28,7 +28,7 @@ import { useServerStatus } from '@/hooks/use-server-status';
 import { cn } from '@/lib/utils';
 
 /** Routes that need zero padding in the main content area. */
-const FULL_BLEED_ROUTES = new Set(['/agent', '/docs', '/dock']);
+const FULL_BLEED_ROUTES = new Set(['/agent', '/docs']);
 
 /** Routes that need full bleed when they match as a prefix. */
 const FULL_BLEED_PREFIXES: string[] = [];
@@ -134,15 +134,6 @@ export default function DashboardLayout() {
           >
             <Activity className="h-3.5 w-3.5" />
             Kernel
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => navigate('/dock')}
-          >
-            <LayoutDashboard className="h-3.5 w-3.5" />
-            Dock
           </Button>
           <Button
             variant="ghost"

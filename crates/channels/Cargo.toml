@@ -17,7 +17,6 @@ image = { workspace = true }
 jiff = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
-rara-dock = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }

@@ -42,7 +42,6 @@ rara-channels = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-kimi-oauth = { workspace = true }
 rara-composio.workspace = true
-rara-dock = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-kernel = { workspace = true }
 rara-keyring-store.workspace = true

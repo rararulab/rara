@@ -1009,9 +1009,6 @@ fn stream_event_to_cli_event(event: StreamEvent) -> Option<CliEvent> {
         StreamEvent::BackgroundTaskDone { task_id, status } => CliEvent::Progress {
             text: format!("Background task {task_id} {status:?}"),
         },
-        StreamEvent::DockTurnComplete { session_id, .. } => CliEvent::Progress {
-            text: format!("Dock turn complete: {session_id}"),
-        },
         StreamEvent::ToolCallLimit {
             session_key,
             limit_id,
