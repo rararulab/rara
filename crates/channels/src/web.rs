@@ -114,6 +114,11 @@ pub enum WebEvent {
     TextDelta { text: String },
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
+    /// Discard any in-flight assistant text the client has rendered for the
+    /// current turn. Emitted by the kernel before a tool-call batch and
+    /// before the anti-laziness nudge restarts the iteration, so the next
+    /// `TextDelta` stream is not appended on top of abandoned narration.
+    TextClear,
     /// A tool call has started.
     ToolCallStart {
         name:      String,
@@ -270,7 +275,8 @@ fn platform_outbound_to_web_event(msg: PlatformOutbound) -> WebEvent {
 fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     match event {
         StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
-        StreamEvent::ReasoningDelta { .. } | StreamEvent::TextClear => None,
+        StreamEvent::ReasoningDelta { .. } => None,
+        StreamEvent::TextClear => Some(WebEvent::TextClear),
         StreamEvent::TurnRationale { text } => Some(WebEvent::TurnRationale { text }),
         StreamEvent::ToolCallStart {
             name,
