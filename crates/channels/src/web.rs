@@ -82,7 +82,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
-use crate::web_reply_buffer::ReplyBuffer;
+use crate::web_reply_buffer::{ReplyBuffer, ReplyBufferConfig};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -430,7 +430,7 @@ pub struct SendMessageResponse {
 /// # Usage
 ///
 /// ```rust,ignore
-/// let adapter = WebAdapter::new(owner_token, owner_user_id);
+/// let adapter = WebAdapter::new(owner_token, owner_user_id, reply_buffer_config);
 /// let router = adapter.router();
 /// // Mount into your axum app:
 /// // app.nest("/chat", router)
@@ -479,12 +479,22 @@ pub struct WebAdapter {
 impl WebAdapter {
     /// Create a new `WebAdapter`.
     ///
-    /// Both `owner_token` and `owner_user_id` are required — invalid
-    /// "no auth" / "anonymous caller" states are unrepresentable.
-    /// Boot-time validation (`validate_owner_auth`) guarantees a
-    /// non-empty token and that `owner_user_id` matches a configured
-    /// user before reaching this constructor.
-    pub fn new(owner_token: String, owner_user_id: String) -> Self {
+    /// `owner_token` and `owner_user_id` are required — invalid "no auth"
+    /// / "anonymous caller" states are unrepresentable. Boot-time
+    /// validation (`validate_owner_auth`) guarantees a non-empty token
+    /// and that `owner_user_id` matches a configured user before reaching
+    /// this constructor.
+    ///
+    /// `reply_buffer_config` carries the per-session reply-buffer caps
+    /// sourced from YAML (`web.reply_buffer.{capacity_events,
+    /// capacity_bytes, ttl}`). Tests that need shared access to the
+    /// underlying [`ReplyBuffer`] should override it via
+    /// [`Self::with_reply_buffer`] after construction.
+    pub fn new(
+        owner_token: String,
+        owner_user_id: String,
+        reply_buffer_config: ReplyBufferConfig,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             adapter_events: Arc::new(DashMap::new()),
@@ -496,7 +506,7 @@ impl WebAdapter {
             shutdown_tx,
             shutdown_rx,
             stt_service: None,
-            reply_buffer: ReplyBuffer::new(),
+            reply_buffer: ReplyBuffer::new(reply_buffer_config),
         }
     }
 
@@ -600,6 +610,19 @@ impl WebAdapter {
         Self::get_or_create_adapter_bus(&self.adapter_events, *session_key).subscribe()
     }
 
+    /// Test-only: mirror the production WS/SSE reattach path —
+    /// `get_or_create_adapter_bus` followed by an atomic
+    /// [`ReplyBuffer::subscribe_and_drain`]. Returns the live receiver
+    /// and the drained backlog.
+    #[doc(hidden)]
+    pub fn reattach_for_test(
+        &self,
+        session_key: &SessionKey,
+    ) -> (broadcast::Receiver<WebEvent>, Vec<WebEvent>) {
+        let bus = Self::get_or_create_adapter_bus(&self.adapter_events, *session_key);
+        self.reply_buffer.subscribe_and_drain(session_key, &bus)
+    }
+
     /// Get or create the per-session adapter-event broadcast sender.
     ///
     /// Kept deliberately minimal — the heavy fan-out path (kernel stream
@@ -634,41 +657,33 @@ impl WebAdapter {
         event: WebEvent,
     ) {
         let event_kind: &'static str = (&event).into();
-        // Only clone the event when it actually needs buffering — keeps
-        // streaming hot paths (TextDelta / ReasoningDelta / …) at zero
-        // extra allocations.
-        let needs_buffer = ReplyBuffer::should_buffer(&event);
-        if let Some(tx) = buses.get(session_key) {
-            let receiver_count = tx.receiver_count();
-            tracing::debug!(
-                session_key = %session_key,
-                receiver_count,
-                event_kind,
-                "web publish_adapter_event"
-            );
-            let send_result = if needs_buffer {
-                let for_buf = event.clone();
-                let r = tx.send(event);
-                reply_buffer.append(session_key, for_buf);
-                r
-            } else {
-                tx.send(event)
-            };
-            if send_result.is_err() {
-                tracing::warn!(
+        // Always create the bus so the buffer's per-session lock has a
+        // stable broadcast handle to coordinate with — `subscribe_and_drain`
+        // expects the same handle, and creating-on-publish removes a
+        // race where a reattach finds no bus and a parallel publish
+        // creates one without taking the buffer lock.
+        let tx = Self::get_or_create_adapter_bus(buses, *session_key);
+        let receiver_count = tx.receiver_count();
+        tracing::debug!(
+            session_key = %session_key,
+            receiver_count,
+            event_kind,
+            "web publish_adapter_event"
+        );
+        // `publish` holds the per-session mutex across "buffer append"
+        // + "broadcast send" so reattach cannot interleave between the
+        // two halves and double-deliver a single event.
+        match reply_buffer.publish(session_key, &tx, event) {
+            Ok(_) => {}
+            Err(_) => {
+                // SendError only fires when there are zero receivers.
+                // The event was still buffered (when `should_buffer`
+                // returns true) so a future reattach will see it.
+                tracing::debug!(
                     session_key = %session_key,
                     event_kind,
-                    "web publish: no active receivers"
+                    "web publish: no active receivers (event buffered for replay)"
                 );
-            }
-        } else {
-            tracing::debug!(
-                session_key = %session_key,
-                event_kind,
-                "web publish_adapter_event: no bus yet"
-            );
-            if needs_buffer {
-                reply_buffer.append(session_key, event);
             }
         }
     }
@@ -1053,13 +1068,16 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
     // (e.g. POST /messages) even before the first WS subscriber shows up —
     // get_or_create ensures the sender exists before publishers try to emit.
     let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-    let mut adapter_rx = adapter_bus.subscribe();
 
-    // Drain any "important" events buffered during a no-listener window
-    // BEFORE the live forwarder starts pushing into the same mpsc, so the
-    // socket sees buffered events first in publish order. The buffer is
-    // not removed on drain — see `web_reply_buffer` module docs for why.
-    let backlog = state.reply_buffer.snapshot(&session_key);
+    // Atomically subscribe to the adapter bus AND drain any "important"
+    // events buffered during a no-listener window. Holding the per-session
+    // mutex across both ops is what guarantees no event reaches this WS
+    // twice (via both the live broadcast and the snapshot) and that a
+    // second reattach within the TTL window does not replay drained events
+    // — see `web_reply_buffer` module docs for the invariant.
+    let (mut adapter_rx, backlog) = state
+        .reply_buffer
+        .subscribe_and_drain(&session_key, &adapter_bus);
     if !backlog.is_empty() {
         debug!(
             session_key = %session_key_str,
@@ -1302,10 +1320,12 @@ async fn sse_handler(
     let (ev_tx, ev_rx) = mpsc::unbounded_channel::<WebEvent>();
 
     let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-    let mut adapter_rx = adapter_bus.subscribe();
 
-    // Drain any buffered "important" events before live tail starts.
-    let backlog = state.reply_buffer.snapshot(&session_key);
+    // Atomic subscribe + drain — see WS reattach above and the
+    // `web_reply_buffer` module docs for the invariant.
+    let (mut adapter_rx, backlog) = state
+        .reply_buffer
+        .subscribe_and_drain(&session_key, &adapter_bus);
     if !backlog.is_empty() {
         debug!(
             session_key = %params.session_key,

@@ -62,9 +62,13 @@ fn subscribe(
 
 #[tokio::test]
 async fn happy_path_reply_reaches_subscribed_listener() {
-    let buffer = ReplyBuffer::new();
-    let adapter =
-        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
+    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
+    let adapter = WebAdapter::new(
+        "tok".to_owned(),
+        "user".to_owned(),
+        rara_channels::web_reply_buffer::test_config(),
+    )
+    .with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
     let mut rx = subscribe(&adapter, &session_key);
@@ -100,9 +104,13 @@ async fn happy_path_reply_reaches_subscribed_listener() {
 
 #[tokio::test]
 async fn listener_loss_is_recovered_via_buffer_snapshot() {
-    let buffer = ReplyBuffer::new();
-    let adapter =
-        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
+    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
+    let adapter = WebAdapter::new(
+        "tok".to_owned(),
+        "user".to_owned(),
+        rara_channels::web_reply_buffer::test_config(),
+    )
+    .with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
 
@@ -134,4 +142,57 @@ async fn listener_loss_is_recovered_via_buffer_snapshot() {
         WebEvent::Message { content } => assert_eq!(content, "while-you-were-away"),
         other => panic!("expected WebEvent::Message, got {other:?}"),
     }
+}
+
+/// Regression for the original #1882 P0: the WS / SSE reattach path must
+/// drain the buffer atomically with subscription, so a *second* reattach
+/// inside the TTL window does not replay events the first reattach
+/// already received. Pre-fix, both reattach sites called `subscribe()` +
+/// `snapshot()` (snapshot does not clear), so the second reattach
+/// re-played the same events — visible as duplicate messages on tab
+/// refresh.
+#[tokio::test]
+async fn second_reattach_does_not_replay_drained_events() {
+    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
+    let adapter = WebAdapter::new(
+        "tok".to_owned(),
+        "user".to_owned(),
+        rara_channels::web_reply_buffer::test_config(),
+    )
+    .with_reply_buffer(Arc::clone(&buffer));
+
+    let session_key = SessionKey::new();
+    let endpoint = web_endpoint(&session_key);
+
+    // Publish with no listener attached — lands in the buffer.
+    adapter
+        .send(
+            &endpoint,
+            PlatformOutbound::Reply {
+                content:       "missed-while-away".to_owned(),
+                attachments:   Vec::new(),
+                reply_context: None,
+            },
+        )
+        .await
+        .expect("egress send while no listener");
+
+    // First reattach: drains the backlog.
+    let (_rx1, backlog1) = adapter.reattach_for_test(&session_key);
+    assert_eq!(backlog1.len(), 1, "first reattach drains the backlog");
+    match &backlog1[0] {
+        WebEvent::Message { content } => assert_eq!(content, "missed-while-away"),
+        other => panic!("expected WebEvent::Message, got {other:?}"),
+    }
+    // Drop the first "WS" by dropping its receiver.
+    drop(_rx1);
+
+    // Second reattach to the same session_key inside the TTL window must
+    // see ZERO buffered events — the first drain cleared the buffer.
+    let (_rx2, backlog2) = adapter.reattach_for_test(&session_key);
+    assert!(
+        backlog2.is_empty(),
+        "second reattach must not replay drained events; got {} events",
+        backlog2.len()
+    );
 }

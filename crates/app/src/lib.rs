@@ -145,6 +145,22 @@ pub struct AppConfig {
     /// `docs/guides/anti-patterns.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox:                Option<SandboxToolConfig>,
+    /// Web channel tunables (required) — currently the per-session reply
+    /// buffer caps for the always-on no-listener replay (#1882).
+    pub web:                    WebChannelConfig,
+}
+
+/// Configuration for the Web channel adapter.
+///
+/// Currently carries only the
+/// [`rara_channels::web_reply_buffer::ReplyBufferConfig`]; nested under `web`
+/// so future per-channel tunables (e.g. broadcast capacities, idle timeouts)
+/// land in the same YAML neighbourhood without touching the top level.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct WebChannelConfig {
+    /// Per-session reply-buffer caps. All three sub-fields are required —
+    /// see [`rara_channels::web_reply_buffer`] and `config.example.yaml`.
+    pub reply_buffer: rara_channels::web_reply_buffer::ReplyBufferConfig,
 }
 
 /// Configuration for the `run_code` sandbox tool.
@@ -527,16 +543,19 @@ pub async fn start_with_options(
     // the same shutdown signal as every other long-running task.
     let cancellation_token = CancellationToken::new();
 
-    // The web reply buffer is always wired in production — see
-    // `web_reply_buffer` module docs for why this is a mechanism, not
-    // a YAML knob. The sweeper runs until `cancellation_token` fires.
-    let reply_buffer = rara_channels::web_reply_buffer::ReplyBuffer::new();
+    // The web reply buffer is always wired in production — the
+    // mechanism is unconditional but the caps are user-tunable knobs
+    // sourced from `web.reply_buffer` in YAML. The sweeper runs until
+    // `cancellation_token` fires.
+    let reply_buffer =
+        rara_channels::web_reply_buffer::ReplyBuffer::new(config.web.reply_buffer.clone());
     Arc::clone(&reply_buffer).spawn_sweeper(cancellation_token.clone());
 
     let web_adapter = Arc::new(
         rara_channels::web::WebAdapter::new(
             config.owner_token.clone(),
             config.owner_user_id.clone(),
+            config.web.reply_buffer.clone(),
         )
         .with_stt_service(stt_service.clone())
         .with_reply_buffer(reply_buffer),
@@ -1315,6 +1334,11 @@ users:
     platforms: []
 mita:
   heartbeat_interval: "30m"
+web:
+  reply_buffer:
+    capacity_events: 256
+    capacity_bytes: 2097152
+    ttl: "5m"
 "#;
 
     #[test]
