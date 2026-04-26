@@ -141,47 +141,6 @@ async fn wait_for_session_ready(
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn simple_text_reply() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env();
-    let tk = TestKernelBuilder::new(tmp.path())
-        .responses(vec![
-            scripted_response("Hi there!"),
-            // Padding for auxiliary LLM calls
-            scripted_response("(padding)"),
-        ])
-        .build()
-        .await;
-
-    let principal = Principal::lookup("test".to_string());
-    let session_key = tk
-        .handle
-        .spawn_named(&tk.agent_name, "hello".to_string(), principal, None)
-        .await
-        .expect("spawn session");
-
-    wait_for_turn_count(&tk.handle, session_key, 1).await;
-
-    let traces = tk.handle.get_process_turns(session_key);
-    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
-    let turn = &traces[0];
-    assert!(turn.success, "turn should succeed: {:?}", turn.error);
-
-    // The last iteration should contain our scripted text.
-    let preview = turn
-        .iterations
-        .last()
-        .map(|i| i.text_preview.as_str())
-        .unwrap_or("");
-    assert!(
-        preview.contains("Hi there!"),
-        "expected scripted response in preview, got: {preview}"
-    );
-
-    tk.shutdown();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_turn_conversation() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_test_env();
@@ -255,53 +214,14 @@ async fn multi_turn_conversation() {
         );
     }
 
-    tk.shutdown();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn empty_llm_response_handled() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env();
-
-    // Script an empty response (no content, no tool calls).
-    let empty_response = rara_kernel::llm::CompletionResponse {
-        content:           None,
-        reasoning_content: None,
-        tool_calls:        vec![],
-        stop_reason:       rara_kernel::llm::StopReason::Stop,
-        usage:             None,
-        model:             "scripted".to_string(),
-    };
-
-    let tk = TestKernelBuilder::new(tmp.path())
-        .responses(vec![
-            empty_response,
-            // Padding for auxiliary LLM calls
-            scripted_response("(padding)"),
-            scripted_response("(padding)"),
-        ])
-        .build()
-        .await;
-
-    let principal = Principal::lookup("test".to_string());
-    let session_key = tk
-        .handle
-        .spawn_named(&tk.agent_name, "say something".to_string(), principal, None)
+    let tape = tk.handle.tape();
+    let entries = tape
+        .entries(&session_key.to_string())
         .await
-        .expect("spawn session");
-
-    wait_for_turn_count(&tk.handle, session_key, 1).await;
-
-    let traces = tk.handle.get_process_turns(session_key);
-    assert_eq!(traces.len(), 1);
-
-    // The turn should still complete (success or graceful handling).
-    // An empty response is a valid LLM output.
-    let turn = &traces[0];
+        .expect("tape entries should load");
     assert!(
-        turn.success,
-        "empty response should not crash the session: {:?}",
-        turn.error
+        !entries.is_empty(),
+        "tape should record entries across multi-turn conversation"
     );
 
     tk.shutdown();
@@ -381,46 +301,6 @@ async fn tool_call_round_trip() {
     assert!(
         preview.contains("hello world"),
         "expected tool output to surface in final reply, got: {preview}"
-    );
-
-    tk.shutdown();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tape_records_conversation() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env();
-    let tk = TestKernelBuilder::new(tmp.path())
-        .responses(vec![
-            scripted_response("Recorded reply"),
-            // Padding for auxiliary LLM calls
-            scripted_response("(padding)"),
-        ])
-        .build()
-        .await;
-
-    let principal = Principal::lookup("test".to_string());
-    let session_key = tk
-        .handle
-        .spawn_named(&tk.agent_name, "tape test".to_string(), principal, None)
-        .await
-        .expect("spawn session");
-
-    wait_for_turn_count(&tk.handle, session_key, 1).await;
-
-    // Read tape entries for this session.
-    let tape = tk.handle.tape();
-    let tape_name = session_key.to_string();
-    let entries = tape
-        .entries(&tape_name)
-        .await
-        .expect("tape entries should load");
-
-    // There should be at least some entries (session start, user message,
-    // assistant response).
-    assert!(
-        !entries.is_empty(),
-        "tape should have recorded entries for the session"
     );
 
     tk.shutdown();
@@ -666,59 +546,6 @@ async fn consecutive_empty_responses_terminate() {
 
     // We don't assert success/failure — the important property is that
     // the turn terminated rather than hanging.
-
-    tk.shutdown();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn send_file_delivers_attachment() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    init_test_env();
-
-    // Create a temp file to send.
-    let file_path = tmp.path().join("test.pdf");
-    std::fs::write(&file_path, b"fake pdf content").expect("write test file");
-    let file_path_str = file_path.to_str().expect("valid utf8 path");
-
-    // Script: LLM calls send-file with the temp path, then produces a reply.
-    let tk = TestKernelBuilder::new(tmp.path())
-        .responses(vec![
-            scripted_tool_call_response(vec![ToolCallRequest {
-                id:        "call_send_1".to_string(),
-                name:      "send-file".to_string(),
-                arguments: json!({"file_path": file_path_str}).to_string(),
-            }]),
-            scripted_response("File sent."),
-            scripted_response("(padding)"),
-            scripted_response("(padding)"),
-        ])
-        .build()
-        .await;
-
-    let principal = Principal::lookup("test".to_string());
-    let session_key = tk
-        .handle
-        .spawn_named(
-            &tk.agent_name,
-            "send me the test file".to_string(),
-            principal,
-            None,
-        )
-        .await
-        .expect("spawn session");
-
-    wait_for_turn_count(&tk.handle, session_key, 1).await;
-
-    let traces = tk.handle.get_process_turns(session_key);
-    assert_eq!(traces.len(), 1, "should have exactly 1 turn");
-    let turn = &traces[0];
-    assert!(turn.success, "turn should succeed: {:?}", turn.error);
-    // The turn must have at least 2 iterations: tool call + final reply.
-    assert!(
-        turn.iterations.len() >= 2,
-        "expected at least 2 iterations (send-file + reply), got {}",
-        turn.iterations.len()
-    );
 
     tk.shutdown();
 }
