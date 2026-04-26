@@ -14,5 +14,6 @@
 
 pub mod logging;
 pub mod panic_hook;
+pub mod profiling;
 pub mod tracing_context;
 pub mod tracing_sampler;

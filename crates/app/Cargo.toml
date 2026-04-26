@@ -20,6 +20,7 @@ base = { workspace = true }
 bon = { workspace = true }
 chrono.workspace = true
 common-runtime = { workspace = true }
+common-telemetry = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }
 futures.workspace = true
@@ -84,7 +85,6 @@ yunara-store = { workspace = true }
 similar = "3.1.0"
 
 [dev-dependencies]
-common-telemetry.workspace = true
 rara-kernel = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

@@ -25,9 +25,12 @@ opentelemetry = { version = "0.31.0", default-features = false, features = ["tra
 opentelemetry-otlp = { version = "0.31.0", features = ["trace", "metrics", "grpc-tonic", "http-proto"] }
 opentelemetry-semantic-conventions = { version = "0.31.0", features = ["semconv_experimental"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace", "metrics"] }
+pyroscope = { workspace = true }
+pyroscope_pprofrs = { workspace = true }
 serde.workspace = true
 serde_json = "1.0"
 smart-default = { workspace = true }
+snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-appender = "0.2.3"

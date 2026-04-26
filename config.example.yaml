@@ -146,10 +146,10 @@ agents:
 #   default_rootfs_image: "alpine:latest"
 
 # ---------------------------------------------------------------------------
-# Telemetry — OTLP traces export (optional)
+# Telemetry — optional OTLP traces and Pyroscope continuous profiling
 # ---------------------------------------------------------------------------
 #
-# Two independent paths are supported:
+# Two independent OTLP paths are supported:
 #
 # 1. `telemetry.otlp_endpoint` / `otlp_protocol` — the legacy generic OTLP
 #    sink (Alloy / Tempo). Set `otlp_endpoint` to a non-empty URL to enable.
@@ -158,15 +158,35 @@ agents:
 #    Disabled by default; set `enabled: true` and provide a `traces_endpoint`
 #    plus auth header to push spans to a running Langfuse instance.
 #
-# Example (commented out — opt in by uncommenting and setting `enabled: true`):
+# `pyroscope` enables continuous CPU profiling via the Grafana Pyroscope agent
+# (pprof-rs backend). Omit the whole `pyroscope:` section to disable — that is
+# the zero-overhead default. When present, every field is required.
+#
+# Tags attached to profiles are process-level only (env, host, build_commit).
+# Per-request labels (session_id, skill_name, user_id, …) MUST NOT be added —
+# they explode label cardinality on the Pyroscope server.
+#
+# Limitation: pprof-rs samples OS-thread CPU only. It does NOT capture async
+# `.await` stalls or tokio mutex contention; use tokio-console for those
+# (separate feature flag, future chore).
+#
+# Example (commented out — opt in by uncommenting):
 #
 # telemetry:
+#   otlp_endpoint: "http://alloy:4318/v1/traces"
+#   otlp_protocol: "http"
+#   env: "prod"
 #   otlp:
 #     enabled: false
 #     traces_endpoint: "http://10.0.0.183:3000/api/public/otel/v1/traces"
 #     deployment_environment: "dev"
 #     headers:
 #       authorization: "Basic <base64(public_key:secret_key)>"
+#   pyroscope:
+#     enabled: false  # default off — flip to true to ship profiles
+#     endpoint: "http://10.0.0.183:4040"
+#     application_name: "rara"
+#     sample_rate: 100  # Hz
 
 # ---------------------------------------------------------------------------
 # Optional integrations — remove or leave commented out if unused

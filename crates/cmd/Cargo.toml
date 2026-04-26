@@ -48,6 +48,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 shadow-rs = { workspace = true }
 snafu.workspace = true
+sysinfo.workspace = true
 anyhow.workspace = true
 diesel.workspace = true
 diesel_migrations.workspace = true
