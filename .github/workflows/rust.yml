@@ -126,10 +126,49 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  build-release:
+    name: Build Release (rara-cli)
+    runs-on: arc-runner-set
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install diesel system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev wget
+
+      - name: Setup mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: rust-ci
+          # Save on all branches: main runs get cancelled by concurrency
+          # before reaching the save step, so main-only save-if leaves the
+          # cache permanently empty. All branches share `shared-key: rust-ci`,
+          # so concurrent saves overwrite rather than accumulate.
+          save-if: true
+
+      - name: Build rara-cli (release)
+        run: cargo build --release -p rara-cli
+
+      - name: Upload rara binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: rara-binary
+          path: target/release/rara
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
   rust-success:
     name: Rust Success
     runs-on: arc-runner-set
-    needs: [clippy, test, docs]
+    needs: [clippy, test, docs, build-release]
     if: always()
     steps:
       - name: Check all Rust jobs status
@@ -137,14 +176,17 @@ jobs:
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
+          BUILD_RELEASE_RESULT: ${{ needs.build-release.result }}
         run: |
           if [[ "$CLIPPY_RESULT" != "success" || \
                 "$TEST_RESULT" != "success" || \
-                "$DOCS_RESULT" != "success" ]]; then
+                "$DOCS_RESULT" != "success" || \
+                "$BUILD_RELEASE_RESULT" != "success" ]]; then
             echo "One or more Rust jobs failed"
-            echo "  clippy: $CLIPPY_RESULT"
-            echo "  test:   $TEST_RESULT"
-            echo "  docs:   $DOCS_RESULT"
+            echo "  clippy:        $CLIPPY_RESULT"
+            echo "  test:          $TEST_RESULT"
+            echo "  docs:          $DOCS_RESULT"
+            echo "  build-release: $BUILD_RELEASE_RESULT"
             exit 1
           fi
           echo "All Rust jobs passed successfully"

@@ -24,6 +24,7 @@ jobs:
     runs-on: arc-runner-set
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -43,6 +44,24 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/rust.yml'
               - '.github/workflows/ci.yml'
+            e2e:
+              - 'web/src/**'
+              - 'web/e2e/**'
+              - 'web/playwright.config.live.ts'
+              - 'web/package.json'
+              - 'web/package-lock.json'
+              - 'crates/server/**'
+              - 'crates/extensions/backend-admin/**'
+              - 'crates/kernel/**'
+              - 'crates/app/**'
+              - 'crates/cmd/**'
+              - 'crates/rara-model/migrations/**'
+              - 'api/**'
+              - 'Cargo.lock'
+              - 'scripts/e2e-seed.sh'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/rust.yml'
+              - '.github/workflows/web-ci.yml'
 
   lint:
     name: Lint
@@ -53,13 +72,157 @@ jobs:
   rust:
     name: Rust
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
+    # Also run when only e2e-relevant paths changed: the live Playwright job
+    # downloads the rara binary artifact produced by rust.yml's build-release.
+    if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.e2e == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
+
+  playwright-live:
+    name: Playwright (live backend)
+    needs: [changes, rust]
+    if: ${{ needs.changes.outputs.e2e == 'true' || github.event_name == 'push' }}
+    runs-on: arc-runner-set
+    timeout-minutes: 30
+    env:
+      # Isolate the backend from any state on the runner. `rara_paths` honours
+      # XDG_{CONFIG,DATA}_HOME on Linux, so this redirects the config file,
+      # database, sessions, and per-process state into the workspace temp dir.
+      XDG_CONFIG_HOME: ${{ github.workspace }}/.e2e/config
+      XDG_DATA_HOME: ${{ github.workspace }}/.e2e/data
+      XDG_CACHE_HOME: ${{ github.workspace }}/.e2e/cache
+      RARA_LIVE_PORT: '25555'
+      # Bearer token written into the isolated config below; Playwright
+      # picks it up from this var (see web/playwright.config.live.ts).
+      RARA_E2E_OWNER_TOKEN: 'ci-e2e-token-not-a-secret'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Install diesel system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Download rara binary
+        uses: actions/download-artifact@v4
+        with:
+          name: rara-binary
+          path: ./bin
+
+      - name: Make rara binary executable
+        run: chmod +x ./bin/rara
+
+      - name: Generate isolated rara config
+        run: |
+          mkdir -p "$XDG_CONFIG_HOME/rara" "$XDG_DATA_HOME/rara" "$XDG_CACHE_HOME/rara"
+          cat > "$XDG_CONFIG_HOME/rara/config.yaml" <<EOF
+          http:
+            bind_address: "127.0.0.1:${RARA_LIVE_PORT}"
+            cors_allowed_origins:
+              - "http://localhost:5173"
+              - "http://127.0.0.1:5173"
+
+          grpc:
+            bind_address: "127.0.0.1:50051"
+            server_address: "127.0.0.1:50051"
+
+          owner_token: "${RARA_E2E_OWNER_TOKEN}"
+          owner_user_id: "ci-e2e"
+
+          users:
+            - name: "ci-e2e"
+              role: root
+              platforms: []
+
+          mita:
+            heartbeat_interval: "24h"
+          EOF
+          echo "wrote config to $XDG_CONFIG_HOME/rara/config.yaml"
+
+      - name: Reset isolated database
+        run: ./scripts/e2e-seed.sh
+
+      - name: Boot rara server
+        run: |
+          mkdir -p "$XDG_DATA_HOME/rara/logs"
+          nohup ./bin/rara server \
+            > "$XDG_DATA_HOME/rara/logs/server.stdout.log" \
+            2> "$XDG_DATA_HOME/rara/logs/server.stderr.log" &
+          echo $! > "$XDG_DATA_HOME/rara/server.pid"
+          echo "spawned rara server pid=$(cat $XDG_DATA_HOME/rara/server.pid)"
+
+      - name: Wait for /api/v1/health
+        run: |
+          set -eu
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 2 "http://127.0.0.1:${RARA_LIVE_PORT}/api/v1/health" > /dev/null; then
+              echo "backend healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend never came up — dumping logs" >&2
+          echo "--- stdout ---" >&2
+          tail -n 200 "$XDG_DATA_HOME/rara/logs/server.stdout.log" >&2 || true
+          echo "--- stderr ---" >&2
+          tail -n 200 "$XDG_DATA_HOME/rara/logs/server.stderr.log" >&2 || true
+          exit 1
+
+      - name: Run Playwright live suite
+        working-directory: web
+        run: npm run test:e2e:live
+
+      - name: Stop rara server
+        if: always()
+        run: |
+          PID_FILE="$XDG_DATA_HOME/rara/server.pid"
+          if [[ -f "$PID_FILE" ]]; then
+            PID=$(cat "$PID_FILE")
+            if kill -0 "$PID" 2>/dev/null; then
+              kill "$PID" || true
+              # Give the process up to 10s to exit cleanly.
+              for _ in $(seq 1 10); do
+                kill -0 "$PID" 2>/dev/null || break
+                sleep 1
+              done
+              kill -9 "$PID" 2>/dev/null || true
+            fi
+          fi
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live-report
+          path: web/playwright-report/
+          retention-days: 7
+
+      - name: Upload backend logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live-backend-logs
+          path: ${{ github.workspace }}/.e2e/data/rara/logs/
+          retention-days: 7
 
   release-pr:
     name: Release PR
-    needs: [lint, rust]
-    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
+    needs: [lint, rust, playwright-live]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.rust.result == 'success' || needs.rust.result == 'skipped') && (needs.playwright-live.result == 'success' || needs.playwright-live.result == 'skipped') }}
     permissions:
       contents: write
       pull-requests: write
