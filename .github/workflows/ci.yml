@@ -80,7 +80,13 @@ jobs:
   playwright-live:
     name: Playwright (live backend)
     needs: [changes, rust]
-    if: ${{ needs.changes.outputs.e2e == 'true' || github.event_name == 'push' }}
+    # Run as long as the rust workflow's build-release produced an artifact.
+    # `needs: rust` failures from unrelated jobs (clippy, test, doc) used to
+    # skip this job — including transient runner cancellations and apt-mirror
+    # flakes that have nothing to do with the binary or the live suite. Use
+    # always() + check the artifact-download step itself: if the artifact
+    # isn't there, the download fails and surfaces a clear error.
+    if: ${{ always() && (needs.changes.outputs.e2e == 'true' || github.event_name == 'push') && needs.rust.result != 'cancelled' && needs.rust.result != 'skipped' }}
     runs-on: arc-runner-set
     timeout-minutes: 30
     env:
