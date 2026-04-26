@@ -32,8 +32,15 @@
 import type { PublicWebEvent } from '@/adapters/rara-stream';
 import type { TimelineItem } from '@/api/kernel-types';
 
-/** Status of a single agent run. */
-export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+/** Status of a single agent run.
+ *
+ * `reconnecting` is a transient state: the underlying WebSocket dropped
+ * mid-run and the rara-stream adapter is retrying with backoff. The run
+ * stays visible in the live card; it transitions back to `running` if a
+ * subsequent server frame arrives, or to `failed` if reconnect attempts
+ * are exhausted (signalled by `__stream_reconnect_failed`).
+ */
+export type RunStatus = 'running' | 'reconnecting' | 'completed' | 'failed' | 'cancelled';
 
 /** One agent run — either currently active or moved into history. */
 export interface LiveRun {
@@ -195,9 +202,10 @@ export class LiveRunStore {
     prev: LiveRun | null,
     next: LiveRun | null,
   ): void {
-    // If the active run is gone (retired) or is running again, drop any
-    // pending dismissal — there is nothing terminal to clear.
-    if (!next || next.status === 'running') {
+    // If the active run is gone (retired) or is in a non-terminal state
+    // (`running` / `reconnecting`), drop any pending dismissal —
+    // nothing terminal to clear.
+    if (!next || next.status === 'running' || next.status === 'reconnecting') {
       this.cancelAutoDismiss(sessionKey);
       return;
     }
@@ -276,7 +284,7 @@ export function reduce(
     // card instead of an abrupt unmount on `done`.
     const prev = slice.active;
     const retired = prev
-      ? prev.status === 'running'
+      ? prev.status === 'running' || prev.status === 'reconnecting'
         ? finalize(prev, 'cancelled', 'Stream restarted')
         : prev
       : null;
@@ -295,15 +303,42 @@ export function reduce(
     return { active, history };
   }
 
+  if (type === '__stream_reconnecting') {
+    // Transient drop — keep items, flip status so the card can show a
+    // grace-period indicator instead of "failed". A subsequent server
+    // frame on the resumed socket transitions back to `running` via
+    // `bumpToRunningIfReconnecting()` (called below for any data event).
+    if (!slice.active) return slice;
+    if (slice.active.status !== 'running' && slice.active.status !== 'reconnecting') {
+      return slice;
+    }
+    return { ...slice, active: { ...slice.active, status: 'reconnecting' } };
+  }
+
+  if (type === '__stream_reconnect_failed') {
+    if (!slice.active) return slice;
+    if (slice.active.status === 'completed' || slice.active.status === 'failed') {
+      return slice;
+    }
+    const message = `WebSocket reconnect failed after ${
+      readNumber(event, 'attempts') ?? 0
+    } attempts`;
+    return {
+      ...slice,
+      active: finalize({ ...slice.active, error: message }, 'failed', message),
+    };
+  }
+
   if (type === '__stream_closed') {
     if (!slice.active) return slice;
-    // Already terminal (done/error arrived before close) — nothing to do;
-    // the card stays pinned in the active slot until the next run.
+    // Already terminal (done/error/reconnect_failed arrived before close)
+    // — nothing to do; the card stays pinned until the next run.
     if (slice.active.status !== 'running') {
       return slice;
     }
-    // WebSocket hung up mid-flight — mark cancelled but keep visible so
-    // the viewer can inspect what ran before the drop.
+    // WebSocket hung up cleanly mid-flight without any reconnect signal
+    // (e.g. session reset, tab navigation) — mark cancelled but keep
+    // visible so the viewer can inspect what ran before the drop.
     return {
       ...slice,
       active: finalize(slice.active, 'cancelled', 'Stream closed'),
@@ -312,7 +347,12 @@ export function reduce(
 
   // All remaining events need an active run.
   if (!slice.active) return slice;
-  const run = slice.active;
+  // Any backend frame arriving while we were `reconnecting` proves the
+  // resumed socket is delivering data — flip back to `running` so the
+  // card stops showing the grace-period indicator. Final status events
+  // (`done` / `error`) further below will overwrite this as needed.
+  const run: LiveRun =
+    slice.active.status === 'reconnecting' ? { ...slice.active, status: 'running' } : slice.active;
 
   switch (type) {
     case 'done': {
@@ -467,6 +507,11 @@ function readString(obj: object, key: string): string | null {
 function readBool(obj: object, key: string): boolean | null {
   const v = (obj as Record<string, unknown>)[key];
   return typeof v === 'boolean' ? v : null;
+}
+
+function readNumber(obj: object, key: string): number | null {
+  const v = (obj as Record<string, unknown>)[key];
+  return typeof v === 'number' ? v : null;
 }
 
 function readRecord(obj: object, key: string): Record<string, unknown> | null {

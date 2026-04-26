@@ -23,6 +23,10 @@ import type { TimelineItem } from '@/api/kernel-types';
 
 const startEvent = { type: '__stream_started' } satisfies PublicWebEvent;
 const closeEvent = { type: '__stream_closed' } satisfies PublicWebEvent;
+const reconnectingEvent = (attempt = 1, delayMs = 250) =>
+  ({ type: '__stream_reconnecting', attempt, delayMs }) satisfies PublicWebEvent;
+const reconnectFailedEvent = (attempts = 5) =>
+  ({ type: '__stream_reconnect_failed', attempts }) satisfies PublicWebEvent;
 
 function toolStart(id: string, name: string, args: Record<string, unknown> = {}): PublicWebEvent {
   return { type: 'tool_call_start', id, name, arguments: args } satisfies PublicWebEvent;
@@ -205,6 +209,56 @@ describe('LiveRunStore auto-dismiss', () => {
     vi.advanceTimersByTime(AUTO_DISMISS_MS);
     expect(store.snapshot(sk).active).toBeNull();
     expect(store.snapshot(sk).history).toHaveLength(0);
+  });
+});
+
+describe('LiveRunStore reconnect grace period (#1880)', () => {
+  it('flips to reconnecting on __stream_reconnecting without finalizing', () => {
+    const store = new LiveRunStore();
+    const sk = 'rec1';
+    store.publish(sk, startEvent);
+    store.publish(sk, toolStart('a', 'Grep'));
+    store.publish(sk, reconnectingEvent(1, 250));
+    const slice = store.snapshot(sk);
+    expect(slice.active?.status).toBe('reconnecting');
+    expect(slice.active?.endedAt).toBeNull();
+    // Items survive — the user can still see what ran before the drop.
+    expect(slice.active?.items.length).toBeGreaterThan(0);
+  });
+
+  it('resumes to running when a backend frame arrives after reconnecting', () => {
+    const store = new LiveRunStore();
+    const sk = 'rec2';
+    store.publish(sk, startEvent);
+    store.publish(sk, reconnectingEvent());
+    expect(store.snapshot(sk).active?.status).toBe('reconnecting');
+    // Resumed socket delivers a tool_call_start — status flips back.
+    store.publish(sk, toolStart('a', 'Grep'));
+    expect(store.snapshot(sk).active?.status).toBe('running');
+  });
+
+  it('finalizes as completed if reconnected stream ends with done', () => {
+    const store = new LiveRunStore();
+    const sk = 'rec3';
+    store.publish(sk, startEvent);
+    store.publish(sk, reconnectingEvent());
+    store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
+    expect(store.snapshot(sk).active?.status).toBe('completed');
+  });
+
+  it('flips to failed only after __stream_reconnect_failed (not on bare close)', () => {
+    const store = new LiveRunStore();
+    const sk = 'rec4';
+    store.publish(sk, startEvent);
+    store.publish(sk, reconnectingEvent());
+    // A spurious __stream_closed mid-reconnect must NOT mark failed.
+    store.publish(sk, closeEvent);
+    expect(store.snapshot(sk).active?.status).toBe('reconnecting');
+    // Now backoff exhausts.
+    store.publish(sk, reconnectFailedEvent(5));
+    const slice = store.snapshot(sk);
+    expect(slice.active?.status).toBe('failed');
+    expect(slice.active?.error).toContain('reconnect failed');
   });
 });
 

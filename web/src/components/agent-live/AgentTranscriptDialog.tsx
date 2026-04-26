@@ -164,6 +164,8 @@ function StatusIcon({ status }: { status: RunStatus }) {
   switch (status) {
     case 'running':
       return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
+    case 'reconnecting':
+      return <Loader2 className="h-4 w-4 animate-spin text-amber-500" />;
     case 'completed':
       return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
     case 'failed':
@@ -179,6 +181,11 @@ function statusChrome(status: RunStatus): { label: string; cls: string } {
       return {
         label: 'Running',
         cls: 'border-border/60 bg-muted/50 text-muted-foreground',
+      };
+    case 'reconnecting':
+      return {
+        label: 'Reconnecting',
+        cls: 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300',
       };
     case 'completed':
       return {
