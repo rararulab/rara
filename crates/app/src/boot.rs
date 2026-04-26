@@ -59,8 +59,6 @@ pub(crate) struct BootResult {
     pub knowledge_service:     rara_kernel::memory::knowledge::KnowledgeServiceRef,
     /// Default provider's model lister for `/v1/models` queries.
     pub model_lister:          rara_kernel::llm::LlmModelListerRef,
-    /// Shared mutation sink for dock tools — passed to both tools and routes.
-    pub dock_mutation_sink:    rara_dock::DockMutationSink,
     /// User question manager for ask-user tool — adapters subscribe to render
     /// questions and call `resolve()` with user answers.
     pub user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
@@ -185,7 +183,6 @@ pub(crate) async fn boot(
 
     // -- tools -------------------------------------------------------------
 
-    let dock_mutation_sink = rara_dock::DockMutationSink::new();
     let user_question_manager: rara_kernel::user_question::UserQuestionManagerRef =
         std::sync::Arc::new(rara_kernel::user_question::UserQuestionManager::new());
 
@@ -228,7 +225,6 @@ pub(crate) async fn boot(
             session_index: session_index.clone(),
             marketplace_service: marketplace_service.clone(),
             clawhub_client: clawhub_client.clone(),
-            dock_mutation_sink: dock_mutation_sink.clone(),
             acp_registry,
             user_question_manager: user_question_manager.clone(),
             fff_picker,
@@ -341,7 +337,6 @@ pub(crate) async fn boot(
         dispatch_rara_handle: tool_result.dispatch_rara_handle,
         list_sessions_handle: tool_result.list_sessions_handle,
         knowledge_service,
-        dock_mutation_sink,
         model_lister,
         user_question_manager,
     })

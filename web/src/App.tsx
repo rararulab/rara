@@ -27,7 +27,6 @@ import {
 } from '@/components/settings/SettingsModalProvider';
 import type { SettingsPage } from '@/components/settings/SettingsPanel';
 import DashboardLayout from '@/layouts/DashboardLayout';
-import Dock from '@/pages/Dock';
 import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
 import Login from '@/pages/Login';
@@ -117,7 +116,6 @@ export default function App() {
               >
                 <Route path="docs" element={<Docs />} />
                 <Route path="kernel-top" element={<KernelTop />} />
-                <Route path="dock" element={<Dock />} />
                 <Route path="subscriptions" element={<Subscriptions />} />
               </Route>
             </Routes>

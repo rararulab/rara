@@ -139,7 +139,7 @@ impl BackendState {
         ));
 
         // NOTE: the CORS layer is intentionally NOT applied here. CORS is a
-        // cross-cutting concern for every public route (health, dock, webhook,
+        // cross-cutting concern for every public route (health, webhook,
         // kernel chat), not just admin. It is applied by `rara-app` to the
         // outermost composed router via [`build_cors_layer`] so the same
         // origin allow-list governs all browser-facing endpoints.
@@ -172,7 +172,7 @@ impl BackendState {
 /// HTTP route.
 ///
 /// Applied by `rara-app` to the outermost composed router so that health,
-/// dock, webhook, kernel chat, and admin endpoints share one consistent
+/// webhook, kernel chat, and admin endpoints share one consistent
 /// origin allow-list. Browser preflight (`OPTIONS` without an
 /// `Authorization` header) is answered here, before any auth middleware can
 /// reject it with 401.

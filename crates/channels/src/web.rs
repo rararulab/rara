@@ -193,17 +193,6 @@ pub enum WebEvent {
         task_id: String,
         status:  rara_kernel::io::BackgroundTaskStatus,
     },
-    /// Dock turn completed with mutations and updated state.
-    DockTurnComplete {
-        session_id:      String,
-        reply:           String,
-        mutations:       Vec<rara_dock::DockMutation>,
-        blocks:          Vec<rara_dock::DockBlock>,
-        facts:           Vec<rara_dock::DockFact>,
-        annotations:     Vec<rara_dock::DockAnnotation>,
-        history:         Vec<rara_dock::DockHistoryEntry>,
-        selected_anchor: Option<String>,
-    },
     /// Kernel has persisted the turn's execution trace; the row is now
     /// retrievable by `trace_id`. Forwarded so future frontend surfaces
     /// (e.g. trace detail modal) can embed the ID without an extra
@@ -370,50 +359,6 @@ fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
         }),
         StreamEvent::BackgroundTaskDone { task_id, status } => {
             Some(WebEvent::BackgroundTaskDone { task_id, status })
-        }
-        StreamEvent::DockTurnComplete {
-            session_id,
-            reply,
-            mutations,
-            blocks,
-            facts,
-            annotations,
-            history,
-            selected_anchor,
-        } => {
-            // Deserialize the generic JSON values into typed dock models.
-            // If deserialization fails for any field, fall back to empty vecs.
-            let mutations: Vec<rara_dock::DockMutation> = mutations
-                .into_iter()
-                .filter_map(|v| serde_json::from_value(v).ok())
-                .collect();
-            let blocks: Vec<rara_dock::DockBlock> = blocks
-                .into_iter()
-                .filter_map(|v| serde_json::from_value(v).ok())
-                .collect();
-            let facts: Vec<rara_dock::DockFact> = facts
-                .into_iter()
-                .filter_map(|v| serde_json::from_value(v).ok())
-                .collect();
-            let annotations: Vec<rara_dock::DockAnnotation> = annotations
-                .into_iter()
-                .filter_map(|v| serde_json::from_value(v).ok())
-                .collect();
-            let history: Vec<rara_dock::DockHistoryEntry> = history
-                .into_iter()
-                .filter_map(|v| serde_json::from_value(v).ok())
-                .collect();
-
-            Some(WebEvent::DockTurnComplete {
-                session_id,
-                reply,
-                mutations,
-                blocks,
-                facts,
-                annotations,
-                history,
-                selected_anchor,
-            })
         }
         StreamEvent::ToolCallLimit { .. } => None, // handled by dedicated channel listener
         StreamEvent::ToolCallLimitResolved { .. } => None, // informational only
