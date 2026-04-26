@@ -228,10 +228,10 @@ mod gateway_defaults {
 pub struct TelemetryConfig {
     /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
     #[serde(default)]
-    pub otlp_endpoint: Option<String>,
+    pub otlp_endpoint:    Option<String>,
     /// Export protocol: `"http"` or `"grpc"`.
     #[serde(default)]
-    pub otlp_protocol: Option<String>,
+    pub otlp_protocol:    Option<String>,
     /// Self-hosted Langfuse / OTLP HTTP traces exporter (opt-in).
     ///
     /// When `enabled`, the application configures an OTLP/HTTP traces
@@ -239,14 +239,18 @@ pub struct TelemetryConfig {
     /// (typically `authorization: "Basic <base64(public:secret)>"` for
     /// Langfuse). Disabled by default.
     #[serde(default)]
-    pub otlp:          Option<OtlpConfig>,
+    pub otlp:             Option<OtlpConfig>,
     /// Continuous CPU profiling via Pyroscope. Section omitted = off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pyroscope:     Option<common_telemetry::profiling::PyroscopeConfig>,
+    pub pyroscope:        Option<common_telemetry::profiling::PyroscopeConfig>,
     /// Deployment environment label (e.g. `"prod"`, `"dev"`). Used as
     /// a low-cardinality process-level tag on profiling samples.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env:           Option<String>,
+    pub env:              Option<String>,
+    /// Layer B payload sampling. When absent, no Layer B attributes are
+    /// emitted — Layer A keeps working as the always-on contract.
+    #[serde(default)]
+    pub payload_sampling: Option<common_telemetry::payload_sampler::PayloadSamplingConfig>,
 }
 
 /// OTLP/HTTP traces exporter config (Langfuse-compatible).

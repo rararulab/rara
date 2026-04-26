@@ -612,6 +612,34 @@ fn infer_has_tool_calls(pending_tool_calls: &HashMap<u32, PendingToolCall>) -> b
     !pending_tool_calls.is_empty()
 }
 
+/// Classify a tool error message into one of the stable
+/// [`common_telemetry::attrs::RARA_TOOL_ERROR_KIND`] enum values. Pure
+/// string matching — substring rules, lowercase compare. Returning a
+/// concrete category lets the detector aggregate by class without parsing
+/// free-form messages.
+fn classify_tool_error(msg: &str) -> &'static str {
+    let m = msg.to_lowercase();
+    if m.contains("timed out") || m.contains("timeout") {
+        "timeout"
+    } else if m.contains("panic") {
+        "panic"
+    } else if m.contains("permission denied") || m.contains("unauthorized") || m.contains("auth") {
+        "auth"
+    } else if m.contains("rate limit") || m.contains("429") {
+        "rate_limit"
+    } else if m.contains("invalid")
+        || m.contains("validation")
+        || m.contains("expected")
+        || m.contains("not found")
+    {
+        "invalid_input"
+    } else if m.contains("interrupted") {
+        "cancelled"
+    } else {
+        "upstream_error"
+    }
+}
+
 fn sanitize_messages_for_llm(messages: &[llm::Message]) -> Vec<llm::Message> {
     messages
         .iter()
@@ -907,23 +935,68 @@ fn thinking_level_to_config(
 ///
 /// Respects `turn_cancel` at every `tokio::select!` point — both before the
 /// stream starts and during delta consumption.
-#[tracing::instrument(
-    skip(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_agent_loop(
+    handle: &KernelHandle,
+    session_key: SessionKey,
+    user_text: String,
+    stream_handle: &StreamHandle,
+    turn_cancel: &CancellationToken,
+    tape: crate::memory::TapeService,
+    tape_name: &str,
+    tool_context: crate::tool::ToolContext,
+    milestone_tx: Option<tokio::sync::mpsc::Sender<crate::io::AgentEvent>>,
+    guard_pipeline: Arc<GuardPipeline>,
+    hook_runner: crate::hooks::HookRunnerRef,
+    notification_bus: NotificationBusRef,
+    rara_message_id: crate::io::MessageId,
+    interrupted: &AtomicBool,
+    interrupt_notify: &tokio::sync::Notify,
+) -> crate::error::Result<AgentTurnResult> {
+    // Root agent turn span — Layer A telemetry. Marked as kind=AGENT per
+    // OpenInference so an external detector can identify the turn root
+    // without parsing the span name. Dotted-name attributes (`rara.*`,
+    // `gen_ai.*`, `openinference.*`) are not supported by
+    // `#[tracing::instrument(fields(...))]`, so the span is built manually
+    // and the body runs inside `.instrument(span)` to keep the future
+    // `Send`.
+    let turn_span = info_span!(
+        "agent_turn",
+        session_key = %session_key,
+        model = tracing::field::Empty,
+        "openinference.span.kind" = common_telemetry::attrs::SPAN_KIND_AGENT,
+        "rara.session.id" = %session_key,
+        "rara.agent.name" = tracing::field::Empty,
+        "rara.turn.outcome" = tracing::field::Empty,
+        "rara.error.kind" = tracing::field::Empty,
+        "gen_ai.request.model" = tracing::field::Empty,
+        "gen_ai.usage.input_tokens" = tracing::field::Empty,
+        "gen_ai.usage.output_tokens" = tracing::field::Empty,
+    );
+    use tracing::Instrument as _;
+    run_agent_loop_inner(
         handle,
+        session_key,
+        user_text,
         stream_handle,
         turn_cancel,
         tape,
         tape_name,
+        tool_context,
+        milestone_tx,
         guard_pipeline,
+        hook_runner,
         notification_bus,
+        rara_message_id,
         interrupted,
-        interrupt_notify
-    ),
-    fields(
-        session_key = %session_key,
+        interrupt_notify,
     )
-)]
-pub(crate) async fn run_agent_loop(
+    .instrument(turn_span)
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_agent_loop_inner(
     handle: &KernelHandle,
     session_key: SessionKey,
     user_text: String,
@@ -1023,6 +1096,16 @@ pub(crate) async fn run_agent_loop(
     };
 
     tracing::Span::current().record("model", model.as_str());
+    // Layer A — populate rara.agent.name + gen_ai.request.model on the root
+    // span as soon as both are resolved. The detector pivots off these.
+    tracing::Span::current().record(
+        common_telemetry::attrs::RARA_AGENT_NAME,
+        manifest.name.as_str(),
+    );
+    tracing::Span::current().record(
+        common_telemetry::attrs::GEN_AI_REQUEST_MODEL,
+        model.as_str(),
+    );
 
     // Model-specific tool-use enforcement, aligned with hermes-agent
     // TOOL_USE_ENFORCEMENT_GUIDANCE + OPENAI_MODEL_EXECUTION_GUIDANCE.
@@ -1424,6 +1507,9 @@ pub(crate) async fn run_agent_loop(
 
         messages = sanitize_messages_for_llm(&messages);
 
+        // LLM call span. Marked as kind=LLM per OpenInference; gen_ai.* fields
+        // are populated as the stream progresses (TTFT on first delta, usage on
+        // Done). `rara.turn.iteration` lets the detector spot tool-loop runaway.
         let iter_span = info_span!(
             "llm_iteration",
             iter = iteration,
@@ -1432,6 +1518,13 @@ pub(crate) async fn run_agent_loop(
             stream_ms = tracing::field::Empty,
             has_tools = tracing::field::Empty,
             tool_count = tracing::field::Empty,
+            "openinference.span.kind" = common_telemetry::attrs::SPAN_KIND_LLM,
+            "rara.turn.iteration" = iteration,
+            "gen_ai.request.model" = model.as_str(),
+            "gen_ai.server.time_to_first_token" = tracing::field::Empty,
+            "gen_ai.usage.input_tokens" = tracing::field::Empty,
+            "gen_ai.usage.output_tokens" = tracing::field::Empty,
+            "gen_ai.response.finish_reasons" = tracing::field::Empty,
         );
         let _iter_guard = iter_span.enter();
 
@@ -1543,12 +1636,13 @@ pub(crate) async fn run_agent_loop(
                     if !text.is_empty() {
                         if first_token_at.is_none() {
                             first_token_at = Some(Instant::now());
+                            let ttft = first_token_at.unwrap().duration_since(stream_start);
+                            iter_span.record("first_token_ms", ttft.as_millis() as u64);
+                            // gen_ai.server.time_to_first_token is in seconds
+                            // per the OTel GenAI spec.
                             iter_span.record(
-                                "first_token_ms",
-                                first_token_at
-                                    .unwrap()
-                                    .duration_since(stream_start)
-                                    .as_millis() as u64,
+                                common_telemetry::attrs::GEN_AI_SERVER_TIME_TO_FIRST_TOKEN,
+                                ttft.as_secs_f64(),
                             );
                         }
                         // Settle reasoning timer on the FIRST TextDelta only
@@ -1654,6 +1748,20 @@ pub(crate) async fn run_agent_loop(
                             output_tokens: cumulative_output_tokens,
                             thinking_ms:   cumulative_thinking_ms,
                         });
+                        iter_span.record(
+                            common_telemetry::attrs::GEN_AI_USAGE_INPUT_TOKENS,
+                            u.prompt_tokens,
+                        );
+                        iter_span.record(
+                            common_telemetry::attrs::GEN_AI_USAGE_OUTPUT_TOKENS,
+                            u.completion_tokens,
+                        );
+                    }
+                    if let Some(ref reason) = last_stop_reason {
+                        iter_span.record(
+                            common_telemetry::attrs::GEN_AI_RESPONSE_FINISH_REASONS,
+                            tracing::field::debug(reason),
+                        );
                     }
                     break;
                 }
@@ -2423,10 +2531,18 @@ pub(crate) async fn run_agent_loop(
                 let notification_bus = notification_bus.clone();
                 let approval_manager = Arc::clone(handle.security().approval());
                 let session_key_for_guard = session_key;
+                // Tool execution span. Marked as kind=TOOL per OpenInference;
+                // `tool.name` carries the registered tool id (matches a const
+                // in `common_telemetry::identifiers`). `tool.outcome` and
+                // `rara.tool.error.kind` are recorded once the call completes.
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
                     success = tracing::field::Empty,
+                    "openinference.span.kind" = common_telemetry::attrs::SPAN_KIND_TOOL,
+                    "tool.name" = name.as_str(),
+                    "tool.outcome" = tracing::field::Empty,
+                    "rara.tool.error.kind" = tracing::field::Empty,
                 );
                 async move {
                     let _guard = tool_span.enter();
@@ -2437,6 +2553,8 @@ pub(crate) async fn run_agent_loop(
                     if let Some(ref user) = user_ref {
                         if !user.can_use_tool(&name) {
                             tool_span.record("success", false);
+                            tool_span.record("tool.outcome", "error");
+                            tool_span.record("rara.tool.error.kind", "auth");
                             let err = format!(
                                 "permission denied: user '{}' cannot use tool '{name}'",
                                 user.name
@@ -2510,6 +2628,8 @@ pub(crate) async fn run_agent_loop(
                             _ => {
                                 // Denied or timed out — block the tool call.
                                 tool_span.record("success", false);
+                                tool_span.record("tool.outcome", "error");
+                                tool_span.record("rara.tool.error.kind", "auth");
 
                                 let agent_id = session_key_for_guard.into_inner();
                                 notification_bus
@@ -2542,6 +2662,8 @@ pub(crate) async fn run_agent_loop(
                         .await;
                     if pre_hook.is_denied() {
                         tool_span.record("success", false);
+                        tool_span.record("tool.outcome", "error");
+                        tool_span.record("rara.tool.error.kind", "auth");
                         let reason = pre_hook.messages().join("; ");
                         warn!(tool = %name, %reason, "tool call denied by PreToolUse hook");
                         let dur = tool_start.elapsed().as_millis() as u64;
@@ -2572,6 +2694,8 @@ pub(crate) async fn run_agent_loop(
                         // no-op edits without spending the execute budget.
                         if let Err(e) = tool.validate(&args).await {
                             tool_span.record("success", false);
+                            tool_span.record("tool.outcome", "error");
+                            tool_span.record("rara.tool.error.kind", "invalid_input");
                             warn!(tool = %name, args = %args_snapshot, error = %e, "tool validation failed");
                             let dur = tool_start.elapsed().as_millis() as u64;
                             return (
@@ -2600,6 +2724,7 @@ pub(crate) async fn run_agent_loop(
                             _ = tool_cancel.cancelled() => {
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 tool_span.record("success", false);
+                                tool_span.record("tool.outcome", "error");
                                 return (
                                     false,
                                     crate::tool::ToolOutput::from(
@@ -2614,6 +2739,7 @@ pub(crate) async fn run_agent_loop(
                         match tool_result {
                             Ok(result) => {
                                 tool_span.record("success", true);
+                                tool_span.record("tool.outcome", "success");
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 info!(tool = %name, duration_ms = dur, "tool call succeeded");
                                 guard_pipeline.post_execute(&session_key_for_guard, &name);
@@ -2639,6 +2765,11 @@ pub(crate) async fn run_agent_loop(
                             }
                             Err(e) => {
                                 tool_span.record("success", false);
+                                tool_span.record("tool.outcome", "error");
+                                tool_span.record(
+                                    "rara.tool.error.kind",
+                                    classify_tool_error(&e.to_string()),
+                                );
                                 warn!(tool = %name, args = %args_snapshot, error = %e, "tool execution failed");
                                 let dur = tool_start.elapsed().as_millis() as u64;
 
@@ -2670,6 +2801,8 @@ pub(crate) async fn run_agent_loop(
                         }
                     } else {
                         tool_span.record("success", false);
+                        tool_span.record("tool.outcome", "error");
+                        tool_span.record("rara.tool.error.kind", "invalid_input");
                         let err = format!("tool not found: {name}");
                         warn!(%err);
                         let dur = tool_start.elapsed().as_millis() as u64;
@@ -3180,9 +3313,11 @@ pub(crate) async fn run_agent_loop(
     // This aligns with the explicit /stop path which returns
     // Err(Interrupted) via turn_cancel.
     if was_interrupted {
+        tracing::Span::current().record(common_telemetry::attrs::RARA_TURN_OUTCOME, "aborted");
         return Err(KernelError::Interrupted);
     }
 
+    tracing::Span::current().record(common_telemetry::attrs::RARA_TURN_OUTCOME, "success");
     Ok(AgentTurnResult {
         text: last_accumulated_text,
         iterations: actual_iterations,

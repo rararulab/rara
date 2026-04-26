@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod attrs;
+pub mod identifiers;
 pub mod logging;
 pub mod panic_hook;
+pub mod payload_sampler;
 pub mod profiling;
 pub mod tracing_context;
 pub mod tracing_sampler;
