@@ -115,9 +115,16 @@ pub enum WebEvent {
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
     /// Discard any in-flight assistant text the client has rendered for the
-    /// current turn. Emitted by the kernel before a tool-call batch and
-    /// before the anti-laziness nudge restarts the iteration, so the next
-    /// `TextDelta` stream is not appended on top of abandoned narration.
+    /// current turn. Emitted by the kernel from two sites in
+    /// `crates/kernel/src/agent/mod.rs`:
+    ///
+    /// - the tool-call branch (around line 1676) — clears intermediate
+    ///   narration before the upcoming `ToolCallStart` arrives;
+    /// - the anti-laziness nudge branch (around line 1935) — clears the
+    ///   abandoned ack text before the next iteration's `TextDelta` stream.
+    ///
+    /// Without this signal, the next `TextDelta` stream would be appended
+    /// on top of the now-stale narration on the client.
     TextClear,
     /// A tool call has started.
     ToolCallStart {
