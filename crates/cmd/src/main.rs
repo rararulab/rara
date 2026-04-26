@@ -139,8 +139,48 @@ impl ServerArgs {
             None,
         );
 
+        // Continuous profiling (Pyroscope). Held for the lifetime of the
+        // server process — its `Drop` performs graceful shutdown so the
+        // last batch flushes when the process receives SIGTERM/SIGINT and
+        // `run_app` returns cleanly via its existing signal handler.
+        let _profiling_guard = init_profiling(&config)?;
+
         run_app(config).await
     }
+}
+
+/// Wire the Pyroscope profiling agent if enabled in YAML config.
+///
+/// `build_commit` comes from `shadow-rs` (`build::SHORT_COMMIT`), captured
+/// at compile time so the running process can be cross-referenced with the
+/// source tree without relying on runtime git access.
+fn init_profiling(
+    config: &AppConfig,
+) -> Result<Option<common_telemetry::profiling::ProfilingGuard>, Whatever> {
+    let Some(pyro_cfg) = config.telemetry.pyroscope.as_ref() else {
+        return Ok(None);
+    };
+    let env = config.telemetry.env.as_deref().unwrap_or("unknown");
+    let host_buf = hostname_or_unknown();
+    let host = host_buf.as_str();
+    let build_commit = if build_info::build::SHORT_COMMIT.is_empty() {
+        "unknown"
+    } else {
+        build_info::build::SHORT_COMMIT
+    };
+    common_telemetry::profiling::init_pyroscope(pyro_cfg, env, host, build_commit)
+        .whatever_context("Failed to initialise Pyroscope profiling")
+}
+
+/// Best-effort hostname lookup for low-cardinality profiling tags.
+///
+/// Falls back to the `HOSTNAME` env var (set by most shells) and then
+/// `"unknown"` so a missing hostname never blocks profiling startup.
+fn hostname_or_unknown() -> String {
+    sysinfo::System::host_name()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 // ---------------------------------------------------------------------------

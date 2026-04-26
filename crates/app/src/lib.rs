@@ -240,6 +240,13 @@ pub struct TelemetryConfig {
     /// Langfuse). Disabled by default.
     #[serde(default)]
     pub otlp:          Option<OtlpConfig>,
+    /// Continuous CPU profiling via Pyroscope. Section omitted = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pyroscope:     Option<common_telemetry::profiling::PyroscopeConfig>,
+    /// Deployment environment label (e.g. `"prod"`, `"dev"`). Used as
+    /// a low-cardinality process-level tag on profiling samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env:           Option<String>,
 }
 
 /// OTLP/HTTP traces exporter config (Langfuse-compatible).
@@ -1374,6 +1381,53 @@ mita:
             err.to_string().contains("owner_token must not be empty"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn telemetry_pyroscope_section_absent_yields_none() {
+        // Default: no `telemetry:` section at all → pyroscope disabled, no
+        // agent constructed, zero overhead at startup.
+        let cfg: AppConfig = serde_yaml::from_str(BASE_YAML).expect("base yaml");
+        assert!(cfg.telemetry.pyroscope.is_none());
+        assert!(cfg.telemetry.env.is_none());
+    }
+
+    #[test]
+    fn telemetry_pyroscope_section_parses_required_fields() {
+        let yaml = format!(
+            "{BASE_YAML}\n\
+telemetry:\n  \
+  env: \"prod\"\n  \
+  pyroscope:\n    \
+    enabled: true\n    \
+    endpoint: \"http://10.0.0.183:4040\"\n    \
+    application_name: \"rara\"\n    \
+    sample_rate: 100\n"
+        );
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let pyro = cfg.telemetry.pyroscope.expect("pyroscope section parsed");
+        assert!(pyro.enabled);
+        assert_eq!(pyro.endpoint, "http://10.0.0.183:4040");
+        assert_eq!(pyro.application_name, "rara");
+        assert_eq!(pyro.sample_rate, 100);
+        assert_eq!(cfg.telemetry.env.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn telemetry_pyroscope_disabled_still_parses() {
+        // `enabled: false` is the documented opt-in-by-default-off shape.
+        let yaml = format!(
+            "{BASE_YAML}\n\
+telemetry:\n  \
+  pyroscope:\n    \
+    enabled: false\n    \
+    endpoint: \"http://localhost:4040\"\n    \
+    application_name: \"rara\"\n    \
+    sample_rate: 100\n"
+        );
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let pyro = cfg.telemetry.pyroscope.expect("section present");
+        assert!(!pyro.enabled);
     }
 
     #[test]
