@@ -39,8 +39,6 @@ pub mod keys {
     pub const GMAIL_ADDRESS: &str = "gmail.address";
     pub const GMAIL_APP_PASSWORD: &str = "gmail.app_password";
     pub const GMAIL_AUTO_SEND_ENABLED: &str = "gmail.auto_send_enabled";
-    pub const COMPOSIO_API_KEY: &str = "composio.api_key";
-    pub const COMPOSIO_ENTITY_ID: &str = "composio.entity_id";
     pub const MEMORY_MEM0_BASE_URL: &str = "memory.mem0.base_url";
     pub const MEMORY_MEMOS_BASE_URL: &str = "memory.memos.base_url";
     pub const MEMORY_MEMOS_TOKEN: &str = "memory.memos.token";

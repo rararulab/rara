@@ -28,7 +28,6 @@ import {
   Moon,
   Plus,
   Save,
-  Settings2,
   Shield,
   Sparkles,
   ChevronDown,
@@ -118,8 +117,6 @@ const KEYS = {
   GMAIL_ADDRESS: 'gmail.address',
   GMAIL_APP_PASSWORD: 'gmail.app_password',
   GMAIL_AUTO_SEND_ENABLED: 'gmail.auto_send_enabled',
-  COMPOSIO_API_KEY: 'composio.api_key',
-  COMPOSIO_ENTITY_ID: 'composio.entity_id',
   MEMORY_MEM0_BASE_URL: 'memory.mem0.base_url',
   MEMORY_MEMOS_BASE_URL: 'memory.memos.base_url',
   MEMORY_MEMOS_TOKEN: 'memory.memos.token',
@@ -157,7 +154,6 @@ const SENSITIVE_KEYS: Set<string> = new Set([
   KEYS.LLM_PROVIDERS_OLLAMA_API_KEY,
   KEYS.TELEGRAM_BOT_TOKEN,
   KEYS.GMAIL_APP_PASSWORD,
-  KEYS.COMPOSIO_API_KEY,
   KEYS.MEMORY_MEMOS_TOKEN,
 ]);
 
@@ -1327,23 +1323,6 @@ export default function SettingsPanel({
           {/* ── Tools ── */}
           {activeCategory === 'tools' && (
             <>
-              <KvGroup
-                title="Composio"
-                description="Tool orchestration platform credentials"
-                icon={<Settings2 className="h-4 w-4" />}
-                fields={[
-                  { key: KEYS.COMPOSIO_API_KEY, label: 'API Key', placeholder: 'cmp-...' },
-                  { key: KEYS.COMPOSIO_ENTITY_ID, label: 'Entity ID', placeholder: 'default' },
-                ]}
-                values={draft}
-                original={original}
-                onFieldChange={handleFieldChange}
-                onSave={() =>
-                  handleGroupSave([KEYS.COMPOSIO_API_KEY, KEYS.COMPOSIO_ENTITY_ID], 'composio')
-                }
-                saving={saveMutation.isPending}
-                toast={groupToasts['composio'] ?? null}
-              />
               <KvGroup
                 title="Memory"
                 description="External memory service connections"

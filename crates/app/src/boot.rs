@@ -15,7 +15,7 @@
 //! Kernel bootstrap — assembles all kernel dependencies in one shot.
 //!
 //! Consolidates the old `rara-boot` crate (state, llm_registry, user_store,
-//! resolvers, manifests, mcp, composio, skills) into a single module with
+//! resolvers, manifests, mcp, skills) into a single module with
 //! private helpers and a public `boot()` entry point.
 
 use std::{
@@ -151,11 +151,6 @@ pub(crate) async fn boot(
     );
     info!("TapeService initialized (FTS5 enabled)");
 
-    // -- Composio auth provider --------------------------------------------
-
-    let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
-        Arc::new(SettingsComposioAuthProvider::new(settings_provider.clone()));
-
     // -- skills registry ---------------------------------------------------
 
     let skill_registry = rara_skills::registry::InMemoryRegistry::new();
@@ -218,7 +213,6 @@ pub(crate) async fn boot(
         &mut tool_registry,
         crate::tools::ToolDeps {
             settings: settings_provider.clone(),
-            composio_auth_provider,
             skill_registry: skill_registry.clone(),
             mcp_manager: mcp_manager.clone(),
             tape_service: tape_service.clone(),
@@ -868,39 +862,6 @@ impl rara_kernel::tool::DynamicToolProvider for McpDynamicToolProvider {
                 Vec::new()
             }
         }
-    }
-}
-
-// =========================================================================
-// Private: Composio auth provider
-// =========================================================================
-
-/// Composio auth provider that reads credentials from runtime settings.
-#[derive(Clone)]
-struct SettingsComposioAuthProvider {
-    settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-}
-
-impl SettingsComposioAuthProvider {
-    fn new(settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>) -> Self {
-        Self { settings }
-    }
-}
-
-#[async_trait]
-impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
-    async fn acquire_auth(&self) -> anyhow::Result<rara_composio::ComposioAuth> {
-        use rara_domain_shared::settings::keys;
-        let api_key = self
-            .settings
-            .get(keys::COMPOSIO_API_KEY)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("composio.api_key is not configured in settings"))?;
-        let entity_id = self.settings.get(keys::COMPOSIO_ENTITY_ID).await;
-        Ok(rara_composio::ComposioAuth::new(
-            api_key,
-            entity_id.as_deref(),
-        ))
     }
 }
 

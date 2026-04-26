@@ -29,7 +29,7 @@ import type { ChatSession } from '@/api/types';
  * never write to them, even if a future release adds UI that touches
  * keys in this namespace.
  */
-const RARA_KEY_PREFIXES = ['llm.', 'telegram.', 'gmail.', 'composio.', 'memory.', 'fs.'] as const;
+const RARA_KEY_PREFIXES = ['llm.', 'telegram.', 'gmail.', 'memory.', 'fs.'] as const;
 
 /** Prefix applied to pi-mono UI state before round-tripping to the backend. */
 const PI_UI_PREFIX = 'ui.pi.';

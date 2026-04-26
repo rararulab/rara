@@ -110,15 +110,6 @@ pub enum ToolKind {
     #[strum(message = "调整设置", detailed_message = "settings")]
     Settings,
 
-    #[strum(
-        serialize = "composio_list",
-        serialize = "composio_execute",
-        serialize = "composio_connect",
-        serialize = "composio_accounts"
-    )]
-    #[strum(message = "执行集成", detailed_message = "composio")]
-    Composio,
-
     #[strum(serialize = "list-skills")]
     #[strum(message = "查看技能", detailed_message = "skills")]
     ListSkills,
@@ -226,7 +217,6 @@ impl ToolKind {
             Self::MemoryWrite | Self::UserNote | Self::DistillUserNotes => "🧠",
             Self::TapeHandoff | Self::TapeInfo | Self::TapeAnchor => "📋",
             Self::Settings => "⚙️",
-            Self::Composio => "🔌",
             Self::ListSkills | Self::CreateSkill | Self::DeleteSkill => "📚",
             Self::InstallMcp | Self::ListMcp | Self::RemoveMcp => "🔌",
             Self::Dispatch => "🔀",
@@ -445,11 +435,6 @@ mod tests {
             Some(ToolKind::ShellExecute)
         );
         assert_eq!(ToolKind::parse("http-fetch"), Some(ToolKind::WebFetch));
-        assert_eq!(ToolKind::parse("composio_list"), Some(ToolKind::Composio));
-        assert_eq!(
-            ToolKind::parse("composio_execute"),
-            Some(ToolKind::Composio)
-        );
         assert_eq!(ToolKind::parse("user-note"), Some(ToolKind::UserNote));
         assert_eq!(ToolKind::parse("write-user-note"), Some(ToolKind::UserNote));
         assert_eq!(ToolKind::parse("unknown_tool"), None);

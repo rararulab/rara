@@ -86,7 +86,6 @@ impl ConfigFileSync {
             let mut cfg = self.app_config.write().await;
             cfg.llm = new_config.llm;
             cfg.telegram = new_config.telegram;
-            cfg.composio = new_config.composio;
             cfg.knowledge = new_config.knowledge;
             cfg.agents = new_config.agents;
         }
@@ -97,7 +96,7 @@ impl ConfigFileSync {
     /// Write current settings back to config.yaml.
     async fn writeback_to_file(&self) -> anyhow::Result<()> {
         let all_settings = self.settings.list().await;
-        let (llm, telegram, wechat, composio, knowledge, agents) =
+        let (llm, telegram, wechat, knowledge, agents) =
             flatten::unflatten_from_settings(&all_settings);
 
         let yaml = {
@@ -105,7 +104,6 @@ impl ConfigFileSync {
             cfg.llm = llm;
             cfg.telegram = telegram;
             cfg.wechat = wechat;
-            cfg.composio = composio;
             cfg.knowledge = knowledge;
             cfg.agents = agents;
             serde_yaml::to_string(&*cfg)?
@@ -200,7 +198,6 @@ impl ConfigFileSync {
                                 let mut cfg = self.app_config.write().await;
                                 cfg.llm = new_config.llm;
                                 cfg.telegram = new_config.telegram;
-                                cfg.composio = new_config.composio;
                                 cfg.knowledge = new_config.knowledge;
                             }
                             info!("config file change detected and synced to settings");
@@ -290,10 +287,6 @@ telegram:
   chat_id: "456"
   notification_channel_id: "-100"
 
-composio:
-  api_key: "cmp_test_key"
-  entity_id: "workspace-default"
-
 knowledge:
   embedding_model: "text-embedding-3-small"
   embedding_dimensions: 1536
@@ -344,24 +337,6 @@ gateway:
                 .as_ref()
                 .and_then(|t| t.bot_token.as_deref()),
         );
-        assert_eq!(
-            config.composio.as_ref().and_then(|c| c.api_key.as_deref()),
-            reparsed
-                .composio
-                .as_ref()
-                .and_then(|c| c.api_key.as_deref()),
-        );
-        assert_eq!(
-            config
-                .composio
-                .as_ref()
-                .and_then(|c| c.entity_id.as_deref()),
-            reparsed
-                .composio
-                .as_ref()
-                .and_then(|c| c.entity_id.as_deref()),
-        );
-
         // Duration roundtrip
         assert_eq!(
             config.mita.heartbeat_interval,

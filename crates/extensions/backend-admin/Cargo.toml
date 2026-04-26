@@ -21,7 +21,6 @@ jiff = { workspace = true }
 
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 rara-channels = { workspace = true }
-rara-composio = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
 rara-kernel = { workspace = true }
