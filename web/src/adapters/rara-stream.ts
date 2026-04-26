@@ -584,6 +584,9 @@ export function createRaraStreamFn(
           // replay them, so re-sending would double-fire the turn.
           ws.send(userPayload);
         }
+        // Reset the retry budget on every successful open so a brief
+        // outage doesn't permanently consume it (no-op on first connect).
+        reconnectAttempts = 0;
         // No __stream_started on reconnect: the live card is already in
         // a 'reconnecting' state and we want it to resume into the same
         // run, not start a fresh one.

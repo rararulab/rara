@@ -306,6 +306,10 @@ describe('createRaraStreamFn — WebSocket auto-reconnect (#1880)', () => {
     void streamFn(fakeModel(), userContext('hi'));
 
     // Drive 5 failed reconnect cycles. Backoffs are [250, 500, 1000, 2000, 4000].
+    // The first socket opens then drops; subsequent reconnect attempts
+    // never reach `onopen` (simulating a backend that stays unreachable),
+    // so the per-outage budget actually gets exhausted instead of being
+    // reset every cycle.
     const backoffs = [250, 500, 1_000, 2_000, 4_000];
     let socketIdx = 0;
     {
@@ -318,9 +322,7 @@ describe('createRaraStreamFn — WebSocket auto-reconnect (#1880)', () => {
       vi.advanceTimersByTime(delay + 1);
       const ws = MockWebSocket.instances[socketIdx];
       if (!ws) break;
-      // Reconnect attempt opens but immediately drops without ever
-      // succeeding — exhausting the budget.
-      ws.onopen?.(new Event('open'));
+      // Reconnect attempt drops without ever opening — exhausts the budget.
       ws.onclose?.(new CloseEvent('close'));
       socketIdx += 1;
     }
@@ -328,6 +330,31 @@ describe('createRaraStreamFn — WebSocket auto-reconnect (#1880)', () => {
     // After the 5th failed retry, the next onclose should emit reconnect_failed.
     expect(events.find((e) => e.type === '__stream_reconnect_failed')).toBeDefined();
     expect(events.find((e) => e.type === '__stream_closed')).toBeDefined();
+  });
+
+  it('resets the retry budget after every successful reopen', () => {
+    const events: { type: string; attempt?: number }[] = [];
+    const streamFn = createRaraStreamFn(
+      () => 'sess-reset',
+      undefined,
+      (_sk, ev) => events.push(ev as { type: string; attempt?: number }),
+    );
+    void streamFn(fakeModel(), userContext('hi'));
+
+    // First outage: drop, reconnect succeeds (attempt #1).
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.onopen?.(new Event('open'));
+    ws1.onclose?.(new CloseEvent('close'));
+    expect(events.filter((e) => e.type === '__stream_reconnecting').at(-1)?.attempt).toBe(1);
+    vi.advanceTimersByTime(300);
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.onopen?.(new Event('open'));
+
+    // Second outage: drop again. If the budget reset on reopen, the next
+    // `__stream_reconnecting` event must report attempt=1 (full budget),
+    // not attempt=2 (per-turn ceiling).
+    ws2.onclose?.(new CloseEvent('close'));
+    expect(events.filter((e) => e.type === '__stream_reconnecting').at(-1)?.attempt).toBe(1);
   });
 
   it('does not reconnect after a clean done frame', () => {
