@@ -236,6 +236,19 @@ example-hello:
     @echo "🏃 Running hello-world example..."
     cargo run --example hello-world
 
+[doc("stage boxlite microVM runtime files into the user-data dir (see docs/guides/boxlite-runtime.md)")]
+[group("🛠️  Setup")]
+setup-boxlite:
+    @echo "📦 Building rara-sandbox so boxlite extracts the runtime tarball..."
+    cargo build -p rara-sandbox
+    @echo "📦 Staging boxlite runtime files..."
+    cargo run -p rara-cli -- setup boxlite
+
+[doc("dry-run boxlite runtime staging (no copy) — used by CI smoke")]
+[group("🛠️  Setup")]
+setup-boxlite-check:
+    cargo run -p rara-cli -- setup boxlite --check
+
 
 [doc("start frontend dev server (proxies /api to localhost:25555)")]
 [group("🔧 Development")]

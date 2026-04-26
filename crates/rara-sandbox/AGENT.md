@@ -119,8 +119,13 @@ person if they aren't written down.
    - `boxlite-shim`
    - `debugfs`
 
-   On macOS the directory is:
-   `~/Library/Application Support/boxlite/runtimes/v0.8.2/`.
-   Copy the artefacts from a boxlite release build into this path
-   before running the integration test. Automating this is tracked in
-   issue #1699.
+   Staging is automated via `rara setup boxlite` (see
+   `docs/guides/boxlite-runtime.md`). The destination is:
+   - macOS: `~/Library/Application Support/boxlite/runtimes/v0.8.2/`
+   - Linux: `$XDG_DATA_HOME/boxlite/runtimes/v0.8.2/`
+     (fallback `~/.local/share/boxlite/runtimes/v0.8.2/`)
+
+   Run `cargo build -p rara-sandbox` once (without `BOXLITE_DEPS_STUB`)
+   so boxlite's build.rs downloads the platform tarball, then run
+   `rara setup boxlite` to copy the files into place. The version
+   segment must match the `tag = "v…"` in this crate's `Cargo.toml`.

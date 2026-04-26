@@ -1,15 +1,15 @@
 //! End-to-end round-trip: create -> exec `echo` -> destroy.
 //!
-//! This test is `#[ignore]`d because it requires the boxlite runtime files
-//! (`boxlite-guest`, `libkrunfw.dylib`, `mke2fs`, `boxlite-shim`, `debugfs`)
-//! to be staged under the platform-specific runtime directory, and a local
-//! OCI image store that can resolve `alpine:latest`. Runtime-file staging
-//! is tracked in issue #1699; until that lands, CI cannot run this test
-//! from a fresh checkout.
+//! This test is `#[ignore]`d because it requires (a) a real boxlite build
+//! (no `BOXLITE_DEPS_STUB`) and (b) a local OCI image store that can
+//! resolve `alpine:latest`. CI today builds with the stub for runner
+//! provisioning reasons (#1842), so the test cannot run there.
 //!
-//! Run locally with:
+//! Run locally on macOS:
 //!
 //! ```bash
+//! cargo build -p rara-sandbox            # boxlite build.rs downloads runtime
+//! cargo run -p rara-cli -- setup boxlite # stage files into user-data dir
 //! cargo test -p rara-sandbox -- --ignored alpine_echo_roundtrip
 //! ```
 

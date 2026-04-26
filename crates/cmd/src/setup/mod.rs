@@ -14,6 +14,7 @@
 
 //! Interactive configuration wizard for rara.
 
+mod boxlite;
 mod db;
 mod llm;
 mod prompt;
@@ -40,6 +41,12 @@ pub struct SetupCmd {
 enum SetupSub {
     /// Configure whisper speech-to-text (STT) settings only.
     Whisper,
+    /// Stage boxlite microVM runtime artifacts into the user data directory.
+    Boxlite {
+        /// Print the source/destination plan without copying any files.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 impl SetupCmd {
@@ -47,6 +54,10 @@ impl SetupCmd {
     pub async fn run(self) -> Result<(), Whatever> {
         match self.sub {
             Some(SetupSub::Whisper) => return stt::run_whisper_setup().await,
+            Some(SetupSub::Boxlite { check }) => {
+                boxlite::run_boxlite_setup(check).await?;
+                return Ok(());
+            }
             None => {}
         }
 
