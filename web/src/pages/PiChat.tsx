@@ -76,6 +76,7 @@ import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
+import { useSessionEvents } from '@/hooks/use-session-events';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { renderTurnChipCard } from '@/tools/turn-chip-card';
 const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
@@ -617,6 +618,19 @@ export default function PiChat() {
     activeSessionKey: activeSession?.key,
     switchSession,
     newSession,
+  });
+
+  // Subscribe to server-pushed session events so tape mutations that
+  // arrive outside a live streamFn turn — background-task summaries,
+  // future scheduled re-entries — refresh the chat without a manual
+  // refresh. The reload is a full snapshot fetch; mid-stream the
+  // assistant message has not been persisted yet so a concurrent reload
+  // is a no-op replay (#1849).
+  useSessionEvents({
+    sessionKey: activeSession?.key ?? null,
+    onTapeAppended: () => {
+      void reloadMessages();
+    },
   });
 
   /**
