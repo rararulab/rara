@@ -1005,7 +1005,10 @@ export default function PiChat() {
             sits on the right. */}
         {activeSession && !showWelcome && !isInitializing && (
           <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/60 px-6">
-            <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+            <h1
+              className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
+              title={activeSession.key}
+            >
               {activeSession.title || activeSession.preview || '新对话'}
             </h1>
             {activeSession.model && (

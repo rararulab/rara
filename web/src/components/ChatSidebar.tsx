@@ -225,6 +225,7 @@ export function ChatSidebar({
                   <button
                     type="button"
                     onClick={() => onSelect(s)}
+                    title={s.key}
                     className="min-w-0 flex-1 cursor-pointer text-left px-2 py-1.5 bg-transparent"
                   >
                     <div className="truncate text-[13px] leading-tight">
