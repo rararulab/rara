@@ -313,6 +313,12 @@ gateway:
   repo_url: "https://github.com/example/repo"
   bot_token: "456:DEF"
   chat_id: 789
+
+web:
+  reply_buffer:
+    capacity_events: 256
+    capacity_bytes: 2097152
+    ttl: "5m"
 "#;
 
     #[test]

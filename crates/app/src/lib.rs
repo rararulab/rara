@@ -1343,6 +1343,11 @@ users:
     platforms: []
 mita:
   heartbeat_interval: "30m"
+web:
+  reply_buffer:
+    capacity_events: 256
+    capacity_bytes: 2097152
+    ttl: "5m"
 "#;
 
     #[test]
