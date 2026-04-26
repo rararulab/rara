@@ -577,12 +577,24 @@ impl WebAdapter {
             reply_buffer:      self.reply_buffer.clone(),
         };
 
+        let events_state = crate::web_session_events::SessionEventsState {
+            owner_token: self.owner_token.clone(),
+            handle:      Arc::clone(&self.sink),
+        };
+        let events_router = Router::new()
+            .route(
+                "/events/{session_key}",
+                get(crate::web_session_events::events_ws_handler),
+            )
+            .with_state(events_state);
+
         Router::new()
             .route("/ws", get(ws_handler))
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
             .route("/signals/{session_id}/interrupt", post(interrupt_handler))
             .with_state(state)
+            .merge(events_router)
     }
 
     /// Test-only entry point that mirrors the inbound code path exercised by

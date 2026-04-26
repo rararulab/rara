@@ -61,6 +61,21 @@ pub enum KernelNotification {
         reason:    String,
         timestamp: Timestamp,
     },
+    /// A new entry was appended to a session's tape.
+    ///
+    /// Emitted by [`crate::memory::TapeService::append_message`] so external
+    /// adapters (e.g. the web events WS) can refresh their view when the
+    /// kernel writes to a tape outside the live-streaming user turn — for
+    /// example a background-task summary or a scheduled re-entry.
+    ///
+    /// `role` is best-effort, extracted from the message payload when
+    /// present; it is `None` for non-message tape kinds.
+    TapeAppended {
+        session_key: SessionKey,
+        entry_id:    u64,
+        role:        Option<String>,
+        timestamp:   Timestamp,
+    },
 }
 
 /// Filter for subscribing to specific events.
