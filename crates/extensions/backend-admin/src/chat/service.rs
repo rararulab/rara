@@ -1301,8 +1301,41 @@ mod search_sessions_tests {
     };
     use rara_sessions::types::SessionEntry;
     use serde_json::json;
+    use tokio::sync::OnceCell;
 
     use super::SessionService;
+
+    /// Process-wide fixture for the search tests.
+    ///
+    /// Building a `SessionService + FTS-backed TapeService` costs ~1s per
+    /// fixture (diesel pool migration + tape store init). The four tests in
+    /// this module are independent at the FTS-marker level (`zephyrrising`,
+    /// `pingpong-token`, `clampme`, `hello`), so a single shared fixture is
+    /// sufficient — each test still uses fresh `SessionKey::new()` UUIDs and
+    /// asserts via marker-scoped queries, never on global counts.
+    static SHARED: OnceCell<SharedFixture> = OnceCell::const_new();
+
+    struct SharedFixture {
+        service:  SessionService,
+        sessions: Arc<InMemorySessionIndex>,
+        // Keep the tape directory alive for the entire process — tape files
+        // are written under this path and the FTS index references them.
+        _tmp:     tempfile::TempDir,
+    }
+
+    async fn shared_fixture() -> &'static SharedFixture {
+        SHARED
+            .get_or_init(|| async {
+                let tmp = tempfile::tempdir().expect("tempdir");
+                let (service, sessions) = build_service_with_fts(tmp.path()).await;
+                SharedFixture {
+                    service,
+                    sessions,
+                    _tmp: tmp,
+                }
+            })
+            .await
+    }
 
     struct StubSettings;
 
@@ -1375,11 +1408,12 @@ mod search_sessions_tests {
 
     #[tokio::test]
     async fn empty_query_returns_no_hits() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+        let fx = shared_fixture().await;
+        let service = &fx.service;
+        let sessions = &fx.sessions;
 
         let key = SessionKey::new();
-        register_session(&sessions, &key, "session one").await;
+        register_session(sessions, &key, "session one").await;
         service
             .tape_service()
             .append_message(&key.to_string(), json!({"content": "hello"}), None)
@@ -1394,14 +1428,15 @@ mod search_sessions_tests {
 
     #[tokio::test]
     async fn attribution_across_many_sessions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+        let fx = shared_fixture().await;
+        let service = &fx.service;
+        let sessions = &fx.sessions;
 
         let marker = "zephyrrising";
         let mut keys = Vec::new();
         for i in 0..12 {
             let key = SessionKey::new();
-            register_session(&sessions, &key, &format!("session-{i}")).await;
+            register_session(sessions, &key, &format!("session-{i}")).await;
             service
                 .tape_service()
                 .append_message(
@@ -1438,11 +1473,12 @@ mod search_sessions_tests {
 
     #[tokio::test]
     async fn dedup_keeps_one_hit_per_session() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+        let fx = shared_fixture().await;
+        let service = &fx.service;
+        let sessions = &fx.sessions;
 
         let key = SessionKey::new();
-        register_session(&sessions, &key, "busy session").await;
+        register_session(sessions, &key, "busy session").await;
         for i in 0..5 {
             service
                 .tape_service()
@@ -1462,12 +1498,13 @@ mod search_sessions_tests {
 
     #[tokio::test]
     async fn limit_clamps_output() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (service, sessions) = build_service_with_fts(tmp.path()).await;
+        let fx = shared_fixture().await;
+        let service = &fx.service;
+        let sessions = &fx.sessions;
 
         for i in 0..8 {
             let key = SessionKey::new();
-            register_session(&sessions, &key, &format!("s{i}")).await;
+            register_session(sessions, &key, &format!("s{i}")).await;
             service
                 .tape_service()
                 .append_message(
