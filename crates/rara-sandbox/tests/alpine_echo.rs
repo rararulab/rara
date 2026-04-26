@@ -2,8 +2,10 @@
 //!
 //! This test is `#[ignore]`d because it requires (a) a real boxlite build
 //! (no `BOXLITE_DEPS_STUB`) and (b) a local OCI image store that can
-//! resolve `alpine:latest`. CI today builds with the stub for runner
-//! provisioning reasons (#1842), so the test cannot run there.
+//! resolve `alpine:latest`. The macOS CI job (`sandbox-macos` in
+//! `.github/workflows/rust.yml`) compiles the test binary against a real
+//! boxlite build but does not run it — provisioning a warm OCI cache
+//! per runner is out of scope for #1842.
 //!
 //! Run locally on macOS:
 //!

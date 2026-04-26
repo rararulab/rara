@@ -52,9 +52,16 @@ first and reported as "already staged".
 
 ## CI
 
-CI builds `rara-sandbox` with `BOXLITE_DEPS_STUB="1"` to avoid pulling
-the full native build chain (meson, ninja, patchelf) onto every runner.
-That means CI never actually has runtime files to stage, so
-`rara setup boxlite --check` in CI exercises only the code path; it
-prints "no boxlite build artifacts found" and exits cleanly. Removing
-the stub is tracked in #1842.
+The Linux `clippy` / `test` / `docs` jobs in
+`.github/workflows/rust.yml` build with `BOXLITE_DEPS_STUB="1"` to avoid
+pulling the full native build chain (meson, ninja, patchelf) onto the
+`arc-runner-set` image. Under the stub, no runtime files are produced,
+so the `rara setup boxlite --check` smoke step exercises only the
+path-resolution code and exits cleanly with "no boxlite build artifacts
+found".
+
+The dedicated `sandbox-macos` job runs WITHOUT the stub on the
+self-hosted macOS runner — `cargo build -p rara-sandbox` and
+`cargo run -p rara-cli -- setup boxlite` execute against a real boxlite
+build, so link-time / FFI / `build.rs` regressions are caught on every
+PR (#1842).
