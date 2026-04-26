@@ -60,10 +60,13 @@ fn ensure_test_paths_isolated() {
     });
 }
 
-/// Fresh kernel: no jobs registered, the admin list is empty and lookups
-/// on a fabricated ID surface as `JobNotFound`.
+/// Fresh kernel: list is empty, and `get` / `delete` / `trigger` against a
+/// fabricated id all surface as `JobNotFound` through the syscall boundary.
+///
+/// Consolidated from four near-identical fixtures — each path was just
+/// "boot kernel, call one method, assert" with no shared state to protect.
 #[tokio::test]
-async fn list_on_empty_kernel_is_empty() {
+async fn missing_job_paths_return_not_found() {
     ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path()).build().await;
@@ -72,64 +75,24 @@ async fn list_on_empty_kernel_is_empty() {
     let jobs = svc.list_jobs().await;
     assert!(jobs.is_empty(), "expected empty kernel, got {jobs:?}");
 
-    tk.shutdown();
-}
-
-#[tokio::test]
-async fn get_missing_returns_job_not_found() {
-    ensure_test_paths_isolated();
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let tk = TestKernelBuilder::new(tmp.path()).build().await;
-    let svc = SchedulerSvc::new(tk.handle.clone());
-
     let ghost = JobId::new();
-    let err = svc
-        .get_job(&ghost)
-        .await
-        .expect_err("ghost job must not be found");
+    let get_err = svc.get_job(&ghost).await.expect_err("get must fail");
     assert!(
-        matches!(err, SchedulerError::JobNotFound { .. }),
-        "expected JobNotFound, got {err:?}"
+        matches!(get_err, SchedulerError::JobNotFound { .. }),
+        "get: expected JobNotFound, got {get_err:?}"
     );
-
-    tk.shutdown();
-}
-
-#[tokio::test]
-async fn delete_missing_returns_job_not_found() {
-    ensure_test_paths_isolated();
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let tk = TestKernelBuilder::new(tmp.path()).build().await;
-    let svc = SchedulerSvc::new(tk.handle.clone());
-
-    let ghost = JobId::new();
-    let err = svc
-        .delete_job(&ghost)
-        .await
-        .expect_err("delete on ghost id must fail");
+    let delete_err = svc.delete_job(&ghost).await.expect_err("delete must fail");
     assert!(
-        matches!(err, SchedulerError::JobNotFound { .. }),
-        "expected JobNotFound, got {err:?}"
+        matches!(delete_err, SchedulerError::JobNotFound { .. }),
+        "delete: expected JobNotFound, got {delete_err:?}"
     );
-
-    tk.shutdown();
-}
-
-#[tokio::test]
-async fn trigger_missing_returns_job_not_found() {
-    ensure_test_paths_isolated();
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let tk = TestKernelBuilder::new(tmp.path()).build().await;
-    let svc = SchedulerSvc::new(tk.handle.clone());
-
-    let ghost = JobId::new();
-    let err = svc
+    let trigger_err = svc
         .trigger_job(&ghost)
         .await
-        .expect_err("trigger on ghost id must fail");
+        .expect_err("trigger must fail");
     assert!(
-        matches!(err, SchedulerError::JobNotFound { .. }),
-        "expected JobNotFound, got {err:?}"
+        matches!(trigger_err, SchedulerError::JobNotFound { .. }),
+        "trigger: expected JobNotFound, got {trigger_err:?}"
     );
 
     tk.shutdown();
