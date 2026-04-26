@@ -50,6 +50,7 @@ mod mita_write_user_note;
 mod multi_edit;
 mod notify;
 mod read_file;
+pub mod run_code;
 mod send_email;
 mod send_file;
 mod session_info;
@@ -95,6 +96,8 @@ use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
 use read_file::ReadFileTool;
+use run_code::RunCodeTool;
+pub use run_code::{SandboxCleanupHook, SandboxMap};
 use send_email::SendEmailTool;
 use send_file::SendFileTool;
 use session_info::SessionInfoTool;
@@ -152,6 +155,10 @@ pub struct ToolDeps {
     pub fff_picker:             fff_search::SharedPicker,
     /// Shared fff query tracker state (initialized at boot).
     pub fff_query_tracker:      fff_search::SharedQueryTracker,
+    /// Sandbox tool config from YAML; `None` disables `run_code`.
+    pub sandbox_config:         Option<crate::SandboxToolConfig>,
+    /// Shared per-session sandbox map; the cleanup hook holds a clone.
+    pub sandbox_map:            SandboxMap,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -184,6 +191,10 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     // `rara_kernel::guard::path_scope::{FILE_PATH_TOOLS, PATH_TOOLS}`.
     let tools: Vec<AgentToolRef> = vec![
         Arc::new(BashTool::new()),
+        Arc::new(RunCodeTool::new(
+            deps.sandbox_config.clone(),
+            deps.sandbox_map.clone(),
+        )),
         Arc::new(ReadFileTool::new()),
         Arc::new(WriteFileTool::new()),
         Arc::new(EditFileTool::new()),

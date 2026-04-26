@@ -20,7 +20,7 @@ pub mod gateway;
 // `crate::tool::AgentTool` in derived impls.
 pub(crate) use rara_kernel::tool;
 mod feed_store;
-mod tools;
+pub mod tools;
 mod web_server;
 
 use std::{
@@ -138,6 +138,29 @@ pub struct AppConfig {
     /// rara falls back to `http-fetch` for web access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser:                Option<rara_browser::BrowserConfig>,
+    /// Sandboxed code execution (optional).
+    ///
+    /// When present, the `run_code` tool is registered and uses the configured
+    /// rootfs image to spin up a per-session boxlite microVM. When absent,
+    /// `run_code` is still registered but every invocation returns a clear
+    /// "sandbox not configured" error so the LLM can react and the user can
+    /// fix their YAML — no hardcoded image fallback (per
+    /// `docs/guides/anti-patterns.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox:                Option<SandboxToolConfig>,
+}
+
+/// Configuration for the `run_code` sandbox tool.
+///
+/// The default rootfs image MUST live in YAML — there is no Rust fallback.
+/// See `crates/app/src/tools/run_code.rs` and `crates/rara-sandbox/AGENT.md`
+/// for the rationale.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct SandboxToolConfig {
+    /// OCI image reference passed to boxlite (e.g. `"alpine:latest"`,
+    /// `"python:3.12-slim"`). The image must already be resolvable by the
+    /// host's boxlite image store.
+    pub default_rootfs_image: String,
 }
 
 /// Configuration for the Mita background proactive agent.
@@ -407,12 +430,19 @@ pub async fn start_with_options(
             None
         };
 
+    // Shared per-session sandbox map — the `run_code` tool inserts entries,
+    // and the `SandboxCleanupHook` registered below removes them when the
+    // owning session ends.
+    let sandbox_map: crate::tools::SandboxMap = std::sync::Arc::new(dashmap::DashMap::new());
+
     let rara = crate::boot::boot(
         diesel_pools.clone(),
         settings_provider.clone(),
         &config.users,
         &config.owner_user_id,
         browser_manager,
+        config.sandbox.clone(),
+        sandbox_map.clone(),
     )
     .await
     .whatever_context("Failed to boot kernel dependencies")?;
@@ -625,11 +655,13 @@ pub async fn start_with_options(
         });
     }
 
-    // Register lifecycle hooks for the closed learning loop.
+    // Register lifecycle hooks for the closed learning loop and per-session
+    // resource cleanup.
     kernel.set_lifecycle_hooks(rara_kernel::lifecycle::LifecycleHookRegistry::with_hooks(
         vec![
             std::sync::Arc::new(rara_kernel::lifecycle::SkillNudgeHook),
             std::sync::Arc::new(rara_kernel::lifecycle::MemoryNudgeHook::new(10)),
+            std::sync::Arc::new(crate::tools::SandboxCleanupHook::new(sandbox_map.clone())),
         ],
     ));
 
