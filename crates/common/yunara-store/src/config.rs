@@ -14,7 +14,7 @@
 
 use crate::{
     db::DBStore,
-    diesel_pool::{DieselPoolConfig, build_sqlite_pool},
+    diesel_pool::{DieselPoolConfig, build_sqlite_pools},
     error::Result,
 };
 
@@ -25,7 +25,7 @@ use crate::{
 /// the consuming binary via `diesel_migrations::embed_migrations!`.
 #[derive(Debug, Clone, bon::Builder, serde::Serialize, serde::Deserialize)]
 pub struct DatabaseConfig {
-    /// Maximum number of connections in the pool.
+    /// Maximum number of connections in the reader pool.
     #[serde(default = "default_max_connections")]
     #[builder(default = 5, getter)]
     pub max_connections: u32,
@@ -36,10 +36,10 @@ fn default_max_connections() -> u32 { 5 }
 impl DatabaseConfig {
     /// Open a SQLite database at the given URL.
     ///
-    /// Builds a diesel-async bb8 pool and applies the `WAL` / `busy_timeout`
-    /// / `foreign_keys` pragmas once per physical connection via the pool's
-    /// `custom_setup` hook. The caller is responsible for running
-    /// migrations afterwards.
+    /// Builds a paired diesel-async bb8 reader/writer pool and applies the
+    /// `WAL` / `busy_timeout` / `foreign_keys` pragmas once per physical
+    /// connection via the pool's `custom_setup` hook. The caller is
+    /// responsible for running migrations afterwards.
     #[tracing::instrument(
         level = "trace",
         skip(self),
@@ -47,7 +47,7 @@ impl DatabaseConfig {
         err
     )]
     pub async fn open(&self, database_url: &str) -> Result<DBStore> {
-        let pool = build_sqlite_pool(
+        let pools = build_sqlite_pools(
             &DieselPoolConfig::builder()
                 .database_url(database_url.to_owned())
                 .max_connections(self.max_connections)
@@ -57,6 +57,6 @@ impl DatabaseConfig {
 
         tracing::info!("SQLite database initialized: {database_url}");
 
-        Ok(DBStore::new(pool))
+        Ok(DBStore::new(pools))
     }
 }

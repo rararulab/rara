@@ -30,7 +30,7 @@ use diesel_async::RunQueryDsl;
 use rara_keyring_store::{KeyringStore, PgSnafu, PoolSnafu, Result};
 use rara_model::schema::credential_store;
 use snafu::ResultExt;
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 /// Row projection for the `credential_store` table.
 #[derive(Queryable, Selectable)]
@@ -42,7 +42,7 @@ struct CredentialRow {
 
 #[derive(Clone)]
 pub struct PgKeyringStore {
-    pool: DieselSqlitePool,
+    pools: DieselSqlitePools,
 }
 
 impl Debug for PgKeyringStore {
@@ -52,14 +52,14 @@ impl Debug for PgKeyringStore {
 }
 
 impl PgKeyringStore {
-    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
+    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 }
 
 #[async_trait]
 impl KeyringStore for PgKeyringStore {
     #[tracing::instrument(skip(self), level = "debug")]
     async fn load(&self, service: &str, account: &str) -> Result<Option<String>> {
-        let mut conn = self.pool.get().await.context(PoolSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(PoolSnafu)?;
         let row: Option<CredentialRow> = credential_store::table
             .filter(credential_store::service.eq(service))
             .filter(credential_store::account.eq(account))
@@ -73,7 +73,7 @@ impl KeyringStore for PgKeyringStore {
 
     #[tracing::instrument(skip(self, value), fields(value_len = value.len()), level = "debug")]
     async fn save(&self, service: &str, account: &str, value: &str) -> Result<()> {
-        let mut conn = self.pool.get().await.context(PoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolSnafu)?;
         // SQLite's `datetime('now')` is emitted via `sql::<Text>` — diesel has
         // no cross-backend DSL helper for the sqlite-specific `datetime()`
         // form. Per docs/guides/db-diesel-migration.md, narrow literal-SQL
@@ -100,7 +100,7 @@ impl KeyringStore for PgKeyringStore {
 
     #[tracing::instrument(skip(self), level = "debug")]
     async fn delete(&self, service: &str, account: &str) -> Result<bool> {
-        let mut conn = self.pool.get().await.context(PoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolSnafu)?;
         let affected = diesel::delete(
             credential_store::table
                 .filter(credential_store::service.eq(service))

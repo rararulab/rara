@@ -2700,7 +2700,40 @@ impl Kernel {
                 // alive at this point (we emit `TraceReady` through it just
                 // below), so ownership cannot be transferred out.
                 let trace = trace_builder.finalize(msg_id.to_string());
-                match trace_service.save(&session_key.to_string(), &trace).await {
+                // Single SQLite writer + WAL still surfaces transient
+                // `database is locked` when the busy_timeout window is
+                // exhausted under heavy contention (concurrent FTS index +
+                // knowledge insert + trace save). Retry the save with
+                // exponential backoff before giving up — silent loss of
+                // execution traces is what #1843 was opened to fix.
+                let save_result = {
+                    let backoffs = [
+                        std::time::Duration::from_millis(100),
+                        std::time::Duration::from_millis(500),
+                        std::time::Duration::from_secs(2),
+                    ];
+                    let mut attempt: Result<String, crate::error::KernelError> =
+                        trace_service.save(&session_key.to_string(), &trace).await;
+                    for delay in backoffs {
+                        match &attempt {
+                            Ok(_) => break,
+                            Err(e) if is_database_locked(e) => {
+                                tracing::debug!(
+                                    session_key = %session_key,
+                                    delay_ms = delay.as_millis() as u64,
+                                    "trace save hit SQLITE_BUSY — retrying",
+                                );
+                                tokio::time::sleep(delay).await;
+                                attempt = trace_service
+                                    .save(&session_key.to_string(), &trace)
+                                    .await;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    attempt
+                };
+                match save_result {
                     Ok(trace_id) => {
                         stream_handle
                             .emit(crate::io::StreamEvent::TraceReady { trace_id });
@@ -3136,7 +3169,7 @@ impl Kernel {
                     &entries,
                     &user_id,
                     &tape_name,
-                    &knowledge.pool,
+                    &knowledge.pools,
                     &knowledge.embedding_svc,
                     &resolved,
                     knowledge.config.similarity_threshold,
@@ -3608,6 +3641,25 @@ fn acquire_parent_child_permit(
         .map_err(|_| KernelError::SpawnLimitReached {
             message: format!("parent session {parent_id} reached its child concurrency limit"),
         })
+}
+
+/// Walk a `KernelError`'s source chain looking for a SQLite "database is
+/// locked" string. We can't match on `diesel::result::Error::DatabaseError`
+/// directly because the error has already been wrapped in `KernelError`
+/// by the time it surfaces here, so a string match against the chain is
+/// the only stable option.
+fn is_database_locked(err: &KernelError) -> bool {
+    let mut current: Option<&dyn std::error::Error> = Some(err);
+    while let Some(e) = current {
+        if e.to_string()
+            .to_ascii_lowercase()
+            .contains("database is locked")
+        {
+            return true;
+        }
+        current = e.source();
+    }
+    false
 }
 
 #[cfg(test)]

@@ -24,28 +24,29 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::{
-    diesel_pool::DieselSqlitePool,
+    diesel_pool::DieselSqlitePools,
     error::{CodecSnafu, DieselPoolRunSnafu, DieselSnafu, Result},
 };
 
 /// Key-value store backed by SQLite via diesel-async.
 ///
-/// All values are serialized to JSON before storage.
+/// All values are serialized to JSON before storage. Reads use the reader
+/// pool; writes go through the single-writer pool.
 #[derive(Clone)]
 pub struct KVStore {
-    pool: DieselSqlitePool,
+    pools: DieselSqlitePools,
 }
 
 impl KVStore {
-    /// Create a new KV store from a diesel-async SQLite pool.
-    pub(crate) fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
+    /// Create a new KV store from a diesel-async SQLite pool bundle.
+    pub(crate) fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 
     /// Set a key-value pair.
     ///
     /// The value will be serialized to JSON before storage.
     pub async fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         let value_json = serde_json::to_string(value).context(CodecSnafu)?;
-        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolRunSnafu)?;
 
         diesel::insert_into(kv_table::table)
             .values((kv_table::key.eq(key), kv_table::value.eq(&value_json)))
@@ -65,7 +66,7 @@ impl KVStore {
     pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         use diesel::OptionalExtension;
 
-        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(DieselPoolRunSnafu)?;
         let row: Option<Option<String>> = kv_table::table
             .filter(kv_table::key.eq(key))
             .select(kv_table::value)
@@ -85,7 +86,7 @@ impl KVStore {
 
     /// Remove a key-value pair.
     pub async fn remove(&self, key: &str) -> Result<()> {
-        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolRunSnafu)?;
         diesel::delete(kv_table::table.filter(kv_table::key.eq(key)))
             .execute(&mut *conn)
             .await
@@ -113,7 +114,7 @@ impl KVStore {
             return Ok(());
         }
 
-        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolRunSnafu)?;
         use diesel_async::AsyncConnection;
         conn.transaction::<_, diesel::result::Error, _>(|tx| {
             async move {
@@ -149,7 +150,7 @@ impl KVStore {
             return Ok(HashMap::new());
         }
 
-        let mut conn = self.pool.get().await.context(DieselPoolRunSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(DieselPoolRunSnafu)?;
         let rows: Vec<(String, Option<String>)> = kv_table::table
             .filter(kv_table::key.eq_any(&keys))
             .select((kv_table::key, kv_table::value))

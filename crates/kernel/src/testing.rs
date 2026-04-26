@@ -26,7 +26,7 @@ use std::{
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePool, build_sqlite_pool};
+use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePools, build_sqlite_pools};
 
 use crate::{
     agent::{AgentManifest, AgentRegistry, AgentRole, ManifestLoader},
@@ -51,10 +51,10 @@ use crate::{
 /// see the same database — shared in-memory SQLite across connections
 /// requires URI filename tricks we don't need here. A temp file is deleted
 /// when the pool drops in practice (OS cleanup on test process exit).
-pub async fn build_memory_diesel_pool() -> DieselSqlitePool {
+pub async fn build_memory_diesel_pools() -> DieselSqlitePools {
     use diesel_async::RunQueryDsl as _;
     let db_path = std::env::temp_dir().join(format!("rara-test-{}.sqlite", uuid::Uuid::new_v4()));
-    let pool = build_sqlite_pool(
+    let pools = build_sqlite_pools(
         &DieselPoolConfig::builder()
             .database_url(db_path.to_string_lossy().into_owned())
             .max_connections(1)
@@ -62,7 +62,7 @@ pub async fn build_memory_diesel_pool() -> DieselSqlitePool {
     )
     .await
     .expect("in-memory diesel pool");
-    let mut conn = pool.get().await.expect("pool conn");
+    let mut conn = pools.writer.get().await.expect("pool conn");
     for ddl in MEMORY_TEST_SCHEMA {
         diesel::sql_query(*ddl)
             .execute(&mut *conn)
@@ -70,7 +70,7 @@ pub async fn build_memory_diesel_pool() -> DieselSqlitePool {
             .expect("bootstrap schema");
     }
     drop(conn);
-    pool
+    pools
 }
 
 /// DDL the in-memory test pool installs on boot. Mirrors the production
@@ -209,7 +209,7 @@ impl crate::io::IdentityResolver for StubIdentityResolver {
 /// Build a minimal knowledge service backed by in-memory SQLite and a noop
 /// embedder.
 async fn stub_knowledge_service() -> crate::memory::knowledge::KnowledgeServiceRef {
-    let pool = build_memory_diesel_pool().await;
+    let pool = build_memory_diesel_pools().await;
 
     let config = crate::memory::knowledge::KnowledgeConfig::builder()
         .embedding_dimensions(64_usize)
@@ -230,7 +230,7 @@ async fn stub_knowledge_service() -> crate::memory::knowledge::KnowledgeServiceR
     .expect("noop embedding service");
 
     Arc::new(crate::memory::knowledge::KnowledgeService {
-        pool,
+        pools: pool,
         embedding_svc: Arc::new(embedding_svc),
         config,
     })
@@ -434,7 +434,7 @@ impl TestKernelBuilder {
         let knowledge = stub_knowledge_service().await;
 
         // Trace service (in-memory diesel SQLite)
-        let trace_pool = build_memory_diesel_pool().await;
+        let trace_pool = build_memory_diesel_pools().await;
         let trace_service = crate::trace::TraceService::new(trace_pool);
 
         // Skills prompt (empty)

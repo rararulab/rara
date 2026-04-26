@@ -1339,7 +1339,7 @@ mod search_sessions_tests {
     async fn build_service_with_fts(
         dir: &std::path::Path,
     ) -> (SessionService, Arc<InMemorySessionIndex>) {
-        let pool = rara_kernel::testing::build_memory_diesel_pool().await;
+        let pool = rara_kernel::testing::build_memory_diesel_pools().await;
 
         let store = FileTapeStore::new(dir, dir).await.unwrap();
         let tape_service = TapeService::with_fts(store, pool.clone());

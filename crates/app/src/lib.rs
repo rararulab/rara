@@ -342,10 +342,10 @@ pub async fn start_with_options(
     let db_store = init_infra(&config)
         .await
         .whatever_context("Failed to initialize infrastructure services")?;
-    let diesel_pool = db_store.pool().clone();
+    let diesel_pools = db_store.pools().clone();
 
     let settings_svc =
-        rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), diesel_pool.clone())
+        rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), diesel_pools.clone())
             .await
             .whatever_context("Failed to initialize runtime settings")?;
 
@@ -384,7 +384,7 @@ pub async fn start_with_options(
         };
 
     let rara = crate::boot::boot(
-        diesel_pool.clone(),
+        diesel_pools.clone(),
         settings_provider.clone(),
         &config.users,
         &config.owner_user_id,
@@ -400,9 +400,10 @@ pub async fn start_with_options(
     let (feed_event_tx, mut feed_event_rx) =
         tokio::sync::mpsc::channel::<rara_kernel::data_feed::FeedEvent>(256);
     let feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(feed_event_tx));
-    let feed_store: rara_kernel::data_feed::FeedStoreRef =
-        Arc::new(crate::feed_store::SqliteFeedStore::new(diesel_pool.clone()));
-    let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(diesel_pool.clone());
+    let feed_store: rara_kernel::data_feed::FeedStoreRef = Arc::new(
+        crate::feed_store::SqliteFeedStore::new(diesel_pools.clone()),
+    );
+    let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(diesel_pools.clone());
 
     // Install the status reporter so runtime transitions (running / idle /
     // error + last_error) persist back to the `data_feeds` table.
@@ -449,7 +450,7 @@ pub async fn start_with_options(
     // turn end) and the backend session service (which reads them for
     // the web "📊 详情" button). Create it once here so both sides see
     // the same underlying pool.
-    let trace_service = rara_kernel::trace::TraceService::new(diesel_pool.clone());
+    let trace_service = rara_kernel::trace::TraceService::new(diesel_pools.clone());
 
     let backend = rara_backend_admin::state::BackendState::init(
         rara.session_index.clone(),

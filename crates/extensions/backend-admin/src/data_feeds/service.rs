@@ -29,29 +29,29 @@ use rara_kernel::data_feed::{
 use rara_model::schema::{data_feed_events, data_feeds};
 use snafu::ResultExt;
 use tracing::instrument;
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 use super::error::{DataFeedSvcError, EncodeJsonSnafu, PoolAcquireSnafu, QuerySnafu, Result};
 
 /// Service for data feed persistence operations.
 ///
-/// Holds a diesel-async SQLite pool and provides CRUD on the `data_feeds`
-/// table plus paginated queries on the `data_feed_events` table.
+/// Holds the diesel-async SQLite pool bundle and provides CRUD on the
+/// `data_feeds` table plus paginated queries on the `data_feed_events` table.
 #[derive(Clone)]
 pub struct DataFeedSvc {
-    pool: DieselSqlitePool,
+    pools: DieselSqlitePools,
 }
 
 impl DataFeedSvc {
-    /// Create a new service backed by the given pool.
-    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
+    /// Create a new service backed by the given pool bundle.
+    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 
     // -- Feed config CRUD ---------------------------------------------------
 
     /// List all registered data feed configurations.
     #[instrument(skip_all)]
     pub async fn list_feeds(&self) -> Result<Vec<DataFeedConfig>> {
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(PoolAcquireSnafu)?;
         let rows: Vec<FeedRow> = data_feeds::table
             .select(FeedRow::as_select())
             .order(data_feeds::created_at.desc())
@@ -67,7 +67,7 @@ impl DataFeedSvc {
     pub async fn get_feed(&self, id: &str) -> Result<Option<DataFeedConfig>> {
         use diesel::OptionalExtension;
 
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(PoolAcquireSnafu)?;
         let row: Option<FeedRow> = data_feeds::table
             .filter(data_feeds::id.eq(id))
             .select(FeedRow::as_select())
@@ -91,7 +91,7 @@ impl DataFeedSvc {
             .transpose()
             .context(EncodeJsonSnafu)?;
 
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolAcquireSnafu)?;
         diesel::insert_into(data_feeds::table)
             .values((
                 data_feeds::id.eq(&config.id),
@@ -128,7 +128,7 @@ impl DataFeedSvc {
             .context(EncodeJsonSnafu)?;
         let now = Timestamp::now().to_string();
 
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolAcquireSnafu)?;
         let affected = diesel::update(data_feeds::table.filter(data_feeds::id.eq(&config.id)))
             .set((
                 data_feeds::name.eq(&config.name),
@@ -151,7 +151,7 @@ impl DataFeedSvc {
     /// Delete a feed by ID. Returns `true` if a row was deleted.
     #[instrument(skip(self))]
     pub async fn delete_feed(&self, id: &str) -> Result<bool> {
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolAcquireSnafu)?;
         let affected = diesel::delete(data_feeds::table.filter(data_feeds::id.eq(id)))
             .execute(&mut *conn)
             .await
@@ -175,7 +175,7 @@ impl DataFeedSvc {
         last_error: Option<String>,
     ) -> Result<bool> {
         let now = Timestamp::now().to_string();
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolAcquireSnafu)?;
         let affected = diesel::update(data_feeds::table.filter(data_feeds::name.eq(name)))
             .set((
                 data_feeds::status.eq(status.to_string()),
@@ -194,7 +194,7 @@ impl DataFeedSvc {
         use diesel::{dsl::sql, sql_types::Integer};
 
         let now = Timestamp::now().to_string();
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(PoolAcquireSnafu)?;
         // `NOT enabled` on a stored integer column has no clean DSL — we use
         // the sanctioned `sql::<Integer>` fragment per
         // docs/guides/db-diesel-migration.md.
@@ -220,7 +220,7 @@ impl DataFeedSvc {
         limit: i64,
         offset: i64,
     ) -> Result<EventPage> {
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(PoolAcquireSnafu)?;
 
         // Count total matching events for pagination metadata.
         let mut count_q = data_feed_events::table
@@ -269,7 +269,7 @@ impl DataFeedSvc {
     pub async fn get_event(&self, source_name: &str, event_id: &str) -> Result<Option<FeedEvent>> {
         use diesel::OptionalExtension;
 
-        let mut conn = self.pool.get().await.context(PoolAcquireSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(PoolAcquireSnafu)?;
         let row: Option<EventRow> = data_feed_events::table
             .filter(data_feed_events::id.eq(event_id))
             .filter(data_feed_events::source_name.eq(source_name))

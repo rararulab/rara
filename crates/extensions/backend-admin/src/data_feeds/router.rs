@@ -524,7 +524,7 @@ mod tests {
         error::Result as KernelResult,
         identity::{KernelUser, Permission, Role, UserStore},
         security::{ApprovalManager, ApprovalPolicy, SecuritySubsystem},
-        testing::build_memory_diesel_pool,
+        testing::build_memory_diesel_pools,
     };
     use tower::ServiceExt;
 
@@ -573,8 +573,8 @@ mod tests {
     /// diesel pool. The non-admin Principal guard runs before any DB query,
     /// so the pool is never hit on the 403 path these tests exercise.
     async fn app_with_user(user: KernelUser) -> Router {
-        let pool = build_memory_diesel_pool().await;
-        let svc = DataFeedSvc::new(pool);
+        let pools = build_memory_diesel_pools().await;
+        let svc = DataFeedSvc::new(pools);
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let registry = Arc::new(DataFeedRegistry::new(event_tx));
         let state = DataFeedRouterState { svc, registry };

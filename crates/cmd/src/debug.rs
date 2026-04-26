@@ -34,7 +34,7 @@ use rara_kernel::{
     trace::{ExecutionTrace, TraceService},
 };
 use snafu::{ResultExt, Whatever};
-use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePool, build_sqlite_pool};
+use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePools, build_sqlite_pools};
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Inspect a message by its rara_message_id")]
@@ -98,10 +98,10 @@ impl DebugCmd {
 
 /// Open the rara SQLite database in read-only mode. The CLI must not run
 /// migrations or hold a write lock — the running daemon may be active.
-async fn open_db() -> Result<DieselSqlitePool, yunara_store::error::Error> {
+async fn open_db() -> Result<DieselSqlitePools, yunara_store::error::Error> {
     let db_path = rara_paths::database_dir().join("rara.db");
     let url = format!("sqlite:{}?mode=ro", db_path.display());
-    build_sqlite_pool(
+    build_sqlite_pools(
         &DieselPoolConfig::builder()
             .database_url(url)
             .max_connections(1)

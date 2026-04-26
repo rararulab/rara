@@ -23,7 +23,7 @@
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 use tracing::{info, warn};
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 use super::{
     categories,
@@ -87,7 +87,7 @@ pub async fn extract_knowledge(
     entries: &[TapEntry],
     username: &str,
     tape_name: &str,
-    pool: &DieselSqlitePool,
+    pools: &DieselSqlitePools,
     embedding_svc: &EmbeddingService,
     agent: &ResolvedAgent,
     similarity_threshold: f32,
@@ -148,7 +148,7 @@ pub async fn extract_knowledge(
             embedding:       Some(blob),
         };
 
-        let row_id = items::insert_item(pool, &new_item)
+        let row_id = items::insert_item(&pools.writer, &new_item)
             .await
             .context(DatabaseSnafu)?;
         embedding_svc
@@ -168,7 +168,7 @@ pub async fn extract_knowledge(
     }
 
     // Step 5: Update category files.
-    update_category_files(driver, extractor_model, username, pool).await?;
+    update_category_files(driver, extractor_model, username, pools).await?;
 
     info!(username, new_count, "knowledge extraction complete");
     Ok(new_count)
@@ -250,9 +250,9 @@ async fn update_category_files(
     driver: &dyn LlmDriver,
     model: &str,
     username: &str,
-    pool: &DieselSqlitePool,
+    pools: &DieselSqlitePools,
 ) -> Result<()> {
-    let all_items = items::list_items_by_username(pool, username)
+    let all_items = items::list_items_by_username(&pools.reader, username)
         .await
         .context(DatabaseSnafu)?;
     if all_items.is_empty() {

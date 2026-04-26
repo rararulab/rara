@@ -27,7 +27,7 @@ use diesel::{
 use diesel_async::RunQueryDsl;
 use rara_model::schema::skill_cache;
 use snafu::ResultExt;
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 use crate::{
     error::{DieselPoolSnafu, DieselSnafu, InvalidInputSnafu, Result},
@@ -62,7 +62,7 @@ pub(crate) struct SkillCacheRow {
 
 /// SQLite-backed skill cache (backing store, not a SkillRegistry).
 pub struct SqliteSkillCache {
-    pool: DieselSqlitePool,
+    pools: DieselSqlitePools,
 }
 
 /// Cached skill with hash for change detection.
@@ -73,11 +73,11 @@ pub struct CachedSkill {
 }
 
 impl SqliteSkillCache {
-    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
+    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 
     /// Load all cached skill metadata from the database.
     pub async fn load_all(&self) -> Result<HashMap<String, CachedSkill>> {
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.reader.get().await.context(DieselPoolSnafu)?;
         let rows: Vec<SkillCacheRow> = skill_cache::table
             .select(SkillCacheRow::as_select())
             .order(skill_cache::name.asc())
@@ -117,7 +117,7 @@ impl SqliteSkillCache {
         // docs/guides/db-diesel-migration.md.
         let now_expr = diesel::dsl::sql::<Text>("datetime('now')");
 
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolSnafu)?;
         diesel::insert_into(skill_cache::table)
             .values((
                 skill_cache::name.eq(&meta.name),
@@ -157,7 +157,7 @@ impl SqliteSkillCache {
 
     /// Remove a skill from the cache by name.
     pub async fn remove(&self, name: &str) -> Result<()> {
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolSnafu)?;
         diesel::delete(skill_cache::table.filter(skill_cache::name.eq(name)))
             .execute(&mut *conn)
             .await
@@ -167,7 +167,7 @@ impl SqliteSkillCache {
 
     /// Remove all skills from the cache.
     pub async fn clear(&self) -> Result<()> {
-        let mut conn = self.pool.get().await.context(DieselPoolSnafu)?;
+        let mut conn = self.pools.writer.get().await.context(DieselPoolSnafu)?;
         diesel::delete(skill_cache::table)
             .execute(&mut *conn)
             .await
@@ -184,7 +184,10 @@ impl SqliteSkillCache {
 /// 1. **Phase 1** — load cached metadata from DB → fill registry (fast).
 /// 2. **Phase 2** — FS scan + SHA-256 hash comparison → upsert changed skills.
 /// 3. **Phase 3** — garbage-collect stale cache entries no longer on disk.
-pub fn spawn_background_sync(pool: DieselSqlitePool, registry: crate::registry::InMemoryRegistry) {
+pub fn spawn_background_sync(
+    pools: DieselSqlitePools,
+    registry: crate::registry::InMemoryRegistry,
+) {
     use std::collections::HashSet;
 
     use tracing::{info, warn};
@@ -192,7 +195,7 @@ pub fn spawn_background_sync(pool: DieselSqlitePool, registry: crate::registry::
     use crate::discover::{FsSkillDiscoverer, SkillDiscoverer};
 
     tokio::spawn(async move {
-        let cache = SqliteSkillCache::new(pool);
+        let cache = SqliteSkillCache::new(pools);
         let discoverer = FsSkillDiscoverer::new(FsSkillDiscoverer::default_paths());
 
         // Phase 1: load from SQLite cache (fast startup)

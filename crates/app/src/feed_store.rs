@@ -25,19 +25,19 @@ use rara_kernel::data_feed::{FeedEvent, FeedEventId, FeedFilter, FeedStore};
 use rara_model::schema::data_feed_events;
 use snafu::ResultExt;
 use tracing::instrument;
-use yunara_store::diesel_pool::DieselSqlitePool;
+use yunara_store::diesel_pool::DieselSqlitePools;
 
 /// SQLite-backed feed event store.
 ///
-/// Implements [`FeedStore`] using the `data_feed_events` table. All operations
-/// go through the shared diesel-async pool.
+/// Implements [`FeedStore`] using the `data_feed_events` table. Reads use
+/// the reader pool; appends use the single-writer pool.
 pub struct SqliteFeedStore {
-    pool: DieselSqlitePool,
+    pools: DieselSqlitePools,
 }
 
 impl SqliteFeedStore {
-    /// Create a new store backed by the given connection pool.
-    pub fn new(pool: DieselSqlitePool) -> Self { Self { pool } }
+    /// Create a new store backed by the given pool bundle.
+    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 }
 
 #[async_trait]
@@ -52,7 +52,8 @@ impl FeedStore for SqliteFeedStore {
         let received_at = event.received_at.to_string();
 
         let mut conn = self
-            .pool
+            .pools
+            .writer
             .get()
             .await
             .whatever_context("data_feed_events pool acquire failed")?;
@@ -78,7 +79,8 @@ impl FeedStore for SqliteFeedStore {
     #[instrument(skip_all)]
     async fn query(&self, filter: FeedFilter) -> rara_kernel::Result<Vec<FeedEvent>> {
         let mut conn = self
-            .pool
+            .pools
+            .reader
             .get()
             .await
             .whatever_context("data_feed_events pool acquire failed")?;
