@@ -140,7 +140,8 @@ function StatusIcon({ status }: { status: RunStatus }) {
     case 'cancelled':
       return <Ban className="h-3.5 w-3.5 text-muted-foreground" />;
     case 'running':
-      // Unreachable — the history section never renders running runs.
+    case 'reconnecting':
+      // Unreachable — the history section never renders non-terminal runs.
       return <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />;
   }
 }
@@ -155,6 +156,8 @@ function statusLabel(status: RunStatus): string {
       return 'Cancelled';
     case 'running':
       return 'Running';
+    case 'reconnecting':
+      return 'Reconnecting';
   }
 }
 

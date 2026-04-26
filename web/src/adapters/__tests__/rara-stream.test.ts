@@ -239,3 +239,111 @@ describe('createRaraStreamFn — relay Map stability across invocations (#1732)'
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// WebSocket auto-reconnect (#1880)
+// ---------------------------------------------------------------------------
+
+describe('createRaraStreamFn — WebSocket auto-reconnect (#1880)', () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+    localStorage.setItem('access_token', 'test-token');
+    localStorage.setItem(
+      'auth_user',
+      JSON.stringify({ user_id: 'alice', role: 'Admin', is_admin: true }),
+    );
+    MockWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('auth_user');
+    vi.unstubAllGlobals();
+  });
+
+  it('emits __stream_reconnecting and reconnects after onclose without done', () => {
+    const events: { type: string }[] = [];
+    const streamFn = createRaraStreamFn(
+      () => 'sess-recon',
+      undefined,
+      (_sk, ev) => events.push(ev),
+    );
+    void streamFn(fakeModel(), userContext('hi'));
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.onopen?.(new Event('open'));
+    expect(events.some((e) => e.type === '__stream_started')).toBe(true);
+
+    // Simulate transport drop (socket close without a `done` first).
+    ws1.onclose?.(new CloseEvent('close'));
+    // The reconnecting frame should fire synchronously on close.
+    expect(events.find((e) => e.type === '__stream_reconnecting')).toBeDefined();
+    // No __stream_closed yet — we are mid-grace window.
+    expect(events.some((e) => e.type === '__stream_closed')).toBe(false);
+
+    // Advance past first backoff (250ms) — a fresh socket should open.
+    vi.advanceTimersByTime(300);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    const ws2 = MockWebSocket.instances[1]!;
+    ws2.onopen?.(new Event('open'));
+    // Reconnect must NOT re-send the user payload (backend has buffered).
+    expect(ws2.sent).toHaveLength(0);
+
+    // Backend resumes and finishes — observer eventually sees done + closed.
+    ws2.emit({ type: 'done' });
+    expect(events.some((e) => e.type === '__stream_closed')).toBe(true);
+  });
+
+  it('gives up after MAX_RECONNECT_ATTEMPTS and emits __stream_reconnect_failed', () => {
+    const events: { type: string }[] = [];
+    const streamFn = createRaraStreamFn(
+      () => 'sess-fail',
+      undefined,
+      (_sk, ev) => events.push(ev),
+    );
+    void streamFn(fakeModel(), userContext('hi'));
+
+    // Drive 5 failed reconnect cycles. Backoffs are [250, 500, 1000, 2000, 4000].
+    const backoffs = [250, 500, 1_000, 2_000, 4_000];
+    let socketIdx = 0;
+    {
+      const ws = MockWebSocket.instances[socketIdx]!;
+      ws.onopen?.(new Event('open'));
+      ws.onclose?.(new CloseEvent('close'));
+      socketIdx += 1;
+    }
+    for (const delay of backoffs) {
+      vi.advanceTimersByTime(delay + 1);
+      const ws = MockWebSocket.instances[socketIdx];
+      if (!ws) break;
+      // Reconnect attempt opens but immediately drops without ever
+      // succeeding — exhausting the budget.
+      ws.onopen?.(new Event('open'));
+      ws.onclose?.(new CloseEvent('close'));
+      socketIdx += 1;
+    }
+
+    // After the 5th failed retry, the next onclose should emit reconnect_failed.
+    expect(events.find((e) => e.type === '__stream_reconnect_failed')).toBeDefined();
+    expect(events.find((e) => e.type === '__stream_closed')).toBeDefined();
+  });
+
+  it('does not reconnect after a clean done frame', () => {
+    const events: { type: string }[] = [];
+    const streamFn = createRaraStreamFn(
+      () => 'sess-done',
+      undefined,
+      (_sk, ev) => events.push(ev),
+    );
+    void streamFn(fakeModel(), userContext('hi'));
+    const ws1 = MockWebSocket.instances[0]!;
+    ws1.onopen?.(new Event('open'));
+    ws1.emit({ type: 'done' });
+    // `done` calls ws.close() which fires onclose. Verify no retry.
+    vi.advanceTimersByTime(10_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(events.some((e) => e.type === '__stream_reconnecting')).toBe(false);
+  });
+});

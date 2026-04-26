@@ -51,7 +51,9 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
   // when a new run takes the active slot (different runId) or when the
   // run flips back to running (defensive — should not happen today).
   useEffect(() => {
-    if (run.status === 'running') {
+    // Non-terminal states (running/reconnecting) never fade — the run
+    // is still live as far as the user is concerned.
+    if (run.status === 'running' || run.status === 'reconnecting') {
       setFading(false);
       return;
     }
@@ -66,7 +68,7 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
 
   // 1 Hz tick while the run is live so the elapsed chip updates.
   useEffect(() => {
-    if (run.status !== 'running') return;
+    if (run.status !== 'running' && run.status !== 'reconnecting') return;
     const id = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, [run.status]);
@@ -92,15 +94,20 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
     setShowLatest(!atBottom);
   };
 
-  const isRunning = run.status === 'running';
+  // Treat `reconnecting` as a soft-running state for header chrome —
+  // the run is alive on the backend; we're just briefly off the wire.
+  const isRunning = run.status === 'running' || run.status === 'reconnecting';
   const elapsed = (run.endedAt ?? nowTick) - run.startedAt;
-  const headerLabel = isRunning
-    ? `${agentName} is working`
-    : run.status === 'failed'
-      ? `${agentName} encountered an error`
-      : run.status === 'cancelled'
-        ? `${agentName} was interrupted`
-        : `${agentName} finished`;
+  const headerLabel =
+    run.status === 'running'
+      ? `${agentName} is working`
+      : run.status === 'reconnecting'
+        ? `${agentName} is reconnecting…`
+        : run.status === 'failed'
+          ? `${agentName} encountered an error`
+          : run.status === 'cancelled'
+            ? `${agentName} was interrupted`
+            : `${agentName} finished`;
   const redactedItems = useMemo(() => run.items.map(redactItem), [run.items]);
   // Newest chip first (hermes pattern) while running; chronological order is
   // nicer once the turn settles so the viewer can read the recap top-down.
@@ -251,6 +258,15 @@ function RunStatusDot({ status }: { status: LiveRun['status'] }) {
       <span
         className="flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-500"
         aria-hidden
+      />
+    );
+  }
+  if (status === 'reconnecting') {
+    // Amber dot — non-terminal but degraded; mirrors the StatusBadge.
+    return (
+      <span
+        className="flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500"
+        aria-label="reconnecting"
       />
     );
   }

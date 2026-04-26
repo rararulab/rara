@@ -109,12 +109,40 @@ type WebEvent =
 /** Callback that returns the current session key for WebSocket connections. */
 export type SessionKeyFn = () => string | undefined;
 
+// ---------------------------------------------------------------------------
+// Reconnect tuning
+//
+// Mechanism-level constants — intentionally not config (see
+// `docs/guides/anti-patterns.md`: "Mechanism constants are not config").
+// Bounded exponential backoff: each entry is the wait BEFORE the
+// corresponding 1-based retry attempt. The list length implicitly caps
+// the retry budget.
+// ---------------------------------------------------------------------------
+
+const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 4_000] as const;
+const RECONNECT_BACKOFF_CAP_MS = 5_000;
+const MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.length;
+
 /**
- * Synthetic lifecycle frames the stream injects before opening / after
- * closing the WebSocket. They cannot collide with backend events because
- * the double-underscore prefix is reserved here.
+ * Synthetic lifecycle frames the stream injects around the WebSocket
+ * lifetime. They cannot collide with backend events because the
+ * double-underscore prefix is reserved here.
+ *
+ * - `__stream_started`: emitted once when the first WS connection opens.
+ * - `__stream_reconnecting`: emitted each time the WS drops mid-run and
+ *   we are about to wait `delayMs` before retrying (`attempt` is 1-based).
+ * - `__stream_reconnect_failed`: emitted after exhausting
+ *   {@link MAX_RECONNECT_ATTEMPTS} retries without re-establishing the
+ *   socket. Always immediately followed by `__stream_closed`.
+ * - `__stream_closed`: emitted exactly once when the stream reaches a
+ *   terminal state (server-emitted `done`/`error`/`message`, or
+ *   reconnect attempts exhausted).
  */
-type StreamLifecycleEvent = { type: '__stream_started' } | { type: '__stream_closed' };
+type StreamLifecycleEvent =
+  | { type: '__stream_started' }
+  | { type: '__stream_reconnecting'; attempt: number; delayMs: number }
+  | { type: '__stream_reconnect_failed'; attempts: number }
+  | { type: '__stream_closed' };
 
 /**
  * Shape of events the stream can publish to an external observer (e.g.
@@ -431,8 +459,8 @@ export function createRaraStreamFn(
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
 
-    const sessionKey = getSessionKey();
-    if (!sessionKey) {
+    const sessionKeyMaybe = getSessionKey();
+    if (!sessionKeyMaybe) {
       const errorMsg = buildPartial(
         model,
         [{ type: 'text', text: 'No active session key set.' }],
@@ -444,6 +472,9 @@ export function createRaraStreamFn(
       stream.end(errorMsg);
       return stream;
     }
+    // Rebind to a non-nullable const so nested closures (`emitLifecycle`,
+    // `connect`) keep the narrowed type without re-checking.
+    const sessionKey: string = sessionKeyMaybe;
 
     const userPayload = extractUserPayload(context, getPendingAttachments?.() ?? []);
     const wsUrl = buildWsUrl(sessionKey);
@@ -495,24 +526,67 @@ export function createRaraStreamFn(
       return block;
     }
 
-    // Connect WebSocket asynchronously
-    try {
+    // Run-level reconnect bookkeeping. `streamFinished` flips true as
+    // soon as the backend signals a terminal state (`done` / `error` /
+    // `message`) so the matching `ws.onclose` skips the reconnect path.
+    // `reconnectAttempts` counts retries that have already been spent;
+    // it resets back to 0 every time a fresh socket reaches `onopen` so
+    // a brief outage doesn't permanently consume the budget.
+    let streamFinished = false;
+    let reconnectAttempts = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let activeWs: WebSocket | null = null;
+    // `firstConnect` distinguishes the initial socket open (where we emit
+    // `__stream_started` and send the user payload) from a reconnect open
+    // (where the backend will replay buffered events for the same
+    // session_key — see companion backend issue #1882).
+    let firstConnect = true;
+
+    /** Emit a synthetic lifecycle frame to the observer, swallowing throws. */
+    function emitLifecycle(event: StreamLifecycleEvent): void {
+      if (!onWebEvent) return;
+      try {
+        onWebEvent(sessionKey, event);
+      } catch (err) {
+        console.warn('rara-stream: observer threw on lifecycle', err);
+      }
+    }
+
+    /**
+     * Emit terminal `__stream_closed` and reject any tool-result promises
+     * that the backend never resolved. Idempotent — guarded by `streamFinished`.
+     */
+    function finalizeStream(): void {
+      if (streamFinished) return;
+      streamFinished = true;
+      emitLifecycle({ type: '__stream_closed' });
+      rejectPendingToolResults(pendingToolResults, 'WebSocket closed before tool result');
+    }
+
+    function clearReconnectTimer(): void {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
+
+    function connect(): void {
       const ws = new WebSocket(wsUrl);
+      activeWs = ws;
 
       ws.onopen = () => {
-        // Emit start event
-        safePush({ type: 'start', partial: buildPartial(model, content, currentUsage) });
-        // Synthetic stream-open frame for observers; see ws.onclose below
-        // for the matching close frame.
-        if (onWebEvent) {
-          try {
-            onWebEvent(sessionKey, { type: '__stream_started' });
-          } catch (err) {
-            console.warn('rara-stream: observer threw on open', err);
-          }
+        if (firstConnect) {
+          firstConnect = false;
+          safePush({ type: 'start', partial: buildPartial(model, content, currentUsage) });
+          emitLifecycle({ type: '__stream_started' });
+          // Send the user message exactly once — on reconnect the
+          // backend has buffered events for this session_key and will
+          // replay them, so re-sending would double-fire the turn.
+          ws.send(userPayload);
         }
-        // Send user message
-        ws.send(userPayload);
+        // No __stream_started on reconnect: the live card is already in
+        // a 'reconnecting' state and we want it to resume into the same
+        // run, not start a fresh one.
       };
 
       ws.onmessage = (ev: MessageEvent) => {
@@ -684,6 +758,9 @@ export function createRaraStreamFn(
             finalMsg.stopReason = 'stop';
             safePush({ type: 'done', reason: 'stop', message: finalMsg });
             safeEnd(finalMsg);
+            // Mark before close so the matching onclose treats this as
+            // a normal terminal exit and skips the reconnect path.
+            finalizeStream();
             ws.close();
             break;
           }
@@ -698,6 +775,7 @@ export function createRaraStreamFn(
             finalMsg.stopReason = 'stop';
             safePush({ type: 'done', reason: 'stop', message: finalMsg });
             safeEnd(finalMsg);
+            finalizeStream();
             ws.close();
             break;
           }
@@ -708,6 +786,8 @@ export function createRaraStreamFn(
             errorMsg.errorMessage = event.message;
             safePush({ type: 'error', reason: 'error', error: errorMsg });
             safeEnd(errorMsg);
+            // Backend signalled an unrecoverable error; do not retry.
+            finalizeStream();
             ws.close();
             break;
           }
@@ -752,40 +832,77 @@ export function createRaraStreamFn(
         }
       };
 
-      ws.onerror = () => {
-        const errorMsg = buildPartial(model, content, currentUsage);
-        errorMsg.stopReason = 'error';
-        errorMsg.errorMessage = 'WebSocket connection error';
-        safePush({ type: 'error', reason: 'error', error: errorMsg });
-        safeEnd(errorMsg);
-        rejectPendingToolResults(pendingToolResults, 'WebSocket connection error');
-      };
+      // `onerror` is intentionally a no-op: browsers always fire
+      // `onclose` after `onerror`, and routing all reconnect / finalize
+      // logic through `onclose` keeps the state machine single-sourced.
+      ws.onerror = () => {};
 
       ws.onclose = () => {
-        // Synthetic stream-close frame so observers can finalize without
-        // an extra lifecycle callback. `__stream_closed` is namespaced
-        // so it cannot collide with a real backend-emitted event type.
-        if (onWebEvent) {
-          try {
-            onWebEvent(sessionKey, { type: '__stream_closed' });
-          } catch (err) {
-            console.warn('rara-stream: observer threw on close', err);
-          }
-        }
-        // Ensure stream is ended if WS closes unexpectedly
-        if (!streamEnded) {
+        // Stale handler firing after we already moved on (e.g. user
+        // navigated away or another reconnect cycle replaced this socket).
+        if (ws !== activeWs) return;
+
+        // Terminal exit (done/error/message arrived first) — observer
+        // already received `__stream_closed` via `finalizeStream()`.
+        if (streamFinished) return;
+
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          // Give up. Surface the failure both to pi-agent-core's stream
+          // (so the assistant message resolves with an error) and to the
+          // observer (so the live card flips out of 'reconnecting').
+          emitLifecycle({
+            type: '__stream_reconnect_failed',
+            attempts: reconnectAttempts,
+          });
           const finalMsg = buildPartial(model, content, currentUsage);
-          finalMsg.stopReason = content.length > 0 ? 'stop' : 'error';
-          if (content.length > 0) {
-            safePush({ type: 'done', reason: 'stop', message: finalMsg });
-          } else {
-            finalMsg.errorMessage = 'WebSocket closed unexpectedly';
-            safePush({ type: 'error', reason: 'error', error: finalMsg });
-          }
+          finalMsg.stopReason = 'error';
+          finalMsg.errorMessage = `WebSocket reconnect failed after ${reconnectAttempts} attempts`;
+          safePush({ type: 'error', reason: 'error', error: finalMsg });
           safeEnd(finalMsg);
+          finalizeStream();
+          return;
         }
-        rejectPendingToolResults(pendingToolResults, 'WebSocket closed before tool result');
+
+        // Schedule a retry. The live card observer treats
+        // `__stream_reconnecting` as a grace window — it stays mounted
+        // and does NOT flip to `failed` until reconnect_failed arrives.
+        const delayMs = RECONNECT_BACKOFF_MS[reconnectAttempts] ?? RECONNECT_BACKOFF_CAP_MS;
+        const attempt = reconnectAttempts + 1;
+        reconnectAttempts = attempt;
+        emitLifecycle({ type: '__stream_reconnecting', attempt, delayMs });
+        clearReconnectTimer();
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          // Bail if a terminal event landed while we were waiting (race
+          // window: backend could push a final frame on a still-open
+          // socket the user manually closed). Defensive only.
+          if (streamFinished) return;
+          try {
+            connect();
+          } catch (err) {
+            // Synchronous throw from `new WebSocket()` (e.g. bad URL,
+            // CSP block). Treat as a fully-spent attempt and recurse
+            // through onclose-style logic by simulating it.
+            console.warn('rara-stream: reconnect failed to construct WebSocket', err);
+            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+              emitLifecycle({
+                type: '__stream_reconnect_failed',
+                attempts: reconnectAttempts,
+              });
+              const finalMsg = buildPartial(model, content, currentUsage);
+              finalMsg.stopReason = 'error';
+              finalMsg.errorMessage = err instanceof Error ? err.message : 'Reconnect failed';
+              safePush({ type: 'error', reason: 'error', error: finalMsg });
+              safeEnd(finalMsg);
+              finalizeStream();
+            }
+          }
+        }, delayMs);
       };
+    }
+
+    try {
+      connect();
     } catch (err) {
       const errorMsg = buildPartial(model, content, currentUsage);
       errorMsg.stopReason = 'error';
@@ -799,9 +916,11 @@ export function createRaraStreamFn(
 }
 
 /**
- * Fail any tool-result promises the kernel never finished. Called from
- * `ws.onerror` / `ws.onclose` so pi-agent-core's loop sees a concrete
- * rejection rather than hanging on an abandoned `tool_call_start`.
+ * Fail any tool-result promises the kernel never finished. Called only
+ * from `finalizeStream()` — i.e. when the stream reaches a terminal
+ * state (server-emitted `done`/`error`, or reconnect attempts
+ * exhausted). Intermediate WS drops do NOT reject pending promises so
+ * the kernel can resolve them on the resumed socket.
  */
 function rejectPendingToolResults(pending: Map<string, PendingToolResult>, reason: string): void {
   for (const slot of pending.values()) {
