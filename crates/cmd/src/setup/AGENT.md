@@ -1,11 +1,12 @@
 # setup — Agent Guidelines
 
 ## Purpose
-Interactive CLI wizard for configuring rara — database, LLM, Telegram, STT, and users. Also provides `rara setup whisper` for automated whisper.cpp installation.
+Interactive CLI wizard for configuring rara — database, LLM, Telegram, STT, and users. Also provides standalone subcommands: `rara setup whisper` (whisper.cpp install) and `rara setup boxlite` (sandbox runtime staging).
 
 ## Architecture
-- `mod.rs` — `SetupCmd` with optional `SetupSub` subcommands (currently: `Whisper`). Orchestrates the full wizard flow.
+- `mod.rs` — `SetupCmd` with optional `SetupSub` subcommands (`Whisper`, `Boxlite`). Orchestrates the full wizard flow.
 - `whisper_install.rs` — Automated whisper.cpp pipeline: detect existing binary → clone/build from source → download GGML model → start server → verify health + transcription → shutdown. Entry point: `ensure_whisper()`.
+- `boxlite.rs` — Stages boxlite microVM runtime files (built by `cargo build -p rara-sandbox`) into the platform user-data dir so `rara-sandbox` can find them at runtime. Entry point: `run_boxlite_setup(check_only)`. See `docs/guides/boxlite-runtime.md` for the user-facing flow.
 - `stt.rs` — STT config section for the full wizard (`setup_stt`) and standalone whisper entry point (`run_whisper_setup`).
 - `writer.rs` — Config assembly and YAML serialization. `assemble_config()` merges all sections.
 - `prompt.rs` — Interactive CLI helpers (ask, confirm, ask_choice, print_step/ok/err).

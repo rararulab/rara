@@ -94,6 +94,14 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace
 
+      # Smoke-test the boxlite staging code path. With BOXLITE_DEPS_STUB=1
+      # the build produces no real runtime files, so this is a dry-run
+      # (`--check`) that just exercises the path/permission logic. Real
+      # staging is run by developers locally on macOS — see
+      # docs/guides/boxlite-runtime.md and tracking issue #1842.
+      - name: Smoke-test boxlite setup (dry-run)
+        run: cargo run -p rara-cli -- setup boxlite --check
+
   docs:
     name: Documentation
     runs-on: arc-runner-set

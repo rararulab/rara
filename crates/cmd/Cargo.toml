@@ -30,6 +30,7 @@ chrono.workspace = true
 clap = { workspace = true }
 common-telemetry.workspace = true
 crossterm.workspace = true
+dirs.workspace = true
 eventsource-stream.workspace = true
 futures.workspace = true
 indexmap.workspace = true
