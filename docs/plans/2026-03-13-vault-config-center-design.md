@@ -1,7 +1,7 @@
 # Vault 配置中心设计
 
 **Date**: 2026-03-13
-**Status**: Draft
+**Status**: Not adopted — `rara-vault` crate removed in #1893. Plan retained for historical reference.
 
 ## 背景
 
