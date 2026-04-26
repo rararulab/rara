@@ -109,10 +109,6 @@ impl RunCodeTool {
         &self,
         session_key: SessionKey,
     ) -> anyhow::Result<Arc<Mutex<Sandbox>>> {
-        if let Some(existing) = self.sandboxes.get(&session_key) {
-            return Ok(Arc::clone(existing.value()));
-        }
-
         let cfg = self.config.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "run_code is unavailable: `sandbox.default_rootfs_image` is not set in \
@@ -120,8 +116,9 @@ impl RunCodeTool {
             )
         })?;
 
-        // Use entry() to avoid the create-twice race: if another task
-        // raced us, only one Sandbox::create call wins.
+        // entry() closes the create-twice race: if two first-calls hit
+        // the same shard concurrently, only one reaches Vacant and runs
+        // Sandbox::create.
         let entry = self.sandboxes.entry(session_key);
         let arc = match entry {
             dashmap::mapref::entry::Entry::Occupied(o) => Arc::clone(o.get()),
@@ -200,7 +197,13 @@ impl ToolExecute for RunCodeTool {
             }
         }
 
-        let exit_code = outcome.execution.wait().await.ok().map(|s| s.code());
+        let exit_code = match outcome.execution.wait().await {
+            Ok(status) => Some(status.code()),
+            Err(e) => {
+                tracing::warn!(error = %e, "sandbox exec wait failed; reporting None");
+                None
+            }
+        };
 
         Ok(RunCodeResult {
             exit_code,
@@ -239,17 +242,18 @@ impl LifecycleHook for SandboxCleanupHook {
         // is preferable to blocking subsequent session teardown.
         tokio::spawn(async move {
             // `destroy` consumes `self`; pull the inner Sandbox out of
-            // the Arc<Mutex<…>>. If another task is still mid-exec, we
-            // bail out: the kernel's signal pipeline has already
-            // cancelled the turn, but the Sandbox would be leaked
-            // anyway since `destroy` cannot run on a borrowed handle.
+            // the Arc<Mutex<…>>. If another task is still mid-exec we
+            // cannot reclaim ownership — the kernel signal pipeline has
+            // already cancelled the turn but the in-flight clone is
+            // still live, so the VM gets leaked until process exit.
+            // Tracked in #1866.
             let inner = match Arc::try_unwrap(sandbox) {
                 Ok(mutex) => mutex.into_inner(),
                 Err(arc) => {
                     tracing::warn!(
                         session_key = %session_key,
                         strong_count = Arc::strong_count(&arc),
-                        "sandbox still in use at session end; leaking VM until process exit"
+                        "sandbox still in use at session end; leaking VM until process exit (see #1866)"
                     );
                     return;
                 }

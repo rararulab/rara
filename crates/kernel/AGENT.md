@@ -435,6 +435,6 @@ Each kernel turn calls `StreamHub::open(session)` which gets-or-creates a `broad
 ## Lifecycle Hooks — `lifecycle.rs`
 
 - `LifecycleHook::on_session_end` fires from `Kernel::cleanup_process` immediately after the session is removed from the process table. Use it for releasing per-session resources owned outside the kernel — the canonical example is `crates/app/src/tools/run_code.rs` destroying its boxlite microVM.
-- The hook runs in the `cleanup_process` task and is bounded to 5 s by `LifecycleHookRegistry::fire_session_end`. Long teardown (e.g. `Sandbox::destroy`) must be spawned as a detached `tokio::task` so it does not stall subsequent session cleanup.
+- The hook *invocation* (the `await` inside `LifecycleHookRegistry::fire_session_end`) is bounded to 5 s; spawned detached `tokio::task`s are unbounded by design. Long teardown (e.g. `Sandbox::destroy`) must therefore be spawned detached so it does not stall subsequent session cleanup, while still running to completion or process exit.
 - Do NOT attempt to mutate the process table from inside `on_session_end` — the entry has already been removed, and the hook is invoked from the kernel's own cleanup path. Treat the context as read-only metadata.
 - `SessionEndContext` only carries `session_key` + `manifest_name`. If a future hook needs more state, add it to the context struct rather than smuggling it through global maps; the goal is for hooks to be stateless except for whatever shared handle they were registered with.
