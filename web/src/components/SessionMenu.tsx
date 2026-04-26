@@ -26,7 +26,6 @@ import {
 
 import { api } from '@/api/client';
 import type { ChatSession } from '@/api/types';
-import { cn } from '@/lib/utils';
 
 interface SessionMenuProps {
   /** Session this menu acts on. Only `key` is required at call time. */
@@ -36,9 +35,6 @@ interface SessionMenuProps {
   /** Called with the refreshed session after a successful title regeneration
    *  so the caller can update its local cache (e.g. the page-header title). */
   onRegenerated?: (session: ChatSession) => void;
-  /** Extra classes for the trigger button — used by the sidebar to apply
-   *  the hover-reveal pattern, while the page header always shows it. */
-  triggerClassName?: string;
 }
 
 /**
@@ -46,12 +42,7 @@ interface SessionMenuProps {
  * title. Exposes two actions: copy the session id to the clipboard, and
  * regenerate the session title via the backend.
  */
-export function SessionMenu({
-  sessionKey,
-  ariaLabel,
-  onRegenerated,
-  triggerClassName,
-}: SessionMenuProps) {
+export function SessionMenu({ sessionKey, ariaLabel, onRegenerated }: SessionMenuProps) {
   const [copied, setCopied] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,10 +88,7 @@ export function SessionMenu({
           aria-label={ariaLabel ? `更多操作 — ${ariaLabel}` : '更多操作'}
           title="更多操作"
           onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground cursor-pointer',
-            triggerClassName,
-          )}
+          className="shrink-0 cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
         >
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
