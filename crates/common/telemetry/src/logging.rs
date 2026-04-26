@@ -205,6 +205,21 @@ pub struct LoggingOptions {
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[default(_code = "HashMap::new()")]
     pub otlp_headers: HashMap<String, String>,
+
+    /// OpenTelemetry semantic-convention schema URL pinned on the tracer
+    /// provider's resource.
+    ///
+    /// Pinning a schema URL lets backends (e.g. Langfuse) interpret span
+    /// attributes against a known semconv version. When `None`, the resource
+    /// is built without a schema URL.
+    pub otlp_schema_url: Option<String>,
+
+    /// Deployment environment label (e.g. `dev`, `staging`, `prod`).
+    ///
+    /// When set, the value is attached to the OTel resource as
+    /// `deployment.environment.name` so traces from different environments
+    /// can be filtered downstream.
+    pub otlp_deployment_environment: Option<String>,
 }
 
 /// OpenTelemetry Protocol (OTLP) export transport protocols.
@@ -619,17 +634,31 @@ pub fn init_global_logging(
                     Sampler::ParentBased,
                 );
 
-            let otel_resource = opentelemetry_sdk::Resource::builder_empty()
-                .with_attributes([
-                    KeyValue::new(resource::SERVICE_NAME, app_name.to_string()),
-                    KeyValue::new(
-                        resource::SERVICE_INSTANCE_ID,
-                        node_id.unwrap_or("none".to_string()),
-                    ),
-                    KeyValue::new(resource::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-                    KeyValue::new(resource::PROCESS_PID, std::process::id().to_string()),
-                ])
-                .build();
+            let mut resource_attrs = vec![
+                KeyValue::new(resource::SERVICE_NAME, app_name.to_string()),
+                KeyValue::new(
+                    resource::SERVICE_INSTANCE_ID,
+                    node_id.unwrap_or("none".to_string()),
+                ),
+                KeyValue::new(resource::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+                KeyValue::new(resource::PROCESS_PID, std::process::id().to_string()),
+            ];
+            if let Some(env) = opts.otlp_deployment_environment.as_deref() {
+                resource_attrs.push(KeyValue::new(
+                    resource::DEPLOYMENT_ENVIRONMENT_NAME,
+                    env.to_string(),
+                ));
+            }
+            // Pin the semconv schema URL on the resource (when configured) so
+            // downstream backends like Langfuse can interpret span attributes
+            // against a known version.
+            let resource_builder = opentelemetry_sdk::Resource::builder_empty();
+            let otel_resource = match opts.otlp_schema_url.as_deref() {
+                Some(schema_url) => resource_builder
+                    .with_schema_url(resource_attrs, schema_url.to_string())
+                    .build(),
+                None => resource_builder.with_attributes(resource_attrs).build(),
+            };
 
             let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(build_otlp_exporter(opts))

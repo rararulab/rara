@@ -66,7 +66,34 @@ impl ServerArgs {
         std::fs::create_dir_all(logs_dir).expect("failed to create logs directory");
         let logs_dir_str = logs_dir.to_string_lossy().into_owned();
 
-        let logging_opts = if let Some(ref endpoint) = config
+        // Pinned OpenTelemetry semantic-convention schema URL for the OTLP
+        // traces exporter. Pinning the version lets backends (Langfuse,
+        // Tempo, etc.) interpret span attributes against a known semconv
+        // release rather than a moving target.
+        const OTEL_SCHEMA_URL: &str = "https://opentelemetry.io/schemas/1.40.0";
+
+        let langfuse_otlp = config
+            .telemetry
+            .otlp
+            .as_ref()
+            .filter(|o| o.enabled.unwrap_or(false));
+
+        let logging_opts = if let Some(otlp) = langfuse_otlp {
+            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+            let Some(endpoint) = otlp.traces_endpoint.clone() else {
+                whatever!("telemetry.otlp.enabled = true requires telemetry.otlp.traces_endpoint");
+            };
+            LoggingOptions {
+                dir: logs_dir_str,
+                enable_otlp_tracing: true,
+                otlp_endpoint: Some(endpoint),
+                otlp_export_protocol: Some(OtlpExportProtocol::Http),
+                otlp_headers: otlp.headers.clone(),
+                otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
+                otlp_deployment_environment: otlp.deployment_environment.clone(),
+                ..Default::default()
+            }
+        } else if let Some(ref endpoint) = config
             .telemetry
             .otlp_endpoint
             .as_deref()
@@ -82,6 +109,7 @@ impl ServerArgs {
                 enable_otlp_tracing: true,
                 otlp_endpoint: Some(endpoint.to_string()),
                 otlp_export_protocol: protocol,
+                otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
                 ..Default::default()
             }
         } else if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
@@ -93,6 +121,7 @@ impl ServerArgs {
                 enable_otlp_tracing: true,
                 otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
                 otlp_export_protocol: Some(OtlpExportProtocol::Http),
+                otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
                 log_format: common_telemetry::logging::LogFormat::Json,
                 ..Default::default()
             }

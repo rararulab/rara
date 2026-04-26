@@ -209,6 +209,30 @@ pub struct TelemetryConfig {
     /// Export protocol: `"http"` or `"grpc"`.
     #[serde(default)]
     pub otlp_protocol: Option<String>,
+    /// Self-hosted Langfuse / OTLP HTTP traces exporter (opt-in).
+    ///
+    /// When `enabled`, the application configures an OTLP/HTTP traces
+    /// exporter pointing at `traces_endpoint` with the provided `headers`
+    /// (typically `authorization: "Basic <base64(public:secret)>"` for
+    /// Langfuse). Disabled by default.
+    #[serde(default)]
+    pub otlp:          Option<OtlpConfig>,
+}
+
+/// OTLP/HTTP traces exporter config (Langfuse-compatible).
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct OtlpConfig {
+    /// Whether the exporter is active. `false` skips construction entirely.
+    pub enabled:                Option<bool>,
+    /// OTLP/HTTP traces ingest URL — full path including
+    /// `/v1/traces` (or Langfuse's `/api/public/otel/v1/traces`).
+    pub traces_endpoint:        Option<String>,
+    /// HTTP headers attached to every export request.
+    #[serde(default)]
+    pub headers:                std::collections::HashMap<String, String>,
+    /// Deployment environment label (e.g. `dev`, `staging`, `prod`)
+    /// emitted as `deployment.environment.name` resource attribute.
+    pub deployment_environment: Option<String>,
 }
 
 fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
@@ -1334,5 +1358,76 @@ mita:
 
         let config = AppConfig::load_from_paths(&global, &local).expect("load config");
         assert_eq!(config.http.bind_address, "127.0.0.1:35555");
+    }
+
+    #[test]
+    fn telemetry_otlp_defaults_to_disabled() {
+        let cfg: AppConfig = serde_yaml::from_str(BASE_YAML).expect("base yaml");
+        assert!(
+            cfg.telemetry.otlp.is_none(),
+            "no `telemetry.otlp` block should leave it unset"
+        );
+        assert!(cfg.telemetry.otlp_endpoint.is_none());
+    }
+
+    #[test]
+    fn telemetry_otlp_parses_full_block() {
+        let yaml = format!(
+            r#"{BASE_YAML}
+telemetry:
+  otlp:
+    enabled: true
+    traces_endpoint: "http://10.0.0.183:3000/api/public/otel/v1/traces"
+    deployment_environment: "dev"
+    headers:
+      authorization: "Basic ZGVtbw=="
+"#
+        );
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let otlp = cfg.telemetry.otlp.expect("otlp block");
+        assert_eq!(otlp.enabled, Some(true));
+        assert_eq!(
+            otlp.traces_endpoint.as_deref(),
+            Some("http://10.0.0.183:3000/api/public/otel/v1/traces")
+        );
+        assert_eq!(otlp.deployment_environment.as_deref(), Some("dev"));
+        assert_eq!(
+            otlp.headers.get("authorization").map(String::as_str),
+            Some("Basic ZGVtbw==")
+        );
+    }
+
+    #[test]
+    fn telemetry_otlp_disabled_block_parses() {
+        let yaml = format!(
+            r#"{BASE_YAML}
+telemetry:
+  otlp:
+    enabled: false
+    traces_endpoint: "http://example.invalid/v1/traces"
+"#
+        );
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let otlp = cfg.telemetry.otlp.expect("otlp block");
+        assert_eq!(otlp.enabled, Some(false));
+        assert!(otlp.headers.is_empty());
+    }
+
+    #[test]
+    fn telemetry_otlp_missing_endpoint_parses_but_runtime_rejects() {
+        // Endpoint is `Option<String>` so deserialization succeeds; the
+        // bootstrap path in `rara-cli` is responsible for rejecting an
+        // enabled-without-endpoint config at startup.
+        let yaml = format!(
+            r#"{BASE_YAML}
+telemetry:
+  otlp:
+    enabled: true
+"#
+        );
+        let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
+        let otlp = cfg.telemetry.otlp.expect("otlp block");
+        assert_eq!(otlp.enabled, Some(true));
+        assert!(otlp.traces_endpoint.is_none());
     }
 }
