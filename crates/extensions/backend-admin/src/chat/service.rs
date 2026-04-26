@@ -22,7 +22,7 @@
 //! Session metadata is managed by [`SessionIndexRef`]. Message persistence has
 //! moved to the tape subsystem via [`TapeService`].
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
@@ -33,6 +33,7 @@ use rara_kernel::{
     channel::types::{
         ChannelType, ChatMessage, MessageContent, MessageRole, ToolCall as ChannelToolCall,
     },
+    handle::KernelHandle,
     llm::{Message, Role},
     memory::{TapEntry, TapEntryKind, TapeSearchHit, TapeService},
     session::SessionIndexRef,
@@ -374,6 +375,14 @@ pub struct SessionService {
     model_catalog:     ModelCatalog,
     /// Settings provider for reading and writing flat KV settings.
     settings_provider: Arc<dyn SettingsProvider>,
+    /// Late-bound kernel handle, set after the kernel has booted.
+    ///
+    /// `BackendState::init` runs before `Kernel::start` so the handle is
+    /// not available at construction time; the bootstrap path calls
+    /// [`Self::set_kernel_handle`] once the kernel is up. Methods that
+    /// require kernel access ([`Self::regenerate_title`]) error out
+    /// cleanly if invoked before the handle is set.
+    kernel_handle:     Arc<OnceLock<KernelHandle>>,
 }
 
 impl SessionService {
@@ -402,7 +411,28 @@ impl SessionService {
             trace_service,
             model_catalog: ModelCatalog::new(model_lister),
             settings_provider,
+            kernel_handle: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Inject the live kernel handle once the kernel has booted.
+    ///
+    /// Called exactly once from the bootstrap path. Subsequent calls are
+    /// silently ignored because the underlying `OnceLock` only accepts
+    /// the first value — a re-init attempt almost certainly indicates a
+    /// double-boot bug rather than legitimate replacement.
+    pub fn set_kernel_handle(&self, handle: KernelHandle) {
+        let _ = self.kernel_handle.set(handle);
+    }
+
+    /// Borrow the injected kernel handle, or return a 500-mapped error
+    /// when the bootstrap path has not yet wired it.
+    fn kernel_handle(&self) -> Result<&KernelHandle, ChatError> {
+        self.kernel_handle
+            .get()
+            .ok_or_else(|| ChatError::SessionError {
+                message: "kernel handle not initialised".to_string(),
+            })
     }
 
     // -- model catalog ------------------------------------------------------
@@ -522,6 +552,29 @@ impl SessionService {
         let updated = self.session_index.update_session(&session).await?;
         info!(key = %key, "session fields updated");
         Ok(updated)
+    }
+
+    /// Re-run the session-title generator against the current tape and
+    /// return the freshly persisted [`SessionEntry`].
+    ///
+    /// Synchronous from the caller's perspective — the call returns only
+    /// after the new title has been written, so the frontend can refresh
+    /// straight away. Unlike the post-first-turn auto-trigger, this path
+    /// overwrites any existing title so the user can replace a poor
+    /// auto-generated one.
+    #[instrument(skip(self))]
+    pub async fn regenerate_title(&self, key: &SessionKey) -> Result<SessionEntry, ChatError> {
+        // Surface a clean 404 before the LLM round-trip so a stale key
+        // does not pay for an LLM call.
+        let _ = self.get_session(key).await?;
+        self.kernel_handle()?
+            .regenerate_session_title(key)
+            .await
+            .map_err(|e| ChatError::TitleGenerationFailed {
+                message: e.to_string(),
+            })?;
+        // Re-fetch so the response reflects the new title and updated_at.
+        self.get_session(key).await
     }
 
     /// Delete a session.

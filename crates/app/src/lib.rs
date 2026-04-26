@@ -670,6 +670,14 @@ pub async fn start_with_options(
 
     let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
+    // Inject the kernel handle into the session service so endpoints that
+    // need to drive the kernel directly (e.g. POST .../regenerate-title)
+    // can reach it. `BackendState::init` had to run before kernel boot so
+    // the handle is wired in here.
+    backend
+        .session_service
+        .set_kernel_handle(kernel_handle.clone());
+
     // Spawn the feed dispatch task — consumes events from all transports,
     // persists them to the data_feed_events table, and routes matching events
     // to subscribing sessions via SubscriptionRegistry.

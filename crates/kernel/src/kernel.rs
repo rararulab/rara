@@ -3240,6 +3240,7 @@ impl Kernel {
                         session_index.as_ref(),
                         &io,
                         &sk,
+                        false,
                     )
                     .await
                     {
@@ -3476,7 +3477,15 @@ fn finalize_title(
 /// keyed by the `title_gen` manifest, so driver + model + max-length stay in
 /// one atomic snapshot (see #1637). Errors are propagated to the caller for
 /// logging.
-async fn generate_session_title(
+/// Generate a sidebar title for a session by feeding the first user/assistant
+/// turn into the `title_gen` agent and persisting the result back onto the
+/// session entry.
+///
+/// Exposed at `pub(crate)` visibility so [`crate::handle::KernelHandle`] can
+/// drive it on demand for the regenerate-title endpoint. The auto-trigger in
+/// `process_turn_completion` gates on `title.is_none()`; on-demand callers
+/// intentionally skip that gate so they can overwrite a poor existing title.
+pub(crate) async fn generate_session_title(
     tape_service: &crate::memory::TapeService,
     tape_name: &str,
     driver_registry: &crate::llm::DriverRegistry,
@@ -3484,6 +3493,7 @@ async fn generate_session_title(
     session_index: &dyn crate::session::SessionIndex,
     io: &Arc<crate::io::IOSubsystem>,
     session_key: &SessionKey,
+    overwrite_existing: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::memory::TapEntryKind;
 
@@ -3596,7 +3606,12 @@ async fn generate_session_title(
             // with a stale generated one is user-visible damage. The
             // up-front `entry.title.is_none()` gate at the call site is
             // advisory — this is the authoritative compare-and-persist.
-            if entry.title.is_some() {
+            //
+            // When the caller explicitly asked for regeneration
+            // (`overwrite_existing = true`), we skip the guard: the user
+            // clicked "regenerate" precisely because the existing title
+            // is wrong, so overwriting is the desired behaviour.
+            if !overwrite_existing && entry.title.is_some() {
                 tracing::info!(
                     session_key = %session_key,
                     existing_title = ?entry.title,

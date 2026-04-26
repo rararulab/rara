@@ -30,6 +30,7 @@
 //! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
 //! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
+//! | `POST`   | `/api/v1/chat/sessions/{key}/regenerate-title`       | Regenerate title       |
 //! | `PUT`    | `/api/v1/chat/channel-bindings`                      | Bind a channel         |
 //! | `GET`    | `/api/v1/chat/channel-bindings/{type}/{id}`           | Get channel binding    |
 
@@ -285,6 +286,7 @@ fn session_routes(service: SessionService) -> OpenApiRouter {
         .routes(routes!(create_session, list_sessions))
         .routes(routes!(search_sessions))
         .routes(routes!(get_session, update_session, delete_session))
+        .routes(routes!(regenerate_session_title))
         .routes(routes!(list_messages, clear_messages))
         .routes(routes!(get_cascade_trace))
         .routes(routes!(get_execution_trace))
@@ -496,6 +498,33 @@ async fn delete_session(
 ) -> Result<StatusCode, ChatError> {
     service.delete_session(&parse_session_key(&key)?).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/chat/sessions/{key}/regenerate-title` — re-run the title
+/// generator against the session's tape, overwriting any existing title.
+///
+/// Synchronous: returns 200 with the updated [`SessionEntry`] only after
+/// the new title has been persisted, so the frontend can refresh straight
+/// away. Returns 404 when the session does not exist and 500 when the
+/// underlying LLM call or persistence step fails.
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/sessions/{key}/regenerate-title",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    responses(
+        (status = 200, description = "Session with refreshed title", body = Object),
+        (status = 404, description = "Session not found"),
+        (status = 500, description = "Title generation failed"),
+    )
+)]
+#[instrument(skip(service))]
+async fn regenerate_session_title(
+    State(service): State<SessionService>,
+    Path(key): Path<String>,
+) -> Result<Json<SessionEntry>, ChatError> {
+    let session = service.regenerate_title(&parse_session_key(&key)?).await?;
+    Ok(Json(session))
 }
 
 /// `GET /api/v1/chat/sessions/{key}/messages` — list conversation messages.
