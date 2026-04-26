@@ -3532,14 +3532,16 @@ async fn generate_session_title(
 
     let assistant_preview: String = first_assistant_msg.chars().take(500).collect();
 
-    // Prompt is framed as a chat-app sidebar title (ChatGPT / Claude-style)
-    // with explicit anti-narrator rules + few-shot examples. Thinking models
-    // otherwise leak third-person framings like `The user wrote: "..."` into
-    // the session list (#1787). The examples cover Chinese + English so the
-    // language-matching rule has a concrete anchor.
-    let prompt = format!(
-        "You are generating a short sidebar title for a chat conversation, like ChatGPT or Claude \
-         shows in its session list.\n\nRules:\n- Output ONLY the title text. No preamble, no \
+    // Rules + few-shot anchors live in the system message; the user
+    // message carries only the conversation snippet. Packing everything
+    // into one user turn (#1870) confused weaker chat models such as
+    // MiniMax-M2.7, which echoed the prompt's opening sentence as the
+    // "topic" — the role boundary disambiguates what to summarise.
+    // Anti-narrator rules + Chinese/English few-shots also suppress
+    // third-person framings (#1787).
+    let system_prompt = format!(
+        "You generate short sidebar titles for chat conversations, like ChatGPT or Claude shows \
+         in its session list.\n\nRules:\n- Output ONLY the title text. No preamble, no \
          explanation, no quotes.\n- Maximum {max_chars} characters.\n- Match the language of the \
          user's first message (Chinese in, Chinese out; English in, English out).\n- Write the \
          title as a noun phrase or topic label — NOT a sentence about what the user did.\n- Do \
@@ -3547,13 +3549,16 @@ async fn generate_session_title(
          any narrator phrasing.\n- Do NOT wrap the title in quotes.\n- Do NOT end with a period, \
          句号, or ellipsis.\n\nExamples:\nUser: 我要开始准备面试\nTitle: 面试准备\n\nUser: help \
          me write a Rust macro for deriving Debug\nTitle: Rust Debug derive macro\n\nUser: \
-         帮我生成一个记录饮食的 skill\nTitle: 饮食记录 skill\n\nNow generate the title for this \
-         conversation:\nUser: {first_user_msg}\nAssistant: {assistant_preview}\nTitle:"
+         帮我生成一个记录饮食的 skill\nTitle: 饮食记录 skill"
     );
+    let user_prompt = format!("User: {first_user_msg}\nAssistant: {assistant_preview}\nTitle:");
 
     let request = crate::llm::CompletionRequest {
         model:               resolved.model,
-        messages:            vec![crate::llm::Message::user(prompt)],
+        messages:            vec![
+            crate::llm::Message::system(system_prompt),
+            crate::llm::Message::user(user_prompt),
+        ],
         tools:               vec![],
         temperature:         Some(0.3),
         max_tokens:          Some(60),
