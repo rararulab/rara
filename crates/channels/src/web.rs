@@ -114,6 +114,11 @@ pub enum WebEvent {
     TextDelta { text: String },
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
+    /// Discard any in-flight assistant text the client has rendered for the
+    /// current turn. Emitted by the kernel before a tool-call batch and
+    /// before the anti-laziness nudge restarts the iteration, so the next
+    /// `TextDelta` stream is not appended on top of abandoned narration.
+    TextClear,
     /// A tool call has started.
     ToolCallStart {
         name:      String,
@@ -270,7 +275,8 @@ fn platform_outbound_to_web_event(msg: PlatformOutbound) -> WebEvent {
 fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     match event {
         StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
-        StreamEvent::ReasoningDelta { .. } | StreamEvent::TextClear => None,
+        StreamEvent::ReasoningDelta { .. } => None,
+        StreamEvent::TextClear => Some(WebEvent::TextClear),
         StreamEvent::TurnRationale { text } => Some(WebEvent::TurnRationale { text }),
         StreamEvent::ToolCallStart {
             name,
@@ -577,12 +583,24 @@ impl WebAdapter {
             reply_buffer:      self.reply_buffer.clone(),
         };
 
+        let events_state = crate::web_session_events::SessionEventsState {
+            owner_token: self.owner_token.clone(),
+            handle:      Arc::clone(&self.sink),
+        };
+        let events_router = Router::new()
+            .route(
+                "/events/{session_key}",
+                get(crate::web_session_events::events_ws_handler),
+            )
+            .with_state(events_state);
+
         Router::new()
             .route("/ws", get(ws_handler))
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
             .route("/signals/{session_id}/interrupt", post(interrupt_handler))
             .with_state(state)
+            .merge(events_router)
     }
 
     /// Test-only entry point that mirrors the inbound code path exercised by

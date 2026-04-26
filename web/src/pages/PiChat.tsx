@@ -76,6 +76,7 @@ import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
+import { useSessionEvents } from '@/hooks/use-session-events';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
 import { renderTurnChipCard } from '@/tools/turn-chip-card';
 const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
@@ -553,10 +554,14 @@ export default function PiChat() {
       const msgs = await api.get<ChatMessageData[]>(
         `/api/v1/chat/sessions/${encodeURIComponent(session.key)}/messages?limit=200`,
       );
+      // Bail if the user has switched away while the fetch was in flight
+      // — otherwise we would `replaceMessages` the now-active session
+      // with this one's tape. See #1867 for the full repro.
+      if (agentRef.current?.sessionId !== session.key) return;
       const agentMsgs = toAgentMessages(msgs);
       if (agentMsgs.length > 0) {
         agent.replaceMessages(agentMsgs);
-      } else if (agentRef.current?.sessionId === session.key) {
+      } else {
         // Really an empty session (not just a stale backend count) —
         // reveal the welcome overlay now that we know for sure.
         setShowWelcome(true);
@@ -582,14 +587,25 @@ export default function PiChat() {
     });
   }, []);
 
-  /** Reload current session messages (e.g. after voice message completes). */
+  /**
+   * Reload current session messages (e.g. after voice message completes,
+   * or on a server-pushed `tape_appended` event).
+   *
+   * Snapshots `agent.sessionId` at call time and re-checks it before
+   * mutating the agent's state. Without this guard, a `tape_appended`
+   * fetch for session A that lands after the user has already switched
+   * to session B would `replaceMessages` B with A's tape, leaking
+   * messages across sessions (#1867).
+   */
   const reloadMessages = useCallback(async () => {
     const agent = agentRef.current;
     if (!agent?.sessionId) return;
+    const requestedSessionId = agent.sessionId;
     try {
       const msgs = await api.get<ChatMessageData[]>(
-        `/api/v1/chat/sessions/${encodeURIComponent(agent.sessionId)}/messages?limit=200`,
+        `/api/v1/chat/sessions/${encodeURIComponent(requestedSessionId)}/messages?limit=200`,
       );
+      if (agentRef.current?.sessionId !== requestedSessionId) return;
       const agentMsgs = toAgentMessages(msgs);
       agent.replaceMessages(agentMsgs);
       await chatPanelRef.current?.artifactsPanel?.reconstructFromMessages(
@@ -617,6 +633,19 @@ export default function PiChat() {
     activeSessionKey: activeSession?.key,
     switchSession,
     newSession,
+  });
+
+  // Subscribe to server-pushed session events so tape mutations that
+  // arrive outside a live streamFn turn — background-task summaries,
+  // future scheduled re-entries — refresh the chat without a manual
+  // refresh. The reload is a full snapshot fetch; mid-stream the
+  // assistant message has not been persisted yet so a concurrent reload
+  // is a no-op replay (#1849).
+  useSessionEvents({
+    sessionKey: activeSession?.key ?? null,
+    onTapeAppended: () => {
+      void reloadMessages();
+    },
   });
 
   /**

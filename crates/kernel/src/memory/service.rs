@@ -29,7 +29,10 @@ use super::{
     AnchorNode, AnchorSummary, AnchorTree, FileTapeStore, ForkEdge, HandoffState, SessionBranch,
     TapEntry, TapEntryKind, TapResult, get_fork_metadata,
 };
-use crate::session::{SessionIndex, SessionKey};
+use crate::{
+    notification::{KernelNotification, NotificationBusRef},
+    session::{SessionIndex, SessionKey},
+};
 
 thread_local! {
     /// Per-thread current tape context used while executing fork closures.
@@ -105,15 +108,37 @@ pub fn current_tape() -> String {
 /// workflows (anchors, fork/merge, search, LLM context building). It is **not**
 /// bound to a specific tape — every method accepts a `tape_name` parameter so a
 /// single instance can serve all sessions.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TapeService {
-    store: FileTapeStore,
-    fts:   Option<super::fts::TapeFts>,
+    store:        FileTapeStore,
+    fts:          Option<super::fts::TapeFts>,
+    /// Optional notification bus for publishing tape mutation events.
+    ///
+    /// Wired in by `Kernel::new` after the bus is constructed, so external
+    /// adapters can react to writes that happen outside a live user turn
+    /// (background-task summaries, scheduled re-entries).
+    notification: Option<NotificationBusRef>,
+}
+
+impl std::fmt::Debug for TapeService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TapeService")
+            .field("store", &self.store)
+            .field("fts", &self.fts.is_some())
+            .field("notification", &self.notification.is_some())
+            .finish()
+    }
 }
 
 impl TapeService {
     /// Create a service backed by the given store.
-    pub fn new(store: FileTapeStore) -> Self { Self { store, fts: None } }
+    pub fn new(store: FileTapeStore) -> Self {
+        Self {
+            store,
+            fts: None,
+            notification: None,
+        }
+    }
 
     /// Create a service with FTS5 full-text search support.
     pub fn with_fts(
@@ -126,7 +151,16 @@ impl TapeService {
         Self {
             store,
             fts: Some(super::fts::TapeFts::new(pools)),
+            notification: None,
         }
+    }
+
+    /// Attach a notification bus so message appends publish
+    /// [`KernelNotification::TapeAppended`].
+    #[must_use]
+    pub fn with_notifications(mut self, bus: NotificationBusRef) -> Self {
+        self.notification = Some(bus);
+        self
     }
 
     /// Access the underlying [`FileTapeStore`] for low-level operations such as
@@ -266,6 +300,27 @@ impl TapeService {
                 .await
             {
                 tracing::warn!(%e, tape_name, "FTS index failed on append");
+            }
+        }
+
+        // Publish a tape-appended notification so adapters can refresh.
+        // Best-effort: errors come from a parsed tape_name that does not
+        // resolve to a SessionKey (user tape, internal tape) — those tapes
+        // are not user-facing chat sessions and are intentionally skipped.
+        if let Some(bus) = &self.notification {
+            if let Ok(session_key) = SessionKey::try_from_raw(tape_name) {
+                let role = entry
+                    .payload
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                bus.publish(KernelNotification::TapeAppended {
+                    session_key,
+                    entry_id: entry.id,
+                    role,
+                    timestamp: entry.timestamp,
+                })
+                .await;
             }
         }
 
@@ -1389,6 +1444,46 @@ mod tests {
     async fn temp_tape_service(dir: &Path) -> TapeService {
         let store = super::super::FileTapeStore::new(dir, dir).await.unwrap();
         TapeService::new(store)
+    }
+
+    #[tokio::test]
+    async fn append_message_publishes_tape_appended() {
+        use crate::notification::{
+            BroadcastNotificationBus, KernelNotification, NotificationFilter,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
+        let svc = temp_tape_service(tmp.path())
+            .await
+            .with_notifications(bus.clone());
+
+        let key = SessionKey::new();
+        let key_raw = key.to_string();
+        let mut rx = bus.subscribe(NotificationFilter::default()).await;
+
+        svc.append_message(
+            &key_raw,
+            json!({"role": "assistant", "content": "hi"}),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // The bus capacity is 256; one publish should arrive without lag.
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("publish timed out")
+            .expect("publish failed");
+        match event {
+            KernelNotification::TapeAppended {
+                session_key, role, ..
+            } => {
+                assert_eq!(session_key, key);
+                assert_eq!(role.as_deref(), Some("assistant"));
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
     }
 
     #[tokio::test]

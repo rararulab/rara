@@ -255,6 +255,12 @@ impl Kernel {
         scheduler_dir: std::path::PathBuf,
     ) -> Self {
         let event_bus: NotificationBusRef = Arc::new(BroadcastNotificationBus::default());
+        // Plumb the notification bus into the tape service so message
+        // appends publish `TapeAppended` events. This is the single point
+        // where every tape mutation is observable, regardless of whether
+        // the writer is a user turn, a synthetic re-entry, or a future
+        // scheduled task.
+        let tape_service = tape_service.with_notifications(event_bus.clone());
         // Clamp default_tool_timeout so it never exceeds the global wave timeout.
         let mut config = config;
         if config.default_tool_timeout >= config.tool_execution_timeout {
@@ -416,6 +422,7 @@ impl Kernel {
             self.feed_registry.clone(),
             self.feed_store.clone(),
             Arc::clone(self.syscall.subscription_registry()),
+            Arc::clone(self.syscall.event_bus()),
         )
     }
 

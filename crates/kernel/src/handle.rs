@@ -114,6 +114,10 @@ pub struct KernelHandle {
     feed_store:            Option<crate::data_feed::FeedStoreRef>,
     /// Tag-based subscription registry for routing notifications to sessions.
     subscription_registry: crate::notification::SubscriptionRegistryRef,
+    /// Kernel event bus exposed for adapters that need to subscribe to
+    /// session-scoped events such as
+    /// [`crate::notification::KernelNotification::TapeAppended`].
+    notification_bus:      crate::notification::NotificationBusRef,
 }
 
 impl KernelHandle {
@@ -139,6 +143,7 @@ impl KernelHandle {
         feed_registry: Option<Arc<crate::data_feed::DataFeedRegistry>>,
         feed_store: Option<crate::data_feed::FeedStoreRef>,
         subscription_registry: crate::notification::SubscriptionRegistryRef,
+        notification_bus: crate::notification::NotificationBusRef,
     ) -> Self {
         Self {
             event_queue,
@@ -160,7 +165,13 @@ impl KernelHandle {
             feed_registry,
             feed_store,
             subscription_registry,
+            notification_bus,
         }
+    }
+
+    /// Access the kernel notification bus.
+    pub fn notification_bus(&self) -> &crate::notification::NotificationBusRef {
+        &self.notification_bus
     }
 
     // -- Mutation methods (flow through event queue) -------------------------

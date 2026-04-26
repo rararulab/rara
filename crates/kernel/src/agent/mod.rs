@@ -1896,7 +1896,7 @@ pub(crate) async fn run_agent_loop(
                     iteration,
                     ack_nudge_count,
                     ?kind,
-                    text_preview = %accumulated_text.chars().take(80).collect::<String>(),
+                    text_preview = ?accumulated_text.chars().take(80).collect::<String>(),
                     "laziness detected, nudging model to take action"
                 );
                 // Persist intermediate assistant text to tape so the model
@@ -1929,6 +1929,10 @@ pub(crate) async fn run_agent_loop(
                         None,
                     )
                     .await;
+                // Why: signal the frontend to discard the abandoned ack text
+                // before the next iteration's TextDelta events arrive, so
+                // the new turn's stream is not appended on top of stale text.
+                stream_handle.emit(StreamEvent::TextClear);
                 continue;
             }
         }
