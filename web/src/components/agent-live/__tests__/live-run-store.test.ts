@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { LiveRunStore, mergeBySourceSeq, timelineKey } from '../live-run-store';
+import { AUTO_DISMISS_MS, LiveRunStore, mergeBySourceSeq, timelineKey } from '../live-run-store';
 
 import type { PublicWebEvent } from '@/adapters/rara-stream';
 import type { TimelineItem } from '@/api/kernel-types';
@@ -126,6 +126,85 @@ describe('LiveRunStore', () => {
     expect(store.snapshot(sk).active?.currentStage).toBe(
       'Waiting for LLM response (iteration 2)...',
     );
+  });
+});
+
+describe('LiveRunStore auto-dismiss', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retires a completed run to history after AUTO_DISMISS_MS', () => {
+    const store = new LiveRunStore();
+    const sk = 'auto1';
+    store.publish(sk, startEvent);
+    store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
+    expect(store.snapshot(sk).active?.status).toBe('completed');
+
+    vi.advanceTimersByTime(AUTO_DISMISS_MS - 1);
+    expect(store.snapshot(sk).active?.status).toBe('completed');
+
+    vi.advanceTimersByTime(1);
+    const slice = store.snapshot(sk);
+    expect(slice.active).toBeNull();
+    expect(slice.history).toHaveLength(1);
+    expect(slice.history[0]?.status).toBe('completed');
+  });
+
+  it('retires a failed run after the same delay', () => {
+    const store = new LiveRunStore();
+    const sk = 'auto2';
+    store.publish(sk, startEvent);
+    store.publish(sk, { type: 'error', message: 'boom' } satisfies PublicWebEvent);
+    expect(store.snapshot(sk).active?.status).toBe('failed');
+
+    vi.advanceTimersByTime(AUTO_DISMISS_MS);
+    const slice = store.snapshot(sk);
+    expect(slice.active).toBeNull();
+    expect(slice.history[0]?.status).toBe('failed');
+  });
+
+  it('cancels the dismiss timer when a new stream starts', () => {
+    const store = new LiveRunStore();
+    const sk = 'auto3';
+    store.publish(sk, startEvent);
+    store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
+    vi.advanceTimersByTime(AUTO_DISMISS_MS - 100);
+    // New stream lands before the timer fires — it should retire the
+    // completed run via the existing __stream_started path and not
+    // double-retire when the timer would have fired.
+    store.publish(sk, startEvent);
+    expect(store.snapshot(sk).active?.status).toBe('running');
+    expect(store.snapshot(sk).history).toHaveLength(1);
+
+    vi.advanceTimersByTime(1_000);
+    // Active is still the running run; history did not gain a duplicate.
+    expect(store.snapshot(sk).active?.status).toBe('running');
+    expect(store.snapshot(sk).history).toHaveLength(1);
+  });
+
+  it('does not arm a timer while the run is still running', () => {
+    const store = new LiveRunStore();
+    const sk = 'auto4';
+    store.publish(sk, startEvent);
+    store.publish(sk, toolStart('a', 'Grep'));
+    vi.advanceTimersByTime(AUTO_DISMISS_MS * 2);
+    expect(store.snapshot(sk).active?.status).toBe('running');
+  });
+
+  it('reset clears any pending dismiss timer', () => {
+    const store = new LiveRunStore();
+    const sk = 'auto5';
+    store.publish(sk, startEvent);
+    store.publish(sk, { type: 'done' } satisfies PublicWebEvent);
+    store.reset(sk);
+    // Even after the dismiss window, no spurious mutation occurs.
+    vi.advanceTimersByTime(AUTO_DISMISS_MS);
+    expect(store.snapshot(sk).active).toBeNull();
+    expect(store.snapshot(sk).history).toHaveLength(0);
   });
 });
 

@@ -103,6 +103,13 @@ export function timelineKey(source: string, seq: number): string {
 }
 
 /**
+ * Delay between a run reaching a terminal state and the live card
+ * being auto-retired to history. Lives at module scope so tests and
+ * the SingleAgentLiveCard fade-out can read the same value.
+ */
+export const AUTO_DISMISS_MS = 5_000;
+
+/**
  * Factory for a per-store run-id generator. Counter lives inside each
  * store instance so parallel test stores don't share global state (and
  * neither does the production singleton leak into tests that construct
@@ -135,6 +142,10 @@ export class LiveRunStore {
   private readonly slices = new Map<string, SessionSlice>();
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly nextRunId = makeRunIdFactory();
+  // Pending auto-dismiss timers, keyed by sessionKey. A timer is armed
+  // when a publish transitions the active run from `running` to a
+  // terminal state and is cleared on retire / reset / new stream start.
+  private readonly dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** Read the current immutable slice for a session. */
   snapshot(sessionKey: string): SessionSlice {
@@ -160,13 +171,69 @@ export class LiveRunStore {
     const next = reduce(current, sessionKey, event, this.nextRunId);
     if (next === current) return;
     this.slices.set(sessionKey, next);
+    this.scheduleAutoDismiss(sessionKey, current.active, next.active);
     this.emit(sessionKey);
   }
 
   /** Clear a session's state — called on session switch / unmount. */
   reset(sessionKey: string): void {
+    this.cancelAutoDismiss(sessionKey);
     if (!this.slices.has(sessionKey)) return;
     this.slices.delete(sessionKey);
+    this.emit(sessionKey);
+  }
+
+  /**
+   * Arm or cancel the auto-dismiss timer for a session based on the
+   * active-run transition produced by the latest publish. The timer is
+   * an effect, not a reducer concern — keeping it here preserves the
+   * reducer's purity while still guaranteeing exactly one pending
+   * timer per session.
+   */
+  private scheduleAutoDismiss(
+    sessionKey: string,
+    prev: LiveRun | null,
+    next: LiveRun | null,
+  ): void {
+    // If the active run is gone (retired) or is running again, drop any
+    // pending dismissal — there is nothing terminal to clear.
+    if (!next || next.status === 'running') {
+      this.cancelAutoDismiss(sessionKey);
+      return;
+    }
+    // Already terminal across both snapshots and same run — keep the
+    // existing timer running rather than restarting it on every event.
+    if (prev && prev.runId === next.runId && prev.status === next.status) {
+      return;
+    }
+    this.cancelAutoDismiss(sessionKey);
+    const timer = setTimeout(() => {
+      this.dismissTimers.delete(sessionKey);
+      this.dismissActive(sessionKey, next.runId);
+    }, AUTO_DISMISS_MS);
+    this.dismissTimers.set(sessionKey, timer);
+  }
+
+  private cancelAutoDismiss(sessionKey: string): void {
+    const timer = this.dismissTimers.get(sessionKey);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.dismissTimers.delete(sessionKey);
+  }
+
+  /**
+   * Retire the active run to history — invoked by the auto-dismiss
+   * timer. Guarded by `runId` so a stale timer racing against a new
+   * stream cannot evict a freshly-started run.
+   */
+  private dismissActive(sessionKey: string, runId: string): void {
+    const slice = this.slices.get(sessionKey);
+    if (!slice || !slice.active || slice.active.runId !== runId) return;
+    const next: SessionSlice = {
+      active: null,
+      history: [slice.active, ...slice.history],
+    };
+    this.slices.set(sessionKey, next);
     this.emit(sessionKey);
   }
 

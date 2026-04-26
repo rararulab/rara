@@ -17,7 +17,7 @@
 import { AlertCircle, Bot, CheckCircle2, ChevronDown, Maximize2, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
-import type { LiveRun } from './live-run-store';
+import { AUTO_DISMISS_MS, type LiveRun } from './live-run-store';
 import { formatDuration } from './time-format';
 import { ToolChip, buildToolChips } from './tool-chips';
 
@@ -32,6 +32,12 @@ interface Props {
   onStop?: () => void;
 }
 
+// Window of the auto-dismiss interval reserved for the fade-out
+// animation. The store retires the run at AUTO_DISMISS_MS; we begin
+// fading the card opacity FADE_OUT_MS earlier so the unmount lines up
+// with opacity reaching zero.
+const FADE_OUT_MS = 300;
+
 /** Folded header + collapsible timeline for a single active run. */
 export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript, onStop }: Props) {
   const [expanded, setExpanded] = useState(true);
@@ -39,6 +45,24 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);
   const [showLatest, setShowLatest] = useState(false);
+  const [fading, setFading] = useState(false);
+
+  // Trigger the fade-out shortly before the store retires the run. Reset
+  // when a new run takes the active slot (different runId) or when the
+  // run flips back to running (defensive — should not happen today).
+  useEffect(() => {
+    if (run.status === 'running') {
+      setFading(false);
+      return;
+    }
+    const elapsedSinceEnd = run.endedAt ? Date.now() - run.endedAt : 0;
+    const fadeAt = Math.max(0, AUTO_DISMISS_MS - FADE_OUT_MS - elapsedSinceEnd);
+    const id = window.setTimeout(() => setFading(true), fadeAt);
+    return () => {
+      window.clearTimeout(id);
+      setFading(false);
+    };
+  }, [run.runId, run.status, run.endedAt]);
 
   // 1 Hz tick while the run is live so the elapsed chip updates.
   useEffect(() => {
@@ -93,7 +117,12 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
   };
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border/50 bg-card/60 backdrop-blur-sm">
+    <section
+      className={cn(
+        'overflow-hidden rounded-lg border border-border/50 bg-card/60 backdrop-blur-sm transition-opacity duration-300 ease-out',
+        fading && 'opacity-0',
+      )}
+    >
       <div
         role="button"
         tabIndex={0}
