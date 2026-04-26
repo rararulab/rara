@@ -93,9 +93,6 @@ pub struct AppConfig {
     /// WeChat iLink Bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wechat:                 Option<flatten::WechatConfig>,
-    /// Composio credentials (seeded to settings store at startup).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub composio:               Option<flatten::ComposioConfig>,
     /// Configured users with platform identity mappings (required).
     pub users:                  Vec<crate::boot::UserConfig>,
     /// Maximum ingress messages per user per minute (rate limiting).

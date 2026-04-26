@@ -110,20 +110,6 @@ pub struct WechatConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Composio config types
-// ---------------------------------------------------------------------------
-
-/// Composio configuration section in config.yaml.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ComposioConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key:   Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entity_id: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // Knowledge config types
 // ---------------------------------------------------------------------------
 
@@ -210,9 +196,6 @@ pub fn flatten_config_sections(config: &AppConfig) -> Vec<(String, String)> {
     if let Some(ref wechat) = config.wechat {
         flatten_wechat(wechat, &mut pairs);
     }
-    if let Some(ref composio) = config.composio {
-        flatten_composio(composio, &mut pairs);
-    }
     if let Some(ref k) = config.knowledge {
         flatten_knowledge(k, &mut pairs);
     }
@@ -290,16 +273,6 @@ fn flatten_wechat(wc: &WechatConfig, out: &mut Vec<(String, String)>) {
     }
 }
 
-fn flatten_composio(config: &ComposioConfig, out: &mut Vec<(String, String)>) {
-    use rara_domain_shared::settings::keys;
-    if let Some(ref v) = config.api_key {
-        out.push((keys::COMPOSIO_API_KEY.into(), v.clone()));
-    }
-    if let Some(ref v) = config.entity_id {
-        out.push((keys::COMPOSIO_ENTITY_ID.into(), v.clone()));
-    }
-}
-
 fn flatten_knowledge(k: &KnowledgeConfig, out: &mut Vec<(String, String)>) {
     use rara_domain_shared::settings::keys;
     if let Some(ref v) = k.embedding_model {
@@ -330,7 +303,6 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
     Option<LlmConfig>,
     Option<TelegramConfig>,
     Option<WechatConfig>,
-    Option<ComposioConfig>,
     Option<KnowledgeConfig>,
     Option<AgentsConfig>,
 ) {
@@ -338,7 +310,6 @@ pub fn unflatten_from_settings<S: std::hash::BuildHasher>(
         unflatten_llm(pairs),
         unflatten_telegram(pairs),
         unflatten_wechat(pairs),
-        unflatten_composio(pairs),
         unflatten_knowledge(pairs),
         unflatten_agents(pairs),
     )
@@ -460,20 +431,6 @@ fn unflatten_wechat(
     })
 }
 
-fn unflatten_composio(
-    pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
-) -> Option<ComposioConfig> {
-    use rara_domain_shared::settings::keys;
-    let api_key = pairs.get(keys::COMPOSIO_API_KEY).cloned();
-    let entity_id = pairs.get(keys::COMPOSIO_ENTITY_ID).cloned();
-
-    if api_key.is_none() && entity_id.is_none() {
-        return None;
-    }
-
-    Some(ComposioConfig { api_key, entity_id })
-}
-
 fn unflatten_knowledge(
     pairs: &HashMap<String, String, impl std::hash::BuildHasher>,
 ) -> Option<KnowledgeConfig> {
@@ -537,11 +494,6 @@ mod tests {
             notification_channel_id: Some("-100".into()),
         };
 
-        let composio = ComposioConfig {
-            api_key:   Some("cmp_test_key".into()),
-            entity_id: Some("workspace-default".into()),
-        };
-
         let knowledge = KnowledgeConfig {
             embedding_model:      Some("text-embedding-3-small".into()),
             embedding_dimensions: Some(1536),
@@ -553,13 +505,11 @@ mod tests {
         let mut flat = Vec::new();
         flatten_llm(&llm, &mut flat);
         flatten_telegram(&telegram, &mut flat);
-        flatten_composio(&composio, &mut flat);
         flatten_knowledge(&knowledge, &mut flat);
         let map: HashMap<String, String> = flat.into_iter().collect();
 
         // Unflatten
-        let (got_llm, got_tg, _got_wechat, got_composio, got_know, _got_agents) =
-            unflatten_from_settings(&map);
+        let (got_llm, got_tg, _got_wechat, got_know, _got_agents) = unflatten_from_settings(&map);
 
         // --- LLM ---
         let got_llm = got_llm.expect("llm should be Some");
@@ -582,11 +532,6 @@ mod tests {
             telegram.notification_channel_id
         );
 
-        // --- Composio ---
-        let got_composio = got_composio.expect("composio should be Some");
-        assert_eq!(got_composio.api_key, composio.api_key);
-        assert_eq!(got_composio.entity_id, composio.entity_id);
-
         // --- Knowledge ---
         let got_know = got_know.expect("knowledge should be Some");
         assert_eq!(got_know.embedding_model, knowledge.embedding_model);
@@ -604,11 +549,10 @@ mod tests {
     #[test]
     fn unflatten_empty_map_returns_none() {
         let map = HashMap::new();
-        let (llm, tg, wechat, composio, know, agents) = unflatten_from_settings(&map);
+        let (llm, tg, wechat, know, agents) = unflatten_from_settings(&map);
         assert!(wechat.is_none());
         assert!(llm.is_none());
         assert!(tg.is_none());
-        assert!(composio.is_none());
         assert!(know.is_none());
         assert!(agents.is_none());
     }
@@ -660,7 +604,7 @@ mod tests {
             "memory.knowledge.extractor_model".to_string(),
             "legacy-model".to_string(),
         );
-        let (_llm, _tg, _wc, _cmp, know, _agents) = unflatten_from_settings(&map);
+        let (_llm, _tg, _wc, know, _agents) = unflatten_from_settings(&map);
         assert!(
             know.is_none(),
             "legacy extractor_model must not produce a KnowledgeConfig"

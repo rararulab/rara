@@ -201,7 +201,3 @@ agents:
 # wechat:
 #   account_id: "your-account-id"
 #   base_url: "https://api.wechat.example/v1"
-
-# composio:
-#   api_key: "cmp_..."
-#   entity_id: "workspace-default"

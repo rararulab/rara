@@ -23,7 +23,6 @@ mod acp_tools;
 mod artifacts;
 mod ask_user;
 mod bash;
-mod composio;
 mod create_directory;
 mod debug_trace;
 mod delete_file;
@@ -140,24 +139,23 @@ pub fn rara_tool_names() -> Vec<rara_kernel::tool::ToolName> {
 
 /// Dependencies required to construct all tools.
 pub struct ToolDeps {
-    pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
-    pub skill_registry:         rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:            rara_mcp::manager::mgr::McpManager,
-    pub tape_service:           rara_kernel::memory::TapeService,
-    pub session_index:          rara_kernel::session::SessionIndexRef,
-    pub marketplace_service:    std::sync::Arc<rara_skills::marketplace::MarketplaceService>,
-    pub clawhub_client:         std::sync::Arc<rara_skills::clawhub::ClawhubClient>,
-    pub acp_registry:           rara_acp::AcpRegistryRef,
-    pub user_question_manager:  rara_kernel::user_question::UserQuestionManagerRef,
+    pub settings:              Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub skill_registry:        rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:           rara_mcp::manager::mgr::McpManager,
+    pub tape_service:          rara_kernel::memory::TapeService,
+    pub session_index:         rara_kernel::session::SessionIndexRef,
+    pub marketplace_service:   std::sync::Arc<rara_skills::marketplace::MarketplaceService>,
+    pub clawhub_client:        std::sync::Arc<rara_skills::clawhub::ClawhubClient>,
+    pub acp_registry:          rara_acp::AcpRegistryRef,
+    pub user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
     /// Shared fff file picker state (initialized at boot).
-    pub fff_picker:             fff_search::SharedPicker,
+    pub fff_picker:            fff_search::SharedPicker,
     /// Shared fff query tracker state (initialized at boot).
-    pub fff_query_tracker:      fff_search::SharedQueryTracker,
+    pub fff_query_tracker:     fff_search::SharedQueryTracker,
     /// Sandbox tool config from YAML; `None` disables `run_code`.
-    pub sandbox_config:         Option<crate::SandboxToolConfig>,
+    pub sandbox_config:        Option<crate::SandboxToolConfig>,
     /// Shared per-session sandbox map; the cleanup hook holds a clone.
-    pub sandbox_map:            SandboxMap,
+    pub sandbox_map:           SandboxMap,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -281,11 +279,6 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     ];
 
     for tool in tools {
-        registry.register(tool);
-    }
-
-    // Composio tool suite (4 focused tools)
-    for tool in composio::build_tools(deps.composio_auth_provider) {
         registry.register(tool);
     }
 
