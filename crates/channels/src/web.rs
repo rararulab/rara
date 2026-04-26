@@ -658,6 +658,19 @@ impl WebAdapter {
         Self::get_or_create_adapter_bus(&self.adapter_events, *session_key).subscribe()
     }
 
+    /// Test-only: mirror the production WS/SSE reattach path —
+    /// `get_or_create_adapter_bus` followed by an atomic
+    /// [`ReplyBuffer::subscribe_and_drain`]. Returns the live receiver
+    /// and the drained backlog.
+    #[doc(hidden)]
+    pub fn reattach_for_test(
+        &self,
+        session_key: &SessionKey,
+    ) -> (broadcast::Receiver<WebEvent>, Vec<WebEvent>) {
+        let bus = Self::get_or_create_adapter_bus(&self.adapter_events, *session_key);
+        self.reply_buffer.subscribe_and_drain(session_key, &bus)
+    }
+
     /// Get or create the per-session adapter-event broadcast sender.
     ///
     /// Kept deliberately minimal — the heavy fan-out path (kernel stream
@@ -1103,13 +1116,16 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
     // (e.g. POST /messages) even before the first WS subscriber shows up —
     // get_or_create ensures the sender exists before publishers try to emit.
     let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-    let mut adapter_rx = adapter_bus.subscribe();
 
-    // Drain any "important" events buffered during a no-listener window
-    // BEFORE the live forwarder starts pushing into the same mpsc, so the
-    // socket sees buffered events first in publish order. The buffer is
-    // not removed on drain — see `web_reply_buffer` module docs for why.
-    let backlog = state.reply_buffer.snapshot(&session_key);
+    // Atomically subscribe to the adapter bus AND drain any "important"
+    // events buffered during a no-listener window. Holding the per-session
+    // mutex across both ops is what guarantees no event reaches this WS
+    // twice (via both the live broadcast and the snapshot) and that a
+    // second reattach within the TTL window does not replay drained events
+    // — see `web_reply_buffer` module docs for the invariant.
+    let (mut adapter_rx, backlog) = state
+        .reply_buffer
+        .subscribe_and_drain(&session_key, &adapter_bus);
     if !backlog.is_empty() {
         debug!(
             session_key = %session_key_str,
@@ -1352,10 +1368,12 @@ async fn sse_handler(
     let (ev_tx, ev_rx) = mpsc::unbounded_channel::<WebEvent>();
 
     let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-    let mut adapter_rx = adapter_bus.subscribe();
 
-    // Drain any buffered "important" events before live tail starts.
-    let backlog = state.reply_buffer.snapshot(&session_key);
+    // Atomic subscribe + drain — see WS reattach above and the
+    // `web_reply_buffer` module docs for the invariant.
+    let (mut adapter_rx, backlog) = state
+        .reply_buffer
+        .subscribe_and_drain(&session_key, &adapter_bus);
     if !backlog.is_empty() {
         debug!(
             session_key = %params.session_key,
