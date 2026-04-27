@@ -24,7 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rara_kernel::llm::LlmModelListerRef;
+use rara_kernel::llm::{LlmModelListerRef, ModelCapabilities};
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -40,13 +40,18 @@ const CACHE_TTL: Duration = Duration::from_mins(5);
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ChatModel {
     /// OpenRouter model identifier (e.g. `"openai/gpt-4o"`).
-    pub id:             String,
+    pub id:              String,
     /// Human-friendly display name.
-    pub name:           String,
+    pub name:            String,
     /// Maximum context window in tokens.
-    pub context_length: u32,
+    pub context_length:  u32,
     /// Whether the user has pinned this model as a favorite.
-    pub is_favorite:    bool,
+    pub is_favorite:     bool,
+    /// Whether the model accepts image input. Surfaced so the frontend can
+    /// pre-flight image attachments and refuse to send to a text-only model,
+    /// instead of letting the kernel silently drop the image block at
+    /// request build time.
+    pub supports_vision: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -116,10 +121,11 @@ fn curated_fallback(favorite_ids: &[String]) -> Vec<ChatModel> {
     let mut models: Vec<ChatModel> = CURATED_MODELS
         .iter()
         .map(|m| ChatModel {
-            id:             m.id.to_owned(),
-            name:           m.name.to_owned(),
-            context_length: m.context_length,
-            is_favorite:    favorite_ids.iter().any(|f| f == m.id),
+            id:              m.id.to_owned(),
+            name:            m.name.to_owned(),
+            context_length:  m.context_length,
+            is_favorite:     favorite_ids.iter().any(|f| f == m.id),
+            supports_vision: ModelCapabilities::detect(None, m.id).supports_vision,
         })
         .collect();
     apply_favorite_sort(&mut models);
@@ -139,9 +145,10 @@ struct CacheEntry {
 /// flag, which is applied at query time).
 #[derive(Clone)]
 struct RawModel {
-    id:             String,
-    name:           String,
-    context_length: u32,
+    id:              String,
+    name:            String,
+    context_length:  u32,
+    supports_vision: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -231,10 +238,17 @@ impl ModelCatalog {
 
         Ok(models
             .into_iter()
-            .map(|m| RawModel {
-                id:             m.id.clone(),
-                name:           m.id,
-                context_length: 0,
+            .map(|m| {
+                // No provider hint here: `LlmModelLister::list_models()` does not
+                // carry one. The substring matcher in `is_known_vision_model`
+                // still resolves well-known model ids correctly.
+                let supports_vision = ModelCapabilities::detect(None, &m.id).supports_vision;
+                RawModel {
+                    id: m.id.clone(),
+                    name: m.id,
+                    context_length: 0,
+                    supports_vision,
+                }
             })
             .collect())
     }
@@ -245,10 +259,11 @@ impl ModelCatalog {
         let mut models: Vec<ChatModel> = raw
             .iter()
             .map(|m| ChatModel {
-                id:             m.id.clone(),
-                name:           m.name.clone(),
-                context_length: m.context_length,
-                is_favorite:    favorite_ids.iter().any(|f| f == &m.id),
+                id:              m.id.clone(),
+                name:            m.name.clone(),
+                context_length:  m.context_length,
+                is_favorite:     favorite_ids.iter().any(|f| f == &m.id),
+                supports_vision: m.supports_vision,
             })
             .collect();
         apply_favorite_sort(&mut models);

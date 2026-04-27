@@ -57,6 +57,8 @@ import type {
 } from '@mariozechner/pi-ai';
 import type { UserMessageWithAttachments } from '@mariozechner/pi-web-ui';
 
+import { getModelCapabilities } from '../api/model-capabilities';
+
 import {
   type LifecycleEvent,
   type PromptContent,
@@ -76,6 +78,34 @@ import type {
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
+
+/**
+ * Thrown by `RaraAgent.prompt()` when the user attempts to send an image
+ * to a model whose `supports_vision` is `false`. The host (`<pi-chat-panel>`)
+ * surfaces the throw to its existing error UI; the composer keeps the
+ * unsent image attachment so the user can switch models or remove it.
+ */
+export class RaraVisionUnsupportedError extends Error {
+  readonly modelId: string;
+
+  constructor(modelId: string) {
+    super(`当前模型「${modelId}」不支持图片，请切换到支持 vision 的模型，或先移除图片再发送`);
+    this.name = 'RaraVisionUnsupportedError';
+    this.modelId = modelId;
+  }
+}
+
+/**
+ * True when `input` carries at least one inline image block — the only
+ * shape `prepareUserInput` would translate into a wire-level `image_base64`
+ * block. Document attachments and plain-text content do not trigger the
+ * vision gate.
+ */
+function inputHasImage(input: string | UserMessageWithAttachments): boolean {
+  if (typeof input === 'string') return false;
+  if (typeof input.content === 'string') return false;
+  return input.content.some((c) => c.type === 'image');
+}
 
 export interface RaraAgentOptions {
   /** Initial session key. May be set/changed later via `agent.sessionId = …`. */
@@ -350,6 +380,25 @@ export class RaraAgent {
     }
     if (!this.client) {
       throw new Error('No active session — set sessionId before prompting');
+    }
+
+    // Vision pre-flight: if the input carries an image and the selected
+    // model is known to be text-only, refuse the send before any state
+    // mutation. Fail-open on lookup miss (model id absent from the
+    // catalog, or the catalog fetch failed) — a stale frontend cache must
+    // not permanently block image sends.
+    if (inputHasImage(input)) {
+      const modelId = this._state.model.id;
+      try {
+        const caps = await getModelCapabilities();
+        if (caps.get(modelId) === false) {
+          throw new RaraVisionUnsupportedError(modelId);
+        }
+      } catch (err) {
+        if (err instanceof RaraVisionUnsupportedError) throw err;
+        // Catalog fetch failed — log and fall through (fail-open).
+        console.warn('RaraAgent: model capabilities lookup failed, allowing send', err);
+      }
     }
 
     const { wire, local } = prepareUserInput(input);
