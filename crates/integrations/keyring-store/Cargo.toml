@@ -15,7 +15,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-keyring = { version = "^3.6", default-features = false }
+keyring = { version = "^4.0", default-features = false }
 snafu.workspace = true
 tracing.workspace = true
 
