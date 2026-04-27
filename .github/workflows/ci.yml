@@ -24,7 +24,6 @@ jobs:
     runs-on: arc-runner-set
     outputs:
       code: ${{ steps.filter.outputs.code }}
-      sandbox: ${{ steps.filter.outputs.sandbox }}
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -44,17 +43,6 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/rust.yml'
               - '.github/workflows/ci.yml'
-            # Narrow filter for the macOS-only sandbox-macos job, which
-            # natively builds boxlite (~minutes). On PRs that don't touch
-            # the sandbox crate or its dependency surface, the job is
-            # skipped entirely. Pushes to main always run it.
-            sandbox:
-              - 'crates/rara-sandbox/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - '.github/workflows/rust.yml'
-              - '.github/workflows/ci.yml'
 
   lint:
     name: Lint
@@ -67,8 +55,6 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
-    with:
-      run-sandbox-macos: ${{ needs.changes.outputs.sandbox == 'true' || github.event_name == 'push' }}
 
   release-pr:
     name: Release PR

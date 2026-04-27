@@ -2,16 +2,6 @@ name: Rust
 
 on:
   workflow_call:
-    inputs:
-      # Caller (ci.yml) computes this from a path filter: false on PRs that
-      # don't touch the sandbox crate or its dependency surface, true on
-      # pushes to main. Defaults to true so direct invocations or future
-      # callers don't accidentally skip the macOS coverage.
-      run-sandbox-macos:
-        description: "Run the sandbox-macos job (slow real boxlite build)."
-        type: boolean
-        required: false
-        default: true
 
 concurrency:
   group: rust-${{ github.event.pull_request.number || github.sha }}
@@ -28,11 +18,11 @@ env:
   # so `rustc -vV` probes (notably `cargo +nightly doc`) time out trying to start a server.
   RUSTC_WRAPPER: ""
   # boxlite (rara-sandbox dep) builds bubblewrap + libkrun + libkrunfw natively.
-  # The Linux jobs below set `BOXLITE_DEPS_STUB: "1"` per-job because the
+  # All Linux jobs set `BOXLITE_DEPS_STUB: "1"` per-job because the
   # `arc-runner-set` image lacks meson/ninja/patchelf and cannot run a full
-  # native boxlite build. The dedicated `sandbox-macos` job builds boxlite
-  # for real on the self-hosted macOS runner so link-time / FFI / build.rs
-  # regressions in those crates are caught on every PR (issue #1842).
+  # native boxlite build. Real boxlite builds happen only on developer
+  # macOS machines today — see #1842 for the plan to add a CI job once a
+  # stable macOS (or properly-provisioned Linux) runner is available.
 
 defaults:
   run:
@@ -46,8 +36,8 @@ jobs:
     name: Clippy
     runs-on: arc-runner-set
     env:
-      # See top-of-file note: stub native boxlite build on Linux runners
-      # only; macOS runner builds for real in `sandbox-macos`.
+      # See top-of-file note: stub native boxlite build — ARC runners
+      # cannot do the real native build today.
       BOXLITE_DEPS_STUB: "1"
     steps:
       - name: Checkout code
@@ -70,8 +60,8 @@ jobs:
     name: Test
     runs-on: arc-runner-set
     env:
-      # See top-of-file note: stub native boxlite build on Linux runners
-      # only; macOS runner builds for real in `sandbox-macos`.
+      # See top-of-file note: stub native boxlite build — ARC runners
+      # cannot do the real native build today.
       BOXLITE_DEPS_STUB: "1"
     steps:
       - name: Checkout code
@@ -92,9 +82,8 @@ jobs:
 
       # Smoke-test the boxlite staging code path. With BOXLITE_DEPS_STUB=1
       # the build produces no real runtime files, so this is a dry-run
-      # (`--check`) that just exercises the path/permission logic. The
-      # macOS `sandbox-macos` job exercises the real staging path against
-      # a non-stub build.
+      # (`--check`) that just exercises the path/permission logic. Real
+      # staging is exercised on developer macOS machines today (#1842).
       - name: Smoke-test boxlite setup (dry-run)
         run: cargo run -p rara-cli -- setup boxlite --check
 
@@ -102,8 +91,8 @@ jobs:
     name: Documentation
     runs-on: arc-runner-set
     env:
-      # See top-of-file note: stub native boxlite build on Linux runners
-      # only; macOS runner builds for real in `sandbox-macos`.
+      # See top-of-file note: stub native boxlite build — ARC runners
+      # cannot do the real native build today.
       BOXLITE_DEPS_STUB: "1"
     steps:
       - name: Checkout code
@@ -124,41 +113,10 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-  # Real boxlite build on the self-hosted macOS runner. This job intentionally
-  # does NOT set `BOXLITE_DEPS_STUB`, so `bubblewrap-sys` and `libkrun-sys`
-  # build natively — catching link-time / FFI / build.rs regressions that
-  # the stubbed Linux jobs cannot see (issue #1842). The runner label
-  # `macos` matches the `aarch64-apple-darwin` mapping in
-  # `Cargo.toml` (`workspace.metadata.dist.github-custom-runners`).
-  sandbox-macos:
-    name: Sandbox (macOS, real boxlite build)
-    runs-on: macos
-    if: ${{ inputs.run-sandbox-macos }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-        with:
-          persist-credentials: false
-
-      - name: Build rara-sandbox (no stub)
-        run: cargo build -p rara-sandbox
-
-      # Compile the (#[ignore]d) integration test so we exercise the test
-      # binary's link path too. Running it would also need a warm OCI image
-      # cache, which CI does not provision — see crates/rara-sandbox/AGENT.md.
-      - name: Compile rara-sandbox tests (no run)
-        run: cargo test --no-run -p rara-sandbox
-
-      # Real staging: boxlite's build.rs has populated
-      # target/debug/build/boxlite-*/out/runtime/, so this copies the
-      # runtime files into the platform user-data directory for real.
-      - name: Stage boxlite runtime files
-        run: cargo run -p rara-cli -- setup boxlite
-
   rust-success:
     name: Rust Success
     runs-on: arc-runner-set
-    needs: [clippy, test, docs, sandbox-macos]
+    needs: [clippy, test, docs]
     if: always()
     steps:
       - name: Check all Rust jobs status
@@ -166,20 +124,14 @@ jobs:
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
-          SANDBOX_MACOS_RESULT: ${{ needs.sandbox-macos.result }}
         run: |
-          # `sandbox-macos` is gated by a path filter and may legitimately
-          # report `skipped` on PRs that don't touch the sandbox crate —
-          # treat that as success here so the gate doesn't block merges.
           if [[ "$CLIPPY_RESULT" != "success" || \
                 "$TEST_RESULT" != "success" || \
-                "$DOCS_RESULT" != "success" || \
-                ( "$SANDBOX_MACOS_RESULT" != "success" && "$SANDBOX_MACOS_RESULT" != "skipped" ) ]]; then
+                "$DOCS_RESULT" != "success" ]]; then
             echo "One or more Rust jobs failed"
-            echo "  clippy:        $CLIPPY_RESULT"
-            echo "  test:          $TEST_RESULT"
-            echo "  docs:          $DOCS_RESULT"
-            echo "  sandbox-macos: $SANDBOX_MACOS_RESULT"
+            echo "  clippy: $CLIPPY_RESULT"
+            echo "  test:   $TEST_RESULT"
+            echo "  docs:   $DOCS_RESULT"
             exit 1
           fi
           echo "All Rust jobs passed successfully"
