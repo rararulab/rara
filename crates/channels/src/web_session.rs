@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Persistent per-session WebSocket endpoint — the single channel that
-//! replaces the legacy split between [`crate::web`]'s per-turn chat WS
-//! and [`crate::web_session_events`]'s tape-events WS.
+//! Persistent per-session WebSocket endpoint — the single channel for
+//! all web chat traffic. Replaces the legacy split between a per-turn
+//! chat WS and a separate tape-events WS, both removed in #1935.
 //!
 //! # Why
 //!

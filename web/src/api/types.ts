@@ -154,32 +154,6 @@ export type ChatContentBlock =
       filename?: string;
     };
 
-export interface SendMessageResponse {
-  message: ChatMessageData;
-}
-
-// SSE stream event types (matches backend ChatStreamEvent)
-export type ChatStreamEvent =
-  | { type: 'text_delta'; text: string }
-  | { type: 'reasoning_delta'; text: string }
-  | { type: 'thinking' }
-  | { type: 'thinking_done' }
-  | { type: 'iteration'; index: number }
-  | { type: 'tool_call_start'; id: string; name: string }
-  | { type: 'tool_call_end'; id: string; name: string; success: boolean; error?: string }
-  | {
-      type: 'usage';
-      input: number;
-      output: number;
-      cache_read: number;
-      cache_write: number;
-      total_tokens: number;
-      cost: number;
-      model: string;
-    }
-  | { type: 'done'; text: string }
-  | { type: 'error'; message: string };
-
 // Skills
 export interface SkillSummary {
   name: string;

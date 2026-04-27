@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Web channel adapter — WebSocket + SSE implementation of [`ChannelAdapter`].
+//! Web channel adapter — single persistent per-session WebSocket
+//! implementation of [`ChannelAdapter`] (#1935).
 //!
 //! # Design
 //!
 //! Unlike the Telegram adapter (which starts its own polling loop), the
 //! `WebAdapter` exposes an [`axum::Router`] that the host application mounts.
 //!
-//! Each WebSocket / SSE connection has two event sources merged into a single
-//! per-connection `mpsc` channel that feeds the socket:
+//! All web chat traffic for a given session flows through one persistent
+//! WebSocket at `GET /session/{session_key}` — see [`crate::web_session`].
+//! That handler funnels three event sources into a **single ordered mpsc**:
 //!
 //! 1. The kernel's **session-level** event bus
 //!    ([`StreamHub::subscribe_session_events`]) — a permanent subscription
@@ -32,37 +34,30 @@
 //! 2. An adapter-local `DashMap<SessionKey, broadcast::Sender<WebEvent>>` for
 //!    events that never flow through the kernel: `Typing`, `Error`, `Phase`,
 //!    and outbound replies delivered via [`ChannelAdapter::send`].
+//! 3. The kernel notification bus, filtered to this session's `TapeAppended`
+//!    frames (in-turn after `done` AND out-of-turn for background-task
+//!    summaries / scheduled re-entries — see #1849, #1877).
 //!
-//! Inbound messages are handed to the kernel via [`KernelHandle`] in a
-//! fire-and-forget fashion. Outbound delivery is handled separately via
-//! [`ChannelAdapter`].
+//! Funnelling all three onto one ordered mpsc is what makes the wire order
+//! deterministic: in-turn `done` always precedes the matching
+//! `tape_appended`, killing the cross-WS race classes from #1601, #1731,
+//! #1849, #1877, #1923.
+//!
+//! Inbound `prompt` and `abort` frames flow over the same socket and are
+//! dispatched to the kernel via [`KernelHandle`].
 //!
 //! # Endpoints
 //!
-//! | Method | Path        | Description                          |
-//! |--------|-------------|--------------------------------------|
-//! | GET    | `/ws`       | WebSocket upgrade (bidirectional)    |
-//! | GET    | `/events`   | SSE stream (server-push)             |
-//! | POST   | `/messages` | Send message (fire-and-forget)       |
-//! | (none) |             | Audio flows as `AudioBase64` content blocks via WS |
+//! | Method | Path                    | Description                          |
+//! |--------|-------------------------|--------------------------------------|
+//! | GET    | `/session/{session_key}`| Persistent per-session WebSocket     |
+//! | (none) |                         | Audio flows as `AudioBase64` content blocks via WS |
 
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use axum::{
-    Router,
-    extract::{
-        Query, State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
-    },
-    response::{
-        IntoResponse, Response,
-        sse::{Event, KeepAlive, Sse},
-    },
-    routing::{get, post},
-};
+use axum::{Router, routing::get};
 use dashmap::DashMap;
-use futures::{SinkExt, StreamExt, stream::Stream};
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
@@ -79,8 +74,8 @@ use rara_kernel::{
     session::SessionKey,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, broadcast, mpsc, watch};
-use tracing::{debug, error, info, warn};
+use tokio::sync::{RwLock, broadcast, watch};
+use tracing::{info, warn};
 
 use crate::web_reply_buffer::ReplyBuffer;
 
@@ -244,8 +239,7 @@ pub enum WebEvent {
     Done,
     /// Sent immediately on connect over the persistent per-session WS
     /// (see `crate::web_session`). Frontend uses it to confirm the socket
-    /// is established before arming reconnect logic. Not produced by the
-    /// legacy per-turn `/ws` endpoint.
+    /// is established before arming reconnect logic.
     Hello,
     /// A new entry was appended to the session's tape. Emitted on the
     /// persistent per-session WS in two situations:
@@ -269,13 +263,13 @@ pub enum WebEvent {
 // Request / response types
 // ---------------------------------------------------------------------------
 
-/// Query parameters for WebSocket and SSE endpoints.
+/// Query parameters for the persistent per-session WebSocket endpoint.
 ///
-/// Identity is **not** carried here. After owner-token auth passes in
-/// `ws_handler` / `sse_handler`, the authenticated identity is taken
-/// from the adapter's server-trusted `owner_user_id` (config-validated
-/// at boot). Any `user_id` the client might append to the query string
-/// is silently ignored by serde.
+/// Identity is **not** carried here. After owner-token auth passes,
+/// the authenticated identity is taken from the adapter's
+/// server-trusted `owner_user_id` (config-validated at boot). Any
+/// `user_id` the client might append to the query string is silently
+/// ignored by serde.
 #[derive(Debug, Deserialize)]
 pub struct SessionQuery {
     pub session_key: String,
@@ -424,42 +418,6 @@ pub(crate) fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> 
     }
 }
 
-/// Parsed inbound WebSocket text frame.
-#[derive(Debug, Deserialize)]
-struct InboundPayload {
-    content: MessageContent,
-}
-
-fn parse_inbound_text_frame(text: &str) -> InboundPayload {
-    serde_json::from_str(text).unwrap_or_else(|err| {
-        if text.starts_with('{') {
-            tracing::debug!(error = %err, "WebSocket frame looks like JSON but failed to parse; treating as plain text");
-        }
-        InboundPayload {
-            content: MessageContent::Text(text.to_owned()),
-        }
-    })
-}
-
-/// JSON body for POST /messages.
-///
-/// The identity is **not** carried in the body — the `POST /messages`
-/// handler derives the user id from the adapter's server-trusted
-/// `owner_user_id` after owner-token auth. Extra fields (notably a
-/// legacy `user_id`) are ignored by serde so older clients continue
-/// to deserialize without error.
-#[derive(Debug, Deserialize)]
-pub struct SendMessageRequest {
-    pub session_key: String,
-    pub content:     MessageContent,
-}
-
-/// JSON response for POST /messages.
-#[derive(Debug, Serialize)]
-pub struct SendMessageResponse {
-    pub accepted: bool,
-}
-
 // ---------------------------------------------------------------------------
 // WebAdapter
 // ---------------------------------------------------------------------------
@@ -560,7 +518,7 @@ impl WebAdapter {
         self
     }
 
-    /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
+    /// Returns an [`axum::Router`] mounting the persistent per-session WS.
     ///
     /// Mount this into your application:
     /// ```rust,ignore
@@ -579,32 +537,12 @@ impl WebAdapter {
             reply_buffer:      self.reply_buffer.clone(),
         };
 
-        let events_state = crate::web_session_events::SessionEventsState {
-            owner_token: self.owner_token.clone(),
-            handle:      Arc::clone(&self.sink),
-        };
-        let events_router = Router::new()
-            .route(
-                "/events/{session_key}",
-                get(crate::web_session_events::events_ws_handler),
-            )
-            .with_state(events_state);
-
         Router::new()
-            .route("/ws", get(ws_handler))
-            .route("/events", get(sse_handler))
-            .route("/messages", post(send_message_handler))
-            // Persistent per-session WS (#1935 phase a). Mounted alongside
-            // the legacy `/ws` so existing frontends keep working unchanged
-            // until the full migration lands. The legacy chat WS, the
-            // separate events WS, and the SSE / POST endpoints are slated
-            // for deletion in later phases of the same PR.
             .route(
                 "/session/{session_key}",
                 get(crate::web_session::session_ws_handler),
             )
             .with_state(state)
-            .merge(events_router)
     }
 
     /// Test-only entry point that mirrors the inbound code path exercised by
@@ -1030,558 +968,6 @@ async fn transcribe_single_audio(
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket handler
-// ---------------------------------------------------------------------------
-
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    Query(params): Query<SessionQuery>,
-    headers: axum::http::HeaderMap,
-    State(state): State<WebAdapterState>,
-) -> Response {
-    // Prefer `Authorization: Bearer <token>` (browsers can set this via
-    // `Sec-WebSocket-Protocol` shims or native clients), fall back to the
-    // legacy `?token=` query parameter for browser WebSocket upgrades.
-    //
-    // Auth is always enforced: `owner_token` is a required `String`
-    // guaranteed non-empty by startup validation, so "no token = no auth"
-    // is not representable.
-    let header_token = bearer_token_from_headers(&headers);
-    let query_token = params.token.as_deref().filter(|t| !t.is_empty());
-    let provided = header_token.or(query_token);
-    match provided {
-        Some(tok) if rara_kernel::auth::verify_owner_token(&state.owner_token, tok) => {
-            info!(session_key = %params.session_key, "WebSocket auth via owner token");
-        }
-        Some(_) => {
-            warn!(session_key = %params.session_key, "invalid owner token, rejecting");
-            return axum::response::Response::builder()
-                .status(axum::http::StatusCode::UNAUTHORIZED)
-                .body(axum::body::Body::from("invalid token"))
-                .expect("static unauthorized response");
-        }
-        None => {
-            warn!(
-                session_key = %params.session_key,
-                "owner token not provided, rejecting"
-            );
-            return axum::response::Response::builder()
-                .status(axum::http::StatusCode::UNAUTHORIZED)
-                .body(axum::body::Body::from("missing token"))
-                .expect("static unauthorized response");
-        }
-    }
-
-    info!(
-        session_key = %params.session_key,
-        user_id = %state.owner_user_id,
-        "WebSocket upgrade request"
-    );
-    ws.on_upgrade(move |socket| handle_ws(socket, params, state))
-}
-
-async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterState) {
-    let (mut ws_tx, mut ws_rx) = socket.split();
-
-    let session_key_str = params.session_key.clone();
-    let session_key = match SessionKey::try_from_raw(&session_key_str) {
-        Ok(k) => k,
-        Err(e) => {
-            warn!(session_key = %session_key_str, error = %e, "invalid session key on WS");
-            return;
-        }
-    };
-
-    // Register this connection in the EndpointRegistry under the
-    // server-trusted owner id — we must NOT trust any client-provided
-    // identifier here, or an attacker with a valid owner token could
-    // impersonate an arbitrary user.
-    register_endpoint(
-        &state.endpoint_registry,
-        &state.owner_user_id,
-        &session_key_str,
-    )
-    .await;
-
-    // Per-WS event sink: both the kernel session bus forwarder and adapter
-    // event forwarder push into this single channel; the send task drains it
-    // and writes to the socket. One consumer → mpsc (no fan-out needed).
-    let (ws_event_tx, mut ws_event_rx) = mpsc::unbounded_channel::<WebEvent>();
-
-    // Subscribe to the adapter-local event bus (Typing / Error / Phase /
-    // outbound replies). Created lazily so we can publish from other tasks
-    // (e.g. POST /messages) even before the first WS subscriber shows up —
-    // get_or_create ensures the sender exists before publishers try to emit.
-    let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-
-    // Atomically subscribe to the adapter bus AND drain any "important"
-    // events buffered during a no-listener window. Holding the per-session
-    // mutex across both ops is what guarantees no event reaches this WS
-    // twice (via both the live broadcast and the snapshot) and that a
-    // second reattach within the TTL window does not replay drained events
-    // — see `web_reply_buffer` module docs for the invariant.
-    let (mut adapter_rx, backlog) = state
-        .reply_buffer
-        .subscribe_and_drain(&session_key, &adapter_bus);
-    if !backlog.is_empty() {
-        debug!(
-            session_key = %session_key_str,
-            count = backlog.len(),
-            "draining web reply buffer to new WS"
-        );
-        for ev in backlog {
-            if ws_event_tx.send(ev).is_err() {
-                break;
-            }
-        }
-    }
-
-    // Forwarder: adapter bus → per-WS mpsc.
-    let adapter_forwarder = {
-        let ws_event_tx = ws_event_tx.clone();
-        let skey = session_key_str.clone();
-        tokio::spawn(async move {
-            loop {
-                match adapter_rx.recv().await {
-                    Ok(ev) => {
-                        if ws_event_tx.send(ev).is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(session_key = %skey, skipped = n, "adapter bus lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        })
-    };
-
-    // Forwarder: kernel session event bus → per-WS mpsc. The session bus
-    // outlives individual streams so this subscription survives mid-turn
-    // interrupt + reinject, which is exactly the #1647 bug fix.
-    let stream_forwarder = {
-        let ws_event_tx = ws_event_tx.clone();
-        let stream_hub = Arc::clone(&state.stream_hub);
-        let skey = session_key_str.clone();
-        tokio::spawn(async move {
-            let hub = {
-                let guard = stream_hub.read().await;
-                match guard.as_ref() {
-                    Some(h) => Arc::clone(h),
-                    None => return,
-                }
-            };
-            let mut rx = hub.subscribe_session_events(&session_key);
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        let Some(web_event) = stream_event_to_web_event(event) else {
-                            continue;
-                        };
-                        if ws_event_tx.send(web_event).is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(session_key = %skey, skipped = n, "session event bus lagged");
-                    }
-                    // The session bus is never closed by the hub (intentional
-                    // — it outlives streams). Reaching Closed means every
-                    // sender was dropped, which can only happen during hub
-                    // teardown.
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        })
-    };
-
-    // Drop the extra sender held here so that when both forwarders exit, the
-    // mpsc receiver sees a clean close and the send task can terminate.
-    drop(ws_event_tx);
-
-    let mut shutdown_rx = state.shutdown_rx.clone();
-
-    // Send task: drain ws_event_rx → socket.
-    let send_task = {
-        let session_key_str = session_key_str.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    msg = ws_event_rx.recv() => {
-                        let Some(event) = msg else { break; };
-                        let json = match serde_json::to_string(&event) {
-                            Ok(j) => j,
-                            Err(e) => {
-                                error!(session_key = %session_key_str, error = %e, "serialize web event");
-                                continue;
-                            }
-                        };
-                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
-                            debug!(session_key = %session_key_str, "WebSocket send failed, closing");
-                            break;
-                        }
-                    }
-                    _ = shutdown_rx.changed() => {
-                        debug!(session_key = %session_key_str, "shutdown signal received");
-                        break;
-                    }
-                }
-            }
-        })
-    };
-
-    // Recv task: read client frames, dispatch to kernel.
-    let recv_task = {
-        let sink = Arc::clone(&state.sink);
-        let adapter_events = Arc::clone(&state.adapter_events);
-        let session_key_str = session_key_str.clone();
-        let user_id = state.owner_user_id.clone();
-        let stt_service = state.stt_service.clone();
-        let reply_buffer = state.reply_buffer.clone();
-        tokio::spawn(async move {
-            while let Some(Ok(msg)) = ws_rx.next().await {
-                let text = match msg {
-                    Message::Text(t) => t.to_string(),
-                    Message::Close(_) => {
-                        debug!(session_key = %session_key_str, "client closed WS");
-                        break;
-                    }
-                    _ => continue,
-                };
-
-                if text.trim().is_empty() {
-                    continue;
-                }
-
-                let payload = parse_inbound_text_frame(&text);
-                let content = transcribe_audio_blocks(payload.content, &stt_service).await;
-                let raw = build_raw_platform_message(&session_key_str, &user_id, content);
-
-                let guard = sink.read().await;
-                let Some(ref s) = *guard else {
-                    warn!(session_key = %session_key_str, "sink not set");
-                    WebAdapter::publish_adapter_event(
-                        &adapter_events,
-                        &reply_buffer,
-                        &session_key,
-                        WebEvent::Error {
-                            message:     "adapter not started".to_owned(),
-                            category:    None,
-                            upgrade_url: None,
-                        },
-                    );
-                    continue;
-                };
-
-                WebAdapter::publish_adapter_event(
-                    &adapter_events,
-                    &reply_buffer,
-                    &session_key,
-                    WebEvent::Typing,
-                );
-
-                // When no channel binding exists yet (first message),
-                // resolve() returns session_key = None. Patch it with the
-                // URL-provided key so the kernel reuses the existing session.
-                match s.resolve(raw).await {
-                    Ok(mut msg) => {
-                        if msg.session_key_opt().is_none() {
-                            msg.set_session_key(session_key);
-                        }
-                        if let Err(e) = s.submit_message(msg) {
-                            error!(session_key = %session_key_str, error = %e, "submit_message failed");
-                            WebAdapter::publish_adapter_event(
-                                &adapter_events,
-                                &reply_buffer,
-                                &session_key,
-                                WebEvent::Error {
-                                    message:     e.to_string(),
-                                    category:    None,
-                                    upgrade_url: None,
-                                },
-                            );
-                        }
-                        // No per-message forwarder spawn needed — the
-                        // per-WS stream_forwarder above is already
-                        // subscribed to the session-level bus and will see
-                        // events from every stream opened on this session.
-                    }
-                    Err(e) => {
-                        error!(session_key = %session_key_str, error = %e, "resolve failed");
-                        WebAdapter::publish_adapter_event(
-                            &adapter_events,
-                            &reply_buffer,
-                            &session_key,
-                            WebEvent::Error {
-                                message:     e.to_string(),
-                                category:    None,
-                                upgrade_url: None,
-                            },
-                        );
-                    }
-                }
-            }
-        })
-    };
-
-    // Wait for recv or send to finish, then tear down the others.
-    tokio::select! {
-        _ = send_task => {}
-        _ = recv_task => {}
-    }
-    adapter_forwarder.abort();
-    stream_forwarder.abort();
-
-    unregister_endpoint(
-        &state.endpoint_registry,
-        &state.owner_user_id,
-        &session_key_str,
-    )
-    .await;
-    info!(session_key = %session_key_str, "WebSocket connection closed");
-}
-
-// ---------------------------------------------------------------------------
-// SSE handler
-// ---------------------------------------------------------------------------
-
-async fn sse_handler(
-    Query(params): Query<SessionQuery>,
-    State(state): State<WebAdapterState>,
-) -> Response {
-    info!(session_key = %params.session_key, "SSE connection opened");
-
-    let session_key = match SessionKey::try_from_raw(&params.session_key) {
-        Ok(k) => k,
-        Err(e) => {
-            warn!(session_key = %params.session_key, error = %e, "invalid session key on SSE");
-            return (axum::http::StatusCode::BAD_REQUEST, "invalid session key").into_response();
-        }
-    };
-
-    register_endpoint(
-        &state.endpoint_registry,
-        &state.owner_user_id,
-        &params.session_key,
-    )
-    .await;
-
-    // Same two-source merge as WS: adapter bus + kernel session bus → mpsc.
-    let (ev_tx, ev_rx) = mpsc::unbounded_channel::<WebEvent>();
-
-    let adapter_bus = WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-
-    // Atomic subscribe + drain — see WS reattach above and the
-    // `web_reply_buffer` module docs for the invariant.
-    let (mut adapter_rx, backlog) = state
-        .reply_buffer
-        .subscribe_and_drain(&session_key, &adapter_bus);
-    if !backlog.is_empty() {
-        debug!(
-            session_key = %params.session_key,
-            count = backlog.len(),
-            "draining web reply buffer to new SSE"
-        );
-        for ev in backlog {
-            if ev_tx.send(ev).is_err() {
-                break;
-            }
-        }
-    }
-
-    {
-        let ev_tx = ev_tx.clone();
-        let skey = params.session_key.clone();
-        tokio::spawn(async move {
-            loop {
-                match adapter_rx.recv().await {
-                    Ok(ev) => {
-                        if ev_tx.send(ev).is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(session_key = %skey, skipped = n, "SSE adapter bus lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-    }
-
-    {
-        let ev_tx = ev_tx.clone();
-        let stream_hub = Arc::clone(&state.stream_hub);
-        let skey = params.session_key.clone();
-        tokio::spawn(async move {
-            let hub = {
-                let guard = stream_hub.read().await;
-                match guard.as_ref() {
-                    Some(h) => Arc::clone(h),
-                    None => return,
-                }
-            };
-            let mut rx = hub.subscribe_session_events(&session_key);
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        let Some(we) = stream_event_to_web_event(event) else {
-                            continue;
-                        };
-                        if ev_tx.send(we).is_err() {
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(session_key = %skey, skipped = n, "SSE stream bus lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-    }
-
-    drop(ev_tx);
-
-    let shutdown_rx = state.shutdown_rx.clone();
-    let registry_for_cleanup = Arc::clone(&state.endpoint_registry);
-    let user_for_cleanup = state.owner_user_id.clone();
-    let key_for_cleanup = params.session_key.clone();
-
-    let stream = futures::stream::unfold(
-        (ev_rx, shutdown_rx, params.session_key.clone()),
-        |(mut rx, mut shutdown_rx, session_key)| async move {
-            tokio::select! {
-                msg = rx.recv() => {
-                    let event = msg?;
-                    let json = match serde_json::to_string(&event) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            error!(session_key, error = %e, "serialize SSE event");
-                            return None;
-                        }
-                    };
-                    let out: Result<Event, std::convert::Infallible> =
-                        Ok(Event::default().data(json));
-                    Some((out, (rx, shutdown_rx, session_key)))
-                }
-                _ = shutdown_rx.changed() => {
-                    debug!(session_key, "shutdown signal, ending SSE stream");
-                    None
-                }
-            }
-        },
-    );
-
-    // Use a oneshot to signal when the SSE stream ends so we can unregister.
-    let (cleanup_tx, cleanup_rx) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(async move {
-        // Wait for stream to end (sender dropped when stream completes).
-        let _ = cleanup_rx.await;
-        unregister_endpoint(&registry_for_cleanup, &user_for_cleanup, &key_for_cleanup).await;
-    });
-
-    // Chain the stream to drop the cleanup sender when done.
-    let stream = CleanupStream {
-        inner:    Box::pin(stream),
-        _cleanup: cleanup_tx,
-    };
-
-    Sse::new(stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
-}
-
-/// Wrapper that holds a oneshot sender — when this stream is dropped, the
-/// sender drops too, which signals the cleanup task to unregister.
-struct CleanupStream<S> {
-    inner:    std::pin::Pin<Box<S>>,
-    _cleanup: tokio::sync::oneshot::Sender<()>,
-}
-
-impl<S: Stream> Stream for CleanupStream<S> {
-    type Item = S::Item;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// POST /messages handler
-// ---------------------------------------------------------------------------
-
-async fn send_message_handler(
-    State(state): State<WebAdapterState>,
-    axum::Json(body): axum::Json<SendMessageRequest>,
-) -> Response {
-    debug!(
-        session_key = %body.session_key,
-        user_id = %state.owner_user_id,
-        "POST /messages"
-    );
-
-    let SendMessageRequest {
-        session_key: session_key_str,
-        content,
-    } = body;
-    // Identity comes from the server-trusted owner id, not the client
-    // body — auth proves "you're the owner", so the server names the
-    // identity.
-    let user_id = state.owner_user_id.clone();
-
-    let session_key = match SessionKey::try_from_raw(&session_key_str) {
-        Ok(k) => k,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                "invalid session_key".to_owned(),
-            )
-                .into_response();
-        }
-    };
-
-    // Ensure the adapter bus exists so the Typing indicator below reaches
-    // currently-connected WS/SSE subscribers (if any).
-    WebAdapter::get_or_create_adapter_bus(&state.adapter_events, session_key);
-
-    let raw = build_raw_platform_message(&session_key_str, &user_id, content);
-
-    let guard = state.sink.read().await;
-    match &*guard {
-        Some(sink) => {
-            WebAdapter::publish_adapter_event(
-                &state.adapter_events,
-                &state.reply_buffer,
-                &session_key,
-                WebEvent::Typing,
-            );
-            match sink.ingest(raw).await {
-                Ok(()) => {
-                    // No forwarder to spawn — each WS/SSE is permanently
-                    // subscribed to the session's event bus via
-                    // StreamHub::subscribe_session_events.
-                    axum::Json(SendMessageResponse { accepted: true }).into_response()
-                }
-                Err(e) => {
-                    error!(session_key = %session_key_str, error = %e, "ingest failed");
-                    let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
-                    (status, e.to_string()).into_response()
-                }
-            }
-        }
-        None => {
-            let status = axum::http::StatusCode::SERVICE_UNAVAILABLE;
-            (status, "adapter not started").into_response()
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ChannelAdapter trait implementation
 // ---------------------------------------------------------------------------
 
@@ -1681,14 +1067,10 @@ impl ChannelAdapter for WebAdapter {
 
 #[cfg(test)]
 mod tests {
-    use rara_kernel::{
-        channel::types::{ContentBlock, MessageContent},
-        io::{PlatformOutbound, StreamEvent},
-    };
+    use rara_kernel::io::{PlatformOutbound, StreamEvent};
 
     use super::{
-        SendMessageRequest, SessionQuery, WebEvent, parse_inbound_text_frame,
-        platform_outbound_to_web_event, stream_event_to_web_event,
+        SessionQuery, WebEvent, platform_outbound_to_web_event, stream_event_to_web_event,
     };
 
     #[test]
@@ -1709,44 +1091,6 @@ mod tests {
         assert!(matches!(
             stream_event_to_web_event(event),
             Some(WebEvent::TextDelta { text }) if text == "hello"
-        ));
-    }
-
-    #[test]
-    fn parses_legacy_text_frame_as_plain_text_message() {
-        let payload = parse_inbound_text_frame("hello world");
-
-        assert!(matches!(payload.content, MessageContent::Text(text) if text == "hello world"));
-    }
-
-    #[test]
-    fn parses_multimodal_json_frame() {
-        let raw = serde_json::json!({
-            "content": [
-                { "type": "text", "text": "look at this" },
-                {
-                    "type": "image_base64",
-                    "media_type": "image/png",
-                    "data": "AAAA"
-                }
-            ]
-        })
-        .to_string();
-
-        let payload = parse_inbound_text_frame(&raw);
-
-        assert!(matches!(
-            payload.content,
-            MessageContent::Multimodal(blocks)
-                if matches!(
-                    blocks.as_slice(),
-                    [
-                        ContentBlock::Text { text },
-                        ContentBlock::ImageBase64 { media_type, data }
-                    ] if text == "look at this"
-                        && media_type == "image/png"
-                        && data == "AAAA"
-                )
         ));
     }
 
@@ -1780,39 +1124,6 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
-    }
-
-    #[test]
-    fn parses_document_attachment_frame() {
-        let raw = serde_json::json!({
-            "content": [
-                { "type": "text", "text": "summarize this" },
-                {
-                    "type": "file_base64",
-                    "media_type": "application/pdf",
-                    "data": "JVBERi0x",
-                    "filename": "spec.pdf"
-                }
-            ]
-        })
-        .to_string();
-
-        let payload = parse_inbound_text_frame(&raw);
-
-        assert!(matches!(
-            payload.content,
-            MessageContent::Multimodal(blocks)
-                if matches!(
-                    blocks.as_slice(),
-                    [
-                        ContentBlock::Text { text },
-                        ContentBlock::FileBase64 { media_type, data, filename }
-                    ] if text == "summarize this"
-                        && media_type == "application/pdf"
-                        && data == "JVBERi0x"
-                        && filename.as_deref() == Some("spec.pdf")
-                )
-        ));
     }
 
     #[test]
@@ -1894,21 +1205,6 @@ mod tests {
             stream_event_to_web_event(event),
             Some(WebEvent::TurnRationale { text }) if text == "checking logs"
         ));
-    }
-
-    #[test]
-    fn deserializes_legacy_post_body_with_plain_string_content() {
-        // Legacy clients still send `user_id` in the body; serde must
-        // ignore that extra field instead of rejecting the request, and
-        // the handler takes identity from `state.owner_user_id`.
-        let request: SendMessageRequest = serde_json::from_value(serde_json::json!({
-            "session_key": "session-123",
-            "user_id": "user-123",
-            "content": "hello world"
-        }))
-        .expect("request");
-
-        assert!(matches!(request.content, MessageContent::Text(text) if text == "hello world"));
     }
 
     #[test]

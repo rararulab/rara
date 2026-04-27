@@ -11,7 +11,8 @@ React page-level components that mount pi-web-ui's Lit web components
   message renderer that adds the trace button when an assistant message is
   flagged as the final one of its turn.
 - `pi-chat-messages.ts` — pure conversion from rara's `ChatMessageData` shape
-  (see `@/api/types`) into pi-agent-core `Message` objects. Owns
+  (see `@/api/types`) into pi-web-ui `Message` objects (typed via the
+  `RaraAgent` interfaces in `@/agent/types`). Owns
   `assistantSeqByRef` (a `WeakMap<AssistantMessage, number>`),
   `toolResultByCallId` (a `Map<string, ToolResultMessage>` populated as a
   side-channel so tool results are NOT emitted as standalone bubbles — see
@@ -86,7 +87,11 @@ AssistantMessage[]  ──────────────►   pi-web-ui re
 
 - `@/api/types` — rara backend message shape (`ChatMessageData`,
   `ChatToolCallData`).
-- `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core` — message types
-  (`AssistantMessage`, `Message`) consumed by pi-web-ui.
+- `@/agent/types`, `@/agent/rara-agent` — local replacements for
+  pi-agent-core (#1935): `AssistantMessage` / `Message` shapes plus the
+  `RaraAgent` class that drives `<pi-chat-panel>` directly off the
+  persistent per-session WebSocket (`@/agent/session-ws-client`).
+- `@mariozechner/pi-ai` — type-only imports for the underlying message
+  shapes still referenced by `pi-web-ui`.
 - `@mariozechner/pi-web-ui` — Lit components (`pi-chat-panel`, etc.) that
   render the converted messages and call back into the registered renderer.
