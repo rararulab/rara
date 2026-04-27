@@ -78,7 +78,7 @@ jobs:
         uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
 
       - name: Run tests
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --profile ci
 
       # Smoke-test the boxlite staging code path. With BOXLITE_DEPS_STUB=1
       # the build produces no real runtime files, so this is a dry-run

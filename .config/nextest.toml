@@ -1,0 +1,20 @@
+# Nextest configuration.
+#
+# The `ci` profile is used by `.github/workflows/rust.yml` on the
+# `arc-runner-set` self-hosted runners. ARC pods report the underlying
+# node's `nproc` (often 16+) while having a much smaller cgroup CPU quota,
+# so nextest's default `test-threads = num_cpus` over-subscribes the pod —
+# individual tests get inflated wall-clock times (sub-second locally,
+# 50s+ on CI) and the multi-thread tokio runtimes inside each test compound
+# the starvation. See #1911.
+
+[profile.ci]
+# Cap parallel test processes to a value that comfortably fits within an
+# ARC pod's CPU quota. 4 keeps tokio worker threads (2-4 per test) within
+# the pod budget and eliminates the starvation-induced wall-clock blow-up.
+test-threads = 4
+
+# Surface accidentally-slow tests instead of letting them sit forever.
+# `terminate-after = 3` kills tests that exceed the period three times in a
+# row, so a hung test fails the run rather than burning the job timeout.
+slow-timeout = { period = "60s", terminate-after = 3 }
