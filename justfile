@@ -365,3 +365,31 @@ check-deps: devtool-build
 deps-update:
     @echo "📦 Updating dependencies..."
     ./scripts/update-deps.sh
+
+# ========================================================================================
+# Spec / agent-spec (Task Contracts) — see specs/README.md
+# ========================================================================================
+
+# Scaffold a new lane-1 task spec under specs/. Use the slug after issue creation.
+[doc("scaffold a new lane-1 task spec: just spec-init <slug>")]
+[group("📝 Spec")]
+spec-init slug:
+    @agent-spec init --level task --lang en --name "{{slug}}"
+
+# Lint a single spec; min-score 0.7 by default.
+[doc("lint a task spec: just spec-lint specs/issue-N-<slug>.spec.md")]
+[group("📝 Spec")]
+spec-lint spec:
+    @agent-spec lint {{spec}} --min-score 0.7
+
+# Run lint + verify + report against the current worktree.
+[doc("verify a task spec against this worktree: just spec-lifecycle specs/issue-N-<slug>.spec.md")]
+[group("📝 Spec")]
+spec-lifecycle spec:
+    @agent-spec lifecycle {{spec}} --code . --change-scope worktree --format text
+
+# Render the agent-facing contract view (Intent + Decisions + Boundaries + Acceptance).
+[doc("render the contract view of a spec: just spec-contract specs/issue-N-<slug>.spec.md")]
+[group("📝 Spec")]
+spec-contract spec:
+    @agent-spec contract {{spec}}
