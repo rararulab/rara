@@ -232,7 +232,7 @@ impl ToolExecute for BashTool {
             .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
 
         let working_dir = match params.cwd.as_deref() {
-            Some(raw) => Some(translate_cwd(raw)?),
+            Some(raw) => Some(translate_cwd(raw, rara_paths::workspace_dir())?),
             None => Some(GUEST_WORKSPACE.to_owned()),
         };
 
@@ -332,7 +332,7 @@ impl ToolExecute for BashTool {
 /// Translate a host-style `cwd` argument into a guest-mount path.
 ///
 /// See the module-level docs for the full rules.
-fn translate_cwd(raw: &str) -> anyhow::Result<String> {
+fn translate_cwd(raw: &str, workspace: &std::path::Path) -> anyhow::Result<String> {
     let path = std::path::Path::new(raw);
     if !path.is_absolute() {
         // Relative path → joined to /workspace inside the guest. Render
@@ -344,7 +344,6 @@ fn translate_cwd(raw: &str) -> anyhow::Result<String> {
         return Ok(format!("{GUEST_WORKSPACE}/{trimmed}"));
     }
 
-    let workspace = rara_paths::workspace_dir();
     match path.strip_prefix(workspace) {
         Ok(rest) if rest.as_os_str().is_empty() => Ok(GUEST_WORKSPACE.to_owned()),
         Ok(rest) => Ok(format!(
@@ -497,32 +496,35 @@ fn truncate_output(output: &str) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    fn fake_workspace() -> PathBuf { PathBuf::from("/tmp/rara-test-workspace") }
 
     #[test]
     fn translate_cwd_relative_path() {
-        let out = translate_cwd("src/foo").expect("ok");
+        let out = translate_cwd("src/foo", &fake_workspace()).expect("ok");
         assert_eq!(out, "/workspace/src/foo");
     }
 
     #[test]
     fn translate_cwd_relative_dot_slash() {
-        let out = translate_cwd("./src").expect("ok");
+        let out = translate_cwd("./src", &fake_workspace()).expect("ok");
         assert_eq!(out, "/workspace/src");
     }
 
     #[test]
     fn translate_cwd_outside_workspace_errors() {
-        // /etc is never inside the workspace dir.
-        let err = translate_cwd("/etc/passwd").expect_err("must reject");
+        let err = translate_cwd("/etc/passwd", &fake_workspace()).expect_err("must reject");
         assert!(err.to_string().contains("outside the workspace"));
     }
 
     #[test]
     fn translate_cwd_inside_workspace_rewrites() {
-        let workspace = rara_paths::workspace_dir().clone();
+        let workspace = fake_workspace();
         let inside = workspace.join("foo/bar");
-        let out = translate_cwd(&inside.to_string_lossy()).expect("ok");
+        let out = translate_cwd(&inside.to_string_lossy(), &workspace).expect("ok");
         assert_eq!(out, "/workspace/foo/bar");
     }
 }
