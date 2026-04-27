@@ -25,6 +25,7 @@ Every entry has a **why** — the reasoning generalizes better than the rule alo
 - Do NOT leave stale worktrees — **why:** stale worktrees accumulate disk usage and cause branch confusion
 - Do NOT report PR as complete before CI is green — **why:** user acts on "done" signal; reporting prematurely wastes their time when CI fails
 - Do NOT create a new crate without an `AGENT.md` — **why:** without agent guidelines, the next agent working in this crate will repeat the same mistakes
+- Do NOT use stacked PRs (sub-PR → feature branch → main) — **why:** Rust full-workspace CI is slow; every layer in the stack waits on its own CI run, compounding turnaround time. One issue = one PR targeting `main`. If a plan spans multiple unrelated concerns, split it into independent issues upfront — each shipped on its own.
 
 ## Agent System Prompt
 

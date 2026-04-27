@@ -20,7 +20,7 @@ A single slash command `/dev "requirement"` that runs the full development pipel
   │
   ├─ Phase 1: DESIGN ──── brainstorm → plan → review plan → revise → present to user
   │                                                                    ↑ interaction 1
-  ├─ Phase 2: IMPLEMENT ─ judge scale → issue → worktree → subagent → build verify
+  ├─ Phase 2: IMPLEMENT ─ issue → worktree → subagent → build verify
   │
   ├─ Phase 3: REVIEW ──── diff review → autonomous research & fix → re-review (≤3 rounds)
   │
@@ -66,13 +66,11 @@ A single slash command `/dev "requirement"` that runs the full development pipel
 
 ## Phase 2: IMPLEMENT
 
-### Step 2.1: Scale Judgment
+### Step 2.1: Issue + Worktree + Implement
 
-- Parse the plan, identify independent sub-tasks
-- Small task (< 3 independent steps) → single worktree
-- Large task (3+ independent steps) → multi-worktree parallel (stacked PRs)
-
-### Step 2.2a: Small Task Path
+Every task — regardless of size — uses a single issue, single worktree, single PR. Rust full-workspace
+compilation is slow enough that stacked PRs would compound CI wait time; verify locally instead and
+ship one PR.
 
 ```bash
 # Create issue (--template cannot be used with --body, so body must follow template structure)
@@ -91,27 +89,10 @@ cargo clippy -p {crate} --all-targets --all-features --no-deps -- -D warnings
 cargo test -p {crate}
 ```
 
-### Step 2.2b: Large Task Path (Stacked PRs)
+If the plan genuinely spans multiple unrelated concerns, split it into separate independent issues
+upfront — each its own worktree and PR, no stacking.
 
-```bash
-# Create epic issue (body follows feature_request template structure)
-gh issue create --title "feat(scope): {description}" --body "..."
-
-# Create feature branch from origin/main (no checkout needed)
-git fetch origin main
-git branch feat/{name} origin/main
-git push -u origin feat/{name}
-
-# For each independent sub-task:
-#   - Create sub-issue referencing epic
-#   - Create worktree branching from feat/{name}
-#   - Dispatch subagent (parallel execution)
-#
-# After all complete → each sub-branch creates a PR targeting feat/{name}
-# Merge via GitHub PR (never local merge) per stacked-prs.md
-```
-
-### Step 2.3: Build Verification
+### Step 2.2: Build Verification
 
 - `cargo check -p {crate}`
 - `cargo clippy -p {crate} --all-targets --all-features --no-deps -- -D warnings`
@@ -167,7 +148,6 @@ Only these situations prompt the user:
 
 - Conventional commit format: `type(scope): description (#N)`
 - Commit body includes `Closes #N`
-- Large tasks: each sub-PR gets independent commits
 
 ### Step 4.2: Push & PR
 
@@ -177,7 +157,7 @@ gh pr create --title "{title}" --body "..." --label "{type}" --label "{component
 ```
 
 - Uses project PR template (`.github/pull_request_template.md`)
-- Large tasks: push sub-PRs first → then summary PR targeting main
+- One issue → one PR, always targeting `main`
 
 ### Step 4.3: Wait for CI Green
 
@@ -207,7 +187,7 @@ Inspired by [gstack](https://github.com/garrytan/gstack) (Garry Tan's Claude Cod
 | Scope | Review + ship only | Full pipeline: design → implement → review → ship |
 | Review issues | Ask user for each issue | Autonomous research + fix; escalate only if stuck |
 | Isolation | Direct branch work | Worktree isolation (per CLAUDE.md) |
-| Scale handling | Single branch | Auto-judge: single vs stacked PRs |
+| Scale handling | Single branch | Single PR per issue; split unrelated concerns into separate issues |
 | User interaction | Multiple touchpoints | Only 2: plan confirm + final report |
 
 ## Implementation Notes

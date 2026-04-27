@@ -46,7 +46,7 @@ Project anchors you must respect (do not duplicate; load and follow):
 
 ### 3. Implement
 
-Make the smallest change that satisfies the acceptance criteria. If the diff grows past ~400 lines or spans multiple unrelated concerns, stop and ask the parent — the issue may need to be split (`docs/guides/stacked-prs.md`).
+Make the smallest change that satisfies the acceptance criteria. If the diff spans multiple unrelated concerns, stop and ask the parent — the issue may need to be split into separate issues (each its own PR).
 
 ### 4. Mandatory pre-commit checks
 
