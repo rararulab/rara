@@ -16,7 +16,6 @@ Background worker and task scheduling framework — provides a flexible worker s
 - `src/driver.rs` — Internal execution loop that drives workers according to their trigger.
 - `src/builder.rs` — Type-state builder for constructing workers with compile-time trigger validation.
 - `src/blocking.rs` — `BlockingWorker` adapter for synchronous work.
-- `src/execution_client.rs` — `ExecutionWorkerClient` for remote worker execution.
 - `src/metrics.rs` — Worker execution metrics.
 
 ## Critical Invariants

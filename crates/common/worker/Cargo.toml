@@ -18,7 +18,6 @@ common-runtime = { workspace = true }
 croner = "3"
 derive_more = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["metrics"] }
-rara-api = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 smart-default = "0.7"
