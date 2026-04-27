@@ -403,7 +403,9 @@ async fn handle_session_ws(
                                 &reply_buffer,
                                 &session_key,
                                 WebEvent::Error {
-                                    message: "adapter not started".to_owned(),
+                                    message:     "adapter not started".to_owned(),
+                                    category:    None,
+                                    upgrade_url: None,
                                 },
                             );
                             continue;
@@ -435,7 +437,9 @@ async fn handle_session_ws(
                                         &reply_buffer,
                                         &session_key,
                                         WebEvent::Error {
-                                            message: e.to_string(),
+                                            message:     e.to_string(),
+                                            category:    None,
+                                            upgrade_url: None,
                                         },
                                     );
                                 }
@@ -451,7 +455,9 @@ async fn handle_session_ws(
                                     &reply_buffer,
                                     &session_key,
                                     WebEvent::Error {
-                                        message: e.to_string(),
+                                        message:     e.to_string(),
+                                        category:    None,
+                                        upgrade_url: None,
                                     },
                                 );
                             }
@@ -466,7 +472,9 @@ async fn handle_session_ws(
                                 &reply_buffer,
                                 &session_key,
                                 WebEvent::Error {
-                                    message: "adapter not started".to_owned(),
+                                    message:     "adapter not started".to_owned(),
+                                    category:    None,
+                                    upgrade_url: None,
                                 },
                             );
                             continue;
@@ -482,7 +490,9 @@ async fn handle_session_ws(
                                 &reply_buffer,
                                 &session_key,
                                 WebEvent::Error {
-                                    message: e.to_string(),
+                                    message:     e.to_string(),
+                                    category:    None,
+                                    upgrade_url: None,
                                 },
                             );
                         } else {
@@ -503,7 +513,9 @@ async fn handle_session_ws(
                             &reply_buffer,
                             &session_key,
                             WebEvent::Error {
-                                message: format!("invalid frame: {e}"),
+                                message:     format!("invalid frame: {e}"),
+                                category:    None,
+                                upgrade_url: None,
                             },
                         );
                     }

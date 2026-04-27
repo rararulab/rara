@@ -416,7 +416,7 @@ async fn session_ws_abort_without_sink_returns_error() {
 
     let response = next_event(&mut ws).await;
     match response {
-        WebEvent::Error { message } => {
+        WebEvent::Error { message, .. } => {
             assert!(
                 message.contains("adapter not started"),
                 "expected adapter-not-started error, got: {message}"
