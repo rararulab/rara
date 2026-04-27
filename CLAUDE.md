@@ -38,7 +38,6 @@ These artifacts are authoritative — your work is accountable to them, not just
 All changes — no matter how small — follow the issue → worktree → PR → merge flow. No exceptions.
 
 @docs/guides/workflow.md
-@docs/guides/stacked-prs.md
 @docs/guides/commit-style.md
 
 ## Code Quality
