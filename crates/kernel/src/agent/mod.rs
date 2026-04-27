@@ -924,18 +924,10 @@ fn thinking_level_to_config(
     })
 }
 
-/// Walk the parent_id chain in the process table to find the root ancestor
-/// of `key`. The root is the first session whose `parent_id` is `None`.
+/// Walk the parent_id chain in `table` from `key` to the root.
 ///
-/// Used by `run_turn` to locate the SessionEntry holding LLM overrides:
-/// child (task subagent) sessions don't have their own SessionEntry, so
-/// children inherit the root's pinned model/provider/thinking_level by
-/// looking it up at turn time (#1958).
-fn root_session_key(handle: &KernelHandle, key: SessionKey) -> SessionKey {
-    walk_to_root(handle.process_table().as_ref(), key)
-}
-
-/// Inner helper: walk the parent_id chain in `table` from `key` to the root.
+/// A root session (no `parent_id`) returns `current` unchanged on the first
+/// iteration — the function is a no-op for top-level sessions.
 ///
 /// Falls back to the last reachable session if any ancestor is missing from
 /// the table (e.g. already reaped) or if the depth cap is hit. The cap is a
@@ -1105,7 +1097,7 @@ async fn run_agent_loop_inner(
     // parent chain in `process_table` to find the root, and read the
     // overrides from the root's SessionEntry. This way children inherit
     // their parent's pinned model without polluting the session list.
-    let root_session_key = root_session_key(handle, session_key);
+    let root_session_key = walk_to_root(handle.process_table().as_ref(), session_key);
     let session_entry = handle
         .session_index()
         .get_session(&root_session_key)
