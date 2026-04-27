@@ -66,18 +66,31 @@ pub struct AppConfig {
     #[serde(default = "default_database_config")]
     pub database:               DatabaseConfig,
     /// HTTP server bind / limits.
+    ///
+    /// `RestServerConfig` is `SmartDefault` (binds `127.0.0.1:25555`), so an
+    /// existing config that omits the section keeps booting on the standard
+    /// port instead of hard-failing — see issue #1913 / `crates/app/AGENT.md`.
+    #[serde(default)]
     pub http:                   RestServerConfig,
     /// gRPC server bind / limits.
+    ///
+    /// `GrpcServerConfig` is `SmartDefault` (binds `127.0.0.1:50051`).
+    #[serde(default)]
     pub grpc:                   GrpcServerConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
     pub telemetry:              TelemetryConfig,
+    // REQUIRED: defaulting an auth secret would silently authorize every
+    // request — the operator must supply a real long random string.
     /// Static bearer token for owner authentication (Web UI + admin API).
     ///
     /// Required. The same token is accepted via `Authorization: Bearer`
     /// on admin HTTP endpoints and via `?token=` on the legacy WebSocket
     /// upgrade. Missing/empty at startup is a fatal config error.
     pub owner_token:            String,
+    // REQUIRED: identifies which `users[]` entry owns the admin surface;
+    // no safe default — picking arbitrarily would grant ownership to a
+    // wrong principal.
     /// Kernel username resolved for authenticated owner requests.
     ///
     /// Must reference an entry in [`AppConfig::users`] whose role is
@@ -93,11 +106,18 @@ pub struct AppConfig {
     /// WeChat iLink Bot configuration (seeded to settings store at startup).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wechat:                 Option<flatten::WechatConfig>,
+    // REQUIRED: an empty users list would leave the kernel with no
+    // resolvable identities; `owner_user_id` references this list, so a
+    // missing/empty value is a hard boot-time error rather than a silent
+    // default.
     /// Configured users with platform identity mappings (required).
     pub users:                  Vec<crate::boot::UserConfig>,
     /// Maximum ingress messages per user per minute (rate limiting).
     #[serde(default = "default_max_ingress_per_minute")]
     pub max_ingress_per_minute: u32,
+    // REQUIRED: `heartbeat_interval` has no defensible default — a fast
+    // tick burns LLM budget, a slow tick disables proactive behavior.
+    // Operator must pick.
     /// Mita proactive agent configuration (required).
     pub mita:                   MitaConfig,
     /// Knowledge layer configuration (seeded to settings store at startup).
@@ -266,6 +286,91 @@ fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build
 fn default_max_ingress_per_minute() -> u32 { 30 }
 
 // ---------------------------------------------------------------------------
+// Friendly "missing required field" error (#1913)
+// ---------------------------------------------------------------------------
+//
+// `serde` reports missing fields as `missing field \`X\``. Operators reading
+// that on startup have no way to recover without grepping the codebase, so we
+// intercept the message and append a pointer at `config.example.yaml` where
+// every top-level key first appears.
+
+/// `config.example.yaml` shipped with the source tree, embedded at compile
+/// time so we can quote line numbers from it without a runtime file read.
+const EXAMPLE_YAML: &str = include_str!("../../../config.example.yaml");
+
+/// Lazy index: top-level YAML key → 1-based line number in `EXAMPLE_YAML`.
+///
+/// Built once on first miss; subsequent misses are O(1).
+fn example_line_index() -> &'static std::collections::HashMap<&'static str, usize> {
+    use std::sync::OnceLock;
+    static INDEX: OnceLock<std::collections::HashMap<&'static str, usize>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut map = std::collections::HashMap::new();
+        for (i, line) in EXAMPLE_YAML.lines().enumerate() {
+            // Match top-level keys only — `^[a-z_]+:` with no leading
+            // whitespace and a colon directly after the identifier. Skip
+            // comment lines (`#`).
+            let trimmed = line.trim_end();
+            if trimmed.starts_with('#') || trimmed.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let Some(colon) = trimmed.find(':') else {
+                continue;
+            };
+            let key = &trimmed[..colon];
+            if !key
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+                || key.is_empty()
+            {
+                continue;
+            }
+            // Only insert the first occurrence — operators want the example
+            // stanza, not the last reference inside a comment.
+            map.entry(Box::leak(key.to_owned().into_boxed_str()) as &'static str)
+                .or_insert(i + 1);
+        }
+        map
+    })
+}
+
+/// Extract the field name from a serde "missing field" message.
+///
+/// Handles both shapes seen in practice:
+/// - serde direct: `... missing field \`X\` ...`
+/// - `config` crate wrapped: `missing configuration field "X"`
+fn parse_missing_field(msg: &str) -> Option<&str> {
+    for (needle, terminator) in [
+        ("missing field `", '`'),
+        ("missing configuration field \"", '"'),
+    ] {
+        if let Some(idx) = msg.find(needle) {
+            let rest = &msg[idx + needle.len()..];
+            if let Some(end) = rest.find(terminator) {
+                return Some(&rest[..end]);
+            }
+        }
+    }
+    None
+}
+
+/// Format the friendly missing-field error described in issue #1913.
+///
+/// Falls back to `None` if the underlying message does not match the
+/// `missing field` shape — caller should keep its existing error path.
+fn format_missing_field_error(raw: &str, config_path: &Path) -> Option<String> {
+    let field = parse_missing_field(raw)?;
+    let line_hint = example_line_index()
+        .get(field)
+        .map(|line| format!("See config.example.yaml line {line} for an example stanza.\n"))
+        .unwrap_or_default();
+    Some(format!(
+        "Failed to load config: missing required field `{field}`.\n{line_hint}Config file: {}",
+        config_path.display()
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // StartOptions
 // ---------------------------------------------------------------------------
 
@@ -319,7 +424,20 @@ impl AppConfig {
             )
             .build()?;
         tracing::info!(?cfg, "Raw configuration");
-        cfg.try_deserialize()
+        cfg.try_deserialize().map_err(|err| {
+            // Pick whichever path actually contributed config (local wins
+            // when both exist) so the operator sees the file they would
+            // edit. If neither exists we already returned early above.
+            let displayed_path = if local_path.is_file() {
+                local_path
+            } else {
+                global_path
+            };
+            match format_missing_field_error(&err.to_string(), displayed_path) {
+                Some(friendly) => config::ConfigError::Message(friendly),
+                None => err,
+            }
+        })
     }
 }
 
@@ -1489,6 +1607,126 @@ telemetry:
         let otlp = cfg.telemetry.otlp.expect("otlp block");
         assert_eq!(otlp.enabled, Some(false));
         assert!(otlp.headers.is_empty());
+    }
+
+    #[test]
+    fn minimal_required_yaml_parses_with_all_defaults() {
+        // Issue #1913: every truly-optional top-level field must default
+        // cleanly. `BASE_YAML` only contains the required fields plus
+        // `http`/`grpc` (which themselves now have `#[serde(default)]`).
+        // Drop them to verify the defaults actually fire.
+        const MINIMAL: &str = r#"
+owner_token: "x"
+owner_user_id: "test"
+users:
+  - name: test
+    role: root
+    platforms: []
+mita:
+  heartbeat_interval: "30m"
+"#;
+        let cfg: AppConfig = serde_yaml::from_str(MINIMAL).expect("minimal yaml");
+        // SmartDefault on RestServerConfig / GrpcServerConfig
+        assert_eq!(cfg.http.bind_address, "127.0.0.1:25555");
+        assert_eq!(cfg.grpc.bind_address, "127.0.0.1:50051");
+        assert_eq!(cfg.max_ingress_per_minute, 30);
+        assert!(cfg.llm.is_none());
+        assert!(cfg.sandbox.is_none());
+    }
+
+    #[test]
+    fn missing_required_field_error_points_at_example_line() {
+        // Drop the required `mita` block to trigger a `missing field` error.
+        let yaml = r#"
+http:
+  bind_address: "127.0.0.1:25555"
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+owner_token: "x"
+owner_user_id: "test"
+users:
+  - name: test
+    role: root
+    platforms: []
+"#;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let local = dir.path().join("config.yaml");
+        let global = dir.path().join("global.yaml");
+        fs::write(&local, yaml).expect("write local");
+
+        let err =
+            AppConfig::load_from_paths(&global, &local).expect_err("missing mita block must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing required field `mita`"),
+            "expected friendly error, got: {msg}"
+        );
+        assert!(
+            msg.contains("config.example.yaml line"),
+            "expected example pointer, got: {msg}"
+        );
+        assert!(
+            msg.contains(local.to_string_lossy().as_ref()),
+            "expected config path in error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn remote_config_shape_parses_cleanly() {
+        // Smoke test guarding against #1907-style regressions: the shape
+        // currently deployed on the rara host (no `web`, no `sandbox`)
+        // MUST keep parsing after schema additions.
+        const REMOTE_SHAPE: &str = r#"
+database:
+  max_connections: 5
+http:
+  bind_address: "127.0.0.1:25555"
+  cors_allowed_origins: ["http://localhost:5173"]
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+telemetry:
+  otlp_endpoint: "http://alloy:4318/v1/traces"
+owner_token: "redacted"
+owner_user_id: "rara"
+llm:
+  default_provider: "openrouter"
+  providers:
+    openrouter:
+      base_url: "https://openrouter.ai/api/v1"
+      api_key: "sk-or-..."
+      default_model: "anthropic/claude-3.5-sonnet"
+telegram:
+  bot_token: "x"
+  chat_id: "1"
+  group_policy: "mention_or_small_group"
+wechat:
+  account_id: "x"
+  base_url: "https://api.example/v1"
+users:
+  - name: "rara"
+    role: root
+    platforms: []
+max_ingress_per_minute: 60
+mita:
+  heartbeat_interval: "30m"
+knowledge:
+  embedding_model: "text-embedding-3-small"
+  embedding_dimensions: 1536
+  search_top_k: 10
+  similarity_threshold: 0.85
+stt:
+  base_url: "http://localhost:9000"
+gateway:
+  repo_url: "https://github.com/rararulab/rara"
+  bot_token: "x"
+  chat_id: 1
+"#;
+        let cfg: AppConfig = serde_yaml::from_str(REMOTE_SHAPE).expect("remote shape parses");
+        assert_eq!(cfg.owner_user_id, "rara");
+        assert!(cfg.sandbox.is_none());
+        assert!(cfg.gateway.is_some());
     }
 
     #[test]
