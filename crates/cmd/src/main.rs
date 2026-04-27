@@ -78,7 +78,7 @@ impl ServerArgs {
             .as_ref()
             .filter(|o| o.enabled.unwrap_or(false));
 
-        let logging_opts = if let Some(otlp) = langfuse_otlp {
+        let mut logging_opts = if let Some(otlp) = langfuse_otlp {
             use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
             let Some(endpoint) = otlp.traces_endpoint.clone() else {
                 whatever!("telemetry.otlp.enabled = true requires telemetry.otlp.traces_endpoint");
@@ -131,6 +131,23 @@ impl ServerArgs {
                 ..Default::default()
             }
         };
+
+        // Overlay OTLP logs config — independent of trace export so users
+        // can ship logs to Loki without also wiring traces. Reads from the
+        // same `telemetry.otlp` section because logs and traces share the
+        // deployment-environment label and the OTLP family.
+        if let Some(otlp) = config.telemetry.otlp.as_ref()
+            && otlp.logs_enabled.unwrap_or(false)
+        {
+            let Some(logs_endpoint) = otlp.logs_endpoint.clone() else {
+                whatever!(
+                    "telemetry.otlp.logs_enabled = true requires telemetry.otlp.logs_endpoint"
+                );
+            };
+            logging_opts.enable_otlp_logs = true;
+            logging_opts.otlp_logs_endpoint = Some(logs_endpoint);
+            logging_opts.otlp_logs_headers = otlp.logs_headers.clone();
+        }
 
         let _guards = common_telemetry::logging::init_global_logging(
             "rara",
