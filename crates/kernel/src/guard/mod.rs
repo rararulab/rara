@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Security guard system — taint tracking, pattern scanning, and path-scope
-//! enforcement.
+//! Security guard system — taint tracking and pattern scanning.
 //!
 //! Sits between permission checks and tool execution in the agent loop.
-//! Three layers, checked in order (short-circuits on first block):
+//! Two layers, checked in order (short-circuits on first block):
 //! 1. **Taint tracking** — data provenance labels through the LLM context
 //! 2. **Pattern scanning** — known dangerous patterns in tool arguments
-//! 3. **Path-scope enforcement** — restricts file-access tools to the workspace
+//!
+//! The filesystem boundary previously enforced by a third "path-scope" layer
+//! has been retired (#1936); write-class tools now resolve paths through
+//! `rara-app::tools::path_check::resolve_writable`, which uses
+//! `tokio::fs::canonicalize` so symlinks cannot escape the workspace, and
+//! `bash` runs inside a `rara-sandbox` microVM with the workspace
+//! bind-mounted at `/workspace`.
 
-pub mod path_scope;
 pub mod pattern;
 pub mod pipeline;
 pub mod taint;

@@ -26,6 +26,8 @@ use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::path_check::resolve_writable;
+
 /// A single edit operation within a batch.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SingleEdit {
@@ -80,8 +82,6 @@ pub struct MultiEditTool;
 impl MultiEditTool {
     pub fn new() -> Self { Self }
 }
-
-use rara_kernel::guard::path_scope::resolve_and_guard;
 
 /// Apply edits for a single file, grouped and applied sequentially in-memory.
 ///
@@ -203,15 +203,15 @@ impl ToolExecute for MultiEditTool {
         let mut guard_errors: Vec<(usize, SingleEditResult)> = Vec::new();
 
         for (idx, edit) in params.edits.iter().enumerate() {
-            match resolve_and_guard(&edit.file_path) {
+            match resolve_writable(&edit.file_path).await {
                 Ok(path) => resolved.push((idx, path)),
-                Err(msg) => guard_errors.push((
+                Err(err) => guard_errors.push((
                     idx,
                     SingleEditResult {
                         file_path:    edit.file_path.clone(),
                         success:      false,
                         replacements: 0,
-                        error:        Some(msg),
+                        error:        Some(err.to_string()),
                     },
                 )),
             }
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn path_outside_workspace_blocked() {
-        // resolve_and_guard calls rara_paths::workspace_dir() which may not be
+        // resolve_writable calls rara_paths::workspace_dir() which may not be
         // available in CI. Skip if workspace creation would fail.
         let workspace = std::panic::catch_unwind(rara_paths::workspace_dir);
         let Ok(ws) = workspace else { return };
@@ -397,8 +397,8 @@ mod tests {
         } else {
             "/tmp/__outside__"
         };
-        let err = resolve_and_guard(outside);
+        let err = resolve_writable(outside).await;
         assert!(err.is_err());
-        assert!(err.unwrap_err().contains("outside workspace"));
+        assert!(err.unwrap_err().to_string().contains("outside workspace"));
     }
 }

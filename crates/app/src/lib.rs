@@ -20,6 +20,7 @@ pub mod gateway;
 // `crate::tool::AgentTool` in derived impls.
 pub(crate) use rara_kernel::tool;
 mod feed_store;
+pub mod sandbox;
 pub mod tools;
 mod web_server;
 
@@ -178,6 +179,30 @@ pub struct SandboxToolConfig {
     /// `"python:3.12-slim"`). The image must already be resolvable by the
     /// host's boxlite image store.
     pub default_rootfs_image: String,
+    /// Per-tool sandbox tuning for `bash`.
+    ///
+    /// Defaults are deny-by-default (no network) — see
+    /// [`BashSandboxConfig`] for the rationale this is one of the few
+    /// `Default`-deriving config structs in rara.
+    #[serde(default)]
+    #[builder(default)]
+    pub bash:                 BashSandboxConfig,
+}
+
+/// Network and runtime policy for the sandboxed `bash` tool.
+///
+/// `Default` is deliberately implemented here — every field defaults to a
+/// safe ground state (empty allow-list = network disabled), which is the
+/// exact case `docs/guides/anti-patterns.md` permits for `Default` on
+/// config structs ("safe by default with no deployment-relevant value").
+#[derive(Debug, Clone, bon::Builder, Default, Serialize, Deserialize)]
+pub struct BashSandboxConfig {
+    /// Hosts the sandboxed `bash` may reach over network.
+    /// Empty (default) = no network. Non-empty = boxlite allow-list, see
+    /// [`rara_sandbox::NetworkPolicy::Enabled`].
+    #[serde(default)]
+    #[builder(default)]
+    pub allow_net: Vec<String>,
 }
 
 /// Configuration for the Mita background proactive agent.

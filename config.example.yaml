@@ -131,19 +131,30 @@ agents:
     max_output_chars: 50
 
 # ---------------------------------------------------------------------------
-# Sandboxed code execution (`run_code` tool — optional)
+# Sandboxed code execution (`run_code` + sandboxed `bash` — optional)
 # ---------------------------------------------------------------------------
 #
-# When this block is present the `run_code` tool can spin up a per-session
-# boxlite microVM using the configured rootfs image. Omit the block to
-# disable code execution: the tool stays registered but every call returns
-# a clear "sandbox not configured" error so the LLM can react.
+# When this block is present the `run_code` tool, the `bash` tool, and the
+# write-class file tools all reuse a per-session boxlite microVM built from
+# the configured rootfs image. Omit the block to disable: each tool stays
+# registered but every call returns a clear "sandbox not configured" error
+# so the LLM can react.
+#
+# `bash.allow_net` is the only tunable specific to the `bash` tool today:
+# - omitted / empty list → `bash` runs with **no network** (deny-by-default)
+# - non-empty list → boxlite allow-list (host patterns or CIDRs); the
+#   sandbox can only reach those hosts. `run_code` is unaffected and
+#   keeps full outbound access for parity with its historical behavior.
 #
 # Pre-flight: `rara setup boxlite` must have staged the runtime files (see
 # docs/guides/boxlite-runtime.md).
 
 # sandbox:
 #   default_rootfs_image: "alpine:latest"
+#   bash:
+#     allow_net:
+#       - "github.com"
+#       - "*.crates.io"
 
 # ---------------------------------------------------------------------------
 # Telemetry — optional OTLP traces, Pyroscope profiling, and Layer B payload

@@ -13,6 +13,10 @@
 // limitations under the License.
 
 //! Precise string replacement primitive.
+//!
+//! Path resolution goes through [`super::path_check::resolve_writable`] so
+//! both absolute-path escape and symlink escape inside the workspace are
+//! rejected before any host read/write happens (see #1936).
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -20,6 +24,8 @@ use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use super::path_check::resolve_writable;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EditFileParams {
@@ -65,11 +71,7 @@ impl ToolExecute for EditFileTool {
         params: EditFileParams,
         _context: &ToolContext,
     ) -> anyhow::Result<EditFileResult> {
-        let file_path = if std::path::Path::new(&params.file_path).is_absolute() {
-            std::path::PathBuf::from(&params.file_path)
-        } else {
-            rara_paths::workspace_dir().join(&params.file_path)
-        };
+        let file_path = resolve_writable(&params.file_path).await?;
         let replace_all = params.replace_all.unwrap_or(false);
         let content = tokio::fs::read_to_string(&file_path)
             .await

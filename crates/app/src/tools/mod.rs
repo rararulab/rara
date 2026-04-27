@@ -48,6 +48,7 @@ mod mita_write_skill_draft;
 mod mita_write_user_note;
 mod multi_edit;
 mod notify;
+mod path_check;
 mod read_file;
 pub mod run_code;
 mod send_email;
@@ -96,7 +97,7 @@ use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
 use read_file::ReadFileTool;
 use run_code::RunCodeTool;
-pub use run_code::{SandboxCleanupHook, SandboxMap};
+pub use run_code::SandboxCleanupHook;
 use send_email::SendEmailTool;
 use send_file::SendFileTool;
 use session_info::SessionInfoTool;
@@ -108,6 +109,10 @@ use user_note::UserNoteTool;
 use walk_directory::WalkDirectoryTool;
 use wechat_login::{WechatLoginConfirmTool, WechatLoginStartTool};
 use write_file::WriteFileTool;
+
+// Re-export at the legacy path (`crate::tools::SandboxMap`) so existing
+// callers in `boot.rs` and downstream tests keep compiling.
+pub use crate::sandbox::SandboxMap;
 
 /// Tool names for the rara agent manifest — single source of truth.
 ///
@@ -182,12 +187,18 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     let list_sessions = Arc::new(ListSessionsTool::new());
     let list_sessions_handle_ref = list_sessions.handle_ref();
 
-    // Core tools
-    // SYNC: file-access tools are guarded by PathScopeGuard. When adding a new
-    // tool that reads/writes files, also add it to the constant arrays in
-    // `rara_kernel::guard::path_scope::{FILE_PATH_TOOLS, PATH_TOOLS}`.
+    // Core tools.
+    //
+    // FS boundary: `bash` and `run_code` execute inside per-session boxlite
+    // microVMs (see `crates/rara-sandbox/AGENT.md`). Read-side file tools
+    // run on the host; write-side tools use canonical-path validation
+    // against `rara_paths::workspace_dir()` to defeat both absolute-path
+    // escape and symlink escape (#1936).
     let tools: Vec<AgentToolRef> = vec![
-        Arc::new(BashTool::new()),
+        Arc::new(BashTool::new(
+            deps.sandbox_config.clone(),
+            deps.sandbox_map.clone(),
+        )),
         Arc::new(RunCodeTool::new(
             deps.sandbox_config.clone(),
             deps.sandbox_map.clone(),

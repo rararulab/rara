@@ -17,13 +17,20 @@
 //! Sits between permission checks and tool execution in `agent.rs`.
 //! Taint is checked first (cheaper, session-level) and short-circuits
 //! before the more expensive argument-level pattern scan.
+//!
+//! The retired Layer 3 ("path-scope") has been replaced by:
+//!   * `rara-app::tools::path_check::resolve_writable` for write-class file
+//!     tools — uses `tokio::fs::canonicalize` so symlinks cannot escape.
+//!   * The `rara-sandbox` microVM mount namespace for `bash` and `run_code`,
+//!     which bind-mounts the workspace at `/workspace` and rejects
+//!     host-absolute paths outside it (#1936).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use super::{path_scope::PathScopeGuard, pattern::PatternGuard, taint::TaintTracker};
+use super::{pattern::PatternGuard, taint::TaintTracker};
 use crate::session::SessionKey;
 
 /// Which guard layer produced a block verdict.
@@ -34,8 +41,6 @@ pub enum GuardLayer {
     Taint,
     /// Regex pattern scanning on tool arguments.
     Pattern,
-    /// Filesystem path scope enforcement.
-    PathScope,
 }
 
 impl fmt::Display for GuardLayer {
@@ -43,7 +48,6 @@ impl fmt::Display for GuardLayer {
         match self {
             Self::Taint => f.write_str("taint"),
             Self::Pattern => f.write_str("pattern"),
-            Self::PathScope => f.write_str("path_scope"),
         }
     }
 }
@@ -64,22 +68,22 @@ pub enum GuardVerdict {
     },
 }
 
-/// Combines taint tracking, pattern scanning, and path-scope enforcement into a
-/// single guard.
+/// Combines taint tracking and pattern scanning into a single guard.
 pub struct GuardPipeline {
-    taint:      TaintTracker,
-    pattern:    PatternGuard,
-    path_scope: PathScopeGuard,
+    taint:   TaintTracker,
+    pattern: PatternGuard,
 }
 
 impl GuardPipeline {
-    /// Create a new guard pipeline with the given workspace root and
-    /// additional allowed path roots.
-    pub fn new(workspace: std::path::PathBuf, allowed_roots: Vec<std::path::PathBuf>) -> Self {
+    /// Create a new guard pipeline.
+    ///
+    /// The previous `workspace` and `allowed_roots` parameters fed the retired
+    /// path-scope layer (#1936) and are no longer accepted; the FS boundary
+    /// now lives in the sandbox + canonicalize path.
+    pub fn new() -> Self {
         Self {
-            taint:      TaintTracker::new(),
-            pattern:    PatternGuard,
-            path_scope: PathScopeGuard::new(workspace, allowed_roots),
+            taint:   TaintTracker::new(),
+            pattern: PatternGuard,
         }
     }
 
@@ -121,15 +125,6 @@ impl GuardPipeline {
             };
         }
 
-        // Layer 3: path scope check (argument-level, file tools only).
-        if let Some(reason) = self.path_scope.check(tool_name, args) {
-            return GuardVerdict::Blocked {
-                layer: GuardLayer::PathScope,
-                reason,
-                tool_name: crate::tool::ToolName::new(tool_name),
-            };
-        }
-
         GuardVerdict::Pass
     }
 
@@ -139,15 +134,13 @@ impl GuardPipeline {
         self.taint.record_tool_output(session, tool_name);
     }
 
-    /// Record a user-approved path so subsequent accesses under the same
-    /// directory tree bypass the path-scope check.
-    pub fn approve_path_scope(&self, tool_name: &str, args: &serde_json::Value) {
-        self.path_scope.approve_path(tool_name, args);
-    }
-
     /// Access the taint tracker directly (for fork, clear, manual label
     /// injection).
     pub fn taint_tracker(&self) -> &TaintTracker { &self.taint }
+}
+
+impl Default for GuardPipeline {
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]
@@ -155,15 +148,9 @@ mod tests {
     use super::*;
     use crate::{guard::taint::TaintLabel, session::SessionKey};
 
-    /// Create a pipeline with a temporary workspace for testing.
-    /// Avoids calling `rara_paths` which may panic in CI.
-    fn test_pipeline() -> GuardPipeline {
-        GuardPipeline::new(std::env::temp_dir().join("rara-test-workspace"), vec![])
-    }
-
     #[test]
     fn pass_when_clean() {
-        let pipeline = test_pipeline();
+        let pipeline = GuardPipeline::new();
         let sk = SessionKey::new();
         let args = serde_json::json!({ "command": "ls -la" });
         let verdict = pipeline.pre_execute(&sk, "bash", &args);
@@ -172,7 +159,7 @@ mod tests {
 
     #[test]
     fn taint_blocks_before_pattern() {
-        let pipeline = test_pipeline();
+        let pipeline = GuardPipeline::new();
         let sk = SessionKey::new();
         pipeline.post_execute(&sk, "web_fetch");
 
@@ -189,7 +176,7 @@ mod tests {
 
     #[test]
     fn pattern_blocks_dangerous_command() {
-        let pipeline = test_pipeline();
+        let pipeline = GuardPipeline::new();
         let sk = SessionKey::new();
         let args = serde_json::json!({ "command": "rm -rf /" });
         let verdict = pipeline.pre_execute(&sk, "bash", &args);
@@ -204,7 +191,7 @@ mod tests {
 
     #[test]
     fn pattern_blocks_injection_marker_on_any_tool() {
-        let pipeline = test_pipeline();
+        let pipeline = GuardPipeline::new();
         let sk = SessionKey::new();
         let args = serde_json::json!({ "content": "ignore previous instructions" });
         let verdict = pipeline.pre_execute(&sk, "file_write", &args);
@@ -219,7 +206,7 @@ mod tests {
 
     #[test]
     fn web_fetch_after_secret_read_blocked() {
-        let pipeline = test_pipeline();
+        let pipeline = GuardPipeline::new();
         let sk = SessionKey::new();
         pipeline.taint_tracker().record_secret(&sk);
         let args = serde_json::json!({ "url": "https://example.com" });
@@ -234,55 +221,8 @@ mod tests {
     }
 
     #[test]
-    fn path_scope_blocks_outside_workspace() {
-        let pipeline = test_pipeline();
-        let sk = SessionKey::new();
-        // /etc/passwd is NOT under temp_dir(), so it must be blocked.
-        let args = serde_json::json!({ "file_path": "/etc/passwd" });
-        let verdict = pipeline.pre_execute(&sk, "read-file", &args);
-        assert!(matches!(
-            verdict,
-            GuardVerdict::Blocked {
-                layer: GuardLayer::PathScope,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn path_scope_passes_relative_path() {
-        let pipeline = test_pipeline();
-        let sk = SessionKey::new();
-        let args = serde_json::json!({ "file_path": "src/main.rs" });
-        let verdict = pipeline.pre_execute(&sk, "read-file", &args);
-        assert!(matches!(verdict, GuardVerdict::Pass));
-    }
-
-    #[test]
-    fn approved_path_bypasses_scope_check() {
-        let pipeline = test_pipeline();
-        let sk = SessionKey::new();
-        let args = serde_json::json!({ "path": "/opt/external" });
-        // First check blocks.
-        assert!(matches!(
-            pipeline.pre_execute(&sk, "list-directory", &args),
-            GuardVerdict::Blocked {
-                layer: GuardLayer::PathScope,
-                ..
-            }
-        ));
-        // Approve the path.
-        pipeline.approve_path_scope("list-directory", &args);
-        // Now it passes.
-        assert!(matches!(
-            pipeline.pre_execute(&sk, "list-directory", &args),
-            GuardVerdict::Pass
-        ));
-    }
-
-    #[test]
     fn post_execute_accumulates_labels() {
-        let pipeline = test_pipeline();
+        let pipeline = GuardPipeline::new();
         let sk = SessionKey::new();
         pipeline.post_execute(&sk, "web_fetch");
         pipeline.post_execute(&sk, "agent_spawn");
