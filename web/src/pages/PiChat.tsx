@@ -642,12 +642,20 @@ export default function PiChat() {
   // Subscribe to server-pushed session events so tape mutations that
   // arrive outside a live streamFn turn — background-task summaries,
   // future scheduled re-entries — refresh the chat without a manual
-  // refresh. The reload is a full snapshot fetch; mid-stream the
-  // assistant message has not been persisted yet so a concurrent reload
-  // is a no-op replay (#1849).
+  // refresh.
+  //
+  // Skip while the agent is mid-turn: the kernel publishes
+  // `tape_appended` for the user's own message as soon as it persists
+  // (before the assistant has produced anything), and reloading then
+  // calls `agent.replaceMessages` + `reconstructFromMessages` while the
+  // chat-stream WebSocket is still open. That mutation kills the
+  // in-flight chat WS, the live card sees a content-empty close and
+  // synthesizes `stopReason='error'`, and the assistant turn only
+  // surfaces after a manual page refresh (#1877).
   useSessionEvents({
     sessionKey: activeSession?.key ?? null,
     onTapeAppended: () => {
+      if (agentRef.current?.state.isStreaming) return;
       void reloadMessages();
     },
   });
