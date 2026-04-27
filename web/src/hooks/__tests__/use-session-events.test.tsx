@@ -15,6 +15,7 @@
  */
 
 import { renderHook } from '@testing-library/react';
+import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useSessionEvents } from '../use-session-events';
@@ -37,6 +38,7 @@ interface MockWebSocket {
 }
 
 let lastSocket: MockWebSocket | null = null;
+const sockets: MockWebSocket[] = [];
 
 class FakeWebSocket implements MockWebSocket {
   url: string;
@@ -50,6 +52,7 @@ class FakeWebSocket implements MockWebSocket {
     this.url = url;
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     lastSocket = this;
+    sockets.push(this);
   }
 
   close() {
@@ -60,6 +63,8 @@ class FakeWebSocket implements MockWebSocket {
 describe('useSessionEvents', () => {
   beforeEach(() => {
     lastSocket = null;
+    sockets.length = 0;
+    vi.useFakeTimers();
     Object.defineProperty(globalThis, 'WebSocket', {
       writable: true,
       configurable: true,
@@ -75,6 +80,7 @@ describe('useSessionEvents', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -125,5 +131,98 @@ describe('useSessionEvents', () => {
     const onTapeAppended = vi.fn();
     renderHook(() => useSessionEvents({ sessionKey: null, onTapeAppended }));
     expect(lastSocket).toBeNull();
+  });
+
+  it('stops reconnecting after the retry budget is exhausted', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onTapeAppended = vi.fn();
+    renderHook(() => useSessionEvents({ sessionKey: 'sess-abc', onTapeAppended }));
+
+    // Initial connect + 5 retries = 6 sockets total. The 6th close exhausts.
+    for (let i = 0; i < 6; i += 1) {
+      const sock = lastSocket!;
+      act(() => {
+        sock.onclose?.(new CloseEvent('close'));
+      });
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+    }
+
+    expect(sockets.length).toBe(6);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the retry budget when a hello frame arrives', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onTapeAppended = vi.fn();
+    renderHook(() => useSessionEvents({ sessionKey: 'sess-abc', onTapeAppended }));
+
+    // Burn 4 of the 5 retries with immediate closes.
+    for (let i = 0; i < 4; i += 1) {
+      const sock = lastSocket!;
+      act(() => {
+        sock.onclose?.(new CloseEvent('close'));
+      });
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+    }
+    // 5 sockets so far (1 initial + 4 retries).
+    expect(sockets.length).toBe(5);
+
+    // Hello frame on the live socket resets the budget.
+    act(() => {
+      lastSocket!.onmessage?.(
+        new MessageEvent('message', { data: JSON.stringify({ type: 'hello' }) }),
+      );
+    });
+
+    // Now we should be able to absorb a full new budget of 5 retries.
+    for (let i = 0; i < 5; i += 1) {
+      const sock = lastSocket!;
+      act(() => {
+        sock.onclose?.(new CloseEvent('close'));
+      });
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+    }
+    expect(sockets.length).toBe(10); // 5 pre-hello + 5 post-hello retries.
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // One more close past the new budget triggers the warn.
+    act(() => {
+      lastSocket!.onclose?.(new CloseEvent('close'));
+    });
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+    expect(sockets.length).toBe(10);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels pending retries when sessionKey changes', () => {
+    const onTapeAppended = vi.fn();
+    const { rerender } = renderHook(
+      ({ key }: { key: string | null }) => useSessionEvents({ sessionKey: key, onTapeAppended }),
+      { initialProps: { key: 'sess-abc' as string | null } },
+    );
+
+    // Trigger a close so a retry is queued for sess-abc.
+    act(() => {
+      lastSocket!.onclose?.(new CloseEvent('close'));
+    });
+    const beforeSwitch = sockets.length;
+
+    // Switch session — the queued retry must NOT fire for sess-abc.
+    rerender({ key: 'sess-xyz' });
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    // After rerender, exactly one new socket opens for sess-xyz.
+    expect(sockets.length).toBe(beforeSwitch + 1);
+    expect(lastSocket!.url).toContain('sess-xyz');
   });
 });
