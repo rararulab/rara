@@ -8,10 +8,10 @@
 3. WORK            →  All edits happen inside the worktree
 4. VERIFY          →  cargo check + npm run build on worktree
 5. PUSH & PR       →  git push -u origin + gh pr create
-6. WAIT FOR CI     →  gh pr checks {N} --watch (must be green)
-7. CODE REVIEW     →  /code-review-expert skill, fix findings, loop until APPROVE
-8. MERGE           →  gh pr merge {N} --squash --delete-branch
-9. CLEANUP         →  git worktree remove + git branch -d
+6. CI + REVIEW     →  In parallel: `gh pr checks {N} --watch` AND /code-review-expert
+                       (fix findings + push, loop until APPROVE; both must pass)
+7. MERGE           →  gh pr merge {N} --squash --delete-branch (after CI green AND APPROVE)
+8. CLEANUP         →  git worktree remove + git branch -d
 ```
 
 ## Step 1: Create Issue
@@ -155,30 +155,33 @@ EOF
   - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
   - Note: a `labeler.yml` workflow auto-labels PRs by file path, but agents must still add type + component labels explicitly via `--label` flags
 
-## Step 6: Wait for CI Green (MANDATORY)
+## Step 6: CI + Code Review (in parallel, both MANDATORY)
 
-After creating the PR, **you MUST verify that all CI checks pass before moving on.**
+CI and code review are independent signals — run them concurrently. Once the implementer subagent reports done and local verification (Step 4) is green, push the PR and immediately kick off **both** the CI watch **and** the reviewer. Do not serialize them; CI doesn't catch what review catches and vice versa, so waiting for one to finish before starting the other just adds latency.
+
+**6a. CI watch:**
 
 ```bash
 gh pr checks {PR-number} --watch    # Wait for all checks to complete
 ```
 
-- If any check fails, investigate and fix in the worktree, push again, and re-verify
-- Do NOT proceed to review or merge while CI is still pending or failing
+If any check fails, investigate and fix in the worktree, push again, and re-verify.
 
-## Step 7: Code Review (MANDATORY)
+**6b. Code review (in parallel):**
 
-After CI is green, run a structured code review with the **`/code-review-expert`** skill — the main agent invokes the skill via the `Skill` tool, or dispatches the **`reviewer`** subagent (`.claude/agents/reviewer.md`) which wraps the same skill and adds the cross-PR regression-decision check (the #1907 lesson: catch silent reversals of recent design decisions). The skill produces a verdict (APPROVE / REQUEST_CHANGES / COMMENT) plus findings graded P0–P3.
+Run the **`/code-review-expert`** skill — the main agent invokes the skill via the `Skill` tool, or dispatches the **`reviewer`** subagent (`.claude/agents/reviewer.md`) which wraps the same skill and adds the cross-PR regression-decision check (the #1907 lesson: catch silent reversals of recent design decisions). The skill produces a verdict (APPROVE / REQUEST_CHANGES / COMMENT) plus findings graded P0–P3.
 
 The agent never approves its own diff in lieu of running the skill — it comes in cold and catches what the implementer missed.
 
 - **REQUEST_CHANGES**: fix every blocking finding (P0/P1) in the worktree, push, re-run the skill. Loop until APPROVE.
 - **APPROVE with P2/P3 nits**: address only the nits that are clearly worth fixing in this PR. Don't stall on stylistic preferences.
-- **APPROVE clean**: proceed to merge.
+- **APPROVE clean**: proceed to merge once CI is also green.
 
 This is non-negotiable — even one-line fixes go through it. The skill is fast; the cost of skipping it (regressions like #1810) is high.
 
-## Step 8: Merge to Main
+The merge gate (Step 7) requires **both** CI green AND review APPROVE.
+
+## Step 7: Merge to Main
 
 Once CI is green AND the review is APPROVE (with all blocking findings handled), merge without further confirmation — green CI + clean review IS the merge signal.
 
@@ -186,9 +189,9 @@ Once CI is green AND the review is APPROVE (with all blocking findings handled),
 gh pr merge {N} --squash --delete-branch
 ```
 
-Use `--squash` so the merged commit on `main` matches the Conventional Commit subject. `--delete-branch` removes the remote branch; the local branch + worktree are removed in Step 9.
+Use `--squash` so the merged commit on `main` matches the Conventional Commit subject. `--delete-branch` removes the remote branch; the local branch + worktree are removed in Step 8.
 
-## Step 9: Cleanup
+## Step 8: Cleanup
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
 git branch -D issue-{N}-{short-name}    # -D because the branch is gone on origin
