@@ -1,0 +1,34 @@
+# CI config template — rendered at job start via `envsubst` into
+# `~/.config/rara/config.yaml`. Only `llm.providers.openai.*` references
+# environment variables; the rest is hardcoded CI-safe values so the
+# real-LLM e2e tests have a complete, valid `AppConfig` to load.
+#
+# See `config.example.yaml` for the canonical reference and field docs.
+
+http:
+  bind_address: "127.0.0.1:25555"
+  cors_allowed_origins:
+    - "http://localhost:5173"
+
+grpc:
+  bind_address: "127.0.0.1:50051"
+  server_address: "127.0.0.1:50051"
+
+owner_token: "ci-owner-token-not-a-real-secret"
+owner_user_id: "ci"
+
+users:
+  - name: "ci"
+    role: root
+    platforms: []
+
+mita:
+  heartbeat_interval: "30m"
+
+llm:
+  default_provider: "openai"
+  providers:
+    openai:
+      base_url: "${OPENAI_BASE_URL}"
+      api_key: "${OPENAI_API_KEY}"
+      default_model: "${OPENAI_MODEL}"

@@ -1,0 +1,74 @@
+name: E2E (Real LLM)
+
+# Real-LLM e2e flows (`real_tape_flow`, `anchor_checkout_e2e`) against an
+# OpenAI-compatible provider. Triggers on `main` push + manual dispatch only —
+# **not** on pull_request, to avoid burning provider tokens on every push.
+# Maintainer must configure `OPENAI_API_KEY` (secret), `OPENAI_BASE_URL` (var),
+# and `OPENAI_MODEL` (var) in repo settings; without them the job fails fast
+# at config render.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-real-llm-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: true
+  CARGO_INCREMENTAL: false
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  # Disable the runner image's preset sccache wrapper — no backend is configured.
+  RUSTC_WRAPPER: ""
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  real-llm-e2e:
+    name: Real-LLM E2E
+    runs-on: arc-runner-set
+    env:
+      # ARC runners can't build native boxlite (meson/ninja/patchelf missing),
+      # mirroring the rust.yml jobs.
+      BOXLITE_DEPS_STUB: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install diesel system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+
+      - name: Render rara config from template
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+        run: |
+          mkdir -p "$HOME/.config/rara"
+          envsubst < ci/config.template.yaml > "$HOME/.config/rara/config.yaml"
+
+      - name: Run real-LLM e2e tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          RARA_REAL_TAPE_SOAK_SECS: "120"
+          RARA_REAL_TAPE_TURN_TIMEOUT_SECS: "60"
+        run: |
+          cargo test -p rara-app \
+            --test real_tape_flow \
+            --test anchor_checkout_e2e \
+            -- --ignored --nocapture
