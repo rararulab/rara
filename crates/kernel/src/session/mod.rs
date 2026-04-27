@@ -1249,4 +1249,42 @@ mod state_transition_tests {
         // method returning `false` for a not-found session.
         assert!(table.with_mut(&missing, |_| ()).is_none());
     }
+
+    /// #1958 — `walk_to_root` walks `parent_id` until it finds the root
+    /// (the first session with `parent_id == None`). Children inherit
+    /// the root's pinned LLM overrides at turn time without persisting
+    /// their own SessionEntry.
+    #[test]
+    fn walk_to_root_finds_root_ancestor() {
+        let table = SessionTable::new();
+
+        let root = make_session(SessionState::Ready);
+        let root_key = root.session_key;
+        table.insert(root);
+
+        let mut child = make_session(SessionState::Ready);
+        child.parent_id = Some(root_key);
+        let child_key = child.session_key;
+        table.insert(child);
+
+        let mut grandchild = make_session(SessionState::Ready);
+        grandchild.parent_id = Some(child_key);
+        let grandchild_key = grandchild.session_key;
+        table.insert(grandchild);
+
+        // Root walks to itself.
+        assert_eq!(crate::agent::walk_to_root(&table, root_key), root_key);
+        // Direct child resolves to root.
+        assert_eq!(crate::agent::walk_to_root(&table, child_key), root_key);
+        // Grandchild resolves to root.
+        assert_eq!(crate::agent::walk_to_root(&table, grandchild_key), root_key);
+    }
+
+    #[test]
+    fn walk_to_root_handles_missing_session() {
+        let table = SessionTable::new();
+        // Not inserted — walk_to_root returns the input key as a safe fallback.
+        let orphan = SessionKey::new();
+        assert_eq!(crate::agent::walk_to_root(&table, orphan), orphan);
+    }
 }
