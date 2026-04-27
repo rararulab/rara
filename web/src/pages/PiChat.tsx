@@ -79,6 +79,7 @@ import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
 import { useSessionEvents } from '@/hooks/use-session-events';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
+import { TapeReloadGate } from '@/lib/tape-reload-gate';
 import { renderTurnChipCard } from '@/tools/turn-chip-card';
 const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
 
@@ -339,6 +340,21 @@ export default function PiChat() {
   // from the pre-#1554 selector). `null` = not yet loaded; we fail-open
   // in that window so the restore isn't blocked on an unrelated fetch.
   const validProvidersRef = useRef<Set<string> | null>(null);
+  // Holds the latest `reloadMessages` closure so the long-lived gate can
+  // call into it without the gate being recreated on every render.
+  const reloadMessagesRef = useRef<(() => Promise<void>) | null>(null);
+  // Gate for `tape_appended` server events. Driven by the chat WS adapter's
+  // `__stream_started` / `__stream_closed` lifecycle frames so reloads
+  // never clobber in-flight assistant text. See `TapeReloadGate` for the
+  // full reasoning (#1877, #1923).
+  const tapeReloadGateRef = useRef<TapeReloadGate | null>(null);
+  if (!tapeReloadGateRef.current) {
+    tapeReloadGateRef.current = new TapeReloadGate({
+      reload: () => {
+        void reloadMessagesRef.current?.();
+      },
+    });
+  }
   // Guards against double-invocations of `handleUseDefault` while a PATCH
   // + settings fetch is still in flight. Backend no-ops the duplicate
   // write (see #1569 round-1 fix) but the UI would still redundantly
@@ -618,6 +634,10 @@ export default function PiChat() {
     }
   }, []);
 
+  // Wire the latest `reloadMessages` closure into the ref the
+  // long-lived `TapeReloadGate` calls into.
+  reloadMessagesRef.current = reloadMessages;
+
   /** Create a new empty session and switch to it. */
   const newSession = useCallback(async () => {
     const created = await api.post<ChatSession>('/api/v1/chat/sessions', {});
@@ -641,19 +661,18 @@ export default function PiChat() {
   // future scheduled re-entries — refresh the chat without a manual
   // refresh.
   //
-  // Skip while the agent is mid-turn: the kernel publishes
-  // `tape_appended` for the user's own message as soon as it persists
-  // (before the assistant has produced anything), and reloading then
-  // calls `agent.replaceMessages` + `reconstructFromMessages` while the
-  // chat-stream WebSocket is still open. That mutation kills the
-  // in-flight chat WS, the live card sees a content-empty close and
-  // synthesizes `stopReason='error'`, and the assistant turn only
-  // surfaces after a manual page refresh (#1877).
+  // The decision of "is it safe to reload" is delegated to
+  // `TapeReloadGate`, which is fed by the chat WS adapter's
+  // `__stream_started` / `__stream_closed` lifecycle frames in
+  // `onWebEvent` below. Driving the gate from `agent.state.isStreaming`
+  // is unsafe: pi-agent-core only sets that after the first stream
+  // event arrives, leaving a race window between submit and first event
+  // where `tape_appended` for the user message would clobber the
+  // in-flight assistant text via `replaceMessages` (#1877, #1923).
   useSessionEvents({
     sessionKey: activeSession?.key ?? null,
     onTapeAppended: () => {
-      if (agentRef.current?.state.isStreaming) return;
-      void reloadMessages();
+      tapeReloadGateRef.current?.onTapeAppended();
     },
   });
 
@@ -838,6 +857,17 @@ export default function PiChat() {
               liveRunStore.publish(sessionKey, event);
               if (event.type === 'approval_requested' || event.type === 'approval_resolved') {
                 void queryClientRef.current.invalidateQueries({ queryKey: ['kernel-approvals'] });
+              }
+              // Bracket the chat WS turn so `tape_appended` events that
+              // arrive while the WS is the source of truth don't trigger
+              // a `replaceMessages` reload that would clobber in-flight
+              // assistant text (#1877, #1923). `__stream_reconnect_failed`
+              // is always immediately followed by `__stream_closed`, so
+              // we only listen on the close edge.
+              if (event.type === '__stream_started') {
+                tapeReloadGateRef.current?.onStreamStarted();
+              } else if (event.type === '__stream_closed') {
+                tapeReloadGateRef.current?.onStreamClosed();
               }
             },
           ),
