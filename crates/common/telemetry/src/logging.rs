@@ -754,13 +754,21 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
             .build()
             .expect("Failed to create OTLP gRPC exporter "),
 
-        OtlpExportProtocol::Http => SpanExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint)
-            .with_protocol(Protocol::HttpBinary)
-            .with_headers(opts.otlp_headers.clone())
-            .build()
-            .expect("Failed to create OTLP HTTP exporter "),
+        OtlpExportProtocol::Http => {
+            // OTLP must not honor HTTP_PROXY — internal collectors live on the LAN.
+            let http_client = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("Failed to build reqwest client for OTLP HTTP exporter");
+            SpanExporter::builder()
+                .with_http()
+                .with_http_client(http_client)
+                .with_endpoint(endpoint)
+                .with_protocol(Protocol::HttpBinary)
+                .with_headers(opts.otlp_headers.clone())
+                .build()
+                .expect("Failed to create OTLP HTTP exporter ")
+        }
     }
 }
 
@@ -804,12 +812,20 @@ fn init_meter_provider(
             .with_endpoint(&endpoint)
             .build()
             .expect("failed to build OTLP gRPC metric exporter"),
-        OtlpExportProtocol::Http => opentelemetry_otlp::MetricExporter::builder()
-            .with_http()
-            .with_endpoint(&endpoint)
-            .with_headers(opts.otlp_headers.clone())
-            .build()
-            .expect("failed to build OTLP HTTP metric exporter"),
+        OtlpExportProtocol::Http => {
+            // OTLP must not honor HTTP_PROXY — internal collectors live on the LAN.
+            let http_client = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("failed to build reqwest client for OTLP HTTP metric exporter");
+            opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .with_http_client(http_client)
+                .with_endpoint(&endpoint)
+                .with_headers(opts.otlp_headers.clone())
+                .build()
+                .expect("failed to build OTLP HTTP metric exporter")
+        }
     };
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
