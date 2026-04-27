@@ -17,6 +17,7 @@
 import { PanelLeftClose, PanelLeft, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { SessionMenu } from './SessionMenu';
 import { SidebarRunHistory } from './SidebarRunHistory';
 
 import { api } from '@/api/client';
@@ -36,6 +37,9 @@ interface ChatSidebarProps {
    * session the caller should switch to when the deleted row was
    * the active one, or `null` when no sessions are left. */
   onDeleteSession: (key: string, fallback: ChatSession | null) => void;
+  /** Notify the parent when a session's metadata changed in-place (e.g. the
+   * user regenerated its title) so the page-header copy can stay in sync. */
+  onSessionUpdated?: (session: ChatSession) => void;
   /** Bump this from the parent to force a session-list refetch (e.g. after
    * creating a new session or receiving the first message of a fresh one). */
   refreshKey: number;
@@ -67,6 +71,7 @@ export function ChatSidebar({
   onOpenSearch,
   onOpenSettings,
   onDeleteSession,
+  onSessionUpdated,
   refreshKey,
 }: ChatSidebarProps) {
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -235,15 +240,27 @@ export function ChatSidebar({
                       {formatRelativeDate(s.updated_at)}
                     </div>
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => handleDelete(s.key, e)}
-                    aria-label={`删除 ${s.title ?? '会话'}`}
-                    className="shrink-0 rounded p-1 mr-1 mt-1 text-muted-foreground/0 transition-[color,opacity] hover:bg-destructive/10 hover:text-destructive group-hover:text-muted-foreground group-hover:opacity-100"
-                    title="删除"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                  <div className="mt-1 mr-1 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <SessionMenu
+                      sessionKey={s.key}
+                      ariaLabel={s.title ?? '会话'}
+                      onRegenerated={(updated) => {
+                        setSessions((prev) =>
+                          prev.map((row) => (row.key === updated.key ? updated : row)),
+                        );
+                        onSessionUpdated?.(updated);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={(e) => handleDelete(s.key, e)}
+                      aria-label={`删除 ${s.title ?? '会话'}`}
+                      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive cursor-pointer"
+                      title="删除"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
               ))
             )}
