@@ -1,5 +1,5 @@
 # CI config template — rendered at job start via `envsubst` into
-# `~/.config/rara/config.yaml`. Only `llm.providers.openai.*` references
+# `$XDG_CONFIG_HOME/rara/config.yaml`. Only `llm.providers.openai.*` references
 # environment variables; the rest is hardcoded CI-safe values so the
 # real-LLM e2e tests have a complete, valid `AppConfig` to load.
 #
