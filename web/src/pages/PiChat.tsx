@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { Agent } from '@mariozechner/pi-agent-core';
 import {
   AppStorage,
   setAppStorage,
@@ -24,7 +23,6 @@ import {
   // truth for provider keys and custom providers (see #1581).
   ProviderKeysStore,
   CustomProvidersStore,
-  defaultConvertToLlm,
   registerMessageRenderer,
   // Importing the extract-document tool triggers a module-level
   // `registerToolRenderer("extract_document", ...)` side effect so
@@ -52,7 +50,7 @@ import {
 } from './pi-chat-messages';
 
 import { RaraStorageBackend } from '@/adapters/rara-storage';
-import { createRaraStreamFn } from '@/adapters/rara-stream';
+import { RaraAgent as Agent } from '@/agent/rara-agent';
 import { api, settingsApi } from '@/api/client';
 import type { CascadeTrace, ExecutionTrace } from '@/api/kernel-types';
 import type { ProviderInfo } from '@/api/types';
@@ -77,9 +75,7 @@ import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
 import { VoiceRecorder } from '@/components/VoiceRecorder';
 import { useLiveCardHeight } from '@/hooks/use-live-card-height';
 import { useSessionDelete } from '@/hooks/use-session-delete';
-import { useSessionEvents } from '@/hooks/use-session-events';
 import { UNKNOWN_MODEL_SENTINEL, isUnknownModel, syntheticModel } from '@/lib/synthetic-model';
-import { TapeReloadGate } from '@/lib/tape-reload-gate';
 import { renderTurnChipCard } from '@/tools/turn-chip-card';
 const ACTIVE_SESSION_KEY = 'rara.activeSessionKey';
 
@@ -340,21 +336,10 @@ export default function PiChat() {
   // from the pre-#1554 selector). `null` = not yet loaded; we fail-open
   // in that window so the restore isn't blocked on an unrelated fetch.
   const validProvidersRef = useRef<Set<string> | null>(null);
-  // Holds the latest `reloadMessages` closure so the long-lived gate can
-  // call into it without the gate being recreated on every render.
+  // Holds the latest `reloadMessages` closure so the agent's observer can
+  // trigger a tape reload on out-of-turn `tape_appended` frames without
+  // capturing a stale React render.
   const reloadMessagesRef = useRef<(() => Promise<void>) | null>(null);
-  // Gate for `tape_appended` server events. Driven by the chat WS adapter's
-  // `__stream_started` / `__stream_closed` lifecycle frames so reloads
-  // never clobber in-flight assistant text. See `TapeReloadGate` for the
-  // full reasoning (#1877, #1923).
-  const tapeReloadGateRef = useRef<TapeReloadGate | null>(null);
-  if (!tapeReloadGateRef.current) {
-    tapeReloadGateRef.current = new TapeReloadGate({
-      reload: () => {
-        void reloadMessagesRef.current?.();
-      },
-    });
-  }
   // Guards against double-invocations of `handleUseDefault` while a PATCH
   // + settings fetch is still in flight. Backend no-ops the duplicate
   // write (see #1569 round-1 fix) but the UI would still redundantly
@@ -635,7 +620,7 @@ export default function PiChat() {
   }, []);
 
   // Wire the latest `reloadMessages` closure into the ref the
-  // long-lived `TapeReloadGate` calls into.
+  // long-lived agent observer calls into.
   reloadMessagesRef.current = reloadMessages;
 
   /** Create a new empty session and switch to it. */
@@ -656,25 +641,12 @@ export default function PiChat() {
     newSession,
   });
 
-  // Subscribe to server-pushed session events so tape mutations that
-  // arrive outside a live streamFn turn — background-task summaries,
-  // future scheduled re-entries — refresh the chat without a manual
-  // refresh.
-  //
-  // The decision of "is it safe to reload" is delegated to
-  // `TapeReloadGate`, which is fed by the chat WS adapter's
-  // `__stream_started` / `__stream_closed` lifecycle frames in
-  // `onWebEvent` below. Driving the gate from `agent.state.isStreaming`
-  // is unsafe: pi-agent-core only sets that after the first stream
-  // event arrives, leaving a race window between submit and first event
-  // where `tape_appended` for the user message would clobber the
-  // in-flight assistant text via `replaceMessages` (#1877, #1923).
-  useSessionEvents({
-    sessionKey: activeSession?.key ?? null,
-    onTapeAppended: () => {
-      tapeReloadGateRef.current?.onTapeAppended();
-    },
-  });
+  // Out-of-turn `tape_appended` (background-task summaries, scheduled
+  // re-entries) flow through `RaraAgent`'s persistent WS now — the
+  // observer wired into the agent below decides when to refetch the
+  // tape (#1849). In-turn appends are absorbed by the agent's own
+  // state machine via `message_update`, so no separate reload path is
+  // needed (#1877, #1923 ordering guarantee from the kernel).
 
   /**
    * Reset the session's pinned (model, provider, thinking) triple so the
@@ -826,53 +798,32 @@ export default function PiChat() {
         setActiveSession(initialSession);
         writeStoredSessionKey(initialSession.key);
         setShowWelcome((initialSession.message_count ?? 0) === 0);
-        // 5. Create the Agent with rara's WebSocket-backed stream function.
-        //    The streamFn reads agent.sessionId at call time to get the active session key.
+        // 5. Create the RaraAgent. It owns one persistent per-session
+        //    WebSocket (`/api/v1/kernel/chat/session/{key}`) and
+        //    translates wire frames into the lifecycle events
+        //    `<agent-interface>` consumes. The kernel runs the LLM and
+        //    tools — `RaraAgent` is purely a frontend state machine.
         const agent: Agent = new Agent({
-          streamFn: createRaraStreamFn(
-            () => agent.sessionId,
-            () => {
-              // Surface raw attachments from the latest user turn so the
-              // rara-stream adapter can forward document bytes as
-              // `file_base64` blocks in addition to pi-mono's client-side
-              // extracted text.
-              for (let i = agent.state.messages.length - 1; i >= 0; i--) {
-                const m = agent.state.messages[i];
-                if (!m) continue;
-                if (m.role === 'user-with-attachments') {
-                  return m.attachments ?? [];
-                }
-                if (m.role === 'user') return [];
-              }
-              return [];
-            },
-            // Feed the agent-live store with every WS frame so the card
-            // can render in parallel to pi-chat-panel without opening a
-            // second WebSocket (see #1615). Also listen for approval
-            // lifecycle events pushed by the backend (see #1745) and
-            // invalidate the `kernel-approvals` query so the admin
-            // drawer refreshes immediately instead of waiting for the
-            // next 5s poll.
-            (sessionKey, event) => {
-              liveRunStore.publish(sessionKey, event);
-              if (event.type === 'approval_requested' || event.type === 'approval_resolved') {
-                void queryClientRef.current.invalidateQueries({ queryKey: ['kernel-approvals'] });
-              }
-              // Bracket the chat WS turn so `tape_appended` events that
-              // arrive while the WS is the source of truth don't trigger
-              // a `replaceMessages` reload that would clobber in-flight
-              // assistant text (#1877, #1923). `__stream_reconnect_failed`
-              // is always immediately followed by `__stream_closed`, so
-              // we only listen on the close edge.
-              if (event.type === '__stream_started') {
-                tapeReloadGateRef.current?.onStreamStarted();
-              } else if (event.type === '__stream_closed') {
-                tapeReloadGateRef.current?.onStreamClosed();
-              }
-            },
-          ),
-          convertToLlm: defaultConvertToLlm,
           sessionId: initialSession.key,
+          // Feed the agent-live store with every WS frame so the card
+          // can render in parallel to pi-chat-panel without opening a
+          // second WebSocket (see #1615). Also listen for approval
+          // lifecycle events pushed by the backend (see #1745) and
+          // invalidate the `kernel-approvals` query so the admin
+          // drawer refreshes immediately instead of waiting for the
+          // next 5s poll. Out-of-turn `tape_appended` triggers a tape
+          // reload — in-turn appends are absorbed by the agent's
+          // `message_update` path so we skip the reload while
+          // `state.isStreaming` is true (#1877, #1923).
+          observer: (sessionKey, event) => {
+            liveRunStore.publish(sessionKey, event);
+            if (event.type === 'approval_requested' || event.type === 'approval_resolved') {
+              void queryClientRef.current.invalidateQueries({ queryKey: ['kernel-approvals'] });
+            }
+            if (event.type === 'tape_appended' && !agent.state.isStreaming) {
+              void reloadMessagesRef.current?.();
+            }
+          },
         });
         agentRef.current = agent;
 
@@ -920,7 +871,13 @@ export default function PiChat() {
         //    `/api/v1/settings` — the only place provider ids (`openrouter`,
         //    `kimi`, `minimax`, `glm`, `scnet`, ...) align with rara's kernel
         //    `DriverRegistry`.
-        await chatPanel.setAgent(agent, {
+        // Cast through `unknown`: pi-web-ui's `setAgent` accepts pi-agent-core's
+        // structural `Agent` shape, but `RaraAgent` only implements the subset
+        // `<agent-interface>` actually reads (the 7 events + the small state
+        // surface — see `event-trace-parity.test.ts`). The optional fields
+        // pi-agent-core exposes (`steeringQueue`, `followUpQueue`, …) are
+        // never read by the renderer; the cast is safe at runtime.
+        await chatPanel.setAgent(agent as unknown as Parameters<typeof chatPanel.setAgent>[0], {
           onApiKeyRequired: async () => true,
           onModelSelect: () => setModelDialogOpen(true),
           onBeforeSend: async () => {

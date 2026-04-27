@@ -22,13 +22,14 @@
 //!
 //! - [`TelegramAdapter`](telegram::TelegramAdapter) — Telegram Bot API via
 //!   `getUpdates` long polling.
-//! - [`WebAdapter`](web::WebAdapter) — WebSocket + SSE for web chat UI.
+//! - [`WebAdapter`](web::WebAdapter) — persistent per-session WebSocket for the
+//!   web chat UI (see [`web_session`]).
 
 pub mod telegram;
 pub mod terminal;
 pub mod web;
 pub mod web_reply_buffer;
-pub mod web_session_events;
+pub mod web_session;
 pub mod wechat;
 
 /// Tool display formatting helpers.

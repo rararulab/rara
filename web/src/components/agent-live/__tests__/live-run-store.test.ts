@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AUTO_DISMISS_MS, LiveRunStore, mergeBySourceSeq, timelineKey } from '../live-run-store';
 
-import type { PublicWebEvent } from '@/adapters/rara-stream';
+import type { PublicWebEvent } from '@/agent/session-ws-client';
 import type { TimelineItem } from '@/api/kernel-types';
 
 const startEvent = { type: '__stream_started' } satisfies PublicWebEvent;
