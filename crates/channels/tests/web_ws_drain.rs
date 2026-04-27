@@ -79,14 +79,10 @@ where
 
 #[tokio::test]
 async fn ws_drains_backlog_before_live_events() {
-    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
+    let buffer = ReplyBuffer::new();
     let adapter = Arc::new(
-        WebAdapter::new(
-            OWNER_TOKEN.to_owned(),
-            OWNER_USER_ID.to_owned(),
-            rara_channels::web_reply_buffer::test_config(),
-        )
-        .with_reply_buffer(Arc::clone(&buffer)),
+        WebAdapter::new(OWNER_TOKEN.to_owned(), OWNER_USER_ID.to_owned())
+            .with_reply_buffer(Arc::clone(&buffer)),
     );
 
     // Mount the adapter under /chat to mirror production wiring.
@@ -173,7 +169,6 @@ async fn ws_rejects_invalid_owner_token() {
     let adapter = Arc::new(WebAdapter::new(
         OWNER_TOKEN.to_owned(),
         OWNER_USER_ID.to_owned(),
-        rara_channels::web_reply_buffer::test_config(),
     ));
     let app = axum::Router::new().nest("/chat", adapter.router());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

@@ -12,7 +12,6 @@ base64 = { workspace = true }
 bon = { workspace = true }
 chrono = { workspace = true }
 dashmap = "6"
-humantime-serde = "1"
 futures = { workspace = true }
 governor = "0.10"
 image = { workspace = true }

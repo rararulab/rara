@@ -62,13 +62,9 @@ fn subscribe(
 
 #[tokio::test]
 async fn happy_path_reply_reaches_subscribed_listener() {
-    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
-    let adapter = WebAdapter::new(
-        "tok".to_owned(),
-        "user".to_owned(),
-        rara_channels::web_reply_buffer::test_config(),
-    )
-    .with_reply_buffer(Arc::clone(&buffer));
+    let buffer = ReplyBuffer::new();
+    let adapter =
+        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
     let mut rx = subscribe(&adapter, &session_key);
@@ -104,13 +100,9 @@ async fn happy_path_reply_reaches_subscribed_listener() {
 
 #[tokio::test]
 async fn listener_loss_is_recovered_via_buffer_snapshot() {
-    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
-    let adapter = WebAdapter::new(
-        "tok".to_owned(),
-        "user".to_owned(),
-        rara_channels::web_reply_buffer::test_config(),
-    )
-    .with_reply_buffer(Arc::clone(&buffer));
+    let buffer = ReplyBuffer::new();
+    let adapter =
+        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
 
@@ -153,13 +145,9 @@ async fn listener_loss_is_recovered_via_buffer_snapshot() {
 /// refresh.
 #[tokio::test]
 async fn second_reattach_does_not_replay_drained_events() {
-    let buffer = ReplyBuffer::new(rara_channels::web_reply_buffer::test_config());
-    let adapter = WebAdapter::new(
-        "tok".to_owned(),
-        "user".to_owned(),
-        rara_channels::web_reply_buffer::test_config(),
-    )
-    .with_reply_buffer(Arc::clone(&buffer));
+    let buffer = ReplyBuffer::new();
+    let adapter =
+        WebAdapter::new("tok".to_owned(), "user".to_owned()).with_reply_buffer(Arc::clone(&buffer));
 
     let session_key = SessionKey::new();
     let endpoint = web_endpoint(&session_key);
