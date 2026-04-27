@@ -55,6 +55,10 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
+    secrets:
+      OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+      OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
+      OLLAMA_EMBEDDING_MODEL: ${{ secrets.OLLAMA_EMBEDDING_MODEL }}
 
   release-pr:
     name: Release PR
