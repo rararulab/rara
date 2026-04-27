@@ -179,27 +179,27 @@ pub struct SandboxToolConfig {
     /// `"python:3.12-slim"`). The image must already be resolvable by the
     /// host's boxlite image store.
     pub default_rootfs_image: String,
-    /// Per-tool sandbox tuning for `bash`.
-    ///
-    /// Defaults are deny-by-default (no network) — see
-    /// [`BashSandboxConfig`] for the rationale this is one of the few
-    /// `Default`-deriving config structs in rara.
-    #[serde(default)]
-    #[builder(default)]
-    pub bash:                 BashSandboxConfig,
+    /// Per-tool sandbox tuning for `bash`. `None` (the YAML default when
+    /// the `bash:` block is absent) means `bash` runs with network
+    /// `Disabled` and an empty allow-list — the safe ground state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bash:                 Option<BashSandboxConfig>,
 }
 
 /// Network and runtime policy for the sandboxed `bash` tool.
 ///
-/// `Default` is deliberately implemented here — every field defaults to a
-/// safe ground state (empty allow-list = network disabled), which is the
-/// exact case `docs/guides/anti-patterns.md` permits for `Default` on
-/// config structs ("safe by default with no deployment-relevant value").
-#[derive(Debug, Clone, bon::Builder, Default, Serialize, Deserialize)]
+/// Per `docs/guides/rust-style.md`, this struct does NOT derive `Default` —
+/// the absent state is represented by `Option<BashSandboxConfig>` on
+/// [`SandboxToolConfig::bash`], not by a Rust-side default value.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct BashSandboxConfig {
-    /// Hosts the sandboxed `bash` may reach over network.
-    /// Empty (default) = no network. Non-empty = boxlite allow-list, see
+    /// Hosts the sandboxed `bash` may reach over network. An empty list
+    /// means no network access. A non-empty list is forwarded to boxlite as
     /// [`rara_sandbox::NetworkPolicy::Enabled`].
+    ///
+    /// Note: when `run_code` is also configured, the per-session VM uses
+    /// the **fused** policy across all callers — see
+    /// `crates/app/src/sandbox.rs` for the union rule.
     #[serde(default)]
     #[builder(default)]
     pub allow_net: Vec<String>,

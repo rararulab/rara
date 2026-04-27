@@ -90,6 +90,26 @@ Public surface (intentionally minimal, see #1697/#1698):
   that job starts failing, fix the underlying build issue — do not
   re-add the stub on macOS.
 
+## Network policy fusion
+
+A single [`Sandbox`] carries a single [`NetworkPolicy`]. Multiple rara tools
+(`bash`, `run_code`, …) share one per-session VM via
+`crates/app/src/sandbox.rs::sandbox_for_session`, so the VM's policy must be
+fixed at creation time and cannot vary per call without leaking a less
+restrictive setting from the first caller forward.
+
+The fusion rule lives at `crates/app/src/sandbox.rs::fused_network_policy`:
+
+- if **every** sandbox-using tool wants `Disabled`, the result is `Disabled`;
+- otherwise the result is `Enabled` with the union of allow-lists. An empty
+  allow-list under `Enabled` means full outbound (boxlite's own default), so
+  a single full-net contributor (today `run_code`) dominates the union.
+
+When you add a new sandbox-using tool, extend `fused_network_policy` so the
+union accounts for the tool's policy. Do **not** add a per-call
+`NetworkPolicy` argument back to `sandbox_for_session` — that's the exact
+shape that motivated this section (PR #1946 review).
+
 ## Dependencies
 
 **Upstream (crates this crate depends on):**

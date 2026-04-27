@@ -37,8 +37,13 @@
 //! - Timeouts are enforced by boxlite per-exec rather than by signaling a host
 //!   process group; there is no `SIGTERM`-then-`SIGKILL` two-phase kill any
 //!   more.
-//! - Network is **disabled** by default. Operators can opt in to a boxlite
-//!   allow-list via `sandbox.bash.allow_net` in YAML.
+//! - Network is **disabled** by default for `bash`. Operators can opt in to a
+//!   boxlite allow-list via `sandbox.bash.allow_net` in YAML. Because the
+//!   per-session VM is shared with `run_code`, the effective policy is the
+//!   fused (most-permissive) union — see `crates/app/src/sandbox.rs`.
+//! - Relative `..` traversal in `cwd` is bounded by the guest rootfs: escape
+//!   attempts fail at [`rara_sandbox::Sandbox::exec`] argv validation rather
+//!   than at host-side path translation.
 //! - The 50KB / 2000-line truncation contract and the streaming
 //!   `StreamEvent::ToolOutput` chunks are preserved so the agent UI is
 //!   unchanged.
@@ -51,13 +56,13 @@ use rara_kernel::{
     io::{StreamEvent, StreamHandle},
     tool::{ToolContext, ToolExecute},
 };
-use rara_sandbox::{ExecRequest, NetworkPolicy};
+use rara_sandbox::ExecRequest;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
-    BashSandboxConfig, SandboxToolConfig,
+    SandboxToolConfig,
     sandbox::{GUEST_WORKSPACE, SandboxMap, sandbox_for_session, sandbox_not_configured_error},
 };
 
@@ -233,13 +238,7 @@ impl ToolExecute for BashTool {
 
         let effective_command = rtk_rewrite(&params.command).await;
 
-        let sandbox = sandbox_for_session(
-            cfg,
-            &self.sandboxes,
-            context.session_key,
-            network_policy(&cfg.bash),
-        )
-        .await?;
+        let sandbox = sandbox_for_session(cfg, &self.sandboxes, context.session_key).await?;
 
         let request = ExecRequest::builder()
             .command("sh".to_owned())
@@ -357,17 +356,6 @@ fn translate_cwd(raw: &str) -> anyhow::Result<String> {
             raw,
             workspace.display()
         )),
-    }
-}
-
-/// Build the boxlite [`NetworkPolicy`] from the per-tool YAML knob.
-fn network_policy(bash: &BashSandboxConfig) -> NetworkPolicy {
-    if bash.allow_net.is_empty() {
-        NetworkPolicy::Disabled
-    } else {
-        NetworkPolicy::Enabled {
-            allow_net: bash.allow_net.clone(),
-        }
     }
 }
 
@@ -536,25 +524,5 @@ mod tests {
         let inside = workspace.join("foo/bar");
         let out = translate_cwd(&inside.to_string_lossy()).expect("ok");
         assert_eq!(out, "/workspace/foo/bar");
-    }
-
-    #[test]
-    fn network_policy_empty_allow_net_disables_network() {
-        let cfg = BashSandboxConfig::default();
-        match network_policy(&cfg) {
-            NetworkPolicy::Disabled => {}
-            NetworkPolicy::Enabled { .. } => panic!("expected Disabled"),
-        }
-    }
-
-    #[test]
-    fn network_policy_non_empty_allow_net_enables() {
-        let cfg = BashSandboxConfig::builder()
-            .allow_net(vec!["github.com".to_owned()])
-            .build();
-        match network_policy(&cfg) {
-            NetworkPolicy::Enabled { allow_net } => assert_eq!(allow_net, vec!["github.com"]),
-            NetworkPolicy::Disabled => panic!("expected Enabled"),
-        }
     }
 }

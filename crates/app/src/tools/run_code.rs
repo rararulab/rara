@@ -32,7 +32,7 @@ use rara_kernel::{
     session::SessionKey,
     tool::{ToolContext, ToolExecute},
 };
-use rara_sandbox::{ExecRequest, NetworkPolicy, Sandbox};
+use rara_sandbox::{ExecRequest, Sandbox};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -113,17 +113,13 @@ impl RunCodeTool {
             .config
             .as_ref()
             .ok_or_else(|| sandbox_not_configured_error("run_code"))?;
-        // run_code preserves its historical "full network" behavior: an empty
-        // allow-list with `Enabled` mirrors boxlite's own default (#1937).
-        sandbox_for_session(
-            cfg,
-            &self.sandboxes,
-            session_key,
-            NetworkPolicy::Enabled {
-                allow_net: Vec::new(),
-            },
-        )
-        .await
+        // The shared per-session VM picks its NetworkPolicy from the fused
+        // policy across all sandbox-using tools — see
+        // `crates/app/src/sandbox.rs::fused_network_policy`. `run_code`
+        // contributes "Enabled with empty allow-list" (full outbound), so
+        // its historical behavior is preserved when bash is absent or
+        // permissive (#1937, #1946).
+        sandbox_for_session(cfg, &self.sandboxes, session_key).await
     }
 }
 

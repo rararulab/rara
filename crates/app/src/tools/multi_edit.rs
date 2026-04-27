@@ -384,21 +384,7 @@ mod tests {
         assert_eq!(content, "xxx yyy ccc");
     }
 
-    #[tokio::test]
-    async fn path_outside_workspace_blocked() {
-        // resolve_writable calls rara_paths::workspace_dir() which may not be
-        // available in CI. Skip if workspace creation would fail.
-        let workspace = std::panic::catch_unwind(rara_paths::workspace_dir);
-        let Ok(ws) = workspace else { return };
-
-        // Use a path that is guaranteed to be outside the workspace.
-        let outside = if ws.starts_with("/tmp") {
-            "/etc/passwd"
-        } else {
-            "/tmp/__outside__"
-        };
-        let err = resolve_writable(outside).await;
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("outside workspace"));
-    }
+    // Out-of-workspace paths are covered by
+    // `path_check::tests::absolute_outside_workspace_rejected`; an extra
+    // copy here was brittle and just re-tested `resolve_writable`.
 }

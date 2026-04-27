@@ -141,10 +141,20 @@ agents:
 # so the LLM can react.
 #
 # `bash.allow_net` is the only tunable specific to the `bash` tool today:
-# - omitted / empty list → `bash` runs with **no network** (deny-by-default)
-# - non-empty list → boxlite allow-list (host patterns or CIDRs); the
-#   sandbox can only reach those hosts. `run_code` is unaffected and
-#   keeps full outbound access for parity with its historical behavior.
+# - omitted block / empty list → bash by itself wants **no network**
+# - non-empty list → boxlite allow-list (host patterns or CIDRs)
+#
+# Important: `bash` and `run_code` share a single per-session VM, which
+# carries a single network policy. The effective policy is the **union**
+# (most-permissive) across both tools, computed once at VM creation and
+# fixed for the session — see `crates/app/src/sandbox.rs`. Because
+# `run_code` is registered with full outbound access (its historical
+# behavior), the session VM's network is effectively "full outbound" as
+# long as `run_code` is registered, regardless of the value of
+# `bash.allow_net`. The `allow_net` knob is therefore primarily a hook
+# for future tools that may want to tighten the union; it cannot
+# unilaterally disable network for the bash tool while `run_code` is
+# also present.
 #
 # Pre-flight: `rara setup boxlite` must have staged the runtime files (see
 # docs/guides/boxlite-runtime.md).

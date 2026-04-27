@@ -53,7 +53,7 @@ pub struct SandboxConfig {
     /// matches boxlite's own default and preserves the historical `run_code`
     /// behavior of full outbound access.
     #[serde(default)]
-    #[builder(default = NetworkPolicy::Enabled { allow_net: Vec::new() })]
+    #[builder(default)]
     pub network: NetworkPolicy,
 
     /// Default working directory for commands executed in the sandbox.
