@@ -38,17 +38,24 @@ export interface UseSessionEventsOptions {
   onTapeAppended: (event: { entry_id: number; role: string | null; timestamp: string }) => void;
 }
 
-const INITIAL_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 30_000;
+// Mechanism-tuning constants — internal knobs, not deploy-relevant config.
+// Aligned with `rara-stream.ts`: bounded retry budget so a permanently dead
+// backend cannot spin reconnect attempts forever.
+const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 4_000] as const;
+const MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.length;
 
 /**
  * Maintain a persistent WebSocket subscription to the kernel's session
  * event bus so the UI sees tape mutations that arrive outside a live
  * user turn (background-task summaries, scheduled re-entries, …).
  *
- * Reconnects with capped exponential backoff. Lifecycle is tied to
- * `sessionKey`: switching sessions closes the old socket and opens a
- * new one; setting `sessionKey` to `null` closes the socket cleanly.
+ * Reconnects with a bounded retry budget ({@link MAX_RECONNECT_ATTEMPTS}).
+ * The backend may close a socket immediately after `onopen` (before the
+ * `Hello` frame) when the kernel handle is not yet attached, so the retry
+ * counter is reset only on receipt of a `Hello` frame — `onopen` alone is
+ * not proof of a live connection. Lifecycle is tied to `sessionKey`:
+ * switching sessions closes the old socket and opens a new one; setting
+ * `sessionKey` to `null` closes the socket cleanly.
  */
 export function useSessionEvents({ sessionKey, onTapeAppended }: UseSessionEventsOptions): void {
   // Stable ref so the effect does not re-subscribe when callers pass a
@@ -62,7 +69,7 @@ export function useSessionEvents({ sessionKey, onTapeAppended }: UseSessionEvent
   useEffect(() => {
     if (!sessionKey) return;
 
-    let backoff = INITIAL_BACKOFF_MS;
+    let attempts = 0;
     let cancelled = false;
     let ws: WebSocket | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -80,15 +87,17 @@ export function useSessionEvents({ sessionKey, onTapeAppended }: UseSessionEvent
 
       ws = new WebSocket(url);
 
-      ws.onopen = () => {
-        backoff = INITIAL_BACKOFF_MS;
-      };
-
       ws.onmessage = (ev) => {
         let frame: SessionEventFrame;
         try {
           frame = JSON.parse(ev.data) as SessionEventFrame;
         } catch {
+          return;
+        }
+        if (frame.type === 'hello') {
+          // Hello is the only signal the connection is truly alive — backend
+          // can early-close after `onopen` if the kernel handle is missing.
+          attempts = 0;
           return;
         }
         if (frame.type === 'tape_appended') {
@@ -107,8 +116,14 @@ export function useSessionEvents({ sessionKey, onTapeAppended }: UseSessionEvent
       ws.onclose = () => {
         ws = null;
         if (cancelled) return;
-        const delay = backoff;
-        backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+        if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+          console.warn(
+            `[useSessionEvents] giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts for session ${sessionKey}`,
+          );
+          return;
+        }
+        const delay = RECONNECT_BACKOFF_MS[attempts];
+        attempts += 1;
         retryTimer = setTimeout(connect, delay);
       };
     };
