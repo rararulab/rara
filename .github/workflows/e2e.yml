@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: e2e-real-llm-${{ github.sha }}
+  group: e2e-real-llm-${{ github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -49,7 +49,7 @@ jobs:
       - name: Install diesel system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev gettext-base
 
       - name: Render rara config from template
         env:
@@ -71,4 +71,4 @@ jobs:
           cargo test -p rara-app \
             --test real_tape_flow \
             --test anchor_checkout_e2e \
-            -- --ignored --nocapture
+            -- --ignored
