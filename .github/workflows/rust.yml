@@ -2,6 +2,16 @@ name: Rust
 
 on:
   workflow_call:
+    inputs:
+      # Caller (ci.yml) computes this from a path filter: false on PRs that
+      # don't touch the sandbox crate or its dependency surface, true on
+      # pushes to main. Defaults to true so direct invocations or future
+      # callers don't accidentally skip the macOS coverage.
+      run-sandbox-macos:
+        description: "Run the sandbox-macos job (slow real boxlite build)."
+        type: boolean
+        required: false
+        default: true
 
 concurrency:
   group: rust-${{ github.event.pull_request.number || github.sha }}
@@ -123,11 +133,25 @@ jobs:
   sandbox-macos:
     name: Sandbox (macOS, real boxlite build)
     runs-on: macos
+    if: ${{ inputs.run-sandbox-macos }}
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      # Cache cargo registry/git checkouts and the rara-sandbox `target/`
+      # subtree. The boxlite build script downloads ~tens of MB of
+      # `libkrunfw` prebuilts and natively compiles `bubblewrap-sys` /
+      # `libkrun-sys`; restoring those build outputs skips the slowest
+      # part of this job. Save only on `main` (default behavior of
+      # `Swatinem/rust-cache@v2`) to avoid PR-induced cache churn.
+      - name: Rust cache (sandbox-macos)
+        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          shared-key: sandbox-macos
+          # Bust the cache when the boxlite/sandbox surface changes.
+          key: ${{ hashFiles('crates/rara-sandbox/Cargo.toml', 'Cargo.lock') }}
 
       - name: Build rara-sandbox (no stub)
         run: cargo build -p rara-sandbox
@@ -157,10 +181,13 @@ jobs:
           DOCS_RESULT: ${{ needs.docs.result }}
           SANDBOX_MACOS_RESULT: ${{ needs.sandbox-macos.result }}
         run: |
+          # `sandbox-macos` is gated by a path filter and may legitimately
+          # report `skipped` on PRs that don't touch the sandbox crate —
+          # treat that as success here so the gate doesn't block merges.
           if [[ "$CLIPPY_RESULT" != "success" || \
                 "$TEST_RESULT" != "success" || \
                 "$DOCS_RESULT" != "success" || \
-                "$SANDBOX_MACOS_RESULT" != "success" ]]; then
+                ( "$SANDBOX_MACOS_RESULT" != "success" && "$SANDBOX_MACOS_RESULT" != "skipped" ) ]]; then
             echo "One or more Rust jobs failed"
             echo "  clippy:        $CLIPPY_RESULT"
             echo "  test:          $TEST_RESULT"
