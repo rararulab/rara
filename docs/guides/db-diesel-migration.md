@@ -24,11 +24,6 @@ This document is the single source of truth for how rara migrated its DB layer f
 - Rationale: rara is tokio-first. Wrapping a sync `diesel` pool inside `spawn_blocking` would add a blocking thread-pool hop to every query and would leak through cancellation semantics. `diesel-async` integrates directly with tokio and gives us a real async API surface.
 - `bb8` (vs `deadpool` / `mobc`) is chosen because it is the tokio-native pool with the smallest surface area and aligns with the rest of the ecosystem (`tokio`, `hyper`, `axum`).
 
-## Postgres handling
-
-- `pg-credential-store` (currently on `sqlx-postgres`) also migrates to `diesel`. It is not left on sqlx.
-- Rationale: a single ORM across the entire codebase is a non-negotiable invariant — we pay the migration cost once, then never again. Leaving one crate on sqlx would permanently fragment the query-layer style and force every future reviewer to context-switch.
-
 ## Query style
 
 - Full `diesel` DSL via `schema.rs` + the `table!` macro. **Not** `diesel::sql_query` as an escape hatch.
@@ -75,10 +70,9 @@ Stacked PRs off `feat/db-diesel` (see #1702 decomposition):
 2. `schema.rs` generation + `diesel.toml` + `AGENT.md` update in `rara-model`.
 3. Connection pool helper (`diesel-async` + `bb8`) in a shared location.
 4. Per-crate repository migration (one PR per crate, smallest blast radius first).
-5. `pg-credential-store` postgres migration.
-6. Cutover: `sqlx::migrate!` → `diesel_migrations::embed_migrations!` in `rara-app` bootstrap.
-7. Integration tests green on `testcontainers` (sqlite + postgres).
-8. Final PR removes `sqlx` from workspace deps and from every crate `Cargo.toml`.
+5. Cutover: `sqlx::migrate!` → `diesel_migrations::embed_migrations!` in `rara-app` bootstrap.
+6. Integration tests green on `testcontainers` (sqlite + postgres).
+7. Final PR removes `sqlx` from workspace deps and from every crate `Cargo.toml`.
 
 Final summary PR goes from `feat/db-diesel` → `main` for reviewer approval.
 
