@@ -78,6 +78,7 @@ git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
 ## Step 3: Work in Worktree
 - **All code edits happen exclusively inside the worktree directory** — never in the main checkout
 - The main agent may dispatch a subagent to the worktree, or work there directly
+- When dispatching, prefer `subagent_type: implementer` (defined in `.claude/agents/implementer.md`) over `general-purpose` — it carries the project's commit/verify/PR conventions and the config-schema guardrail learned from #1907
 - Independent issues can be dispatched **in parallel** (each in its own worktree)
 - All work should be committed before moving to the next step
 
@@ -167,7 +168,7 @@ gh pr checks {PR-number} --watch    # Wait for all checks to complete
 
 ## Step 7: Code Review (MANDATORY)
 
-After CI is green, run a structured code review with the **`/code-review-expert`** skill — the main agent invokes the skill via the `Skill` tool, or dispatches a subagent that loads the same skill. The skill produces a verdict (APPROVE / REQUEST_CHANGES / COMMENT) plus findings graded P0–P3.
+After CI is green, run a structured code review with the **`/code-review-expert`** skill — the main agent invokes the skill via the `Skill` tool, or dispatches the **`reviewer`** subagent (`.claude/agents/reviewer.md`) which wraps the same skill and adds the cross-PR regression-decision check (the #1907 lesson: catch silent reversals of recent design decisions). The skill produces a verdict (APPROVE / REQUEST_CHANGES / COMMENT) plus findings graded P0–P3.
 
 The agent never approves its own diff in lieu of running the skill — it comes in cold and catches what the implementer missed.
 
