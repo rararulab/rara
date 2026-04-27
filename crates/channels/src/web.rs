@@ -82,7 +82,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
-use crate::web_reply_buffer::{ReplyBuffer, ReplyBufferConfig};
+use crate::web_reply_buffer::ReplyBuffer;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -430,7 +430,7 @@ pub struct SendMessageResponse {
 /// # Usage
 ///
 /// ```rust,ignore
-/// let adapter = WebAdapter::new(owner_token, owner_user_id, reply_buffer_config);
+/// let adapter = WebAdapter::new(owner_token, owner_user_id);
 /// let router = adapter.router();
 /// // Mount into your axum app:
 /// // app.nest("/chat", router)
@@ -485,16 +485,11 @@ impl WebAdapter {
     /// and that `owner_user_id` matches a configured user before reaching
     /// this constructor.
     ///
-    /// `reply_buffer_config` carries the per-session reply-buffer caps
-    /// sourced from YAML (`web.reply_buffer.{capacity_events,
-    /// capacity_bytes, ttl}`). Tests that need shared access to the
-    /// underlying [`ReplyBuffer`] should override it via
-    /// [`Self::with_reply_buffer`] after construction.
-    pub fn new(
-        owner_token: String,
-        owner_user_id: String,
-        reply_buffer_config: ReplyBufferConfig,
-    ) -> Self {
+    /// The per-session reply buffer is constructed with mechanism-tuning
+    /// caps defined as `const` in [`crate::web_reply_buffer`]; tests that
+    /// need shared access to the underlying [`ReplyBuffer`] should
+    /// override it via [`Self::with_reply_buffer`] after construction.
+    pub fn new(owner_token: String, owner_user_id: String) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             adapter_events: Arc::new(DashMap::new()),
@@ -506,7 +501,7 @@ impl WebAdapter {
             shutdown_tx,
             shutdown_rx,
             stt_service: None,
-            reply_buffer: ReplyBuffer::new(reply_buffer_config),
+            reply_buffer: ReplyBuffer::new(),
         }
     }
 

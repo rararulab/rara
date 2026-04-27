@@ -25,28 +25,6 @@ grpc:
   server_address: "127.0.0.1:50051"
 
 # ---------------------------------------------------------------------------
-# Web channel — per-session reply buffer (required)
-# ---------------------------------------------------------------------------
-#
-# When a long-running task completes while the user has closed their tab,
-# the WebSocket broadcast has zero receivers and the reply would be lost
-# (#1882). The reply buffer holds "important" events (final messages,
-# errors, task completions, progress) per session for `ttl` so a
-# reattaching client can replay them in publish order.
-#
-# All three caps are required — there are no Rust-side defaults.
-#   - capacity_events: max number of buffered events per session
-#   - capacity_bytes:  max total serialized bytes per session
-#   - ttl:             how long an event survives before lazy eviction
-# Whichever cap fills first triggers FIFO eviction.
-
-web:
-  reply_buffer:
-    capacity_events: 256
-    capacity_bytes: 2097152   # 2 MiB
-    ttl: 5m
-
-# ---------------------------------------------------------------------------
 # Owner authentication (required)
 # ---------------------------------------------------------------------------
 #

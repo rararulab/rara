@@ -17,8 +17,8 @@
 //! When a long-running task completes while the user has closed their tab,
 //! the WS broadcast has zero receivers and the event would otherwise be
 //! silently dropped (issues #1804 / #1882). This buffer holds "important"
-//! events for a configurable TTL window so a reattaching client can replay
-//! them in order before resuming live publish.
+//! events for a TTL window so a reattaching client can replay them in
+//! order before resuming live publish.
 //!
 //! ## Critical invariants
 //!
@@ -32,12 +32,13 @@
 //! - **Hard memory bound**: bounded by both event count and total bytes —
 //!   whichever cap fills first triggers FIFO eviction. Buffering can never OOM
 //!   regardless of producer rate.
-//! - **TTL**: events older than [`ReplyBufferConfig::ttl`] are evicted lazily
-//!   on every publish/drain (so no idle session needs a sweep), and a
-//!   low-frequency background sweeper drops fully-empty session entries.
+//! - **TTL**: events older than `TTL` are evicted lazily on every publish/drain
+//!   (so no idle session needs a sweep), and a low-frequency background sweeper
+//!   drops fully-empty session entries.
 //!
-//! Configuration lives in YAML (`web.reply_buffer.{capacity_events,
-//! capacity_bytes, ttl}`); there are no Rust-side defaults.
+//! Caps live as `const` next to the buffer — they are mechanism tuning for
+//! the always-on bug fix, not deployment configuration. See
+//! `docs/guides/anti-patterns.md` "Mechanism constants are not config".
 
 use std::{
     collections::VecDeque,
@@ -48,27 +49,27 @@ use std::{
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rara_kernel::session::SessionKey;
-use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::web::WebEvent;
 
-/// User-tunable bounds for [`ReplyBuffer`]. All three fields are required —
-/// the buffer has no Rust-side defaults; callers must source values from
-/// YAML configuration (see `config.example.yaml`).
-#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
-pub struct ReplyBufferConfig {
-    /// Maximum number of buffered events per session before FIFO eviction.
-    pub capacity_events: usize,
-    /// Maximum total serialized bytes per session before FIFO eviction.
-    /// Bytes are estimated from `serde_json::to_string(&event).len()`.
-    pub capacity_bytes:  usize,
-    /// How long an individual event survives in the buffer before being
-    /// evicted on the next publish or drain.
-    #[serde(with = "humantime_serde")]
-    pub ttl:             Duration,
-}
+/// Maximum number of buffered events per session before FIFO eviction.
+const CAPACITY_EVENTS: usize = 256;
+
+/// Maximum total serialized bytes per session before FIFO eviction.
+/// Bytes are estimated from `serde_json::to_string(&event).len()`.
+const CAPACITY_BYTES: usize = 2 * 1024 * 1024;
+
+/// How long an individual event survives in the buffer before being
+/// evicted on the next publish or drain.
+const TTL: Duration = Duration::from_mins(5);
+
+/// Sweeper interval for dropping fully-empty session entries. The
+/// per-event TTL is enforced inline on publish/drain; the sweeper only
+/// reclaims map slots whose buffer has been empty long enough that no
+/// reattach is realistically going to need them.
+const SESSION_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
 
 /// One buffered event with the timestamp used for TTL eviction and the
 /// pre-computed serialized size used for the byte-cap accounting.
@@ -97,12 +98,12 @@ impl SessionBuffer {
         }
     }
 
-    /// Drop events older than `ttl`. Called on every publish/drain so an
+    /// Drop events older than `TTL`. Called on every publish/drain so an
     /// abandoned session stops returning stale data even if no sweeper
     /// has run yet.
-    fn evict_expired(&mut self, ttl: Duration, now: Instant) {
+    fn evict_expired(&mut self, now: Instant) {
         while let Some(front) = self.events.front() {
-            if now.duration_since(front.queued_at) <= ttl {
+            if now.duration_since(front.queued_at) <= TTL {
                 break;
             }
             let dropped = self
@@ -115,11 +116,11 @@ impl SessionBuffer {
 
     /// Append `event`, FIFO-evicting until both the event-count and
     /// byte-count caps are satisfied.
-    fn push(&mut self, event: WebEvent, bytes: usize, cfg: &ReplyBufferConfig) {
+    fn push(&mut self, event: WebEvent, bytes: usize) {
         // Evict by count first so a flood of tiny events still leaves
         // room for the new entry without blowing the byte cap.
-        while self.events.len() >= cfg.capacity_events
-            || (self.bytes + bytes > cfg.capacity_bytes && !self.events.is_empty())
+        while self.events.len() >= CAPACITY_EVENTS
+            || (self.bytes + bytes > CAPACITY_BYTES && !self.events.is_empty())
         {
             let Some(dropped) = self.events.pop_front() else {
                 break;
@@ -139,27 +140,17 @@ impl SessionBuffer {
 /// Per-session reply buffer registry shared across all WS / SSE handlers
 /// and the [`crate::web::WebAdapter`] publish path.
 pub struct ReplyBuffer {
-    config:   ReplyBufferConfig,
     sessions: DashMap<SessionKey, Arc<Mutex<SessionBuffer>>>,
 }
 
-/// Sweeper interval for dropping fully-empty session entries. The
-/// per-event TTL is enforced inline on publish/drain; the sweeper only
-/// reclaims map slots whose buffer has been empty long enough that no
-/// reattach is realistically going to need them. This is a mechanism
-/// constant, not a knob — see `docs/guides/anti-patterns.md` "Mechanism
-/// constants are not config".
-const SESSION_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
-
 impl ReplyBuffer {
-    /// Construct an empty buffer wired to `config`.
+    /// Construct an empty buffer.
     ///
     /// Returned as `Arc` because every consumer (`WebAdapter`, the WS
     /// handler, the sweeper task) holds its own reference.
     #[must_use]
-    pub fn new(config: ReplyBufferConfig) -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            config,
             sessions: DashMap::new(),
         })
     }
@@ -202,9 +193,9 @@ impl ReplyBuffer {
         let entry = self.session_entry(session_key);
         let mut guard = entry.lock();
         let now = Instant::now();
-        guard.evict_expired(self.config.ttl, now);
+        guard.evict_expired(now);
         if needs_buffer {
-            guard.push(event.clone(), bytes, &self.config);
+            guard.push(event.clone(), bytes);
         }
         // The send happens inside the lock so a concurrent
         // `subscribe_and_drain` cannot insert itself between the buffer
@@ -234,7 +225,7 @@ impl ReplyBuffer {
         // so no concurrent publish can sneak between subscribe + drain.
         let rx = tx.subscribe();
         let now = Instant::now();
-        guard.evict_expired(self.config.ttl, now);
+        guard.evict_expired(now);
         let drained: Vec<WebEvent> = guard.events.drain(..).map(|b| b.event).collect();
         guard.bytes = 0;
         (rx, drained)
@@ -250,7 +241,7 @@ impl ReplyBuffer {
             return Vec::new();
         };
         let mut guard = entry.lock();
-        guard.evict_expired(self.config.ttl, Instant::now());
+        guard.evict_expired(Instant::now());
         guard.events.iter().map(|b| b.event.clone()).collect()
     }
 
@@ -282,13 +273,12 @@ impl ReplyBuffer {
     #[doc(hidden)]
     pub fn sweep(&self) {
         let now = Instant::now();
-        let ttl = self.config.ttl;
         let victims: Vec<SessionKey> = self
             .sessions
             .iter()
             .filter_map(|entry| {
                 let mut guard = entry.value().lock();
-                guard.evict_expired(ttl, now);
+                guard.evict_expired(now);
                 guard.events.is_empty().then_some(*entry.key())
             })
             .collect();
@@ -312,19 +302,6 @@ impl ReplyBuffer {
     }
 }
 
-/// Test-only [`ReplyBufferConfig`] with generous caps suitable for
-/// integration tests that don't care about eviction behaviour. Production
-/// code MUST source caps from YAML (see `config.example.yaml`).
-#[doc(hidden)]
-#[must_use]
-pub fn test_config() -> ReplyBufferConfig {
-    ReplyBufferConfig::builder()
-        .capacity_events(256)
-        .capacity_bytes(2 * 1024 * 1024)
-        .ttl(Duration::from_mins(1))
-        .build()
-}
-
 /// Best-effort serialised byte estimate used for the byte cap. We pay
 /// this cost only when `should_buffer` is true, so the streaming hot
 /// path is unaffected. Falls back to a small constant when the event
@@ -335,20 +312,10 @@ fn estimated_bytes(event: &WebEvent) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use rara_kernel::{io::BackgroundTaskStatus, session::SessionKey};
     use tokio::sync::broadcast;
 
-    use super::{ReplyBuffer, ReplyBufferConfig, WebEvent};
-
-    fn cfg() -> ReplyBufferConfig {
-        ReplyBufferConfig::builder()
-            .capacity_events(256)
-            .capacity_bytes(2 * 1024 * 1024)
-            .ttl(Duration::from_mins(1))
-            .build()
-    }
+    use super::{ReplyBuffer, WebEvent};
 
     fn session() -> SessionKey { SessionKey::new() }
 
@@ -385,7 +352,7 @@ mod tests {
 
     #[test]
     fn append_then_snapshot_returns_events_in_order() {
-        let buf = ReplyBuffer::new(cfg());
+        let buf = ReplyBuffer::new();
         let s = session();
         let (tx, _rx) = broadcast::channel(16);
         buf.publish(&s, &tx, msg("first")).ok();
@@ -402,79 +369,8 @@ mod tests {
     }
 
     #[test]
-    fn cap_by_event_count_evicts_oldest() {
-        let cfg = ReplyBufferConfig::builder()
-            .capacity_events(256)
-            .capacity_bytes(usize::MAX)
-            .ttl(Duration::from_mins(1))
-            .build();
-        let buf = ReplyBuffer::new(cfg);
-        let s = session();
-        let (tx, _rx) = broadcast::channel(16);
-        for i in 0..300 {
-            buf.publish(&s, &tx, msg(&format!("m{i}"))).ok();
-        }
-        let snap = buf.snapshot(&s);
-        assert_eq!(snap.len(), 256);
-        match &snap[0] {
-            WebEvent::Message { content } => {
-                // First retained should be m44 (300 - 256 = 44 evicted).
-                assert_eq!(content, "m44");
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn cap_by_byte_count_evicts_oldest() {
-        // Each serialized message is roughly the JSON `{"type":"message",
-        // "content":"..."}` plus payload length. Pick a tight byte cap
-        // that forces eviction within 10 sends.
-        let cfg = ReplyBufferConfig::builder()
-            .capacity_events(usize::MAX)
-            .capacity_bytes(200)
-            .ttl(Duration::from_mins(1))
-            .build();
-        let buf = ReplyBuffer::new(cfg);
-        let s = session();
-        let (tx, _rx) = broadcast::channel(16);
-        for i in 0..10 {
-            buf.publish(&s, &tx, msg(&format!("payload-{i:03}"))).ok();
-        }
-        let snap = buf.snapshot(&s);
-        // Some events MUST have been evicted to satisfy the byte cap.
-        assert!(
-            snap.len() < 10,
-            "byte cap should have evicted old events; got {} events",
-            snap.len()
-        );
-    }
-
-    #[test]
-    fn ttl_drops_old_events_on_drain() {
-        let cfg = ReplyBufferConfig::builder()
-            .capacity_events(256)
-            .capacity_bytes(usize::MAX)
-            .ttl(Duration::from_millis(20))
-            .build();
-        let buf = ReplyBuffer::new(cfg);
-        let s = session();
-        let (tx, _rx) = broadcast::channel(16);
-        buf.publish(&s, &tx, msg("stale")).ok();
-        std::thread::sleep(Duration::from_millis(40));
-        buf.publish(&s, &tx, msg("fresh")).ok();
-
-        let (_rx2, drained) = buf.subscribe_and_drain(&s, &tx);
-        assert_eq!(drained.len(), 1, "stale event must be TTL-evicted");
-        match &drained[0] {
-            WebEvent::Message { content } => assert_eq!(content, "fresh"),
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    #[test]
     fn subscribe_and_drain_clears_buffer() {
-        let buf = ReplyBuffer::new(cfg());
+        let buf = ReplyBuffer::new();
         let s = session();
         let (tx, _rx) = broadcast::channel(16);
         buf.publish(&s, &tx, msg("a")).ok();
@@ -489,7 +385,7 @@ mod tests {
 
     #[test]
     fn per_session_isolation() {
-        let buf = ReplyBuffer::new(cfg());
+        let buf = ReplyBuffer::new();
         let s1 = session();
         let s2 = session();
         let (tx1, _rx1) = broadcast::channel(16);
@@ -505,7 +401,7 @@ mod tests {
 
     #[test]
     fn sweep_drops_empty_sessions() {
-        let buf = ReplyBuffer::new(cfg());
+        let buf = ReplyBuffer::new();
         let s = session();
         let (tx, _rx) = broadcast::channel(16);
         buf.publish(&s, &tx, msg("x")).ok();
@@ -521,7 +417,7 @@ mod tests {
         // Mid-flight scenario: subscribe_and_drain, then immediately
         // publish — the receiver must see the new event ONCE (live), and
         // a second drain must not re-emit it.
-        let buf = ReplyBuffer::new(cfg());
+        let buf = ReplyBuffer::new();
         let s = session();
         let (tx, _rx) = broadcast::channel(16);
         buf.publish(&s, &tx, msg("buffered")).ok();
