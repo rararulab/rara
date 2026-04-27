@@ -23,6 +23,10 @@ vi.mock('@/api/client', () => ({
   getAccessToken: () => 'test-token',
 }));
 
+vi.mock('@/adapters/ws-base-url', () => ({
+  buildWsBaseUrl: () => 'ws://localhost:5173',
+}));
+
 interface MockWebSocket {
   url: string;
   onopen: ((ev: Event) => void) | null;
