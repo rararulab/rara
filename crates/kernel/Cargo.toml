@@ -24,6 +24,7 @@ base.workspace = true
 base64.workspace = true
 bon.workspace = true
 chrono.workspace = true
+common-telemetry.workspace = true
 cron = "0.16"
 crossbeam-queue.workspace = true
 dashmap = "6"
@@ -78,7 +79,6 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 [dev-dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-common-telemetry.workspace = true
 dashmap = "6"
 diesel_migrations.workspace = true
 rara-domain-shared = { workspace = true, features = ["testing"] }

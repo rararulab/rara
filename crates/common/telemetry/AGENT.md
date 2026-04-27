@@ -13,6 +13,9 @@ Telemetry utilities — logging initialization, tracing subscriber setup (with o
 - `src/tracing_context.rs` — Utilities for propagating tracing context across async boundaries.
 - `src/tracing_sampler.rs` — Custom tracing sampler for controlling trace sampling rates.
 - `src/profiling.rs` — `init_pyroscope()` wires the Grafana Pyroscope agent (pprof-rs backend) for continuous CPU profiling. Returns a `ProfilingGuard` whose `Drop` performs graceful shutdown (stop → flush → join). Section omitted from YAML = zero overhead, no thread spawned.
+- `src/attrs.rs` — **Stable telemetry attribute keys (Layer A contract).** `SCHEMA_VERSION = "0.1.0"`. Re-exports `gen_ai.*` keys from `opentelemetry-semantic-conventions` and adds the `rara.*` namespace + OpenInference `openinference.span.kind`. Renaming any `pub const` here breaks the external detector — that is a major version bump.
+- `src/identifiers.rs` — `pub const` for every tool name, agent name, and guard rule name in rara. Internal call sites that emit `tool.name` / `rara.skill.name` / `rara.guard.rule` MUST reference these constants so renames are caught at compile time.
+- `src/payload_sampler.rs` — Layer B content sampler. `PayloadSamplingConfig` (no `Default`, defaults come from YAML) + `PayloadSampler::decide(Outcome)` returns a `SamplingDecision` enum. Deterministic, lock-free, RNG-free.
 
 ### Features
 
@@ -33,6 +36,9 @@ Telemetry utilities — logging initialization, tracing subscriber setup (with o
 - Do NOT import `tracing_subscriber::fmt::init()` directly — use this crate's initialization.
 - Do NOT expect Pyroscope to capture async `.await` stalls or tokio mutex contention — `pprof-rs` is OS-thread CPU sampling. For async stall / lock contention diagnosis, enable the `tokio-console` feature flag (separate chore) and connect with the `tokio-console` CLI.
 - Do NOT add per-request labels to Pyroscope tags — see Critical Invariants. Process-level tags only.
+- Do NOT hardcode telemetry attribute strings (`"rara.session.id"`, `"gen_ai.request.model"`) at call sites — always reference the `pub const` in `attrs.rs` so the compiler catches schema drift.
+- Do NOT rename or remove a `pub const` in `attrs.rs` without bumping `SCHEMA_VERSION` — downstream detectors pin against the schema.
+- Do NOT add Layer B payload attributes outside the sampler — Layer A attributes are always-on and low-cardinality; Layer B (raw prompts/completions) MUST go through `PayloadSampler::decide` first.
 
 ## Dependencies
 

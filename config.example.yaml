@@ -146,8 +146,14 @@ agents:
 #   default_rootfs_image: "alpine:latest"
 
 # ---------------------------------------------------------------------------
-# Telemetry — optional OTLP traces and Pyroscope continuous profiling
+# Telemetry — optional OTLP traces, Pyroscope profiling, and Layer B payload
+# sampling
 # ---------------------------------------------------------------------------
+#
+# Layer A attributes (rara.*, gen_ai.*, openinference.*) are always emitted on
+# spans. Layer B (raw prompts, completions, tool I/O, error chains) is only
+# attached when the `payload_sampling` sampler decides — default off so spans
+# stay low-cardinality and free of user content.
 #
 # Two independent OTLP paths are supported:
 #
@@ -176,6 +182,10 @@ agents:
 #   otlp_endpoint: "http://alloy:4318/v1/traces"
 #   otlp_protocol: "http"
 #   env: "prod"
+#   payload_sampling:
+#     on_error: 1.0         # always sample errored ops
+#     on_success: 0.0       # default off; flip to 0.05 in dev
+#     max_chars: 1000
 #   otlp:
 #     enabled: false
 #     traces_endpoint: "http://10.0.0.183:3000/api/public/otel/v1/traces"
