@@ -940,6 +940,63 @@ impl Kernel {
                 .fork_session(&parent_key, &session_key);
         }
 
+        // Inherit per-session LLM overrides (model / model_provider /
+        // thinking_level) from the parent session by writing a SessionEntry
+        // for the child. Without this, agent::run_turn's lookup via
+        // session_index().get_session() returns None and the child silently
+        // falls back to the global default LLM (#1932).
+        //
+        // We only write the entry when the parent actually has an override to
+        // inherit. Writing for top-level spawns (no parent) or for parents
+        // with no overrides would pollute list_sessions() — that index
+        // enumerates every entry under the directory and feeds the user-facing
+        // session list, which today only contains user-created sessions.
+        //
+        // When the parent has no overrides we skip the write entirely:
+        // agent::run_turn's get_session(child) will return None and resolve
+        // to the global default, which is the correct behavior here.
+        //
+        // Failure to persist is logged but non-fatal: the spawn proceeds, the
+        // child just loses override inheritance — never block a spawn on
+        // metadata bookkeeping.
+        if let Some(parent_key) = parent_id.as_ref() {
+            let parent_entry = self
+                .io
+                .session_index()
+                .get_session(parent_key)
+                .await
+                .ok()
+                .flatten();
+            let has_override = parent_entry.as_ref().is_some_and(|p| {
+                p.model.is_some() || p.model_provider.is_some() || p.thinking_level.is_some()
+            });
+            if has_override {
+                let parent = parent_entry.expect("has_override implies parent_entry is Some");
+                let now = chrono::Utc::now();
+                let child_entry = crate::session::SessionEntry {
+                    key:            session_key,
+                    title:          None,
+                    model:          parent.model.clone(),
+                    model_provider: parent.model_provider.clone(),
+                    thinking_level: parent.thinking_level.clone(),
+                    system_prompt:  None,
+                    message_count:  0,
+                    preview:        None,
+                    metadata:       None,
+                    created_at:     now,
+                    updated_at:     now,
+                };
+                if let Err(e) = self.io.session_index().create_session(&child_entry).await {
+                    tracing::error!(
+                        error = %e,
+                        session_key = %session_key,
+                        parent_id = ?parent_id,
+                        "failed to persist SessionEntry for spawned agent — LLM override inheritance disabled for this session"
+                    );
+                }
+            }
+        }
+
         crate::metrics::record_session_created(&manifest.name);
         crate::metrics::inc_session_active(&manifest.name);
 
