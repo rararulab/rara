@@ -754,13 +754,14 @@ fn build_otel_resource(
     }
 }
 
-/// Build a `reqwest::Client` configured for OTLP HTTP exporters.
+/// Build a `reqwest::blocking::Client` configured for OTLP HTTP exporters.
 ///
 /// OTLP exporters target collectors on the LAN (Alloy, Langfuse, Loki). They
-/// must NOT honor `HTTP_PROXY` / `HTTPS_PROXY` from the environment — a
-/// developer's outbound proxy would silently misroute observability traffic.
-fn build_otlp_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+/// must NOT honor `HTTP_PROXY` / `HTTPS_PROXY` from the environment, and
+/// OTel's BatchProcessor / PeriodicReader threads have no tokio runtime, so we
+/// use the blocking client.
+fn build_otlp_http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
         .no_proxy()
         .build()
         .expect("Failed to build reqwest client for OTLP HTTP exporter")
