@@ -12,7 +12,6 @@ categories.workspace = true
 description = "Application orchestration and lifecycle management for rara"
 
 [dependencies]
-agentfs-sdk = { workspace = true }
 anyhow.workspace = true
 async-trait = { workspace = true }
 axum = { workspace = true }

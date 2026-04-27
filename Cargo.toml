@@ -139,7 +139,6 @@ members = [
 ]
 
 [workspace.dependencies]
-agentfs-sdk = "0.6"
 anyhow = "^1.0"
 argon2 = "0.5"
 async-openai = { version = "0.33", features = ["chat-completion"] }
