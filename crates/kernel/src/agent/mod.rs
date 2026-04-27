@@ -59,7 +59,7 @@ use tracing::{error, info, info_span, warn};
 
 use crate::{
     error::{IoSnafu, KernelError, Result, TapeSnafu, YamlSnafu},
-    guard::pipeline::{GuardLayer, GuardPipeline, GuardVerdict},
+    guard::pipeline::{GuardPipeline, GuardVerdict},
     handle::KernelHandle,
     identity::Role,
     io::{StreamEvent, StreamHandle},
@@ -2618,12 +2618,10 @@ async fn run_agent_loop_inner(
                                     %reason,
                                     "guard block overridden by user approval"
                                 );
-                                // Remember approved path so the user is not
-                                // prompted again for the same directory tree.
-                                if layer == GuardLayer::PathScope {
-                                    guard_pipeline.approve_path_scope(&name, &args);
-                                }
                                 // Fall through to normal tool execution.
+                                // (The retired path-scope layer used to
+                                // record an approved-prefix here; that
+                                // bookkeeping died with the layer in #1936.)
                             }
                             _ => {
                                 // Denied or timed out — block the tool call.

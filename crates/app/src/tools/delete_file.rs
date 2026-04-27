@@ -13,8 +13,10 @@
 // limitations under the License.
 
 //! File deletion primitive.
-
-use std::path::{Path, PathBuf};
+//!
+//! Path resolution goes through [`super::path_check::resolve_writable`] so
+//! both absolute-path escape and symlink escape inside the workspace are
+//! rejected before any host delete happens (see #1936).
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -22,6 +24,8 @@ use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use super::path_check::resolve_writable;
 
 /// Input parameters for the delete-file tool.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -63,11 +67,7 @@ impl ToolExecute for DeleteFileTool {
         params: DeleteFileParams,
         _context: &ToolContext,
     ) -> anyhow::Result<DeleteFileResult> {
-        let file_path = if Path::new(&params.file_path).is_absolute() {
-            PathBuf::from(&params.file_path)
-        } else {
-            rara_paths::workspace_dir().join(&params.file_path)
-        };
+        let file_path = resolve_writable(&params.file_path).await?;
 
         // Call remove_file directly and map OS errors to user-friendly messages,
         // avoiding TOCTOU races from separate is_dir()/exists() checks.

@@ -291,17 +291,11 @@ impl Kernel {
         let event_queue: ShardedQueueRef = sharded_queue.clone();
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
-        let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new(
-            rara_paths::workspace_dir().clone(),
-            vec![
-                rara_paths::config_dir().clone(),
-                rara_paths::data_dir().clone(),
-                rara_paths::temp_dir().clone(),
-                rara_paths::logs_dir().clone(),
-                rara_paths::home_dir().join(".claude"),
-                std::path::PathBuf::from("/tmp"),
-            ],
-        ));
+        // Workspace boundary used to be enforced by a path-scope guard layer
+        // here; it has been retired (#1936) in favor of the
+        // canonicalize-based check in `rara-app::tools::path_check` and the
+        // sandbox mount namespace in `rara-sandbox`.
+        let guard_pipeline = Arc::new(crate::guard::pipeline::GuardPipeline::new());
 
         let syscall = SyscallDispatcher::new(
             SharedKv::new(

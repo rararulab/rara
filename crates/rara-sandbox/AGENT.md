@@ -23,6 +23,14 @@ Public surface (intentionally minimal, see #1697/#1698):
   `ExecOutcome::stdout: boxlite::ExecStdout` is a
   `futures::Stream<Item = String>`
 - `Sandbox::destroy(self) -> Result<()>`
+- `SandboxConfig` exposes `volumes: Vec<VolumeMount>`,
+  `network: NetworkPolicy`, and `working_dir: Option<String>` — all forwarded
+  to boxlite (#1937). `ExecRequest::working_dir` further allows per-exec
+  overrides via `boxlite::BoxCommand::working_dir`.
+- `VolumeMount` and `NetworkPolicy` are wrapper types over
+  `boxlite::runtime::options::VolumeSpec` / `boxlite::NetworkSpec`. We do not
+  re-export the boxlite types directly — same rule as the rest of this
+  crate's public surface, so the kernel never imports `boxlite::*`.
 
 ## Critical Invariants
 
@@ -32,6 +40,11 @@ Public surface (intentionally minimal, see #1697/#1698):
 - **No hardcoded rootfs image / paths.** The image reference is a required
   `SandboxConfig` field; the application layer reads it from YAML and
   passes it through. Do not add an `impl Default for SandboxConfig`.
+  `NetworkPolicy` *does* implement `Default` — the value mirrors
+  `boxlite::NetworkSpec::default` (`Enabled { allow_net: [] }`) so a YAML
+  config that omits `network` keeps the historical `run_code` behavior.
+  This is the only `Default` impl in the crate and exists solely to make
+  `#[serde(default)]` on `SandboxConfig::network` legal.
 - **No noop impls, no mock backend.** `docs/guides/anti-patterns.md`
   forbids silent `Ok(())` trait impls. If you need to test a caller
   without a real VM, fake it at the caller boundary — not inside this
@@ -76,6 +89,26 @@ Public surface (intentionally minimal, see #1697/#1698):
   `bubblewrap-sys` and `libkrun-sys` are caught on every PR (#1842). If
   that job starts failing, fix the underlying build issue — do not
   re-add the stub on macOS.
+
+## Network policy fusion
+
+A single [`Sandbox`] carries a single [`NetworkPolicy`]. Multiple rara tools
+(`bash`, `run_code`, …) share one per-session VM via
+`crates/app/src/sandbox.rs::sandbox_for_session`, so the VM's policy must be
+fixed at creation time and cannot vary per call without leaking a less
+restrictive setting from the first caller forward.
+
+The fusion rule lives at `crates/app/src/sandbox.rs::fused_network_policy`:
+
+- if **every** sandbox-using tool wants `Disabled`, the result is `Disabled`;
+- otherwise the result is `Enabled` with the union of allow-lists. An empty
+  allow-list under `Enabled` means full outbound (boxlite's own default), so
+  a single full-net contributor (today `run_code`) dominates the union.
+
+When you add a new sandbox-using tool, extend `fused_network_policy` so the
+union accounts for the tool's policy. Do **not** add a per-call
+`NetworkPolicy` argument back to `sandbox_for_session` — that's the exact
+shape that motivated this section (PR #1946 review).
 
 ## Dependencies
 

@@ -25,7 +25,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use futures::StreamExt;
 use rara_kernel::{
     io::{StreamEvent, StreamHandle},
@@ -33,18 +32,19 @@ use rara_kernel::{
     session::SessionKey,
     tool::{ToolContext, ToolExecute},
 };
-use rara_sandbox::{ExecRequest, Sandbox, SandboxConfig};
+use rara_sandbox::{ExecRequest, Sandbox};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::SandboxToolConfig;
-
-/// Per-session sandbox lookup table.
-///
-/// Wrapped in `Arc` so the tool and the cleanup hook share a single map.
-pub type SandboxMap = Arc<DashMap<SessionKey, Arc<Mutex<Sandbox>>>>;
+// Re-export for back-compat with the integration test in
+// `tests/run_code_session.rs`, which imports `SandboxMap` from this module.
+pub use crate::sandbox::SandboxMap;
+use crate::{
+    SandboxToolConfig,
+    sandbox::{sandbox_for_session, sandbox_not_configured_error},
+};
 
 /// Input parameters for the `run_code` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,33 +109,17 @@ impl RunCodeTool {
         &self,
         session_key: SessionKey,
     ) -> anyhow::Result<Arc<Mutex<Sandbox>>> {
-        let cfg = self.config.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "run_code is unavailable: `sandbox.default_rootfs_image` is not set in \
-                 config.yaml. Add a `sandbox:` block (see config.example.yaml) and restart."
-            )
-        })?;
-
-        // entry() closes the create-twice race: if two first-calls hit
-        // the same shard concurrently, only one reaches Vacant and runs
-        // Sandbox::create.
-        let entry = self.sandboxes.entry(session_key);
-        let arc = match entry {
-            dashmap::mapref::entry::Entry::Occupied(o) => Arc::clone(o.get()),
-            dashmap::mapref::entry::Entry::Vacant(v) => {
-                let sandbox = Sandbox::create(
-                    SandboxConfig::builder()
-                        .rootfs_image(cfg.default_rootfs_image.clone())
-                        .build(),
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to create sandbox: {e}"))?;
-                let arc = Arc::new(Mutex::new(sandbox));
-                v.insert(Arc::clone(&arc));
-                arc
-            }
-        };
-        Ok(arc)
+        let cfg = self
+            .config
+            .as_ref()
+            .ok_or_else(|| sandbox_not_configured_error("run_code"))?;
+        // The shared per-session VM picks its NetworkPolicy from the fused
+        // policy across all sandbox-using tools — see
+        // `crates/app/src/sandbox.rs::fused_network_policy`. `run_code`
+        // contributes "Enabled with empty allow-list" (full outbound), so
+        // its historical behavior is preserved when bash is absent or
+        // permissive (#1937, #1946).
+        sandbox_for_session(cfg, &self.sandboxes, session_key).await
     }
 }
 

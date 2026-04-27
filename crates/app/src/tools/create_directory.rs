@@ -13,8 +13,10 @@
 // limitations under the License.
 
 //! Directory creation primitive.
-
-use std::path::{Path, PathBuf};
+//!
+//! Path resolution goes through [`super::path_check::resolve_writable`] so
+//! both absolute-path escape and symlink escape inside the workspace are
+//! rejected before any host mkdir happens (see #1936).
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -22,6 +24,8 @@ use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use super::path_check::resolve_writable;
 
 /// Input parameters for the create-directory tool.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -64,11 +68,7 @@ impl ToolExecute for CreateDirectoryTool {
         params: CreateDirectoryParams,
         _context: &ToolContext,
     ) -> anyhow::Result<CreateDirectoryResult> {
-        let dir_path = if Path::new(&params.path).is_absolute() {
-            PathBuf::from(&params.path)
-        } else {
-            rara_paths::workspace_dir().join(&params.path)
-        };
+        let dir_path = resolve_writable(&params.path).await?;
 
         // Check if parent needs to be created to report `created_parents`.
         let parent_exists = dir_path.parent().map_or(true, |p| p.exists());

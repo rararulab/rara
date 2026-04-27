@@ -20,6 +20,7 @@ pub mod gateway;
 // `crate::tool::AgentTool` in derived impls.
 pub(crate) use rara_kernel::tool;
 mod feed_store;
+pub mod sandbox;
 pub mod tools;
 mod web_server;
 
@@ -178,6 +179,30 @@ pub struct SandboxToolConfig {
     /// `"python:3.12-slim"`). The image must already be resolvable by the
     /// host's boxlite image store.
     pub default_rootfs_image: String,
+    /// Per-tool sandbox tuning for `bash`. `None` (the YAML default when
+    /// the `bash:` block is absent) means `bash` runs with network
+    /// `Disabled` and an empty allow-list — the safe ground state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bash:                 Option<BashSandboxConfig>,
+}
+
+/// Network and runtime policy for the sandboxed `bash` tool.
+///
+/// Per `docs/guides/rust-style.md`, this struct does NOT derive `Default` —
+/// the absent state is represented by `Option<BashSandboxConfig>` on
+/// [`SandboxToolConfig::bash`], not by a Rust-side default value.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct BashSandboxConfig {
+    /// Hosts the sandboxed `bash` may reach over network. An empty list
+    /// means no network access. A non-empty list is forwarded to boxlite as
+    /// [`rara_sandbox::NetworkPolicy::Enabled`].
+    ///
+    /// Note: when `run_code` is also configured, the per-session VM uses
+    /// the **fused** policy across all callers — see
+    /// `crates/app/src/sandbox.rs` for the union rule.
+    #[serde(default)]
+    #[builder(default)]
+    pub allow_net: Vec<String>,
 }
 
 /// Configuration for the Mita background proactive agent.

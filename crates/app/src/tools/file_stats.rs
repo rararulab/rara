@@ -85,8 +85,6 @@ impl FileStatsTool {
     pub fn new() -> Self { Self }
 }
 
-use rara_kernel::guard::path_scope::resolve_and_guard;
-
 /// Compute statistics for a single file using streaming reads.
 async fn stat_single_file(path: &std::path::Path) -> FileStat {
     let display = path.display().to_string();
@@ -172,29 +170,17 @@ async fn stat_single_file(path: &std::path::Path) -> FileStat {
 
 /// Compute file statistics for the given paths.
 ///
-/// Reports per-file errors without aborting. Paths outside the workspace are
-/// rejected.
+/// Read-side tool: per-file errors are reported without aborting. Path scope
+/// is intentionally not enforced here — the workspace boundary for write-class
+/// tools lives in [`super::path_check::resolve_writable`] (#1936); reads are
+/// allowed anywhere the host process has access.
 async fn compute_stats(paths: &[String]) -> FileStatsResult {
     let mut files = Vec::with_capacity(paths.len());
     let mut total_lines = 0usize;
     let mut total_bytes = 0u64;
 
     for path_str in paths {
-        let path = match resolve_and_guard(path_str) {
-            Ok(p) => p,
-            Err(msg) => {
-                files.push(FileStat {
-                    path:        path_str.clone(),
-                    lines:       None,
-                    bytes:       0,
-                    chars:       None,
-                    size_capped: false,
-                    error:       Some(msg),
-                });
-                continue;
-            }
-        };
-
+        let path = std::path::PathBuf::from(path_str);
         let stat = stat_single_file(&path).await;
         if let Some(lines) = stat.lines {
             total_lines += lines;
@@ -290,22 +276,5 @@ mod tests {
         assert!(stat.error.is_some());
         assert!(stat.error.unwrap().contains("failed to stat"));
         assert_eq!(stat.lines, None);
-    }
-
-    #[tokio::test]
-    async fn path_outside_workspace_blocked() {
-        // resolve_and_guard calls rara_paths::workspace_dir() which may not be
-        // available in CI. Skip if workspace creation would fail.
-        let workspace = std::panic::catch_unwind(rara_paths::workspace_dir);
-        let Ok(ws) = workspace else { return };
-
-        let outside = if ws.starts_with("/tmp") {
-            "/etc/passwd"
-        } else {
-            "/tmp/__outside__"
-        };
-        let err = resolve_and_guard(outside);
-        assert!(err.is_err());
-        assert!(err.unwrap_err().contains("outside workspace"));
     }
 }

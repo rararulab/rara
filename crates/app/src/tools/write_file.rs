@@ -13,6 +13,10 @@
 // limitations under the License.
 
 //! File writing primitive.
+//!
+//! Path resolution goes through [`super::path_check::resolve_writable`] so
+//! both absolute-path escape and symlink escape inside the workspace are
+//! rejected before any host write happens (see #1936).
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -20,6 +24,8 @@ use rara_kernel::tool::{ToolContext, ToolExecute};
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use super::path_check::resolve_writable;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteFileParams {
@@ -56,11 +62,7 @@ impl ToolExecute for WriteFileTool {
         params: WriteFileParams,
         _context: &ToolContext,
     ) -> anyhow::Result<WriteFileResult> {
-        let file_path = if std::path::Path::new(&params.file_path).is_absolute() {
-            std::path::PathBuf::from(&params.file_path)
-        } else {
-            rara_paths::workspace_dir().join(&params.file_path)
-        };
+        let file_path = resolve_writable(&params.file_path).await?;
         if let Some(parent) = file_path.parent() {
             if !parent.as_os_str().is_empty() {
                 tokio::fs::create_dir_all(parent).await.context(format!(

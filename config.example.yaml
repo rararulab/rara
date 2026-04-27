@@ -131,19 +131,40 @@ agents:
     max_output_chars: 50
 
 # ---------------------------------------------------------------------------
-# Sandboxed code execution (`run_code` tool — optional)
+# Sandboxed code execution (`run_code` + sandboxed `bash` — optional)
 # ---------------------------------------------------------------------------
 #
-# When this block is present the `run_code` tool can spin up a per-session
-# boxlite microVM using the configured rootfs image. Omit the block to
-# disable code execution: the tool stays registered but every call returns
-# a clear "sandbox not configured" error so the LLM can react.
+# When this block is present the `run_code` tool, the `bash` tool, and the
+# write-class file tools all reuse a per-session boxlite microVM built from
+# the configured rootfs image. Omit the block to disable: each tool stays
+# registered but every call returns a clear "sandbox not configured" error
+# so the LLM can react.
+#
+# `bash.allow_net` is the only tunable specific to the `bash` tool today:
+# - omitted block / empty list → bash by itself wants **no network**
+# - non-empty list → boxlite allow-list (host patterns or CIDRs)
+#
+# Important: `bash` and `run_code` share a single per-session VM, which
+# carries a single network policy. The effective policy is the **union**
+# (most-permissive) across both tools, computed once at VM creation and
+# fixed for the session — see `crates/app/src/sandbox.rs`. Because
+# `run_code` is registered with full outbound access (its historical
+# behavior), the session VM's network is effectively "full outbound" as
+# long as `run_code` is registered, regardless of the value of
+# `bash.allow_net`. The `allow_net` knob is therefore primarily a hook
+# for future tools that may want to tighten the union; it cannot
+# unilaterally disable network for the bash tool while `run_code` is
+# also present.
 #
 # Pre-flight: `rara setup boxlite` must have staged the runtime files (see
 # docs/guides/boxlite-runtime.md).
 
 # sandbox:
 #   default_rootfs_image: "alpine:latest"
+#   bash:
+#     allow_net:
+#       - "github.com"
+#       - "*.crates.io"
 
 # ---------------------------------------------------------------------------
 # Telemetry — optional OTLP traces, Pyroscope profiling, and Layer B payload

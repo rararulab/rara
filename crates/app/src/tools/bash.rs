@@ -12,26 +12,59 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Shell command execution primitive.
+//! Sandboxed shell command execution primitive.
 //!
-//! Runs a command via `/bin/bash -c` with configurable timeout and working
-//! directory.  Output is truncated to 50 KB / 2000 lines.
+//! Runs the LLM-supplied command inside the per-session boxlite microVM so
+//! shell commands cannot touch the host outside the workspace bind-mount.
+//!
+//! # Path translation
+//!
+//! `cwd` accepts host-style paths so the LLM can keep using the host
+//! workspace layout. The translation rules are:
+//!
+//! - relative path → joined to `/workspace` inside the guest
+//! - absolute path inside `rara_paths::workspace_dir()` → rewritten to
+//!   `/workspace/<rest>`
+//! - absolute path outside the workspace → hard error returned to the LLM (no
+//!   approval routing — this is a mount-namespace boundary, not a policy
+//!   decision)
+//!
+//! # Behavior changes vs. the host-shell implementation it replaces
+//!
+//! - The shell binary is whatever the rootfs image provides (`sh` for alpine,
+//!   `bash` for debian-family). The tool always invokes `<shell> -c
+//!   "<command>"`.
+//! - Timeouts are enforced by boxlite per-exec rather than by signaling a host
+//!   process group; there is no `SIGTERM`-then-`SIGKILL` two-phase kill any
+//!   more.
+//! - Network is **disabled** by default for `bash`. Operators can opt in to a
+//!   boxlite allow-list via `sandbox.bash.allow_net` in YAML. Because the
+//!   per-session VM is shared with `run_code`, the effective policy is the
+//!   fused (most-permissive) union — see `crates/app/src/sandbox.rs`.
+//! - Relative `..` traversal in `cwd` is bounded by the guest rootfs: escape
+//!   attempts fail at [`rara_sandbox::Sandbox::exec`] argv validation rather
+//!   than at host-side path translation.
+//! - The 50KB / 2000-line truncation contract and the streaming
+//!   `StreamEvent::ToolOutput` chunks are preserved so the agent UI is
+//!   unchanged.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use base::process_group::{kill_process_group, terminate_process_group};
+use futures::StreamExt;
 use rara_kernel::{
     io::{StreamEvent, StreamHandle},
     tool::{ToolContext, ToolExecute},
 };
+use rara_sandbox::ExecRequest;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-use tokio::{io::AsyncReadExt, sync::Mutex};
+
+use crate::{
+    SandboxToolConfig,
+    sandbox::{GUEST_WORKSPACE, SandboxMap, sandbox_for_session, sandbox_not_configured_error},
+};
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -52,7 +85,9 @@ pub struct BashParams {
     /// `"2m"`).
     #[serde(default, deserialize_with = "deserialize_timeout")]
     timeout: Option<Duration>,
-    /// Working directory for the command.
+    /// Working directory for the command. Host paths inside the workspace
+    /// are translated to the guest mount; paths outside the workspace are
+    /// rejected.
     cwd:     Option<String>,
 }
 
@@ -138,6 +173,9 @@ where
 }
 
 /// Typed result returned by the bash tool.
+///
+/// Schema-stable with the host-shell implementation it replaces — the LLM
+/// must not see this refactor.
 #[derive(Debug, Clone, Serialize)]
 pub struct BashResult {
     /// Process exit code (-1 if failed to execute or timed out).
@@ -150,19 +188,31 @@ pub struct BashResult {
     pub truncated: bool,
 }
 
-/// Layer 1 primitive: execute a shell command.
+/// Sandboxed shell command tool.
 #[derive(ToolDef)]
 #[tool(
     name = "bash",
-    description = "Execute a shell command via /bin/bash -c; returns exit code, stdout/stderr \
-                   (truncated to 50KB).",
+    description = "Execute a shell command inside a hardware-isolated sandbox (boxlite microVM); \
+                   returns exit code, stdout/stderr (truncated to 50KB).",
     timeout_secs = 150,
     destructive
 )]
-pub struct BashTool;
+pub struct BashTool {
+    /// Sandbox creation parameters resolved from YAML at startup. `None`
+    /// means the operator did not configure `sandbox:` in `config.yaml` —
+    /// in that case every call returns the standard "sandbox not
+    /// configured" error.
+    config:    Option<SandboxToolConfig>,
+    /// Shared per-session sandbox handles. Reused across `bash` and
+    /// `run_code` invocations so a single VM serves the whole session.
+    sandboxes: SandboxMap,
+}
 
 impl BashTool {
-    pub fn new() -> Self { Self }
+    /// Create a new tool wired to the given config and shared sandbox map.
+    pub fn new(config: Option<SandboxToolConfig>, sandboxes: SandboxMap) -> Self {
+        Self { config, sandboxes }
+    }
 }
 
 #[async_trait]
@@ -172,29 +222,37 @@ impl ToolExecute for BashTool {
 
     #[tracing::instrument(skip_all)]
     async fn run(&self, params: BashParams, context: &ToolContext) -> anyhow::Result<BashResult> {
+        let cfg = self
+            .config
+            .as_ref()
+            .ok_or_else(|| sandbox_not_configured_error("bash"))?;
+
         let timeout_dur = params
             .timeout
             .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+
+        let working_dir = match params.cwd.as_deref() {
+            Some(raw) => Some(translate_cwd(raw, rara_paths::workspace_dir())?),
+            None => Some(GUEST_WORKSPACE.to_owned()),
+        };
+
         let effective_command = rtk_rewrite(&params.command).await;
 
-        let mut cmd = tokio::process::Command::new("/bin/bash");
-        cmd.arg("-c").arg(&effective_command);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+        let sandbox = sandbox_for_session(cfg, &self.sandboxes, context.session_key).await?;
 
-        // Place child in its own process group so we can signal the entire
-        // tree on timeout (PGID = child PID).
-        #[cfg(unix)]
-        cmd.process_group(0);
+        let request = ExecRequest::builder()
+            .command("sh".to_owned())
+            .args(vec!["-c".to_owned(), effective_command])
+            .timeout(timeout_dur)
+            .maybe_working_dir(working_dir)
+            .build();
 
-        if let Some(ref dir) = params.cwd {
-            cmd.current_dir(dir);
-        } else {
-            cmd.current_dir(rara_paths::workspace_dir());
-        }
-
-        let mut child = match cmd.spawn() {
-            Ok(child) => child,
+        // Hold the per-session lock for the whole exec — boxlite's `LiteBox`
+        // is not assumed `Sync`, so concurrent calls within the same session
+        // must serialize.
+        let guard = sandbox.lock().await;
+        let mut outcome = match guard.exec(request).await {
+            Ok(o) => o,
             Err(e) => {
                 return Ok(BashResult {
                     exit_code: -1,
@@ -205,190 +263,151 @@ impl ToolExecute for BashTool {
             }
         };
 
-        let pgid = child.id();
-
-        // Shared buffer for incremental output collection from both pipes.
-        let buffer: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-
-        // Build optional streaming context for real-time output.
+        // Build streaming context up front so each stdout chunk can be
+        // forwarded to the agent UI as it arrives.
         let stream_ctx: Option<(StreamHandle, String)> = context
             .stream_handle
             .as_ref()
             .zip(context.tool_call_id.as_ref())
             .map(|(h, id)| (h.clone(), id.clone()));
 
-        // Spawn reader tasks for stdout and stderr that feed into the shared
-        // buffer. Only stdout is streamed in real-time — stderr is typically
-        // small diagnostic output and interleaving it would produce confusing
-        // mixed output for the user.
-        let stdout_handle = child.stdout.take().map(|pipe| {
-            let buf = Arc::clone(&buffer);
-            tokio::spawn(read_pipe_into(pipe, buf, stream_ctx))
-        });
-        let stderr_handle = child.stderr.take().map(|pipe| {
-            let buf = Arc::clone(&buffer);
-            tokio::spawn(read_pipe_into(pipe, buf, None))
-        });
+        let mut combined = String::new();
+        let mut bytes_used: usize = 0;
+        let mut truncation_notified = false;
 
-        let (status, timed_out) = tokio::select! {
-            status = child.wait() => (Some(status), false),
-            () = tokio::time::sleep(timeout_dur) => {
-                // Graceful two-phase kill: SIGTERM → wait 2s → SIGKILL.
-                if let Some(pgid) = pgid {
-                    tracing::warn!(pgid, ?timeout_dur, "bash command timed out, killing process group");
-                    let _ = terminate_process_group(pgid);
+        while let Some(line) = outcome.stdout.next().await {
+            append_with_cap(
+                &line,
+                &mut combined,
+                &mut bytes_used,
+                &mut truncation_notified,
+                stream_ctx.as_ref(),
+                // stream =
+                true,
+            );
+        }
+        if let Some(mut s) = outcome.stderr.take() {
+            while let Some(line) = s.next().await {
+                append_with_cap(
+                    &line,
+                    &mut combined,
+                    &mut bytes_used,
+                    &mut truncation_notified,
+                    stream_ctx.as_ref(),
+                    // stderr is not real-time-streamed: matches the previous
+                    // host-shell behavior, where interleaving stdout+stderr
+                    // produced confusing UI.
+                    // stream =
+                    false,
+                );
+            }
+        }
 
-                    let exited = tokio::time::timeout(
-                        std::time::Duration::from_secs(2),
-                        child.wait(),
-                    ).await;
-
-                    if exited.is_err() {
-                        tracing::warn!(pgid, "process group did not exit after SIGTERM, sending SIGKILL");
-                        let _ = kill_process_group(pgid);
-                        let _ = child.wait().await;
-                    }
-                } else {
-                    // No pgid available — best-effort kill via tokio.
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
-                }
-                (None, true)
-            },
+        // Wait for the underlying execution to complete so we have an exit
+        // status. boxlite enforces the per-exec timeout itself; if it fired,
+        // `wait` returns an error or a non-zero status — we only treat the
+        // dedicated boxlite timeout error as `timed_out = true`. Any other
+        // wait error degrades to exit_code = -1 with timed_out = false.
+        let (exit_code, timed_out) = match outcome.execution.wait().await {
+            Ok(status) => (status.code(), false),
+            Err(e) => {
+                let msg = e.to_string();
+                let timed_out = msg.contains("timeout") || msg.contains("timed out");
+                tracing::warn!(error = %msg, timed_out, "sandbox exec wait failed");
+                (-1, timed_out)
+            }
         };
 
-        // Wait for reader tasks to drain remaining pipe data.
-        if let Some(h) = stdout_handle {
-            let _ = h.await;
-        }
-        if let Some(h) = stderr_handle {
-            let _ = h.await;
-        }
-
-        let raw = buffer.lock().await;
-        let combined = String::from_utf8_lossy(&raw);
         let (truncated_output, was_truncated) = truncate_output(&combined);
-
-        let exit_code = match (timed_out, status) {
-            (true, _) => -1,
-            (false, Some(Ok(s))) => s.code().unwrap_or(-1),
-            _ => -1,
-        };
 
         Ok(BashResult {
             exit_code,
             stdout: truncated_output,
             timed_out,
-            truncated: was_truncated,
+            truncated: was_truncated || truncation_notified,
         })
     }
 }
 
-/// Minimum accumulated bytes before emitting a streaming chunk.
-const STREAM_CHUNK_MIN_BYTES: usize = 256;
-
-/// Maximum time between streaming chunk emissions.
-const STREAM_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
-
-/// Read from an async pipe into a shared buffer, capping at
-/// [`MAX_OUTPUT_BYTES`] to prevent unbounded memory growth.
+/// Translate a host-style `cwd` argument into a guest-mount path.
 ///
-/// When `stream_ctx` is provided, decoded text chunks are emitted as
-/// [`StreamEvent::ToolOutput`] events for real-time display. Chunks are
-/// batched by size ([`STREAM_CHUNK_MIN_BYTES`]) or time
-/// ([`STREAM_FLUSH_INTERVAL`]) to avoid flooding the broadcast channel.
-async fn read_pipe_into<R: tokio::io::AsyncRead + Unpin>(
-    mut pipe: R,
-    buffer: Arc<Mutex<Vec<u8>>>,
-    stream_ctx: Option<(StreamHandle, String)>,
-) {
-    let mut chunk = [0u8; 8192];
-    let mut pending_text = String::new();
-    let mut last_emit = Instant::now();
-
-    // Tail buffer for incomplete UTF-8 sequences at chunk boundaries.
-    let mut utf8_tail: Vec<u8> = Vec::new();
-    let mut truncation_notified = false;
-
-    loop {
-        match pipe.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let mut buf = buffer.lock().await;
-                let remaining = MAX_OUTPUT_BYTES.saturating_sub(buf.len());
-                if remaining == 0 {
-                    // Buffer full — drop lock before emitting to avoid holding
-                    // it during broadcast.
-                    drop(buf);
-                    // Notify the stream once so the user knows output continues
-                    // but is no longer displayed.
-                    if !truncation_notified {
-                        if let Some((ref handle, ref tool_call_id)) = stream_ctx {
-                            // Flush any pending text before the truncation notice.
-                            if !pending_text.is_empty() {
-                                handle.emit(StreamEvent::ToolOutput {
-                                    tool_call_id: tool_call_id.clone(),
-                                    chunk:        std::mem::take(&mut pending_text),
-                                });
-                            }
-                            handle.emit(StreamEvent::ToolOutput {
-                                tool_call_id: tool_call_id.clone(),
-                                chunk:        "\n[output truncated — 50 KB cap reached]\n"
-                                    .to_string(),
-                            });
-                        }
-                        truncation_notified = true;
-                    }
-                    continue;
-                }
-                let to_copy = n.min(remaining);
-                buf.extend_from_slice(&chunk[..to_copy]);
-                // Drop the lock before streaming to avoid holding it during emit.
-                drop(buf);
-
-                // Emit streaming chunk — only stream bytes that were actually
-                // stored (to_copy) so streamed content matches the final result.
-                if let Some((ref handle, ref tool_call_id)) = stream_ctx {
-                    // Prepend any incomplete UTF-8 tail from the previous chunk.
-                    utf8_tail.extend_from_slice(&chunk[..to_copy]);
-                    // Find the last valid UTF-8 boundary in the accumulated bytes.
-                    let valid_up_to = match std::str::from_utf8(&utf8_tail) {
-                        Ok(_) => utf8_tail.len(),
-                        Err(e) => e.valid_up_to(),
-                    };
-                    if valid_up_to > 0 {
-                        // valid_up_to was determined by from_utf8, so this won't panic.
-                        let text = std::str::from_utf8(&utf8_tail[..valid_up_to])
-                            .expect("valid_up_to guarantees valid UTF-8");
-                        pending_text.push_str(text);
-                    }
-                    // Keep incomplete tail bytes for the next iteration.
-                    utf8_tail.drain(..valid_up_to);
-
-                    if !pending_text.is_empty()
-                        && (pending_text.len() >= STREAM_CHUNK_MIN_BYTES
-                            || last_emit.elapsed() >= STREAM_FLUSH_INTERVAL)
-                    {
-                        handle.emit(StreamEvent::ToolOutput {
-                            tool_call_id: tool_call_id.clone(),
-                            chunk:        std::mem::take(&mut pending_text),
-                        });
-                        last_emit = Instant::now();
-                    }
-                }
-            }
+/// See the module-level docs for the full rules.
+fn translate_cwd(raw: &str, workspace: &std::path::Path) -> anyhow::Result<String> {
+    let path = std::path::Path::new(raw);
+    if !path.is_absolute() {
+        // Relative path → joined to /workspace inside the guest. Render
+        // with forward slashes; sandbox is always linux-flavored.
+        let trimmed = raw.trim_start_matches("./");
+        if trimmed.is_empty() {
+            return Ok(GUEST_WORKSPACE.to_owned());
         }
+        return Ok(format!("{GUEST_WORKSPACE}/{trimmed}"));
     }
 
-    // Flush any remaining pending text (including incomplete UTF-8 tail).
-    if let Some((ref handle, ref tool_call_id)) = stream_ctx {
-        if !utf8_tail.is_empty() {
-            pending_text.push_str(&String::from_utf8_lossy(&utf8_tail));
+    match path.strip_prefix(workspace) {
+        Ok(rest) if rest.as_os_str().is_empty() => Ok(GUEST_WORKSPACE.to_owned()),
+        Ok(rest) => Ok(format!(
+            "{GUEST_WORKSPACE}/{}",
+            rest.to_string_lossy().replace('\\', "/")
+        )),
+        Err(_) => Err(anyhow::anyhow!(
+            "cwd '{}' is outside the workspace ('{}'); cannot run sandboxed bash there",
+            raw,
+            workspace.display()
+        )),
+    }
+}
+
+/// Append `line` to the combined output buffer with the 50 KB byte cap and
+/// emit a streaming chunk when `stream` is true.
+fn append_with_cap(
+    line: &str,
+    combined: &mut String,
+    bytes_used: &mut usize,
+    truncation_notified: &mut bool,
+    stream_ctx: Option<&(StreamHandle, String)>,
+    stream: bool,
+) {
+    let line_bytes = line.len();
+    let needs_newline = !line.ends_with('\n');
+    let extra = usize::from(needs_newline);
+    let remaining = MAX_OUTPUT_BYTES.saturating_sub(*bytes_used);
+
+    if remaining == 0 {
+        if !*truncation_notified {
+            if let Some((handle, tool_call_id)) = stream_ctx {
+                handle.emit(StreamEvent::ToolOutput {
+                    tool_call_id: tool_call_id.clone(),
+                    chunk:        "\n[output truncated — 50 KB cap reached]\n".to_owned(),
+                });
+            }
+            *truncation_notified = true;
         }
-        if !pending_text.is_empty() {
+        return;
+    }
+
+    // Truncate at a UTF-8 boundary if the line itself overflows.
+    let allow_bytes = remaining.saturating_sub(extra);
+    let chunk_str = if line_bytes <= allow_bytes {
+        line.to_owned()
+    } else {
+        let safe = line.floor_char_boundary(allow_bytes);
+        line[..safe].to_owned()
+    };
+
+    let to_emit = if needs_newline {
+        format!("{chunk_str}\n")
+    } else {
+        chunk_str
+    };
+    *bytes_used += to_emit.len();
+    combined.push_str(&to_emit);
+
+    if stream {
+        if let Some((handle, tool_call_id)) = stream_ctx {
             handle.emit(StreamEvent::ToolOutput {
                 tool_call_id: tool_call_id.clone(),
-                chunk:        pending_text,
+                chunk:        to_emit,
             });
         }
     }
@@ -417,7 +436,8 @@ fn has_unsupported_find_predicates(cmd: &str) -> bool {
 
 /// Try to rewrite a command via `rtk rewrite` for token-optimized output.
 /// Falls back to the original command if rtk is unavailable or declines the
-/// rewrite.
+/// rewrite. `rtk` runs on the host (it transforms the command string only);
+/// the rewritten string is then handed to the sandboxed shell.
 async fn rtk_rewrite(command: &str) -> String {
     let result = tokio::process::Command::new("rtk")
         .args(["rewrite", command])
@@ -428,7 +448,6 @@ async fn rtk_rewrite(command: &str) -> String {
         Ok(output) if output.status.success() => {
             let rewritten = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !rewritten.is_empty() && rewritten != command {
-                // rtk find cannot handle compound predicates — fall back.
                 if rewritten.starts_with("rtk find") && has_unsupported_find_predicates(command) {
                     tracing::debug!(
                         original = command,
@@ -451,10 +470,8 @@ async fn rtk_rewrite(command: &str) -> String {
 fn truncate_output(output: &str) -> (String, bool) {
     let mut truncated = false;
 
-    // First truncate by byte size.
     let text = if output.len() > MAX_OUTPUT_BYTES {
         truncated = true;
-        // Find a safe UTF-8 boundary.
         let start = output.len() - MAX_OUTPUT_BYTES;
         let safe_start = output.ceil_char_boundary(start);
         &output[safe_start..]
@@ -462,7 +479,6 @@ fn truncate_output(output: &str) -> (String, bool) {
         output
     };
 
-    // Then truncate by line count.
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() > MAX_OUTPUT_LINES {
         truncated = true;
@@ -475,5 +491,40 @@ fn truncate_output(output: &str) -> (String, bool) {
         (format!("... [output truncated]\n{text}"), truncated)
     } else {
         (text.to_owned(), truncated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn fake_workspace() -> PathBuf { PathBuf::from("/tmp/rara-test-workspace") }
+
+    #[test]
+    fn translate_cwd_relative_path() {
+        let out = translate_cwd("src/foo", &fake_workspace()).expect("ok");
+        assert_eq!(out, "/workspace/src/foo");
+    }
+
+    #[test]
+    fn translate_cwd_relative_dot_slash() {
+        let out = translate_cwd("./src", &fake_workspace()).expect("ok");
+        assert_eq!(out, "/workspace/src");
+    }
+
+    #[test]
+    fn translate_cwd_outside_workspace_errors() {
+        let err = translate_cwd("/etc/passwd", &fake_workspace()).expect_err("must reject");
+        assert!(err.to_string().contains("outside the workspace"));
+    }
+
+    #[test]
+    fn translate_cwd_inside_workspace_rewrites() {
+        let workspace = fake_workspace();
+        let inside = workspace.join("foo/bar");
+        let out = translate_cwd(&inside.to_string_lossy(), &workspace).expect("ok");
+        assert_eq!(out, "/workspace/foo/bar");
     }
 }
