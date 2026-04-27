@@ -98,13 +98,19 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
   // the run is alive on the backend; we're just briefly off the wire.
   const isRunning = run.status === 'running' || run.status === 'reconnecting';
   const elapsed = (run.endedAt ?? nowTick) - run.startedAt;
+  // A turn that failed before producing any LLM iteration or tool call
+  // (e.g. Kimi 403 quota on the very first request) has nothing to show
+  // in the duration / tool-count chips, and the generic "encountered an
+  // error" copy is not actionable. Suppress the noisy chrome and render
+  // a category-specific banner instead (see #1926).
+  const failedWithNoWork = run.status === 'failed' && run.toolCalls === 0 && run.items.length === 0;
   const headerLabel =
     run.status === 'running'
       ? `${agentName} is working`
       : run.status === 'reconnecting'
         ? `${agentName} is reconnecting…`
         : run.status === 'failed'
-          ? `${agentName} encountered an error`
+          ? failedTitle(run.errorCategory, agentName)
           : run.status === 'cancelled'
             ? `${agentName} was interrupted`
             : `${agentName} finished`;
@@ -149,12 +155,16 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
             </span>
           )}
         </span>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {formatDuration(elapsed)}
-        </span>
-        <span className="shrink-0 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-          {run.toolCalls} tool{run.toolCalls === 1 ? '' : 's'}
-        </span>
+        {!failedWithNoWork && (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {formatDuration(elapsed)}
+          </span>
+        )}
+        {!failedWithNoWork && (
+          <span className="shrink-0 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+            {run.toolCalls} tool{run.toolCalls === 1 ? '' : 's'}
+          </span>
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -193,23 +203,32 @@ export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript,
 
       {expanded && (
         <div className="relative border-t border-border/50">
+          {run.status === 'failed' && (
+            <FailureBanner
+              category={run.errorCategory}
+              detail={run.errorDetail ?? run.error}
+              upgradeUrl={run.upgradeUrl}
+            />
+          )}
           <div
             ref={scrollerRef}
             onScroll={onScroll}
             className="max-h-[213px] overflow-y-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             {redactedItems.length === 0 ? (
-              <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
-                {isRunning && (
-                  <span
-                    className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
-                    aria-hidden
-                  />
-                )}
-                <span className="truncate">
-                  {isRunning ? stageLabel(run.currentStage) : 'No tool calls in this run'}
-                </span>
-              </div>
+              failedWithNoWork ? null : (
+                <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+                  {isRunning && (
+                    <span
+                      className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500"
+                      aria-hidden
+                    />
+                  )}
+                  <span className="truncate">
+                    {isRunning ? stageLabel(run.currentStage) : 'No tool calls in this run'}
+                  </span>
+                </div>
+              )
             ) : (
               <div className="flex flex-col gap-1 px-3 py-2">
                 {chips.map((chip) => (
@@ -281,6 +300,69 @@ function RunStatusDot({ status }: { status: LiveRun['status'] }) {
       className="flex h-2 w-2 shrink-0 rounded-full bg-muted-foreground/50"
       aria-label="cancelled"
     />
+  );
+}
+
+/**
+ * Pick a header title for the failed state based on the backend-supplied
+ * error category. Older error frames without a category fall back to the
+ * legacy generic copy so existing screenshots/tests still match.
+ */
+function failedTitle(category: string | null, agentName: string): string {
+  switch (category) {
+    case 'quota':
+      return 'Kimi 配额已用完';
+    case 'network':
+      return '网络异常，请稍后重试';
+    case 'context_window':
+      return '上下文超长';
+    case 'tool':
+      return '工具调用失败';
+    case 'cancelled':
+      return '已取消';
+    default:
+      return `${agentName} encountered an error`;
+  }
+}
+
+/**
+ * Banner rendered above the timeline for a failed run. Shows the
+ * category-specific title's CTA (currently only quota carries an upgrade
+ * URL) and stows the raw provider message inside a `<details>` so the
+ * card stays compact unless the user opts in.
+ */
+function FailureBanner({
+  category,
+  detail,
+  upgradeUrl,
+}: {
+  category: string | null;
+  detail: string | null;
+  upgradeUrl: string | null;
+}) {
+  return (
+    <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-3 text-xs text-destructive">
+      {category === 'quota' && upgradeUrl && (
+        <div className="mb-2">
+          <a
+            href={upgradeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center rounded-md border border-destructive/40 bg-background/80 px-2.5 py-1 text-xs font-medium text-destructive transition hover:bg-destructive hover:text-destructive-foreground"
+          >
+            升级 Kimi 配额
+          </a>
+        </div>
+      )}
+      {detail && (
+        <details className="text-[11px] text-destructive/90">
+          <summary className="cursor-pointer select-none text-destructive hover:underline">
+            显示详情
+          </summary>
+          <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px]">{detail}</pre>
+        </details>
+      )}
+    </div>
   );
 }
 

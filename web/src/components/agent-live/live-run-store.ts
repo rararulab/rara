@@ -59,6 +59,21 @@ export interface LiveRun {
   /** Last error message (for `failed` status); null otherwise. */
   error: string | null;
   /**
+   * Backend-supplied UX category for `failed` runs (`'quota'`, `'network'`,
+   * `'context_window'`, `'provider'`, `'tool'`, `'cancelled'`). Absent on
+   * older error frames or non-failure runs — the UI falls back to the
+   * generic chrome when missing.
+   */
+  errorCategory: string | null;
+  /** Long-form detail for the failure banner (mirrors `error` today). */
+  errorDetail: string | null;
+  /**
+   * Provider-supplied upgrade/billing URL surfaced for quota errors so the
+   * UI can render a CTA button (Kimi includes one inside
+   * `access_terminated_error`).
+   */
+  upgradeUrl: string | null;
+  /**
    * Latest `progress.stage` string emitted by the kernel — a free-text
    * status marker (e.g. `"thinking"`, `"Waiting for LLM response
    * (iteration 2)..."`, `"Processing... (3 steps completed)"`). Rendered
@@ -298,6 +313,9 @@ export function reduce(
       items: [],
       toolCalls: 0,
       error: null,
+      errorCategory: null,
+      errorDetail: null,
+      upgradeUrl: null,
       currentStage: null,
     };
     return { active, history };
@@ -363,9 +381,21 @@ export function reduce(
     }
     case 'error': {
       const message = readString(event, 'message') ?? 'Unknown error';
+      const category = readString(event, 'category');
+      const upgradeUrl = readString(event, 'upgrade_url');
       return {
         ...slice,
-        active: finalize({ ...run, error: message }, 'failed', message),
+        active: finalize(
+          {
+            ...run,
+            error: message,
+            errorCategory: category,
+            errorDetail: message,
+            upgradeUrl,
+          },
+          'failed',
+          message,
+        ),
       };
     }
     case 'reasoning_delta': {

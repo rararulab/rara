@@ -356,6 +356,22 @@ impl TraceBuilder {
     /// to finalize prematurely.
     #[allow(dead_code)]
     pub fn elapsed(&self) -> Duration { self.turn_started.elapsed() }
+
+    /// `true` when the turn ended without any LLM iteration or tool call.
+    ///
+    /// Used by the kernel turn loop to skip persistence + `TraceReady` for
+    /// turns that failed before any work happened (e.g. a 403 quota error
+    /// on the first request) — persisting them produces a misleading
+    /// "0 tools / 0s" trace card in the UI.
+    pub fn is_empty(&self) -> bool {
+        match self.state.lock() {
+            Ok(g) => g.iterations == 0 && g.tools.is_empty(),
+            Err(poisoned) => {
+                let g = poisoned.into_inner();
+                g.iterations == 0 && g.tools.is_empty()
+            }
+        }
+    }
 }
 
 impl Default for TraceBuilder {

@@ -108,8 +108,17 @@ pub enum WebEvent {
     Typing,
     /// Agent phase change.
     Phase { phase: String },
-    /// Error notification.
-    Error { message: String },
+    /// Error notification. `category` and `upgrade_url` are optional — older
+    /// frontends ignore unknown fields, newer ones use them to render a
+    /// category-specific banner (e.g. quota → upgrade CTA). Backwards
+    /// compatible: legacy callers that only set `message` continue to work.
+    Error {
+        message:     String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category:    Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        upgrade_url: Option<String>,
+    },
     /// Incremental text output from LLM.
     TextDelta { text: String },
     /// Incremental reasoning/thinking text.
@@ -264,7 +273,16 @@ fn platform_outbound_to_web_event(msg: PlatformOutbound) -> WebEvent {
         PlatformOutbound::Reply { content, .. } => WebEvent::Message { content },
         PlatformOutbound::StreamChunk { delta, .. } => WebEvent::TextDelta { text: delta },
         PlatformOutbound::Progress { text } => WebEvent::Progress { stage: text },
-        PlatformOutbound::Error { message, .. } => WebEvent::Error { message },
+        PlatformOutbound::Error {
+            message,
+            category,
+            upgrade_url,
+            ..
+        } => WebEvent::Error {
+            message,
+            category,
+            upgrade_url,
+        },
     }
 }
 
@@ -1216,7 +1234,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                         &reply_buffer,
                         &session_key,
                         WebEvent::Error {
-                            message: "adapter not started".to_owned(),
+                            message:     "adapter not started".to_owned(),
+                            category:    None,
+                            upgrade_url: None,
                         },
                     );
                     continue;
@@ -1244,7 +1264,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                                 &reply_buffer,
                                 &session_key,
                                 WebEvent::Error {
-                                    message: e.to_string(),
+                                    message:     e.to_string(),
+                                    category:    None,
+                                    upgrade_url: None,
                                 },
                             );
                         }
@@ -1260,7 +1282,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                             &reply_buffer,
                             &session_key,
                             WebEvent::Error {
-                                message: e.to_string(),
+                                message:     e.to_string(),
+                                category:    None,
+                                upgrade_url: None,
                             },
                         );
                     }
@@ -1795,12 +1819,14 @@ mod tests {
     #[test]
     fn platform_error_maps_to_web_error_frame() {
         let event = platform_outbound_to_web_event(PlatformOutbound::Error {
-            code:    "agent_error".to_owned(),
-            message: "model rejected reasoning=minimal".to_owned(),
+            code:        "agent_error".to_owned(),
+            message:     "model rejected reasoning=minimal".to_owned(),
+            category:    None,
+            upgrade_url: None,
         });
 
         match &event {
-            WebEvent::Error { message } => {
+            WebEvent::Error { message, .. } => {
                 assert_eq!(message, "model rejected reasoning=minimal");
             }
             other => panic!("expected WebEvent::Error, got {other:?}"),
@@ -1811,6 +1837,24 @@ mod tests {
         let json = serde_json::to_value(&event).expect("serialize");
         assert_eq!(json["type"], "error");
         assert_eq!(json["message"], "model rejected reasoning=minimal");
+    }
+
+    #[test]
+    fn platform_error_carries_quota_category_and_upgrade_url() {
+        let event = platform_outbound_to_web_event(PlatformOutbound::Error {
+            code:        "agent_error".to_owned(),
+            message:     "Kimi quota exceeded".to_owned(),
+            category:    Some("quota".to_owned()),
+            upgrade_url: Some("https://www.kimi.com/code/console?from=quota-upgrade".to_owned()),
+        });
+
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["category"], "quota");
+        assert_eq!(
+            json["upgrade_url"],
+            "https://www.kimi.com/code/console?from=quota-upgrade",
+        );
     }
 
     #[test]

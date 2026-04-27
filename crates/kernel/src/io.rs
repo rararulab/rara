@@ -417,8 +417,33 @@ impl OutboundEnvelope {
             user,
             session_key,
             OutboundPayload::Error {
-                code:    code.into(),
-                message: message.into(),
+                code:        code.into(),
+                message:     message.into(),
+                category:    None,
+                upgrade_url: None,
+            },
+        )
+    }
+
+    /// Like [`OutboundEnvelope::error`] but carries the structured turn
+    /// failure (category + optional upgrade URL) so the web UI can render
+    /// a category-specific banner.
+    pub fn error_with_details(
+        in_reply_to: MessageId,
+        user: UserId,
+        session_key: SessionKey,
+        code: impl Into<String>,
+        details: &crate::error::OutboundError,
+    ) -> Self {
+        Self::broadcast(
+            in_reply_to,
+            user,
+            session_key,
+            OutboundPayload::Error {
+                code:        code.into(),
+                message:     details.message.clone(),
+                category:    Some(details.category.clone()),
+                upgrade_url: details.upgrade_url.clone(),
             },
         )
     }
@@ -489,9 +514,16 @@ impl OutboundEnvelope {
             OutboundPayload::Progress { stage, detail } => PlatformOutbound::Progress {
                 text: detail.as_deref().unwrap_or(stage).to_string(),
             },
-            OutboundPayload::Error { code, message } => PlatformOutbound::Error {
-                code:    code.clone(),
-                message: message.clone(),
+            OutboundPayload::Error {
+                code,
+                message,
+                category,
+                upgrade_url,
+            } => PlatformOutbound::Error {
+                code:        code.clone(),
+                message:     message.clone(),
+                category:    category.clone(),
+                upgrade_url: upgrade_url.clone(),
             },
         }
     }
@@ -532,7 +564,22 @@ pub enum OutboundPayload {
         detail: Option<String>,
     },
     /// Error response.
-    Error { code: String, message: String },
+    Error {
+        /// Short stable code (e.g. `"agent_error"`, `"rate_limited"`). Always
+        /// present.
+        code:        String,
+        /// Human-readable detail.
+        message:     String,
+        /// Optional UX category for the frontend (`"quota"`, `"network"`,
+        /// `"context_window"`, `"provider"`, `"tool"`, `"cancelled"`). When
+        /// absent, frontends fall back to a generic error chrome.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        category:    Option<String>,
+        /// Provider-supplied upgrade/billing URL surfaced to the UI for
+        /// quota errors. `None` for every other category.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        upgrade_url: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1689,9 +1736,14 @@ pub enum PlatformOutbound {
     /// text reply formatted as `"Error [{code}]: {message}"`.
     Error {
         /// Short error code (e.g. `"agent_error"`, `"rate_limited"`).
-        code:    String,
+        code:        String,
         /// Human-readable error message.
-        message: String,
+        message:     String,
+        /// UX category (`"quota"`, `"network"`, …) for typed-error frames.
+        /// `None` on plain text channels that ignore it.
+        category:    Option<String>,
+        /// Provider upgrade/billing URL, populated only for quota errors.
+        upgrade_url: Option<String>,
     },
 }
 
@@ -2313,9 +2365,16 @@ mod outbound_payload_tests {
         );
 
         match envelope.to_platform_outbound() {
-            PlatformOutbound::Error { code, message } => {
+            PlatformOutbound::Error {
+                code,
+                message,
+                category,
+                upgrade_url,
+            } => {
                 assert_eq!(code, "agent_error");
                 assert_eq!(message, "model rejected reasoning=minimal");
+                assert!(category.is_none());
+                assert!(upgrade_url.is_none());
             }
             other => panic!("expected PlatformOutbound::Error, got {other:?}"),
         }

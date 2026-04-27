@@ -2021,7 +2021,9 @@ impl Kernel {
                     // Push a failed TurnCompleted so the process exits Running state.
                     let event = KernelEventEnvelope::turn_completed(
                         self.session_key,
-                        Err("turn task terminated unexpectedly".to_string()),
+                        Err(crate::error::OutboundError::from_message(
+                            "turn task terminated unexpectedly",
+                        )),
                         self.msg_id.clone(),
                         self.user.clone(),
                         self.origin_endpoint.clone(),
@@ -2711,6 +2713,16 @@ impl Kernel {
                 // responsibility and only TG turns had rows; now trace
                 // construction + save is a single kernel-owned concern.
                 //
+                // Exception: a turn that errored before any LLM iteration
+                // or tool call produces an empty trace (0 iterations / 0
+                // tools / ~0s). Persisting it surfaces a misleading
+                // "rara encountered an error / 0 tools / 0s" card in the
+                // UI (see #1926). Skip persistence + `TraceReady` in that
+                // case — the structured error envelope already carries
+                // the failure detail.
+                let turn_failed = turn_result.is_err();
+                let trace_empty = trace_builder.is_empty();
+                let skip_trace = turn_failed && trace_empty;
                 // `finalize` takes `&self` because the `TraceBuilder` is
                 // shared with `stream_handle` via `Arc`; the handle is still
                 // alive at this point (we emit `TraceReady` through it just
@@ -2722,44 +2734,51 @@ impl Kernel {
                 // knowledge insert + trace save). Retry the save with
                 // exponential backoff before giving up — silent loss of
                 // execution traces is what #1843 was opened to fix.
-                let save_result = {
-                    let backoffs = [
-                        std::time::Duration::from_millis(100),
-                        std::time::Duration::from_millis(500),
-                        std::time::Duration::from_secs(2),
-                    ];
-                    let mut attempt: Result<String, crate::error::KernelError> =
-                        trace_service.save(&session_key.to_string(), &trace).await;
-                    for delay in backoffs {
-                        match &attempt {
-                            Ok(_) => break,
-                            Err(e) if is_database_locked(e) => {
-                                tracing::debug!(
-                                    session_key = %session_key,
-                                    delay_ms = delay.as_millis() as u64,
-                                    "trace save hit SQLITE_BUSY — retrying",
-                                );
-                                tokio::time::sleep(delay).await;
-                                attempt = trace_service
-                                    .save(&session_key.to_string(), &trace)
-                                    .await;
+                if skip_trace {
+                    tracing::debug!(
+                        session_key = %session_key,
+                        "skipping trace persistence for empty failed turn",
+                    );
+                } else {
+                    let save_result = {
+                        let backoffs = [
+                            std::time::Duration::from_millis(100),
+                            std::time::Duration::from_millis(500),
+                            std::time::Duration::from_secs(2),
+                        ];
+                        let mut attempt: Result<String, crate::error::KernelError> =
+                            trace_service.save(&session_key.to_string(), &trace).await;
+                        for delay in backoffs {
+                            match &attempt {
+                                Ok(_) => break,
+                                Err(e) if is_database_locked(e) => {
+                                    tracing::debug!(
+                                        session_key = %session_key,
+                                        delay_ms = delay.as_millis() as u64,
+                                        "trace save hit SQLITE_BUSY — retrying",
+                                    );
+                                    tokio::time::sleep(delay).await;
+                                    attempt = trace_service
+                                        .save(&session_key.to_string(), &trace)
+                                        .await;
+                                }
+                                Err(_) => break,
                             }
-                            Err(_) => break,
                         }
-                    }
-                    attempt
-                };
-                match save_result {
-                    Ok(trace_id) => {
-                        stream_handle
-                            .emit(crate::io::StreamEvent::TraceReady { trace_id });
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            session_key = %session_key,
-                            error = %e,
-                            "failed to persist execution trace",
-                        );
+                        attempt
+                    };
+                    match save_result {
+                        Ok(trace_id) => {
+                            stream_handle
+                                .emit(crate::io::StreamEvent::TraceReady { trace_id });
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                session_key = %session_key,
+                                error = %e,
+                                "failed to persist execution trace",
+                            );
+                        }
                     }
                 }
 
@@ -2775,7 +2794,7 @@ impl Kernel {
                     turn_result,
                     Err(KernelError::Interrupted)
                 );
-                let result = turn_result.map_err(|e| e.to_string());
+                let result = turn_result.map_err(|e| crate::error::OutboundError::from_kernel_error(&e));
                 let event = KernelEventEnvelope::turn_completed(
                     session_key,
                     result,
@@ -2821,7 +2840,9 @@ impl Kernel {
                     // Push TurnCompleted(Err) with the real panic message.
                     let event = KernelEventEnvelope::turn_completed(
                         turn_guard.session_key.clone(),
-                        Err(format!("turn task panicked: {panic_msg}")),
+                        Err(crate::error::OutboundError::from_message(format!(
+                            "turn task panicked: {panic_msg}"
+                        ))),
                         turn_guard.msg_id.clone(),
                         turn_guard.user.clone(),
                         turn_guard.origin_endpoint.clone(),
@@ -2848,7 +2869,7 @@ impl Kernel {
     async fn handle_turn_completed(
         &self,
         session_key: SessionKey,
-        result: std::result::Result<AgentTurnResult, String>,
+        result: std::result::Result<AgentTurnResult, crate::error::OutboundError>,
         in_reply_to: MessageId,
         user: crate::identity::UserId,
         origin_endpoint: Option<crate::io::Endpoint>,
@@ -2931,7 +2952,7 @@ impl Kernel {
                     iterations:  0,
                     tool_calls:  0,
                     output:      String::new(),
-                    error:       Some(err.clone()),
+                    error:       Some(err.message.clone()),
                     duration_ms: 0,
                 },
             };
@@ -3080,11 +3101,17 @@ impl Kernel {
                     }
                 }
             }
-            Err(err_msg) => {
+            Err(err_details) => {
                 span.record("success", false);
                 _turn_failed = !interrupted;
+                let err_msg = err_details.message.clone();
                 if _turn_failed {
-                    error!(session_key = %session_key, error = %err_msg, "turn failed");
+                    error!(
+                        session_key = %session_key,
+                        category = %err_details.category,
+                        error = %err_msg,
+                        "turn failed",
+                    );
                 } else {
                     info!(session_key = %session_key, "turn interrupted by user");
                 }
@@ -3107,12 +3134,12 @@ impl Kernel {
                 // already sent a confirmation message) and for headless
                 // agents that have no user-facing channel.
                 if _turn_failed && should_deliver {
-                    let envelope = OutboundEnvelope::error(
+                    let envelope = OutboundEnvelope::error_with_details(
                         in_reply_to,
                         user.clone(),
                         egress_session_key.clone(),
                         "agent_error",
-                        err_msg.clone(),
+                        &err_details,
                     )
                     .with_origin(origin_endpoint.clone());
                     let envelope = match cross_channel_routing {

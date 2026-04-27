@@ -302,7 +302,7 @@ impl ChannelAdapter for WechatAdapter {
             }
             // WeChat does not support streaming edits.
             PlatformOutbound::StreamChunk { .. } => {}
-            PlatformOutbound::Error { code, message } => {
+            PlatformOutbound::Error { code, message, .. } => {
                 let plain = format!("Error [{code}]: {message}");
                 self.send_plain_text(&user_id, context_token.as_deref(), &plain)
                     .await?;
