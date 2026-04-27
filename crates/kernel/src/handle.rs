@@ -948,6 +948,52 @@ impl KernelHandle {
         .await
     }
 
+    /// Re-run session title generation against the current tape, overwriting
+    /// any existing title.
+    ///
+    /// Reuses the same generator as the post-first-turn auto-trigger but
+    /// skips the `title.is_none()` gate so the caller can replace a poor
+    /// auto-generated title or refresh the title after a topic shift. The
+    /// call is synchronous: it returns only after the new title has been
+    /// persisted to the session index (or generation has failed).
+    ///
+    /// Returns [`KernelError::SessionNotFound`] when no session exists for
+    /// `session_key`, and a wrapped [`KernelError::Whatever`] when the
+    /// underlying LLM call or persistence step fails.
+    pub async fn regenerate_session_title(&self, session_key: &SessionKey) -> Result<()> {
+        // Verify the session exists before doing the LLM round-trip so a
+        // stale `key` returns a clean 404 instead of a noisy "tape not
+        // found" surface.
+        let exists = self
+            .session_index()
+            .get_session(session_key)
+            .await
+            .map_err(|e| KernelError::Session {
+                message: e.to_string(),
+            })?
+            .is_some();
+        if !exists {
+            return Err(KernelError::SessionNotFound { key: *session_key });
+        }
+
+        let tape_name = session_key.to_string();
+        crate::kernel::generate_session_title(
+            &self.tape,
+            &tape_name,
+            self.driver_registry.as_ref(),
+            self.agent_registry.as_ref(),
+            self.session_index().as_ref(),
+            &self.io,
+            session_key,
+            true,
+        )
+        .await
+        .map_err(|e| KernelError::Whatever {
+            message: format!("session title regeneration failed: {e}"),
+            source:  Some(e),
+        })
+    }
+
     /// Deliver a system-generated message to a session, triggering an LLM turn.
     ///
     /// Used by the notification bus to deliver proactive-turn notifications.

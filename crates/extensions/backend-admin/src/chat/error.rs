@@ -42,6 +42,10 @@ pub enum ChatError {
     /// The requested resource does not exist (generic 404).
     #[snafu(display("not found: {message}"))]
     NotFound { message: String },
+
+    /// Session title regeneration failed (LLM call or persistence step).
+    #[snafu(display("title generation failed: {message}"))]
+    TitleGenerationFailed { message: String },
 }
 
 /// Convert a sessions-layer error into a chat-domain error.
@@ -62,11 +66,12 @@ impl From<rara_sessions::error::SessionError> for ChatError {
 
 /// Maps [`ChatError`] variants to HTTP status codes:
 ///
-/// | Variant            | Status              |
-/// |--------------------|---------------------|
-/// | `SessionNotFound`  | `404 Not Found`     |
-/// | `InvalidRequest`   | `400 Bad Request`   |
-/// | `SessionError`     | `500 Internal`      |
+/// | Variant                 | Status              |
+/// |-------------------------|---------------------|
+/// | `SessionNotFound`       | `404 Not Found`     |
+/// | `InvalidRequest`        | `400 Bad Request`   |
+/// | `SessionError`          | `500 Internal`      |
+/// | `TitleGenerationFailed` | `500 Internal`      |
 ///
 /// Server errors (`5xx`) are logged at the `error` level.
 impl axum::response::IntoResponse for ChatError {
@@ -76,7 +81,9 @@ impl axum::response::IntoResponse for ChatError {
                 axum::http::StatusCode::NOT_FOUND
             }
             Self::InvalidRequest { .. } => axum::http::StatusCode::BAD_REQUEST,
-            Self::SessionError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Self::SessionError { .. } | Self::TitleGenerationFailed { .. } => {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         let message = self.to_string();
         if status.is_server_error() {
