@@ -57,8 +57,12 @@ jobs:
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
         run: |
-          mkdir -p "$HOME/.config/rara"
-          envsubst < ci/config.template.yaml > "$HOME/.config/rara/config.yaml"
+          # ARC self-hosted runners ship with a read-only $HOME, so render the
+          # config under $RUNNER_TEMP and steer `dirs::config_dir()` there via
+          # XDG_CONFIG_HOME for downstream steps.
+          mkdir -p "$RUNNER_TEMP/xdg-config/rara"
+          envsubst < ci/config.template.yaml > "$RUNNER_TEMP/xdg-config/rara/config.yaml"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/xdg-config" >> "$GITHUB_ENV"
 
       - name: Run real-LLM e2e tests
         env:
