@@ -60,8 +60,8 @@ so the `rara setup boxlite --check` smoke step exercises only the
 path-resolution code and exits cleanly with "no boxlite build artifacts
 found".
 
-The dedicated `sandbox-macos` job runs WITHOUT the stub on the
-self-hosted macOS runner — `cargo build -p rara-sandbox` and
-`cargo run -p rara-cli -- setup boxlite` execute against a real boxlite
-build, so link-time / FFI / `build.rs` regressions are caught on every
-PR (#1842).
+There is no CI job that builds boxlite without the stub today. The
+self-hosted macOS runner introduced in #1842 was removed in #1916
+because its network reachability was too unreliable to gate every PR
+on. Real boxlite builds happen only on developer macOS machines until
+a stable runner is provisioned — see #1842 for the long-term plan.
