@@ -718,48 +718,6 @@ pub fn init_global_logging(
     guards
 }
 
-/// Build an OpenTelemetry span exporter based on configuration.
-///
-/// Creates and configures an OTLP span exporter using the specified protocol
-/// and endpoint configuration. This is an internal function used by the
-/// logging initialization to set up OpenTelemetry integration.
-///
-/// # Parameters
-///
-/// * `opts` - Logging options containing OTLP configuration
-///
-/// # Returns
-///
-/// A configured `SpanExporter` ready for use with the OpenTelemetry SDK.
-///
-/// # Protocol Selection
-///
-/// The function chooses the export protocol based on
-/// `opts.otlp_export_protocol`:
-/// - `Some(Grpc)` - Uses gRPC transport with Tonic
-/// - `Some(Http)` - Uses HTTP transport with binary protobuf
-/// - `None` - Defaults to HTTP transport
-///
-/// # Endpoint Resolution
-///
-/// Endpoint selection follows this priority:
-/// 1. `opts.otlp_endpoint` if provided (with automatic "http://" prefix if
-///    needed)
-/// 2. Default gRPC endpoint (`http://localhost:4317`) for gRPC protocol
-/// 3. Default HTTP endpoint (`http://localhost:4318/v1/traces`) for HTTP
-///    protocol
-///
-/// # Custom Headers
-///
-/// For HTTP exports, custom headers from `opts.otlp_headers` are included.
-/// This is useful for authentication tokens, tenant IDs, or routing
-/// information.
-///
-/// # Panics
-///
-/// This function panics if the exporter cannot be created, which typically
-/// indicates a configuration error or network issue that should be resolved
-/// before the application starts.
 /// Build the shared OTel `Resource` that identifies this process to every
 /// OTLP signal (traces, metrics, logs).
 ///
