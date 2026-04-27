@@ -102,9 +102,8 @@ pub(crate) async fn boot(
     sandbox_map: crate::tools::SandboxMap,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
-    let credential_store: rara_keyring_store::KeyringStoreRef = Arc::new(
-        rara_pg_credential_store::PgKeyringStore::new(diesel_pools.clone()),
-    );
+    let credential_store: rara_keyring_store::KeyringStoreRef =
+        Arc::new(rara_keyring_store::DefaultKeyringStore);
 
     // -- LLM driver registry -----------------------------------------------
 
