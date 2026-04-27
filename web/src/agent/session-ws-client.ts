@@ -176,6 +176,39 @@ export type LifecycleEvent =
   | { type: 'reconnecting'; attempt: number; delayMs: number }
   | { type: 'closed'; reason: 'user' | 'auth' | 'reconnect_exhausted' };
 
+/**
+ * Synthetic per-turn lifecycle frames synthesized by `RaraAgent` and
+ * surfaced to the observer hook alongside raw `WebFrame`s.
+ *
+ * These mirror the legacy `rara-stream.ts` `__stream_*` frames so the
+ * `live-run-store` reducer can keep working without semantic change:
+ * a "stream" is now a single agentic turn rather than a per-turn
+ * WebSocket lifecycle, but the timeline-card model is identical.
+ *
+ * - `__stream_started`: emitted right after `agent_start` for a new
+ *   turn (i.e. when the user sends a prompt).
+ * - `__stream_reconnecting`: forwarded from the underlying
+ *   `LifecycleEvent` so the live card can show a grace-period state.
+ * - `__stream_reconnect_failed`: emitted once the WS retry budget is
+ *   exhausted; always immediately followed by `__stream_closed`.
+ * - `__stream_closed`: emitted exactly once per turn when the turn
+ *   reaches a terminal state (`done`/`error`/abort/reconnect_exhausted).
+ */
+export type StreamLifecycleEvent =
+  | { type: '__stream_started' }
+  | { type: '__stream_reconnecting'; attempt: number; delayMs: number }
+  | { type: '__stream_reconnect_failed'; attempts: number }
+  | { type: '__stream_closed' };
+
+/**
+ * Shape of events surfaced to the `RaraAgent` observer hook. The raw
+ * WebSocket frame plus the four synthetic per-turn lifecycle frames.
+ * Observers (e.g. the live-card store) can correlate
+ * `tool_call_start`/`tool_call_end` pairs and distinguish run
+ * boundaries via the synthetic frames.
+ */
+export type PublicWebEvent = WebFrame | StreamLifecycleEvent;
+
 // ---------------------------------------------------------------------------
 // Reconnect tuning — mechanism constants, NOT config
 //

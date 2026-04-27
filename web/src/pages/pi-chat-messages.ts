@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type {
   AssistantMessage,
   TextContent,
@@ -25,6 +24,7 @@ import type {
 } from '@mariozechner/pi-ai';
 import type { Attachment, UserMessageWithAttachments } from '@mariozechner/pi-web-ui';
 
+import type { AgentMessage } from '@/agent/types';
 import type { ChatMessageData } from '@/api/types';
 
 /**

@@ -10,7 +10,23 @@
 
 import { useState, useRef, useCallback } from 'react';
 
-import { buildWsUrl } from '@/adapters/rara-stream';
+import { buildWsBaseUrl } from '@/adapters/ws-base-url';
+import { getAccessToken } from '@/api/client';
+
+/**
+ * Build the persistent session WS URL targeting the new `web_session`
+ * endpoint. Mirrors `SessionWsClient.buildUrl` but inlined here because
+ * VoiceRecorder is a one-shot consumer that doesn't need the client's
+ * reconnect machinery.
+ */
+function buildSessionWsUrl(sessionKey: string): string | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  const base = buildWsBaseUrl();
+  const path = `/api/v1/kernel/chat/session/${encodeURIComponent(sessionKey)}`;
+  const params = new URLSearchParams({ token });
+  return `${base}${path}?${params.toString()}`;
+}
 
 type VoiceRecorderProps = {
   /** Returns the current session key. */
@@ -89,8 +105,10 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
           const audioBase64 = await blobToBase64(blob);
           const mimeType = recorder.mimeType.split(';')[0] ?? 'audio/webm';
 
-          // Build JSON payload matching backend InboundPayload with AudioBase64 block.
+          // Tagged inbound frame for the persistent session WS — mirrors
+          // `SessionWsClient.prompt` but with an audio block instead of text.
           const payload = JSON.stringify({
+            type: 'prompt',
             content: [
               {
                 type: 'audio_base64',
@@ -100,10 +118,15 @@ export function VoiceRecorder({ getSessionKey, onComplete, className }: VoiceRec
             ],
           });
 
-          // Send via WebSocket — same pattern as rara-stream.
-          // Keep the connection open until the backend finishes processing,
-          // then call onComplete to reload the session messages.
-          const wsUrl = buildWsUrl(capturedSessionKey);
+          // Open a one-shot socket against the new persistent session WS
+          // endpoint — close as soon as the backend signals turn end so
+          // we don't compete with `RaraAgent`'s long-lived connection.
+          const wsUrl = buildSessionWsUrl(capturedSessionKey);
+          if (!wsUrl) {
+            console.error('Voice send error: no auth token');
+            setSending(false);
+            return;
+          }
           const ws = new WebSocket(wsUrl);
 
           ws.onopen = () => {

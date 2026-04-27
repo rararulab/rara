@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { describe, expect, it } from 'vitest';
 
@@ -28,6 +27,9 @@ import {
   toolResultByCallId,
 } from '../pi-chat-messages';
 
+import type { AgentMessage } from '@/agent/types';
+import type { ChatMessageData, ChatToolCallData } from '@/api/types';
+
 /**
  * Build the `turnHosts` set that production code derives from
  * {@link aggregateTurnToolCalls}. Tests pass an empty results map since
@@ -37,8 +39,6 @@ import {
 function hostsOf(list: readonly AgentMessage[]): ReadonlySet<AssistantMessage> {
   return new Set(aggregateTurnToolCalls(list, new Map()).keys());
 }
-
-import type { ChatMessageData, ChatToolCallData } from '@/api/types';
 
 const ISO = '2025-01-01T00:00:00Z';
 

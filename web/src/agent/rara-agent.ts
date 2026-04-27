@@ -61,6 +61,7 @@ import {
   type LifecycleEvent,
   type PromptContent,
   type PromptContentBlock,
+  type PublicWebEvent,
   SessionWsClient,
   type WebFrame,
 } from './session-ws-client';
@@ -91,11 +92,14 @@ export interface RaraAgentOptions {
    */
   clientFactory?: (sessionKey: string) => SessionWsClient;
   /**
-   * Receives raw `WebFrame`s alongside the agent-event projection. Mirrors
-   * the legacy `WebEventObserver` from `rara-stream.ts` so the live-card
-   * store can keep observing in-flight frames during the migration window.
+   * Receives raw `WebFrame`s plus synthetic per-turn lifecycle events
+   * (`__stream_started` / `__stream_closed` / `__stream_reconnecting`
+   * / `__stream_reconnect_failed`). Mirrors the legacy `WebEventObserver`
+   * from `rara-stream.ts` so the `live-run-store` reducer keeps working
+   * unchanged: a "stream" is now one agentic turn, not a per-turn WS,
+   * but the timeline-card model is identical.
    */
-  observer?: (sessionKey: string, frame: WebFrame) => void;
+  observer?: (sessionKey: string, event: PublicWebEvent) => void;
   /**
    * Reserved for source-compat with pi-agent-core's `AgentOptions` —
    * `<pi-chat-panel>` is configured today with a `convertToLlm` arg that
@@ -202,7 +206,9 @@ export class RaraAgent {
   private readonly _state: RaraAgentState;
   private readonly listeners = new Set<(e: RaraAgentEvent) => void>();
   private readonly clientFactory: (sessionKey: string) => SessionWsClient;
-  private readonly observer: ((sessionKey: string, frame: WebFrame) => void) | undefined;
+  private readonly observer: ((sessionKey: string, event: PublicWebEvent) => void) | undefined;
+  /** True between the synthetic `__stream_started` and `__stream_closed`. */
+  private streamLifecycleOpen = false;
 
   private _sessionId: string | undefined;
   private client: SessionWsClient | null = null;
@@ -364,6 +370,11 @@ export class RaraAgent {
     this.emit({ type: 'message_start', message: local });
     this.emit({ type: 'message_end', message: local });
 
+    // Open the synthetic per-turn stream lifecycle so live-run-store sees
+    // a fresh run. Mirrors the legacy `__stream_started` emit at the top
+    // of `rara-stream.ts:streamFn`.
+    this.openStreamLifecycle();
+
     if (!this.client.prompt(wire)) {
       // Socket isn't open yet (still mid-handshake or reconnecting).
       // Surface as a clean error termination — let the host retry.
@@ -405,8 +416,47 @@ export class RaraAgent {
   }
 
   private handleLifecycle(event: LifecycleEvent): void {
-    if (event.type === 'closed' && event.reason === 'reconnect_exhausted' && this.turnActive) {
-      this.terminateWithError('WebSocket reconnect failed');
+    // Forward transport-level reconnect signals as synthetic per-turn
+    // frames so the live-run-store can flip its grace-period indicator.
+    if (event.type === 'reconnecting' && this.streamLifecycleOpen) {
+      this.publishLifecycle({
+        type: '__stream_reconnecting',
+        attempt: event.attempt,
+        delayMs: event.delayMs,
+      });
+      return;
+    }
+    if (event.type === 'closed' && event.reason === 'reconnect_exhausted') {
+      if (this.streamLifecycleOpen) {
+        this.publishLifecycle({ type: '__stream_reconnect_failed', attempts: 0 });
+      }
+      if (this.turnActive) {
+        this.terminateWithError('WebSocket reconnect failed');
+      }
+    }
+  }
+
+  /** Emit a synthetic `__stream_started` to the observer if not already open. */
+  private openStreamLifecycle(): void {
+    if (this.streamLifecycleOpen) return;
+    this.streamLifecycleOpen = true;
+    this.publishLifecycle({ type: '__stream_started' });
+  }
+
+  /** Emit a synthetic `__stream_closed` to the observer if open. */
+  private closeStreamLifecycle(): void {
+    if (!this.streamLifecycleOpen) return;
+    this.streamLifecycleOpen = false;
+    this.publishLifecycle({ type: '__stream_closed' });
+  }
+
+  /** Forward a synthetic lifecycle frame to the observer (no agent-event mapping). */
+  private publishLifecycle(event: PublicWebEvent): void {
+    if (!this.observer || !this._sessionId) return;
+    try {
+      this.observer(this._sessionId, event);
+    } catch (err) {
+      console.warn('RaraAgent: observer threw on lifecycle', err);
     }
   }
 
@@ -715,6 +765,7 @@ export class RaraAgent {
     this.streamingContent = [];
 
     this.emit({ type: 'agent_end', messages: this._state.messages.slice() });
+    this.closeStreamLifecycle();
   }
 
   private terminateWithError(message: string, stopReason: 'error' | 'aborted' = 'error'): void {
@@ -748,6 +799,7 @@ export class RaraAgent {
     this.pendingTurnToolResults.length = 0;
 
     this.emit({ type: 'agent_end', messages: this._state.messages.slice() });
+    this.closeStreamLifecycle();
   }
 
   private emit(event: RaraAgentEvent): void {

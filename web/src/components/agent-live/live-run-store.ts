@@ -29,7 +29,7 @@
  * component trees, and unit-tested without a DOM.
  */
 
-import type { PublicWebEvent } from '@/adapters/rara-stream';
+import type { PublicWebEvent } from '@/agent/session-ws-client';
 import type { TimelineItem } from '@/api/kernel-types';
 
 /** Status of a single agent run.
