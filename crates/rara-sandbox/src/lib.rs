@@ -48,6 +48,6 @@ mod config;
 mod error;
 mod sandbox;
 
-pub use config::{ExecRequest, SandboxConfig};
+pub use config::{ExecRequest, NetworkPolicy, SandboxConfig, VolumeMount};
 pub use error::{BoxliteSnafu, Result, SandboxError};
 pub use sandbox::{ExecOutcome, Sandbox};

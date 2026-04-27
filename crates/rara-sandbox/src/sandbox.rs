@@ -1,13 +1,14 @@
 //! Concrete [`Sandbox`] handle backed by a boxlite `LiteBox`.
 
 use boxlite::{
-    BoxCommand, BoxOptions, BoxliteRuntime, ExecStderr, ExecStdout, Execution, LiteBox, RootfsSpec,
+    BoxCommand, BoxOptions, BoxliteRuntime, ExecStderr, ExecStdout, Execution, LiteBox,
+    NetworkSpec, RootfsSpec, runtime::options::VolumeSpec,
 };
 use snafu::ResultExt;
 use tracing::instrument;
 
 use crate::{
-    config::{ExecRequest, SandboxConfig},
+    config::{ExecRequest, NetworkPolicy, SandboxConfig, VolumeMount},
     error::{BoxliteSnafu, MissingStdoutSnafu, Result},
 };
 
@@ -58,6 +59,9 @@ impl Sandbox {
         let runtime = BoxliteRuntime::default_runtime();
         let options = BoxOptions {
             rootfs: RootfsSpec::Image(config.rootfs_image),
+            volumes: config.volumes.into_iter().map(volume_to_boxlite).collect(),
+            network: network_to_boxlite(config.network),
+            working_dir: config.working_dir,
             ..Default::default()
         };
         let litebox = runtime
@@ -84,6 +88,9 @@ impl Sandbox {
         }
         if let Some(timeout) = request.timeout {
             command = command.timeout(timeout);
+        }
+        if let Some(working_dir) = request.working_dir {
+            command = command.working_dir(working_dir);
         }
 
         let mut execution = self.litebox.exec(command).await.context(BoxliteSnafu)?;
@@ -116,5 +123,24 @@ impl Sandbox {
             .await
             .context(BoxliteSnafu)?;
         Ok(())
+    }
+}
+
+/// Translate a [`VolumeMount`] into boxlite's `String`-typed
+/// [`VolumeSpec`]. boxlite stores `host_path` as `String` (see
+/// `boxlite/runtime/options.rs`) so we lossily render the `PathBuf` once
+/// here rather than leaking that detail to callers.
+fn volume_to_boxlite(mount: VolumeMount) -> VolumeSpec {
+    VolumeSpec {
+        host_path:  mount.host_path.to_string_lossy().into_owned(),
+        guest_path: mount.guest_path,
+        read_only:  mount.read_only,
+    }
+}
+
+fn network_to_boxlite(policy: NetworkPolicy) -> NetworkSpec {
+    match policy {
+        NetworkPolicy::Enabled { allow_net } => NetworkSpec::Enabled { allow_net },
+        NetworkPolicy::Disabled => NetworkSpec::Disabled,
     }
 }
