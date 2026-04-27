@@ -68,12 +68,14 @@ Public surface (intentionally minimal, see #1697/#1698):
 - Do NOT call `boxlite::init_logging_for` from inside this crate —
   **why:** tracing init is an application-layer concern; library crates
   that install global subscribers fight the host's `tracing` setup.
-- Do NOT silently keep relying on `BOXLITE_DEPS_STUB="1"` in CI —
-  **why:** the stub disables native compilation of `bubblewrap-sys` and
-  `libkrun-sys`, so CI cannot catch link-time / FFI / `build.rs`
-  regressions in those crates. See #1842 for the plan to drop the env
-  var once a macOS (or properly-provisioned Linux) runner builds boxlite
-  for real.
+- Do NOT extend `BOXLITE_DEPS_STUB="1"` to the macOS CI job —
+  **why:** the stub is scoped to the Linux `clippy` / `test` / `docs`
+  jobs in `.github/workflows/rust.yml` because the `arc-runner-set` image
+  lacks meson/ninja/patchelf. The `sandbox-macos` job intentionally
+  builds boxlite for real so link-time / FFI / `build.rs` regressions in
+  `bubblewrap-sys` and `libkrun-sys` are caught on every PR (#1842). If
+  that job starts failing, fix the underlying build issue — do not
+  re-add the stub on macOS.
 
 ## Dependencies
 
