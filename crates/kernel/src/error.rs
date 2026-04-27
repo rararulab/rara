@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use base::shared_string::SharedString;
+use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::session::SessionKey;
@@ -74,6 +75,17 @@ pub enum KernelError {
 
     #[snafu(display("non-retryable error: {message}"))]
     NonRetryable { message: SharedString },
+
+    /// Provider returned a billing/quota terminal error (e.g. Kimi
+    /// `access_terminated_error`, OpenAI "usage limit exceeded"). Not
+    /// retryable, not fallback eligible — the user needs to top up or wait
+    /// for the next billing cycle. `upgrade_url` is surfaced to the UI when
+    /// the provider embeds one in the error body.
+    #[snafu(display("quota exceeded: {message}"))]
+    Quota {
+        message:     String,
+        upgrade_url: Option<String>,
+    },
 
     #[snafu(display("{}", source))]
     Io {
@@ -257,6 +269,18 @@ pub fn format_error_chain(err: &dyn std::error::Error) -> String {
 /// Used by retry and fallback logic to decide whether to retry, fall back to
 /// another model, or give up.
 pub fn classify_provider_error(msg: &str, status_code: Option<u16>) -> KernelError {
+    // Quota errors (e.g. Kimi `access_terminated_error`) are terminal:
+    // retrying or falling back to another model will not help, since the
+    // user's billing account is the bottleneck. Detect these BEFORE the
+    // generic 429/5xx retryable bucket so a 403 carrying an
+    // `access_terminated_error` payload is not misclassified.
+    if is_quota_error(msg) {
+        return KernelError::Quota {
+            message:     msg.to_owned(),
+            upgrade_url: extract_url(msg),
+        };
+    }
+
     if matches!(status_code, Some(429 | 500 | 502 | 503 | 529)) {
         return KernelError::RetryableServer {
             message: SharedString::from(msg.to_owned()),
@@ -278,12 +302,15 @@ pub fn classify_provider_error(msg: &str, status_code: Option<u16>) -> KernelErr
 
 /// Whether the error is eligible for model fallback.
 ///
-/// Context window errors and missing API key errors are NOT eligible because
-/// switching models would not resolve them.
+/// Context window errors, missing API key errors, and quota terminal errors
+/// are NOT eligible because switching models would not resolve them — quota
+/// is account-scoped and persists until the user takes action.
 pub fn is_fallback_eligible(err: &KernelError) -> bool {
     !matches!(
         err,
-        KernelError::ContextWindow | KernelError::ProviderNotConfigured { .. }
+        KernelError::ContextWindow
+            | KernelError::ProviderNotConfigured { .. }
+            | KernelError::Quota { .. }
     )
 }
 
@@ -362,4 +389,174 @@ fn is_retryable_server_error(msg: &str) -> bool {
         .any(|pattern| lower.contains(pattern))
 }
 
+/// Provider patterns that indicate a billing/quota terminal error.
+///
+/// These are distinct from generic rate limits (`RetryableServer`) — the
+/// account itself is exhausted and waiting/retrying within this billing
+/// window will keep failing. Kimi's `access_terminated_error` is the
+/// motivating case.
+const QUOTA_PATTERNS: &[&str] = &[
+    "access_terminated_error",
+    "usage limit",
+    "quota exceeded",
+    "quota_exceeded",
+    "billing",
+    "insufficient_quota",
+];
+
+fn is_quota_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    QUOTA_PATTERNS.iter().any(|pattern| lower.contains(pattern))
+}
+
+/// Best-effort URL extraction for upgrade links embedded in provider
+/// error messages (e.g. Kimi includes a console URL after
+/// `from=quota-upgrade`). Scans for the first `http://` or `https://` and
+/// takes characters up to the first whitespace or quote.
+fn extract_url(msg: &str) -> Option<String> {
+    let start = msg.find("https://").or_else(|| msg.find("http://"))?;
+    let tail = &msg[start..];
+    let end = tail
+        .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | ')' | '>'))
+        .unwrap_or(tail.len());
+    Some(tail[..end].to_owned())
+}
+
 pub type Result<T> = std::result::Result<T, KernelError>;
+
+/// Coarse classification of a turn-failure for the UI layer.
+///
+/// Mapped from a [`KernelError`] at the kernel boundary so frontends can
+/// pick a user-facing title/CTA without reparsing free-form messages.
+/// Stable string values are used because this travels over the wire as the
+/// `category` field in `OutboundPayload::Error` / `WebEvent::Error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboundErrorCategory {
+    Quota,
+    Network,
+    ContextWindow,
+    Provider,
+    Tool,
+    Cancelled,
+}
+
+impl OutboundErrorCategory {
+    /// Wire string. Frontend code matches on these.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Quota => "quota",
+            Self::Network => "network",
+            Self::ContextWindow => "context_window",
+            Self::Provider => "provider",
+            Self::Tool => "tool",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Structured turn failure carried from the agent loop to the egress
+/// envelope. Built once at the kernel boundary so the same record drives
+/// the outbound envelope, the `TurnCompleted` event, and the platform
+/// error frame on each channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundError {
+    /// Category for the UI to pick a title/CTA. Wire form is the
+    /// snake_case string from [`OutboundErrorCategory::as_str`].
+    pub category:    String,
+    /// Human-readable detail. Falls back to the raw error message when no
+    /// better text is available.
+    pub message:     String,
+    /// When the provider embeds an upgrade/billing URL (Kimi quota), it is
+    /// surfaced so the UI can render a CTA button.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub upgrade_url: Option<String>,
+}
+
+impl OutboundError {
+    /// Build a `OutboundError` from a typed [`KernelError`].
+    pub fn from_kernel_error(err: &KernelError) -> Self {
+        match err {
+            KernelError::Quota {
+                message,
+                upgrade_url,
+            } => Self {
+                category:    OutboundErrorCategory::Quota.as_str().to_owned(),
+                message:     message.clone(),
+                upgrade_url: upgrade_url.clone(),
+            },
+            KernelError::RetryableServer { message } => Self {
+                category:    OutboundErrorCategory::Network.as_str().to_owned(),
+                message:     message.to_string(),
+                upgrade_url: None,
+            },
+            KernelError::ContextWindow => Self {
+                category:    OutboundErrorCategory::ContextWindow.as_str().to_owned(),
+                message:     "context window exceeded".to_owned(),
+                upgrade_url: None,
+            },
+            KernelError::Tool { message } | KernelError::ToolNotAllowed { tool_name: message } => {
+                Self {
+                    category:    OutboundErrorCategory::Tool.as_str().to_owned(),
+                    message:     message.clone(),
+                    upgrade_url: None,
+                }
+            }
+            KernelError::Interrupted => Self {
+                category:    OutboundErrorCategory::Cancelled.as_str().to_owned(),
+                message:     "interrupted by user".to_owned(),
+                upgrade_url: None,
+            },
+            other => Self {
+                category:    OutboundErrorCategory::Provider.as_str().to_owned(),
+                message:     other.to_string(),
+                upgrade_url: None,
+            },
+        }
+    }
+
+    /// Plain-text fallback when no typed error is available (panic, abnormal
+    /// task exit). The category defaults to `provider` because the UI's
+    /// existing copy is the closest match for "something blew up".
+    pub fn from_message(message: impl Into<String>) -> Self {
+        Self {
+            category:    OutboundErrorCategory::Provider.as_str().to_owned(),
+            message:     message.into(),
+            upgrade_url: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_kimi_access_terminated_403_returns_quota() {
+        let body = r#"{"error":{"type":"access_terminated_error","message":"Your account usage limit has been reached. Visit https://www.kimi.com/code/console?from=quota-upgrade to top up."}}"#;
+        let err = classify_provider_error(body, Some(403));
+        match err {
+            KernelError::Quota {
+                message,
+                upgrade_url,
+            } => {
+                assert!(message.contains("access_terminated_error"));
+                assert_eq!(
+                    upgrade_url.as_deref(),
+                    Some("https://www.kimi.com/code/console?from=quota-upgrade"),
+                );
+            }
+            other => panic!("expected Quota, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_quota_not_fallback_eligible() {
+        let err = KernelError::Quota {
+            message:     "usage limit reached".into(),
+            upgrade_url: None,
+        };
+        assert!(!is_fallback_eligible(&err));
+        assert!(!is_retryable_provider_error(&err));
+        assert!(!is_rate_limit_error(&err));
+    }
+}

@@ -339,7 +339,9 @@ mod tests {
     fn important_events_are_buffered() {
         assert!(ReplyBuffer::should_buffer(&msg("hi")));
         assert!(ReplyBuffer::should_buffer(&WebEvent::Error {
-            message: "bad".to_owned(),
+            message:     "bad".to_owned(),
+            category:    None,
+            upgrade_url: None,
         }));
         assert!(ReplyBuffer::should_buffer(&WebEvent::BackgroundTaskDone {
             task_id: "t".to_owned(),

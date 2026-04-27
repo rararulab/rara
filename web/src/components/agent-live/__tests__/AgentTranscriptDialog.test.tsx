@@ -33,6 +33,9 @@ function runFixture(): LiveRun {
     ],
     toolCalls: 1,
     error: null,
+    errorCategory: null,
+    errorDetail: null,
+    upgradeUrl: null,
     currentStage: null,
   };
 }

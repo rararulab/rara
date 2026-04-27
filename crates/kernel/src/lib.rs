@@ -133,4 +133,4 @@ pub mod tool_names {
     tool!(ASK_USER, "ask-user");
 }
 
-pub use error::{KernelError, Result};
+pub use error::{KernelError, OutboundError, OutboundErrorCategory, Result};

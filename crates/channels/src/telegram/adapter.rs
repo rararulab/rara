@@ -1402,7 +1402,7 @@ impl ChannelAdapter for TelegramAdapter {
             // Telegram has no typed error frame — render as plain text via
             // the dedicated helper (bypasses stream-coalescing / keyboard
             // logic that only makes sense for `Reply`).
-            PlatformOutbound::Error { code, message } => {
+            PlatformOutbound::Error { code, message, .. } => {
                 let text = format!("Error [{code}]: {message}");
                 return self.send_plain_text_reply(chat_id, thread_id, &text).await;
             }

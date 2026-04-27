@@ -72,6 +72,9 @@ function runFixture(overrides: Partial<LiveRun> = {}): LiveRun {
     items: [{ seq: 0, turn: 0, kind: 'tool_use', tool: 'Grep', input: { query: 'hello' } }],
     toolCalls: 1,
     error: null,
+    errorCategory: null,
+    errorDetail: null,
+    upgradeUrl: null,
     currentStage: null,
     ...overrides,
   };

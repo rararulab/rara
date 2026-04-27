@@ -164,7 +164,7 @@ impl ChannelAdapter for TerminalAdapter {
             PlatformOutbound::Reply { content, .. } => CliEvent::Reply { content },
             PlatformOutbound::StreamChunk { delta, .. } => CliEvent::TextDelta { text: delta },
             PlatformOutbound::Progress { text } => CliEvent::Progress { text },
-            PlatformOutbound::Error { code, message } => CliEvent::Error {
+            PlatformOutbound::Error { code, message, .. } => CliEvent::Error {
                 message: format!("Error [{code}]: {message}"),
             },
         };

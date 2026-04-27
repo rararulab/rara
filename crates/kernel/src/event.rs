@@ -374,7 +374,7 @@ pub enum KernelEvent {
     TurnCompleted {
         #[debug("{}", if result.is_ok() { "Ok(..)" } else { "Err(..)" })]
         #[serde(skip_serializing)]
-        result:          Result<AgentTurnResult, String>,
+        result:          Result<AgentTurnResult, crate::error::OutboundError>,
         in_reply_to:     MessageId,
         user:            UserId,
         /// Origin endpoint from the inbound message for session-scoped routing.
@@ -578,7 +578,7 @@ impl KernelEventEnvelope {
     /// Create a `TurnCompleted` event.
     pub fn turn_completed(
         session_key: SessionKey,
-        result: Result<AgentTurnResult, String>,
+        result: Result<AgentTurnResult, crate::error::OutboundError>,
         in_reply_to: MessageId,
         user: UserId,
         origin_endpoint: Option<crate::io::Endpoint>,
