@@ -924,6 +924,28 @@ fn thinking_level_to_config(
     })
 }
 
+/// Walk the parent_id chain in `table` from `key` to the root.
+///
+/// A root session (no `parent_id`) returns `current` unchanged on the first
+/// iteration — the function is a no-op for top-level sessions.
+///
+/// Falls back to the last reachable session if any ancestor is missing from
+/// the table (e.g. already reaped) or if the depth cap is hit. The cap is a
+/// belt-and-suspenders guard against accidental cycles — `max_children=0`
+/// for task workers means real chains are 1–2 deep in practice.
+pub(crate) fn walk_to_root(table: &crate::session::SessionTable, key: SessionKey) -> SessionKey {
+    const MAX_DEPTH: usize = 32;
+    let mut current = key;
+    for _ in 0..MAX_DEPTH {
+        match table.with(&current, |s| s.parent_id) {
+            Some(Some(parent)) => current = parent,
+            // Reached the root, or session not found in table — stop.
+            Some(None) | None => return current,
+        }
+    }
+    current
+}
+
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
@@ -1069,9 +1091,16 @@ async fn run_agent_loop_inner(
     // Load per-session LLM overrides (model + thinking level) from the
     // session index. A user-facing UI can pin these via the admin chat
     // session API; when unset we fall back to the agent manifest defaults.
+    //
+    // Child (task subagent) sessions do NOT have their own SessionEntry
+    // — only root user-facing sessions do (#1958). Walk the in-memory
+    // parent chain in `process_table` to find the root, and read the
+    // overrides from the root's SessionEntry. This way children inherit
+    // their parent's pinned model without polluting the session list.
+    let root_session_key = walk_to_root(handle.process_table().as_ref(), session_key);
     let session_entry = handle
         .session_index()
-        .get_session(&session_key)
+        .get_session(&root_session_key)
         .await
         .ok()
         .flatten();
