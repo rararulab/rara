@@ -140,19 +140,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Cache cargo registry/git checkouts and the rara-sandbox `target/`
-      # subtree. The boxlite build script downloads ~tens of MB of
-      # `libkrunfw` prebuilts and natively compiles `bubblewrap-sys` /
-      # `libkrun-sys`; restoring those build outputs skips the slowest
-      # part of this job. Save only on `main` (default behavior of
-      # `Swatinem/rust-cache@v2`) to avoid PR-induced cache churn.
-      - name: Rust cache (sandbox-macos)
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-        with:
-          shared-key: sandbox-macos
-          # Bust the cache when the boxlite/sandbox surface changes.
-          key: ${{ hashFiles('crates/rara-sandbox/Cargo.toml', 'Cargo.lock') }}
-
       - name: Build rara-sandbox (no stub)
         run: cargo build -p rara-sandbox
 
