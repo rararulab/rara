@@ -42,12 +42,12 @@
 //!
 //! # Phase scope
 //!
-//! This is phase (a) of #1935: **scaffold + hello + drain + forwarders**.
-//! The endpoint is mounted alongside the legacy `/ws` so existing
-//! frontends keep working unchanged. Inbound `prompt` is **rejected**
-//! with an error frame so a half-built endpoint cannot accidentally
-//! serve traffic; `abort` is accepted but only logged. Full inbound
-//! handling lands in phase (b).
+//! Phases (a) + (b) of #1935: scaffold + hello + drain + forwarders, plus
+//! full inbound handling. `prompt` runs the same audio-transcription /
+//! `RawPlatformMessage` / `submit_message` pipeline as the legacy
+//! [`crate::web`] chat WS; `abort` dispatches `Signal::Interrupt` against
+//! the kernel session — replacing the now-deleted REST
+//! `POST /signals/{session_id}/interrupt` endpoint.
 //!
 //! [`Hello`]: crate::web::WebEvent::Hello
 //! [`TapeAppended`]: crate::web::WebEvent::TapeAppended
@@ -64,15 +64,15 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use rara_kernel::{
     notification::{KernelNotification, NotificationFilter},
-    session::SessionKey,
+    session::{SessionKey, Signal},
 };
 use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
 use crate::web::{
-    WebAdapter, WebAdapterState, WebEvent, bearer_token_from_headers, register_endpoint,
-    stream_event_to_web_event, unregister_endpoint,
+    WebAdapter, WebAdapterState, WebEvent, bearer_token_from_headers, build_raw_platform_message,
+    register_endpoint, stream_event_to_web_event, transcribe_audio_blocks, unregister_endpoint,
 };
 
 /// Query parameters for the persistent session WS endpoint.
@@ -91,21 +91,17 @@ pub struct TokenQuery {
 }
 
 /// Inbound frames the persistent WS accepts from the client.
-///
-/// Phase (a) only handles `Abort` (logged, no-op until phase b). `Prompt`
-/// is parsed so the contract is locked in but rejected at runtime with
-/// an error frame — see module docs for why.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InboundFrame {
-    /// User submitted a new message. Phase (b) will route this through
+    /// User submitted a new message. Routed through
     /// `transcribe_audio_blocks` + `build_raw_platform_message` +
-    /// `KernelHandle::submit_message`.
+    /// `KernelHandle::submit_message`, mirroring the legacy chat WS path.
     Prompt {
         content: rara_kernel::channel::types::MessageContent,
     },
-    /// User clicked stop. Phase (b) will dispatch
-    /// `Signal::Interrupt` against the kernel session.
+    /// User clicked stop. Dispatches `Signal::Interrupt` against the
+    /// kernel session — replaces the deleted REST interrupt endpoint.
     Abort,
 }
 
@@ -373,9 +369,12 @@ async fn handle_session_ws(
     };
 
     let recv_task = {
+        let sink = Arc::clone(&state.sink);
         let adapter_events = Arc::clone(&state.adapter_events);
         let reply_buffer = state.reply_buffer.clone();
         let session_key_str = session_key_str.clone();
+        let user_id = state.owner_user_id.clone();
+        let stt_service = state.stt_service.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 let text = match msg {
@@ -392,33 +391,106 @@ async fn handle_session_ws(
                 }
 
                 match serde_json::from_str::<InboundFrame>(&text) {
-                    Ok(InboundFrame::Abort) => {
-                        // Phase (a): log only. Phase (b) will dispatch
-                        // `Signal::Interrupt` against the kernel session.
-                        info!(
-                            session_key = %session_key_str,
-                            "session WS received abort (phase-a no-op)"
-                        );
-                    }
-                    Ok(InboundFrame::Prompt { .. }) => {
-                        // Phase (a): the prompt path is not implemented
-                        // yet. Reject loudly so the endpoint cannot serve
-                        // traffic accidentally — better a visible error
-                        // than a silently dropped message.
-                        warn!(
-                            session_key = %session_key_str,
-                            "session WS received prompt during phase-a scaffold; rejecting"
-                        );
+                    Ok(InboundFrame::Prompt { content }) => {
+                        let content = transcribe_audio_blocks(content, &stt_service).await;
+                        let raw = build_raw_platform_message(&session_key_str, &user_id, content);
+
+                        let guard = sink.read().await;
+                        let Some(ref s) = *guard else {
+                            warn!(session_key = %session_key_str, "sink not set");
+                            WebAdapter::publish_adapter_event(
+                                &adapter_events,
+                                &reply_buffer,
+                                &session_key,
+                                WebEvent::Error {
+                                    message: "adapter not started".to_owned(),
+                                },
+                            );
+                            continue;
+                        };
+
                         WebAdapter::publish_adapter_event(
                             &adapter_events,
                             &reply_buffer,
                             &session_key,
-                            WebEvent::Error {
-                                message: "persistent session WS prompt handling not yet \
-                                          implemented (phase b)"
-                                    .to_owned(),
-                            },
+                            WebEvent::Typing,
                         );
+
+                        // First-contact sessions arrive with no resolved
+                        // session_key; patch with the URL-pinned key so
+                        // the kernel reuses this connection's session.
+                        match s.resolve(raw).await {
+                            Ok(mut msg) => {
+                                if msg.session_key_opt().is_none() {
+                                    msg.set_session_key(session_key);
+                                }
+                                if let Err(e) = s.submit_message(msg) {
+                                    error!(
+                                        session_key = %session_key_str,
+                                        error = %e,
+                                        "submit_message failed on session WS"
+                                    );
+                                    WebAdapter::publish_adapter_event(
+                                        &adapter_events,
+                                        &reply_buffer,
+                                        &session_key,
+                                        WebEvent::Error {
+                                            message: e.to_string(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    session_key = %session_key_str,
+                                    error = %e,
+                                    "resolve failed on session WS"
+                                );
+                                WebAdapter::publish_adapter_event(
+                                    &adapter_events,
+                                    &reply_buffer,
+                                    &session_key,
+                                    WebEvent::Error {
+                                        message: e.to_string(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    Ok(InboundFrame::Abort) => {
+                        let guard = sink.read().await;
+                        let Some(ref s) = *guard else {
+                            warn!(session_key = %session_key_str, "sink not set on abort");
+                            WebAdapter::publish_adapter_event(
+                                &adapter_events,
+                                &reply_buffer,
+                                &session_key,
+                                WebEvent::Error {
+                                    message: "adapter not started".to_owned(),
+                                },
+                            );
+                            continue;
+                        };
+                        if let Err(e) = s.send_signal(session_key, Signal::Interrupt) {
+                            error!(
+                                session_key = %session_key_str,
+                                error = %e,
+                                "send_signal(Interrupt) failed on session WS"
+                            );
+                            WebAdapter::publish_adapter_event(
+                                &adapter_events,
+                                &reply_buffer,
+                                &session_key,
+                                WebEvent::Error {
+                                    message: e.to_string(),
+                                },
+                            );
+                        } else {
+                            info!(
+                                session_key = %session_key_str,
+                                "session WS dispatched Signal::Interrupt"
+                            );
+                        }
                     }
                     Err(e) => {
                         warn!(

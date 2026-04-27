@@ -248,23 +248,50 @@ async fn session_ws_rejects_invalid_owner_token() {
     server.abort();
 }
 
-/// During phase (a), an inbound `prompt` frame must be rejected with a
-/// loud error frame so a half-built endpoint cannot accidentally serve
-/// traffic. This guards against accidentally enabling the new endpoint
-/// before phase (b) wires the full inbound path.
-#[tokio::test]
-async fn session_ws_rejects_prompt_during_phase_a() {
+/// An inbound `prompt` frame must traverse the full pipeline
+/// (transcribe → build_raw_platform_message → resolve → submit_message)
+/// and reach the kernel as a real user turn. This is the phase-(b)
+/// replacement for the phase-(a) rejection test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_ws_prompt_reaches_kernel() {
+    use rara_kernel::testing::{TestKernelBuilder, scripted_response};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env();
+
+    let tk = TestKernelBuilder::new(tmp.path())
+        .responses(vec![
+            scripted_response("hello back"),
+            scripted_response("(padding)"),
+        ])
+        .build()
+        .await;
+
     let buffer = ReplyBuffer::new();
-    let (addr, _adapter, server) = boot_adapter(Arc::clone(&buffer)).await;
+    let adapter = Arc::new(
+        WebAdapter::new(OWNER_TOKEN.to_owned(), OWNER_USER_ID.to_owned())
+            .with_reply_buffer(Arc::clone(&buffer)),
+    );
+    adapter
+        .start(tk.handle.clone())
+        .await
+        .expect("adapter start");
+
+    let app = axum::Router::new().nest("/chat", adapter.router());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("axum serve");
+    });
 
     let session_key = SessionKey::new();
     let (mut ws, _resp) =
         tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
             .await
             .expect("ws connect");
-
-    // Drain the initial `hello`.
-    let _ = next_event(&mut ws).await;
+    let _ = next_event(&mut ws).await; // hello
 
     let prompt = serde_json::json!({
         "type": "prompt",
@@ -275,29 +302,104 @@ async fn session_ws_rejects_prompt_during_phase_a() {
         .await
         .expect("send prompt");
 
-    let response = next_event(&mut ws).await;
-    match response {
-        WebEvent::Error { message } => {
-            assert!(
-                message.contains("phase b"),
-                "expected phase-b mention in error, got: {message}"
-            );
+    // Wait for the kernel to register a session + complete a turn driven
+    // by this prompt. Polling matches the pattern used in `web_e2e.rs`.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let traces = loop {
+        let traces = tk.handle.get_process_turns(session_key);
+        if !traces.is_empty() {
+            break traces;
         }
-        other => panic!("expected Error frame rejecting prompt, got {other:?}"),
-    }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "kernel did not record a turn for the prompt within 30s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let turn = traces.last().expect("at least one turn");
+    assert!(turn.success, "turn should succeed: {:?}", turn.error);
+    let preview = turn
+        .iterations
+        .last()
+        .map(|i| i.text_preview.as_str())
+        .unwrap_or("");
+    assert!(
+        preview.contains("hello back"),
+        "expected scripted response, got: {preview}"
+    );
 
     ws.send(Message::Close(None)).await.ok();
     drop(ws);
     server.abort();
+    tk.shutdown();
 }
 
-/// An inbound `abort` frame must be parsed without producing an error.
-/// Phase (a) is a logged no-op; this test confirms the parser accepts
-/// the contract so phase (b) can drop in real handling without changing
-/// the wire format. We assert by sending an abort then a prompt and
-/// confirming only the prompt produces an error frame.
+/// An inbound `abort` frame must reach the kernel through
+/// `KernelHandle::send_signal(_, Signal::Interrupt)`. With a started
+/// adapter the WS path returns silently (no client-visible Error frame),
+/// proving the call landed on the sink — this is the same wiring the
+/// deleted `POST /signals/{session_id}/interrupt` endpoint exercised.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_ws_abort_dispatches_interrupt_signal() {
+    use rara_kernel::testing::TestKernelBuilder;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env();
+
+    let tk = TestKernelBuilder::new(tmp.path()).build().await;
+
+    let buffer = ReplyBuffer::new();
+    let adapter = Arc::new(
+        WebAdapter::new(OWNER_TOKEN.to_owned(), OWNER_USER_ID.to_owned())
+            .with_reply_buffer(Arc::clone(&buffer)),
+    );
+    adapter
+        .start(tk.handle.clone())
+        .await
+        .expect("adapter start");
+
+    let app = axum::Router::new().nest("/chat", adapter.router());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("axum serve");
+    });
+
+    let session_key = SessionKey::new();
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
+            .await
+            .expect("ws connect");
+    let _ = next_event(&mut ws).await; // hello
+
+    ws.send(Message::Text("{\"type\":\"abort\"}".into()))
+        .await
+        .expect("send abort");
+
+    // With a started adapter, send_signal succeeds (the queued event is
+    // a fire-and-forget signal — handle.rs::send_signal). The wire
+    // contract: the WS must NOT push any error frame back to the client.
+    // A short timeout proves no frame arrives.
+    let timed = tokio::time::timeout(Duration::from_millis(300), ws.next()).await;
+    assert!(
+        timed.is_err(),
+        "abort against a started adapter must not surface an Error frame; got: {timed:?}"
+    );
+
+    ws.send(Message::Close(None)).await.ok();
+    drop(ws);
+    server.abort();
+    tk.shutdown();
+}
+
+/// When the adapter has not been `start`ed, an abort frame must surface
+/// a clear `Error` frame so the client knows the signal did not land.
+/// This proves the abort path actually consults `state.sink` instead of
+/// silently dropping — symmetrical to the prompt path's behavior.
 #[tokio::test]
-async fn session_ws_parses_abort_without_error() {
+async fn session_ws_abort_without_sink_returns_error() {
     let buffer = ReplyBuffer::new();
     let (addr, _adapter, server) = boot_adapter(Arc::clone(&buffer)).await;
 
@@ -306,36 +408,22 @@ async fn session_ws_parses_abort_without_error() {
         tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
             .await
             .expect("ws connect");
-
     let _ = next_event(&mut ws).await; // hello
 
     ws.send(Message::Text("{\"type\":\"abort\"}".into()))
         .await
         .expect("send abort");
 
-    // Now send a prompt to elicit a single error frame; if abort had also
-    // produced an error we would observe two error frames here.
-    ws.send(Message::Text(
-        serde_json::json!({"type": "prompt", "content": "x"})
-            .to_string()
-            .into(),
-    ))
-    .await
-    .expect("send prompt");
-
     let response = next_event(&mut ws).await;
-    assert!(
-        matches!(response, WebEvent::Error { .. }),
-        "expected exactly one Error frame from prompt, got {response:?}"
-    );
-
-    // No further frames should arrive in a short window — confirms abort
-    // did not also emit anything.
-    let timed = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
-    assert!(
-        timed.is_err(),
-        "abort must be a phase-a no-op; instead got: {timed:?}"
-    );
+    match response {
+        WebEvent::Error { message } => {
+            assert!(
+                message.contains("adapter not started"),
+                "expected adapter-not-started error, got: {message}"
+            );
+        }
+        other => panic!("expected Error frame for abort without sink, got {other:?}"),
+    }
 
     ws.send(Message::Close(None)).await.ok();
     drop(ws);

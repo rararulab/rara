@@ -594,7 +594,6 @@ impl WebAdapter {
             .route("/ws", get(ws_handler))
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
-            .route("/signals/{session_id}/interrupt", post(interrupt_handler))
             // Persistent per-session WS (#1935 phase a). Mounted alongside
             // the legacy `/ws` so existing frontends keep working unchanged
             // until the full migration lands. The legacy chat WS, the
@@ -928,7 +927,7 @@ pub(crate) async fn unregister_endpoint(
 // Helper: build a RawPlatformMessage from request data
 // ---------------------------------------------------------------------------
 
-fn build_raw_platform_message(
+pub(crate) fn build_raw_platform_message(
     session_key: &str,
     user_id: &str,
     content: MessageContent,
@@ -956,7 +955,7 @@ use rara_kernel::channel::types::ContentBlock;
 
 /// Transcribe any `AudioBase64` blocks in the message content, replacing them
 /// with `Text` blocks containing the transcribed text.
-async fn transcribe_audio_blocks(
+pub(crate) async fn transcribe_audio_blocks(
     content: MessageContent,
     stt: &Option<rara_stt::SttService>,
 ) -> MessageContent {
@@ -1579,39 +1578,6 @@ async fn send_message_handler(
             let status = axum::http::StatusCode::SERVICE_UNAVAILABLE;
             (status, "adapter not started").into_response()
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// POST /signals/{session_id}/interrupt handler
-// ---------------------------------------------------------------------------
-
-async fn interrupt_handler(
-    axum::extract::Path(session_id): axum::extract::Path<String>,
-    State(state): State<WebAdapterState>,
-) -> Response {
-    let session_key = match rara_kernel::session::SessionKey::try_from_raw(&session_id) {
-        Ok(k) => k,
-        Err(_) => {
-            return (axum::http::StatusCode::BAD_REQUEST, "invalid session key").into_response();
-        }
-    };
-
-    let guard = state.sink.read().await;
-    match &*guard {
-        Some(handle) => {
-            match handle.send_signal(session_key, rara_kernel::session::Signal::Interrupt) {
-                Ok(()) => axum::Json(serde_json::json!({ "ok": true })).into_response(),
-                Err(e) => {
-                    (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-                }
-            }
-        }
-        None => (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "adapter not started",
-        )
-            .into_response(),
     }
 }
 
