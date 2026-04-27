@@ -163,6 +163,10 @@ agents:
 # 2. `telemetry.otlp` — the self-hosted Langfuse traces exporter (HTTP only).
 #    Disabled by default; set `enabled: true` and provide a `traces_endpoint`
 #    plus auth header to push spans to a running Langfuse instance.
+#    The same section also drives OTLP **logs** export to a separate backend
+#    (e.g. Loki) — logs and traces are independent signals. Flip
+#    `logs_enabled: true` with a `logs_endpoint` to ship `tracing` events to
+#    Loki regardless of whether traces are enabled.
 #
 # `pyroscope` enables continuous CPU profiling via the Grafana Pyroscope agent
 # (pprof-rs backend). Omit the whole `pyroscope:` section to disable — that is
@@ -192,6 +196,11 @@ agents:
 #     deployment_environment: "dev"
 #     headers:
 #       authorization: "Basic <base64(public_key:secret_key)>"
+#     # OTLP logs → self-hosted Loki (independent of traces above).
+#     logs_enabled: true
+#     logs_endpoint: "http://10.0.0.168:31100/otlp/v1/logs"
+#     logs_headers:
+#       x-scope-orgid: "rara"
 #   pyroscope:
 #     enabled: false  # default off — flip to true to ship profiles
 #     endpoint: "http://10.0.0.183:4040"

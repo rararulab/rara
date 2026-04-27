@@ -284,6 +284,18 @@ pub struct OtlpConfig {
     /// Deployment environment label (e.g. `dev`, `staging`, `prod`)
     /// emitted as `deployment.environment.name` resource attribute.
     pub deployment_environment: Option<String>,
+    /// Enable OTLP log export (separate from traces). Targets a
+    /// log-specific backend like Loki's native OTLP receiver.
+    #[serde(default)]
+    pub logs_enabled:           Option<bool>,
+    /// OTLP/HTTP logs ingest URL — full path including `/v1/logs`
+    /// (e.g. Loki: `http://10.0.0.168:31100/otlp/v1/logs`).
+    #[serde(default)]
+    pub logs_endpoint:          Option<String>,
+    /// HTTP headers attached to log exports. Loki requires
+    /// `X-Scope-OrgID` even when `auth_enabled` is false.
+    #[serde(default)]
+    pub logs_headers:           std::collections::HashMap<String, String>,
 }
 
 fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }

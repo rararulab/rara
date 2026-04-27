@@ -31,9 +31,11 @@ use std::{
 use bon::Builder;
 use once_cell::sync::{Lazy, OnceCell};
 use opentelemetry::{KeyValue, global, trace::TracerProvider};
-use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
-    metrics::SdkMeterProvider, propagation::TraceContextPropagator, trace::Sampler,
+    logs::SdkLoggerProvider, metrics::SdkMeterProvider, propagation::TraceContextPropagator,
+    trace::Sampler,
 };
 use opentelemetry_semantic_conventions::resource;
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -97,6 +99,13 @@ pub const DEFAULT_OTLP_GRPC_ENDPOINT: &str = "http://localhost:4317";
 /// HTTP export is useful when gRPC is not available or when custom headers
 /// are needed for authentication.
 pub const DEFAULT_OTLP_HTTP_ENDPOINT: &str = "http://localhost:4318/v1/traces";
+
+/// The default OTLP logs HTTP endpoint.
+///
+/// Used when `otlp_logs_endpoint` is not configured but logs export is
+/// enabled. The `/v1/logs` path is the OTLP specification endpoint for log
+/// records.
+pub const DEFAULT_OTLP_HTTP_LOGS_ENDPOINT: &str = "http://localhost:4318/v1/logs";
 
 /// The default directory name for log files when file logging is enabled.
 ///
@@ -220,6 +229,31 @@ pub struct LoggingOptions {
     /// `deployment.environment.name` so traces from different environments
     /// can be filtered downstream.
     pub otlp_deployment_environment: Option<String>,
+
+    /// Enable OTLP log export via the `tracing` → OTel logs bridge.
+    ///
+    /// When true, every `tracing` event is converted to an OTLP `LogRecord`
+    /// and shipped to `otlp_logs_endpoint`. This is independent of trace
+    /// export — Loki receives logs while Langfuse receives traces. Default
+    /// is false.
+    #[default = false]
+    pub enable_otlp_logs: bool,
+
+    /// OTLP/HTTP logs ingest URL — full path including `/v1/logs`.
+    ///
+    /// Separate from `otlp_endpoint` because logs and traces typically live
+    /// on different services even when colocated (e.g. Loki vs Langfuse).
+    /// If `enable_otlp_logs` is true and this is `None`, falls back to
+    /// [`DEFAULT_OTLP_HTTP_LOGS_ENDPOINT`].
+    pub otlp_logs_endpoint: Option<String>,
+
+    /// Custom HTTP headers attached to OTLP log exports.
+    ///
+    /// Used for tenant routing or auth — Loki, for example, requires
+    /// `X-Scope-OrgID` even when `auth_enabled` is false.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[default(_code = "HashMap::new()")]
+    pub otlp_logs_headers: HashMap<String, String>,
 }
 
 /// OpenTelemetry Protocol (OTLP) export transport protocols.
@@ -622,7 +656,15 @@ pub fn init_global_logging(
             .with(file_logging_layer)
             .with(err_file_logging_layer);
 
-        if opts.enable_otlp_tracing {
+        // Build the OTel resource once if either OTLP signal is enabled —
+        // traces, metrics, and logs all share the same `service.*` identity.
+        let otel_resource = if opts.enable_otlp_tracing || opts.enable_otlp_logs {
+            Some(build_otel_resource(app_name, node_id.as_deref(), opts))
+        } else {
+            None
+        };
+
+        let otel_trace_layer = if opts.enable_otlp_tracing {
             global::set_text_map_propagator(TraceContextPropagator::new());
 
             let sampler = opts
@@ -634,51 +676,43 @@ pub fn init_global_logging(
                     Sampler::ParentBased,
                 );
 
-            let mut resource_attrs = vec![
-                KeyValue::new(resource::SERVICE_NAME, app_name.to_string()),
-                KeyValue::new(
-                    resource::SERVICE_INSTANCE_ID,
-                    node_id.unwrap_or("none".to_string()),
-                ),
-                KeyValue::new(resource::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
-                KeyValue::new(resource::PROCESS_PID, std::process::id().to_string()),
-            ];
-            if let Some(env) = opts.otlp_deployment_environment.as_deref() {
-                resource_attrs.push(KeyValue::new(
-                    resource::DEPLOYMENT_ENVIRONMENT_NAME,
-                    env.to_string(),
-                ));
-            }
-            // Pin the semconv schema URL on the resource (when configured) so
-            // downstream backends like Langfuse can interpret span attributes
-            // against a known version.
-            let resource_builder = opentelemetry_sdk::Resource::builder_empty();
-            let otel_resource = match opts.otlp_schema_url.as_deref() {
-                Some(schema_url) => resource_builder
-                    .with_schema_url(resource_attrs, schema_url.to_string())
-                    .build(),
-                None => resource_builder.with_attributes(resource_attrs).build(),
-            };
+            let resource = otel_resource
+                .clone()
+                .expect("otel_resource present when enable_otlp_tracing");
 
             let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(build_otlp_exporter(opts))
                 .with_sampler(sampler)
-                .with_resource(otel_resource.clone())
+                .with_resource(resource.clone())
                 .build();
             let tracer = provider.tracer("job");
 
             // Initialize the OTel metrics pipeline alongside traces.
-            let meter_provider = init_meter_provider(opts, otel_resource);
+            let meter_provider = init_meter_provider(opts, resource);
             global::set_meter_provider(meter_provider);
 
-            tracing::subscriber::set_global_default(
-                subscriber.with(tracing_opentelemetry::layer().with_tracer(tracer)),
-            )
-            .expect("error setting global tracing subscriber");
+            Some(tracing_opentelemetry::layer().with_tracer(tracer))
         } else {
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("error setting global tracing subscriber");
-        }
+            None
+        };
+
+        let otel_logs_layer = if opts.enable_otlp_logs {
+            let resource = otel_resource
+                .clone()
+                .expect("otel_resource present when enable_otlp_logs");
+            let logger_provider = init_logger_provider(opts, resource);
+            // The bridge converts every `tracing` event into an OTLP
+            // `LogRecord`. Keep it as a separate layer so it stacks on the
+            // same `Registry` as the file/stdout layers and the trace layer.
+            Some(OpenTelemetryTracingBridge::new(&logger_provider))
+        } else {
+            None
+        };
+
+        tracing::subscriber::set_global_default(
+            subscriber.with(otel_trace_layer).with(otel_logs_layer),
+        )
+        .expect("error setting global tracing subscriber");
     });
 
     guards
@@ -726,6 +760,54 @@ pub fn init_global_logging(
 /// This function panics if the exporter cannot be created, which typically
 /// indicates a configuration error or network issue that should be resolved
 /// before the application starts.
+/// Build the shared OTel `Resource` that identifies this process to every
+/// OTLP signal (traces, metrics, logs).
+///
+/// Pulling this into one place keeps the three signals consistent — they all
+/// see the same `service.name`, `service.instance.id`, `service.version`,
+/// `process.pid`, and (when configured) `deployment.environment.name` and
+/// semconv schema URL.
+fn build_otel_resource(
+    app_name: &str,
+    node_id: Option<&str>,
+    opts: &LoggingOptions,
+) -> opentelemetry_sdk::Resource {
+    let mut resource_attrs = vec![
+        KeyValue::new(resource::SERVICE_NAME, app_name.to_string()),
+        KeyValue::new(
+            resource::SERVICE_INSTANCE_ID,
+            node_id.unwrap_or("none").to_string(),
+        ),
+        KeyValue::new(resource::SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+        KeyValue::new(resource::PROCESS_PID, std::process::id().to_string()),
+    ];
+    if let Some(env) = opts.otlp_deployment_environment.as_deref() {
+        resource_attrs.push(KeyValue::new(
+            resource::DEPLOYMENT_ENVIRONMENT_NAME,
+            env.to_string(),
+        ));
+    }
+    let builder = opentelemetry_sdk::Resource::builder_empty();
+    match opts.otlp_schema_url.as_deref() {
+        Some(schema_url) => builder
+            .with_schema_url(resource_attrs, schema_url.to_string())
+            .build(),
+        None => builder.with_attributes(resource_attrs).build(),
+    }
+}
+
+/// Build a `reqwest::Client` configured for OTLP HTTP exporters.
+///
+/// OTLP exporters target collectors on the LAN (Alloy, Langfuse, Loki). They
+/// must NOT honor `HTTP_PROXY` / `HTTPS_PROXY` from the environment — a
+/// developer's outbound proxy would silently misroute observability traffic.
+fn build_otlp_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("Failed to build reqwest client for OTLP HTTP exporter")
+}
+
 fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
     let protocol = opts
         .otlp_export_protocol
@@ -754,21 +836,14 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
             .build()
             .expect("Failed to create OTLP gRPC exporter "),
 
-        OtlpExportProtocol::Http => {
-            // OTLP must not honor HTTP_PROXY — internal collectors live on the LAN.
-            let http_client = reqwest::Client::builder()
-                .no_proxy()
-                .build()
-                .expect("Failed to build reqwest client for OTLP HTTP exporter");
-            SpanExporter::builder()
-                .with_http()
-                .with_http_client(http_client)
-                .with_endpoint(endpoint)
-                .with_protocol(Protocol::HttpBinary)
-                .with_headers(opts.otlp_headers.clone())
-                .build()
-                .expect("Failed to create OTLP HTTP exporter ")
-        }
+        OtlpExportProtocol::Http => SpanExporter::builder()
+            .with_http()
+            .with_http_client(build_otlp_http_client())
+            .with_endpoint(endpoint)
+            .with_protocol(Protocol::HttpBinary)
+            .with_headers(opts.otlp_headers.clone())
+            .build()
+            .expect("Failed to create OTLP HTTP exporter "),
     }
 }
 
@@ -812,20 +887,13 @@ fn init_meter_provider(
             .with_endpoint(&endpoint)
             .build()
             .expect("failed to build OTLP gRPC metric exporter"),
-        OtlpExportProtocol::Http => {
-            // OTLP must not honor HTTP_PROXY — internal collectors live on the LAN.
-            let http_client = reqwest::Client::builder()
-                .no_proxy()
-                .build()
-                .expect("failed to build reqwest client for OTLP HTTP metric exporter");
-            opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_http_client(http_client)
-                .with_endpoint(&endpoint)
-                .with_headers(opts.otlp_headers.clone())
-                .build()
-                .expect("failed to build OTLP HTTP metric exporter")
-        }
+        OtlpExportProtocol::Http => opentelemetry_otlp::MetricExporter::builder()
+            .with_http()
+            .with_http_client(build_otlp_http_client())
+            .with_endpoint(&endpoint)
+            .with_headers(opts.otlp_headers.clone())
+            .build()
+            .expect("failed to build OTLP HTTP metric exporter"),
     };
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
@@ -834,6 +902,45 @@ fn init_meter_provider(
 
     SdkMeterProvider::builder()
         .with_reader(reader)
+        .with_resource(resource)
+        .build()
+}
+
+/// Initialize an OpenTelemetry `SdkLoggerProvider` that ships log records to
+/// an OTLP/HTTP endpoint via a batch processor.
+///
+/// The exporter is intentionally HTTP-only — Loki's native OTLP receiver
+/// listens on `/otlp/v1/logs` over HTTP, and we don't currently target a gRPC
+/// log backend. `otlp_logs_endpoint` is independent from `otlp_endpoint`
+/// because logs and traces typically live on different services even when
+/// colocated (Loki vs Langfuse).
+fn init_logger_provider(
+    opts: &LoggingOptions,
+    resource: opentelemetry_sdk::Resource,
+) -> SdkLoggerProvider {
+    let endpoint = opts
+        .otlp_logs_endpoint
+        .as_ref()
+        .map(|e| {
+            if e.starts_with("http") {
+                e.clone()
+            } else {
+                format!("http://{e}")
+            }
+        })
+        .unwrap_or_else(|| DEFAULT_OTLP_HTTP_LOGS_ENDPOINT.to_string());
+
+    let exporter = LogExporter::builder()
+        .with_http()
+        .with_http_client(build_otlp_http_client())
+        .with_endpoint(endpoint)
+        .with_protocol(Protocol::HttpBinary)
+        .with_headers(opts.otlp_logs_headers.clone())
+        .build()
+        .expect("failed to build OTLP HTTP log exporter");
+
+    SdkLoggerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_resource(resource)
         .build()
 }
