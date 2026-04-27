@@ -42,8 +42,13 @@ use anyhow::{Context, anyhow};
 /// Relative paths are joined to the workspace before resolution, matching
 /// the existing tool conventions.
 pub async fn resolve_writable(raw: &str) -> anyhow::Result<PathBuf> {
-    let workspace = rara_paths::workspace_dir().clone();
-    let workspace_canon = canonicalize_workspace(&workspace).await?;
+    resolve_writable_in(rara_paths::workspace_dir(), raw).await
+}
+
+/// Same as [`resolve_writable`] but with the workspace path injected, so
+/// tests can use a tempdir without touching the global `OnceLock`.
+async fn resolve_writable_in(workspace: &Path, raw: &str) -> anyhow::Result<PathBuf> {
+    let workspace_canon = canonicalize_workspace(workspace).await?;
 
     let joined = if Path::new(raw).is_absolute() {
         PathBuf::from(raw)
@@ -143,27 +148,24 @@ mod tests {
 
     use super::*;
 
-    /// `resolve_writable` joins relative paths under the workspace.
+    /// `resolve_writable_in` joins relative paths under the workspace.
     #[tokio::test]
     async fn relative_path_joins_workspace() {
-        // Best-effort: the workspace dir is a global OnceLock, so we just
-        // verify the resolution stays within it.
-        let workspace = rara_paths::workspace_dir().clone();
-        // Use a file we KNOW exists inside workspace by creating one.
-        tokio::fs::create_dir_all(&workspace).await.unwrap();
-        let target = workspace.join("__rara_path_check_test__.txt");
+        let workspace = TempDir::new().expect("tempdir");
+        let target = workspace.path().join("file.txt");
         tokio::fs::write(&target, b"x").await.unwrap();
-        let resolved = resolve_writable("__rara_path_check_test__.txt")
+        let resolved = resolve_writable_in(workspace.path(), "file.txt")
             .await
             .expect("resolve");
-        assert!(resolved.starts_with(tokio::fs::canonicalize(&workspace).await.unwrap()));
-        let _ = tokio::fs::remove_file(&target).await;
+        let workspace_canon = tokio::fs::canonicalize(workspace.path()).await.unwrap();
+        assert!(resolved.starts_with(workspace_canon));
     }
 
     /// `/etc/passwd` is rejected.
     #[tokio::test]
     async fn absolute_outside_workspace_rejected() {
-        let err = resolve_writable("/etc/passwd")
+        let workspace = TempDir::new().expect("tempdir");
+        let err = resolve_writable_in(workspace.path(), "/etc/passwd")
             .await
             .expect_err("must reject");
         assert!(err.to_string().contains("outside workspace"));
@@ -172,23 +174,17 @@ mod tests {
     /// A symlink inside the workspace pointing at `/etc` is rejected.
     #[tokio::test]
     async fn symlink_escape_rejected() {
-        // Create a symlink target outside the workspace via a temp dir.
-        let workspace = rara_paths::workspace_dir().clone();
-        tokio::fs::create_dir_all(&workspace).await.unwrap();
-        let outside = TempDir::new().expect("tempdir");
+        let workspace = TempDir::new().expect("workspace tempdir");
+        let outside = TempDir::new().expect("outside tempdir");
         let outside_file = outside.path().join("victim.txt");
         tokio::fs::write(&outside_file, b"secret").await.unwrap();
 
-        let link = workspace.join("__rara_path_check_symlink__");
-        // Clean up any stale link from a prior failed run.
-        let _ = tokio::fs::remove_file(&link).await;
+        let link = workspace.path().join("escape");
         symlink(&outside_file, &link).expect("symlink");
 
-        let err = resolve_writable(&link.to_string_lossy())
+        let err = resolve_writable_in(workspace.path(), &link.to_string_lossy())
             .await
             .expect_err("symlink escape must be rejected");
         assert!(err.to_string().contains("outside workspace"));
-
-        let _ = tokio::fs::remove_file(&link).await;
     }
 }
