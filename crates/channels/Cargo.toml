@@ -46,16 +46,12 @@ url = "2"
 uuid = { workspace = true }
 
 [dev-dependencies]
-base64 = { workspace = true }
 futures = { workspace = true }
 rara-kernel = { workspace = true }
-rara-paths = { workspace = true }
-rara-stt = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-tungstenite = "0.29"
-wiremock = "0.6"
 
 [lints]
 workspace = true
