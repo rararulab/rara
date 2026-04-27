@@ -16,6 +16,7 @@
 
 import { useEffect, useRef } from 'react';
 
+import { buildWsBaseUrl } from '@/adapters/ws-base-url';
 import { getAccessToken } from '@/api/client';
 
 /**
@@ -72,9 +73,8 @@ export function useSessionEvents({ sessionKey, onTapeAppended }: UseSessionEvent
       const token = getAccessToken();
       if (!token) return;
 
-      const host = window.location.host;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${protocol}//${host}/api/v1/kernel/chat/events/${encodeURIComponent(
+      const base = buildWsBaseUrl();
+      const url = `${base}/api/v1/kernel/chat/events/${encodeURIComponent(
         sessionKey,
       )}?token=${encodeURIComponent(token)}`;
 
