@@ -42,7 +42,6 @@ fn main() {
             &[
                 "proto/hello/v1/hello.proto",
                 "proto/telegrambot/v1/command.proto",
-                "proto/execution/v1/worker.proto",
             ],
             &includes
                 .iter()

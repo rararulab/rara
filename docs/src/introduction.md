@@ -60,4 +60,3 @@ job/
 ## Next Steps
 
 - [API Guide](api-guide.md) - Learn about the gRPC API structure
-- [Buf Integration](buf-integration.md) - Multi-language code generation setup

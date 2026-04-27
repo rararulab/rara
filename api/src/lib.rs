@@ -36,10 +36,4 @@ pub mod pb {
             tonic::include_proto!("rara.telegrambot.v1");
         }
     }
-
-    pub mod execution {
-        pub mod v1 {
-            tonic::include_proto!("execution.v1");
-        }
-    }
 }

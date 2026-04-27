@@ -30,7 +30,6 @@ api/
 │   ├── typescript/           # TypeScript client libraries
 │   └── rust/                 # Rust server + client code
 ├── buf.yaml                  # Main Buf configuration
-├── buf.gen.yaml              # Multi-language generation config
 ├── buf.gen.go.yaml           # Go-specific generation
 ├── buf.gen.java.yaml         # Java-specific generation
 ├── buf.gen.cpp.yaml          # C++-specific generation
