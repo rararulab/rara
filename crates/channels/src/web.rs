@@ -242,6 +242,27 @@ pub enum WebEvent {
     ApprovalResolved { id: String, decision: String },
     /// Stream completed (no more deltas).
     Done,
+    /// Sent immediately on connect over the persistent per-session WS
+    /// (see `crate::web_session`). Frontend uses it to confirm the socket
+    /// is established before arming reconnect logic. Not produced by the
+    /// legacy per-turn `/ws` endpoint.
+    Hello,
+    /// A new entry was appended to the session's tape. Emitted on the
+    /// persistent per-session WS in two situations:
+    ///
+    /// 1. *In-turn*: after the matching [`WebEvent::Done`] for a turn that
+    ///    produced a tape append. Both events flow through the same ordered
+    ///    mpsc, so a single consumer observes `done`-then-`tape_appended`
+    ///    deterministically (kills the cross-socket race classes traced in
+    ///    #1601, #1731, #1849, #1877, #1923).
+    /// 2. *Out-of-turn*: when the kernel writes to a tape outside a user turn
+    ///    (e.g. background-task summaries, scheduled re-entries). Clients treat
+    ///    the frame as a refetch trigger.
+    TapeAppended {
+        entry_id:  u64,
+        role:      Option<String>,
+        timestamp: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +307,7 @@ fn platform_outbound_to_web_event(msg: PlatformOutbound) -> WebEvent {
     }
 }
 
-fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
+pub(crate) fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> {
     match event {
         StreamEvent::TextDelta { text } => Some(WebEvent::TextDelta { text }),
         StreamEvent::ReasoningDelta { .. } => None,
@@ -574,6 +595,15 @@ impl WebAdapter {
             .route("/events", get(sse_handler))
             .route("/messages", post(send_message_handler))
             .route("/signals/{session_id}/interrupt", post(interrupt_handler))
+            // Persistent per-session WS (#1935 phase a). Mounted alongside
+            // the legacy `/ws` so existing frontends keep working unchanged
+            // until the full migration lands. The legacy chat WS, the
+            // separate events WS, and the SSE / POST endpoints are slated
+            // for deletion in later phases of the same PR.
+            .route(
+                "/session/{session_key}",
+                get(crate::web_session::session_ws_handler),
+            )
             .with_state(state)
             .merge(events_router)
     }
@@ -642,7 +672,7 @@ impl WebAdapter {
     /// events) runs directly off [`StreamHub::subscribe_session_events`], so
     /// this bus only carries adapter-local events (Typing, Error, Phase,
     /// outbound replies).
-    fn get_or_create_adapter_bus(
+    pub(crate) fn get_or_create_adapter_bus(
         buses: &DashMap<SessionKey, broadcast::Sender<WebEvent>>,
         session_key: SessionKey,
     ) -> broadcast::Sender<WebEvent> {
@@ -663,7 +693,7 @@ impl WebAdapter {
     /// `receiver_count`. Trade-off: a tab that read an event live will
     /// see it again if it disconnects + reconnects within the TTL window.
     /// See `web_reply_buffer.rs` module docs.
-    fn publish_adapter_event(
+    pub(crate) fn publish_adapter_event(
         buses: &DashMap<SessionKey, broadcast::Sender<WebEvent>>,
         reply_buffer: &Arc<ReplyBuffer>,
         session_key: &SessionKey,
@@ -807,21 +837,24 @@ fn decision_str(decision: rara_kernel::security::ApprovalDecision) -> &'static s
 // ---------------------------------------------------------------------------
 
 /// Shared state passed to axum route handlers.
+///
+/// Crate-visible so `crate::web_session` (the persistent per-session WS
+/// handler) can mount on the same state without duplicating fields.
 #[derive(Clone)]
-struct WebAdapterState {
-    adapter_events:    Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
-    sink:              Arc<RwLock<Option<KernelHandle>>>,
-    stream_hub:        Arc<RwLock<Option<Arc<StreamHub>>>>,
-    endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    owner_token:       String,
+pub(crate) struct WebAdapterState {
+    pub(crate) adapter_events:    Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
+    pub(crate) sink:              Arc<RwLock<Option<KernelHandle>>>,
+    pub(crate) stream_hub:        Arc<RwLock<Option<Arc<StreamHub>>>>,
+    pub(crate) endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    pub(crate) owner_token:       String,
     /// Authenticated owner identity — see [`WebAdapter::owner_user_id`].
     /// Used after auth passes to stamp inbound messages with a
     /// server-trusted user id instead of trusting client input.
-    owner_user_id:     String,
-    shutdown_rx:       watch::Receiver<bool>,
-    stt_service:       Option<rara_stt::SttService>,
+    pub(crate) owner_user_id:     String,
+    pub(crate) shutdown_rx:       watch::Receiver<bool>,
+    pub(crate) stt_service:       Option<rara_stt::SttService>,
     /// Always-on per-session ring buffer; see [`WebAdapter::reply_buffer`].
-    reply_buffer:      Arc<ReplyBuffer>,
+    pub(crate) reply_buffer:      Arc<ReplyBuffer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -838,7 +871,7 @@ struct WebAdapterState {
 /// provided" and falls back to the query-string token.
 ///
 /// [RFC 6750]: https://datatracker.ietf.org/doc/html/rfc6750#section-2.1
-fn bearer_token_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
+pub(crate) fn bearer_token_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
     let raw = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
@@ -868,7 +901,7 @@ fn web_endpoint_for(session_key: &str) -> Endpoint {
 fn web_user_id(user_id: &str) -> UserId { UserId(user_id.to_string()) }
 
 /// Register a web endpoint in the registry (if available).
-async fn register_endpoint(
+pub(crate) async fn register_endpoint(
     registry: &RwLock<Option<Arc<EndpointRegistry>>>,
     user_id: &str,
     session_key: &str,
@@ -880,7 +913,7 @@ async fn register_endpoint(
 }
 
 /// Unregister a web endpoint from the registry (if available).
-async fn unregister_endpoint(
+pub(crate) async fn unregister_endpoint(
     registry: &RwLock<Option<Arc<EndpointRegistry>>>,
     user_id: &str,
     session_key: &str,
