@@ -40,7 +40,11 @@ const FADE_OUT_MS = 300;
 
 /** Folded header + collapsible timeline for a single active run. */
 export function SingleAgentLiveCard({ run, agentName = 'rara', onOpenTranscript, onStop }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  // Default to collapsed: an expanded card with tool chips reserves
+  // scroll padding equal to its full height (see useLiveCardHeight),
+  // which eats visible message space. A single-line header keeps the
+  // status indicator quiet; users click to drill into the timeline.
+  const [expanded, setExpanded] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [stickToBottom, setStickToBottom] = useState(true);

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LiveRun } from '../live-run-store';
@@ -52,9 +52,17 @@ function errorItem(seq: number, content: string): TimelineItem {
   return { seq, turn: 0, kind: 'error', content };
 }
 
+// The card defaults to collapsed so it doesn't compress the message column;
+// these tests assert content inside the expandable timeline, so click open
+// after render.
+function expandCard() {
+  fireEvent.click(screen.getByRole('button', { name: /events/ }));
+}
+
 describe('SingleAgentLiveCard', () => {
   it('shows a generic working placeholder when the run has no items or stage', () => {
     render(<SingleAgentLiveCard run={runFixture()} onOpenTranscript={vi.fn()} />);
+    expandCard();
     expect(screen.getByText('正在处理…')).toBeInTheDocument();
   });
 
@@ -77,6 +85,7 @@ describe('SingleAgentLiveCard', () => {
         onOpenTranscript={vi.fn()}
       />,
     );
+    expandCard();
     expect(screen.getAllByText('思考中…').length).toBeGreaterThan(0);
   });
 
@@ -89,6 +98,7 @@ describe('SingleAgentLiveCard', () => {
         onOpenTranscript={vi.fn()}
       />,
     );
+    expandCard();
     expect(screen.getByText('grep')).toBeInTheDocument();
     expect(screen.getByText('fn main')).toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'running' })).toBeInTheDocument();
@@ -106,6 +116,7 @@ describe('SingleAgentLiveCard', () => {
         onOpenTranscript={vi.fn()}
       />,
     );
+    expandCard();
     expect(screen.getByLabelText('completed')).toBeInTheDocument();
   });
 
@@ -121,6 +132,7 @@ describe('SingleAgentLiveCard', () => {
         onOpenTranscript={vi.fn()}
       />,
     );
+    expandCard();
     expect(screen.getByLabelText('errored')).toBeInTheDocument();
     expect(screen.getByText('permission denied')).toBeInTheDocument();
   });
@@ -134,6 +146,7 @@ describe('SingleAgentLiveCard', () => {
         onOpenTranscript={vi.fn()}
       />,
     );
+    expandCard();
     expect(screen.getByLabelText('errored')).toBeInTheDocument();
     expect(screen.getByText('kernel crashed')).toBeInTheDocument();
   });
@@ -150,6 +163,7 @@ describe('SingleAgentLiveCard', () => {
         onOpenTranscript={vi.fn()}
       />,
     );
+    expandCard();
     const names = Array.from(container.querySelectorAll('.font-mono')).map(
       (n) => within(n as HTMLElement).queryByText(/./)?.textContent ?? n.textContent,
     );
