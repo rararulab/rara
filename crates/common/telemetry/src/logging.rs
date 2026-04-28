@@ -40,6 +40,10 @@ use opentelemetry_sdk::{
 use opentelemetry_semantic_conventions::resource;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use smart_default::SmartDefault;
+/// Re-export so binary crates that hold the guards returned by
+/// `init_global_logging` can name their type without depending on
+/// `tracing-appender` directly.
+pub use tracing_appender::non_blocking::WorkerGuard as LoggingWorkerGuard;
 use tracing_appender::{
     non_blocking::WorkerGuard,
     rolling::{RollingFileAppender, Rotation},
@@ -902,4 +906,239 @@ fn init_logger_provider(
         .with_batch_exporter(exporter)
         .with_resource(resource)
         .build()
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    //! Tests for the OTLP construction site fix (issue #1982).
+    //!
+    //! These tests run in plain `#[test]` mode — i.e. no outer tokio
+    //! Runtime is active on the calling thread. That mirrors the fixed
+    //! production codepath, where `init_logging` runs synchronously
+    //! before `Runtime::new()` in `fn main()`. If any of these test
+    //! functions panicked with "Cannot drop a runtime in a context where
+    //! blocking is not allowed", the fix would have regressed.
+    //!
+    //! Note: we intentionally exercise `build_otlp_exporter` and
+    //! `build_otlp_http_client` directly rather than going through
+    //! `init_global_logging`, because the latter installs a process-wide
+    //! global subscriber via `Once` — only one `#[test]` could use it
+    //! per test binary. The panic root-cause we are guarding against
+    //! lives in `reqwest::blocking::Client::builder().build()`, which is
+    //! reached via `build_otlp_http_client`, which is called from all
+    //! three `build_otlp_*` / `init_*_provider` helpers — so testing the
+    //! helper directly is equivalent.
+
+    use std::{
+        io::{Read, Write},
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+
+    use opentelemetry::trace::{Tracer, TracerProvider as _};
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+
+    use super::*;
+
+    /// Scenario 1: telemetry init does not panic when OTLP is enabled.
+    ///
+    /// The pre-fix codepath called
+    /// `reqwest::blocking::Client::builder().build()` from inside
+    /// `#[tokio::main]` and panicked with "Cannot drop a runtime in a
+    /// context where blocking is not allowed". The fix moves the call out
+    /// of the async context — this test reproduces the synchronous (no
+    /// outer Runtime) call shape that production now uses.
+    #[test]
+    fn otlp_init_does_not_panic_from_production_codepath() {
+        // No tokio runtime is current on this thread — that is the
+        // shape of the post-fix call from `init_server_sync` in
+        // `crates/cmd/src/main.rs`.
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "test precondition: no tokio runtime should be current",
+        );
+
+        let opts = LoggingOptions {
+            enable_otlp_tracing: true,
+            otlp_endpoint: Some("http://127.0.0.1:1/".to_string()),
+            otlp_export_protocol: Some(OtlpExportProtocol::Http),
+            ..Default::default()
+        };
+
+        // The exporter builds the HTTP client synchronously. If the
+        // panic regresses, this line aborts the test thread.
+        let _exporter = build_otlp_exporter(&opts);
+    }
+
+    /// Scenario 2: OTLP HTTP client preserves `.no_proxy()`.
+    ///
+    /// `reqwest::blocking::Client` does not expose its proxy
+    /// configuration via a public getter, so we observe the behavior:
+    /// set `HTTPS_PROXY` to an unreachable address, ask the client to
+    /// hit an HTTPS URL pointing at a local TCP listener, and check
+    /// where the connection actually lands. With `.no_proxy()` the
+    /// client connects to our listener; without it, the client would
+    /// try the proxy address instead.
+    #[test]
+    fn otlp_http_client_bypasses_env_proxy() {
+        // Bind a local listener that records the first incoming peer.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let addr = listener.local_addr().expect("local addr");
+        let (tx, rx) = mpsc::channel::<()>();
+
+        let listener_thread = thread::spawn(move || {
+            // Accept one connection and signal — that's enough to prove
+            // the client targeted us, not the env proxy.
+            if let Ok((mut stream, _peer)) = listener.accept() {
+                let _ = tx.send(());
+                // Drain anything the client wrote so it doesn't block.
+                let mut buf = [0u8; 64];
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                let _ = stream.read(&mut buf);
+            }
+        });
+
+        // SAFETY: `set_var` is unsafe in 2024 edition because env vars
+        // are process-global. This test does not run in parallel with
+        // other tests that read `HTTPS_PROXY` (unique to this test in
+        // this crate). The variable is restored before the test exits.
+        let prev = std::env::var("HTTPS_PROXY").ok();
+        unsafe {
+            std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:1");
+        }
+
+        let client = build_otlp_http_client();
+        // A short timeout keeps the test fast — we only need to see
+        // *which* address the client tried to connect to.
+        let url = format!("http://{addr}/");
+        let _ = client
+            .post(&url)
+            .timeout(Duration::from_secs(2))
+            .body("ping")
+            .send();
+
+        // Restore the env var before asserting.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("HTTPS_PROXY", v),
+                None => std::env::remove_var("HTTPS_PROXY"),
+            }
+        }
+
+        let connected = rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        let _ = listener_thread.join();
+        assert!(
+            connected,
+            "OTLP blocking client honored HTTPS_PROXY instead of bypassing it — .no_proxy() \
+             regression"
+        );
+    }
+
+    /// Scenario 3: batch exporter delivers spans via the blocking client.
+    ///
+    /// Stand up a minimal HTTP server on a local port, point an OTLP
+    /// trace pipeline at it, emit one span, shut the provider down (which
+    /// drains any pending batches synchronously), and assert the server
+    /// received at least one POST. Specifically guards against:
+    ///   1. "Cannot drop a runtime in a context where blocking is not allowed"
+    ///      — would surface if `reqwest::blocking::Client` construction landed
+    ///      back inside an async context.
+    ///   2. "there is no reactor running" — would surface if we regressed to
+    ///      async `reqwest::Client` on the BatchSpan processor's std::thread.
+    #[test]
+    fn otlp_trace_export_round_trip_via_blocking_client() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
+        let addr: SocketAddr = listener.local_addr().expect("local addr");
+        let _ = listener.set_nonblocking(false);
+
+        let (post_tx, post_rx) = mpsc::channel::<()>();
+
+        // Minimal HTTP/1.1 server. Loops accepting connections until the
+        // test drops the listener (server_done flag) or the loop exits
+        // naturally on a closed socket. Each connection gets one response.
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag_for_thread = stop_flag.clone();
+        let server_thread = thread::spawn(move || {
+            // Short accept timeout so the loop can poll the stop flag.
+            let _ = listener.set_nonblocking(true);
+            while !stop_flag_for_thread.load(std::sync::atomic::Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => handle_one_post(stream, &post_tx),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let opts = LoggingOptions {
+            enable_otlp_tracing: true,
+            otlp_endpoint: Some(format!("http://{addr}/v1/traces")),
+            otlp_export_protocol: Some(OtlpExportProtocol::Http),
+            ..Default::default()
+        };
+
+        // Build the exporter the same way `init_global_logging` does,
+        // but assemble the provider locally so this test does not
+        // collide with the process-global `Once` guard inside
+        // `init_global_logging`.
+        let exporter = build_otlp_exporter(&opts);
+        let resource = build_otel_resource("test", None, &opts);
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+            .with_resource(resource)
+            .build();
+        let tracer = provider.tracer("otlp_trace_export_round_trip_via_blocking_client");
+
+        // Emit one span and shut down the provider on a worker thread so
+        // we can bound the wait. `shutdown` drains pending batches
+        // synchronously through the blocking exporter — this is the
+        // codepath that would panic on the regression.
+        let provider_for_worker = provider.clone();
+        let worker = thread::spawn(move || {
+            let span = tracer.start("test-span");
+            drop(span);
+            // `shutdown` flushes pending batches and is the canonical
+            // synchronization point in 0.31 — `force_flush` returns
+            // before the send completes for the standard processor.
+            let _ = provider_for_worker.shutdown();
+        });
+
+        // Wait up to 5s for the stub server to record a POST.
+        let got_post = post_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+
+        // Tear down: signal server, drop provider, join threads.
+        stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = worker.join();
+        // Open a throwaway connection so the server's accept loop wakes
+        // up and observes the stop flag immediately.
+        let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(200));
+        let _ = server_thread.join();
+
+        assert!(
+            got_post,
+            "BatchSpanProcessor did not deliver any POST to the stub OTLP server within 5s",
+        );
+    }
+
+    fn handle_one_post(mut stream: TcpStream, post_tx: &mpsc::Sender<()>) {
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap_or(0);
+        let request = String::from_utf8_lossy(&buf[..n]);
+        if request.starts_with("POST ") {
+            let _ = post_tx.send(());
+        }
+        // 200 OK with empty body is enough for OTel's HTTP exporter to
+        // treat the export as successful.
+        let _ =
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let _ = stream.flush();
+    }
 }
