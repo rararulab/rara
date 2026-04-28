@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use rara_kernel::{
-    memory::TapeService,
+    memory::{TapeService, read_turn_id},
     tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
@@ -69,14 +69,11 @@ impl ToolExecute for DebugTraceTool {
         let entries: Vec<_> = entries
             .into_iter()
             .filter(|entry| {
-                entry.metadata.as_ref().is_some_and(|m| {
-                    // Honor the legacy `rara_message_id` key on tape entries
-                    // written before issue #1978 alongside the new key.
-                    m.get("rara_turn_id")
-                        .or_else(|| m.get("rara_message_id"))
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|id| id == params.rara_turn_id)
-                })
+                entry
+                    .metadata
+                    .as_ref()
+                    .and_then(read_turn_id)
+                    .is_some_and(|id| id == params.rara_turn_id)
             })
             .collect();
         let formatted: Vec<Value> = entries.iter().map(|entry| {

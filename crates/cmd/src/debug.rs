@@ -64,8 +64,8 @@ impl DebugCmd {
             println!("🔍 Debug: {}", self.turn_id);
             println!("{}", "─".repeat(60));
             println!(
-                "No execution trace found for this message ID.\nThe trace may have expired (30 \
-                 day retention), the turn may have failed before persistence, or the ID is for a \
+                "No execution trace found for this turn ID.\nThe trace may have expired (30 day \
+                 retention), the turn may have failed before persistence, or the ID is for a \
                  slash command (which does not produce a turn)."
             );
             return Ok(());

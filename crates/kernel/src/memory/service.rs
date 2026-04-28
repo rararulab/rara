@@ -45,7 +45,7 @@ thread_local! {
 ///
 /// Returns `None` when neither key is present or the value is not a
 /// string.
-pub(crate) fn read_turn_id(metadata: &Value) -> Option<&str> {
+pub fn read_turn_id(metadata: &Value) -> Option<&str> {
     metadata
         .get("rara_turn_id")
         .or_else(|| metadata.get("rara_message_id"))

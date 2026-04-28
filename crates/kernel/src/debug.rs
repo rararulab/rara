@@ -26,8 +26,8 @@ use crate::memory::TapEntry;
 #[derive(Debug, Clone)]
 pub struct MessageDebugSummary {
     /// The `rara_turn_id` this summary describes.
-    pub message_id:    String,
-    /// All tape entries that referenced the message ID.
+    pub turn_id:       String,
+    /// All tape entries that referenced the turn ID.
     pub entries:       Vec<TapEntry>,
     /// LLM model name (first non-empty value seen in metadata).
     pub model:         Option<String>,
@@ -70,14 +70,14 @@ pub struct TimelineItem {
 impl MessageDebugSummary {
     /// Aggregate tape entries into a debug summary. Filters entries to
     /// only those whose `metadata.rara_turn_id` matches the target.
-    pub fn from_entries(message_id: &str, entries: Vec<TapEntry>) -> Self {
+    pub fn from_entries(turn_id: &str, entries: Vec<TapEntry>) -> Self {
         let matched: Vec<TapEntry> = entries
             .into_iter()
             .filter(|e| {
                 e.metadata.as_ref().is_some_and(|m| {
                     m.get("rara_turn_id")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|id| id == message_id)
+                        .is_some_and(|id| id == turn_id)
                 })
             })
             .collect();
@@ -176,7 +176,7 @@ impl MessageDebugSummary {
         }
 
         Self {
-            message_id: message_id.to_owned(),
+            turn_id: turn_id.to_owned(),
             entries: matched,
             model,
             input_tokens,
@@ -189,6 +189,6 @@ impl MessageDebugSummary {
         }
     }
 
-    /// Returns true if no tape entries matched the message ID.
+    /// Returns true if no tape entries matched the turn ID.
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }

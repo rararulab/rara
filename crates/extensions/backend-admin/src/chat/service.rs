@@ -718,8 +718,8 @@ impl SessionService {
             return Ok(trace);
         }
 
-        let message_id = format!("{}-{}", key, message_seq);
-        let trace = build_cascade(turn_entries, &message_id);
+        let turn_id = format!("{}-{}", key, message_seq);
+        let trace = build_cascade(turn_entries, &turn_id);
         Ok(trace)
     }
 

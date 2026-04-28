@@ -88,13 +88,12 @@ fn render_html(summary: &MessageDebugSummary) -> String {
     let _ = writeln!(
         output,
         "<b>🔍 Debug: <code>{}</code></b>\n",
-        html_escape(&summary.message_id)
+        html_escape(&summary.turn_id)
     );
 
     if summary.is_empty() {
         output.push_str(
-            "<i>No tape entries found for this message ID. It may have expired or never \
-             existed.</i>",
+            "<i>No tape entries found for this turn ID. It may have expired or never existed.</i>",
         );
         return output;
     }
