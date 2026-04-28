@@ -56,114 +56,127 @@ enum Commands {
 #[command(long_about = "Start the job server with all services.\n\nExamples:\n  job server")]
 struct ServerArgs {}
 
-impl ServerArgs {
-    async fn run() -> Result<(), Whatever> {
-        // Load config first (Consul KV or env vars) so observability
-        // settings are available before initialising the tracing subscriber.
-        let config = AppConfig::new().whatever_context("Failed to load config")?;
+/// Sync prelude for the `server` command.
+///
+/// Why this is a separate function (and not part of an `async fn run`):
+/// `init_global_logging` constructs the OTLP HTTP exporter, which uses
+/// `reqwest::blocking::Client::builder().build()`. That builder spawns
+/// and immediately drops a temporary tokio Runtime on the calling thread.
+/// Dropping a Runtime while another Runtime is current panics in tokio
+/// 1.x ("Cannot drop a runtime in a context where blocking is not
+/// allowed"). So all logging / OTLP / Pyroscope construction must happen
+/// **before** the outer tokio Runtime exists.
+///
+/// Returns the loaded config plus the guards that must outlive the
+/// process (file appender flush guards + Pyroscope shutdown guard).
+type ServerInitGuards = (
+    AppConfig,
+    Vec<common_telemetry::logging::LoggingWorkerGuard>,
+    Option<common_telemetry::profiling::ProfilingGuard>,
+);
 
-        let logs_dir = rara_paths::logs_dir();
-        std::fs::create_dir_all(logs_dir).expect("failed to create logs directory");
-        let logs_dir_str = logs_dir.to_string_lossy().into_owned();
+fn init_server_sync() -> Result<ServerInitGuards, Whatever> {
+    let config = AppConfig::new().whatever_context("Failed to load config")?;
 
-        // Pinned OpenTelemetry semantic-convention schema URL for the OTLP
-        // traces exporter. Pinning the version lets backends (Langfuse,
-        // Tempo, etc.) interpret span attributes against a known semconv
-        // release rather than a moving target.
-        const OTEL_SCHEMA_URL: &str = "https://opentelemetry.io/schemas/1.40.0";
+    let logs_dir = rara_paths::logs_dir();
+    std::fs::create_dir_all(logs_dir).expect("failed to create logs directory");
+    let logs_dir_str = logs_dir.to_string_lossy().into_owned();
 
-        let langfuse_otlp = config
-            .telemetry
-            .otlp
-            .as_ref()
-            .filter(|o| o.enabled.unwrap_or(false));
+    // Pinned OpenTelemetry semantic-convention schema URL for the OTLP
+    // traces exporter. Pinning the version lets backends (Langfuse,
+    // Tempo, etc.) interpret span attributes against a known semconv
+    // release rather than a moving target.
+    const OTEL_SCHEMA_URL: &str = "https://opentelemetry.io/schemas/1.40.0";
 
-        let mut logging_opts = if let Some(otlp) = langfuse_otlp {
-            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-            let Some(endpoint) = otlp.traces_endpoint.clone() else {
-                whatever!("telemetry.otlp.enabled = true requires telemetry.otlp.traces_endpoint");
-            };
-            LoggingOptions {
-                dir: logs_dir_str,
-                enable_otlp_tracing: true,
-                otlp_endpoint: Some(endpoint),
-                otlp_export_protocol: Some(OtlpExportProtocol::Http),
-                otlp_headers: otlp.headers.clone(),
-                otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
-                otlp_deployment_environment: otlp.deployment_environment.clone(),
-                ..Default::default()
-            }
-        } else if let Some(ref endpoint) = config
-            .telemetry
-            .otlp_endpoint
-            .as_deref()
-            .filter(|s| !s.is_empty())
-        {
-            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-            let protocol = config.telemetry.otlp_protocol.as_deref().map(|p| match p {
-                "grpc" => OtlpExportProtocol::Grpc,
-                _ => OtlpExportProtocol::Http,
-            });
-            LoggingOptions {
-                dir: logs_dir_str,
-                enable_otlp_tracing: true,
-                otlp_endpoint: Some(endpoint.to_string()),
-                otlp_export_protocol: protocol,
-                otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
-                ..Default::default()
-            }
-        } else if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
-            // Running in Kubernetes — auto-connect to Alloy OTLP collector.
-            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-            tracing::info!("Kubernetes detected — auto-enabling OTLP tracing to Alloy");
-            LoggingOptions {
-                dir: logs_dir_str,
-                enable_otlp_tracing: true,
-                otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
-                otlp_export_protocol: Some(OtlpExportProtocol::Http),
-                otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
-                log_format: common_telemetry::logging::LogFormat::Json,
-                ..Default::default()
-            }
-        } else {
-            common_telemetry::logging::LoggingOptions {
-                dir: logs_dir_str,
-                ..Default::default()
-            }
+    let langfuse_otlp = config
+        .telemetry
+        .otlp
+        .as_ref()
+        .filter(|o| o.enabled.unwrap_or(false));
+
+    let mut logging_opts = if let Some(otlp) = langfuse_otlp {
+        use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+        let Some(endpoint) = otlp.traces_endpoint.clone() else {
+            whatever!("telemetry.otlp.enabled = true requires telemetry.otlp.traces_endpoint");
         };
-
-        // Overlay OTLP logs config — independent of trace export so users
-        // can ship logs to Loki without also wiring traces. Reads from the
-        // same `telemetry.otlp` section because logs and traces share the
-        // deployment-environment label and the OTLP family.
-        if let Some(otlp) = config.telemetry.otlp.as_ref()
-            && otlp.logs_enabled.unwrap_or(false)
-        {
-            let Some(logs_endpoint) = otlp.logs_endpoint.clone() else {
-                whatever!(
-                    "telemetry.otlp.logs_enabled = true requires telemetry.otlp.logs_endpoint"
-                );
-            };
-            logging_opts.enable_otlp_logs = true;
-            logging_opts.otlp_logs_endpoint = Some(logs_endpoint);
-            logging_opts.otlp_logs_headers = otlp.logs_headers.clone();
+        LoggingOptions {
+            dir: logs_dir_str,
+            enable_otlp_tracing: true,
+            otlp_endpoint: Some(endpoint),
+            otlp_export_protocol: Some(OtlpExportProtocol::Http),
+            otlp_headers: otlp.headers.clone(),
+            otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
+            otlp_deployment_environment: otlp.deployment_environment.clone(),
+            ..Default::default()
         }
+    } else if let Some(ref endpoint) = config
+        .telemetry
+        .otlp_endpoint
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+        let protocol = config.telemetry.otlp_protocol.as_deref().map(|p| match p {
+            "grpc" => OtlpExportProtocol::Grpc,
+            _ => OtlpExportProtocol::Http,
+        });
+        LoggingOptions {
+            dir: logs_dir_str,
+            enable_otlp_tracing: true,
+            otlp_endpoint: Some(endpoint.to_string()),
+            otlp_export_protocol: protocol,
+            otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
+            ..Default::default()
+        }
+    } else if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+        // Running in Kubernetes — auto-connect to Alloy OTLP collector.
+        use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+        tracing::info!("Kubernetes detected — auto-enabling OTLP tracing to Alloy");
+        LoggingOptions {
+            dir: logs_dir_str,
+            enable_otlp_tracing: true,
+            otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
+            otlp_export_protocol: Some(OtlpExportProtocol::Http),
+            otlp_schema_url: Some(OTEL_SCHEMA_URL.to_string()),
+            log_format: common_telemetry::logging::LogFormat::Json,
+            ..Default::default()
+        }
+    } else {
+        common_telemetry::logging::LoggingOptions {
+            dir: logs_dir_str,
+            ..Default::default()
+        }
+    };
 
-        let _guards = common_telemetry::logging::init_global_logging(
-            "rara",
-            &logging_opts,
-            &common_telemetry::logging::TracingOptions::default(),
-            None,
-        );
-
-        // Continuous profiling (Pyroscope). Held for the lifetime of the
-        // server process — its `Drop` performs graceful shutdown so the
-        // last batch flushes when the process receives SIGTERM/SIGINT and
-        // `run_app` returns cleanly via its existing signal handler.
-        let _profiling_guard = init_profiling(&config)?;
-
-        run_app(config).await
+    // Overlay OTLP logs config — independent of trace export so users
+    // can ship logs to Loki without also wiring traces. Reads from the
+    // same `telemetry.otlp` section because logs and traces share the
+    // deployment-environment label and the OTLP family.
+    if let Some(otlp) = config.telemetry.otlp.as_ref()
+        && otlp.logs_enabled.unwrap_or(false)
+    {
+        let Some(logs_endpoint) = otlp.logs_endpoint.clone() else {
+            whatever!("telemetry.otlp.logs_enabled = true requires telemetry.otlp.logs_endpoint");
+        };
+        logging_opts.enable_otlp_logs = true;
+        logging_opts.otlp_logs_endpoint = Some(logs_endpoint);
+        logging_opts.otlp_logs_headers = otlp.logs_headers.clone();
     }
+
+    let guards = common_telemetry::logging::init_global_logging(
+        "rara",
+        &logging_opts,
+        &common_telemetry::logging::TracingOptions::default(),
+        None,
+    );
+
+    // Continuous profiling (Pyroscope). Held for the lifetime of the
+    // server process — its `Drop` performs graceful shutdown so the
+    // last batch flushes when the process receives SIGTERM/SIGINT and
+    // `run_app` returns cleanly via its existing signal handler.
+    let profiling_guard = init_profiling(&config)?;
+
+    Ok((config, guards, profiling_guard))
 }
 
 /// Wire the Pyroscope profiling agent if enabled in YAML config.
@@ -391,21 +404,49 @@ impl GatewayArgs {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Whatever> {
+/// Manually construct the multi-threaded tokio runtime instead of using
+/// `#[tokio::main]`.
+///
+/// Why: the `server` command's logging init builds an OTLP HTTP exporter
+/// via `reqwest::blocking::Client::builder().build()`, which internally
+/// constructs and immediately drops a temporary tokio Runtime on the
+/// calling thread. Dropping a Runtime while another Runtime is current
+/// panics in tokio 1.x ("Cannot drop a runtime in a context where
+/// blocking is not allowed"). So we must perform sync logging /
+/// telemetry construction **before** entering the outer runtime, then
+/// `block_on` the async work afterwards.
+fn main() -> Result<(), Whatever> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls crypto provider");
 
     let cli = Cli::parse();
+
+    // Perform any sync, pre-runtime initialization for the chosen
+    // subcommand, then build the runtime and dispatch the async body.
     match cli.commands {
-        Commands::Server(_) => ServerArgs::run().await,
-        Commands::Chat(args) => args.run().await,
-        Commands::Top(args) => args.run().await,
-        Commands::Gateway(_) => GatewayArgs::run().await,
-        Commands::Login(cmd) => cmd.run().await,
-        Commands::Setup(cmd) => cmd.run().await,
-        Commands::Wechat(cmd) => cmd.run().await,
-        Commands::Debug(cmd) => cmd.run().await,
+        Commands::Server(_) => {
+            // Sync logging + Pyroscope init MUST run before the runtime
+            // exists — see module-level comment above.
+            let (config, _guards, _profiling_guard) = init_server_sync()?;
+            build_runtime()?.block_on(run_app(config))
+        }
+        Commands::Chat(args) => build_runtime()?.block_on(args.run()),
+        Commands::Top(args) => build_runtime()?.block_on(args.run()),
+        Commands::Gateway(_) => build_runtime()?.block_on(GatewayArgs::run()),
+        Commands::Login(cmd) => build_runtime()?.block_on(cmd.run()),
+        Commands::Setup(cmd) => build_runtime()?.block_on(cmd.run()),
+        Commands::Wechat(cmd) => build_runtime()?.block_on(cmd.run()),
+        Commands::Debug(cmd) => build_runtime()?.block_on(cmd.run()),
     }
+}
+
+/// Build the multi-thread tokio runtime that `#[tokio::main]` would have
+/// produced. Kept identical to the implicit defaults so behavior outside
+/// of "what runs first" is unchanged.
+fn build_runtime() -> Result<tokio::runtime::Runtime, Whatever> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .whatever_context("failed to build tokio runtime")
 }
