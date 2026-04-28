@@ -32,6 +32,7 @@ use futures::{SinkExt, StreamExt};
 use rara_channels::{
     web::{WebAdapter, WebEvent},
     web_reply_buffer::ReplyBuffer,
+    web_session::set_session_ws_keepalive_interval_for_tests,
 };
 use rara_kernel::{
     channel::{adapter::ChannelAdapter, types::ChannelType},
@@ -62,6 +63,7 @@ fn init_test_env() {
         rara_paths::set_custom_data_dir(&data);
         rara_paths::set_custom_config_dir(&config);
     });
+    init_test_keepalive();
 }
 
 fn web_endpoint(session_key: &SessionKey) -> Endpoint {
@@ -94,6 +96,18 @@ where
     }
 }
 
+/// Shrink the server-side keepalive ping interval to a sub-second value
+/// for the entire test binary so the BDD scenarios bound to the
+/// keepalive feature finish in well under a second. All other tests
+/// already tolerate (or ignore) `Ping` frames, so a global override is
+/// safe.
+fn init_test_keepalive() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        set_session_ws_keepalive_interval_for_tests(Some(Duration::from_millis(200)));
+    });
+}
+
 /// Boot the adapter under an axum loopback server, returning the bound
 /// address, the adapter, and the server task handle.
 async fn boot_adapter(
@@ -103,6 +117,7 @@ async fn boot_adapter(
     Arc<WebAdapter>,
     tokio::task::JoinHandle<()>,
 ) {
+    init_test_keepalive();
     let adapter = Arc::new(
         WebAdapter::new(OWNER_TOKEN.to_owned(), OWNER_USER_ID.to_owned())
             .with_reply_buffer(Arc::clone(&buffer)),
@@ -381,12 +396,19 @@ async fn session_ws_abort_dispatches_interrupt_signal() {
     // With a started adapter, send_signal succeeds (the queued event is
     // a fire-and-forget signal — handle.rs::send_signal). The wire
     // contract: the WS must NOT push any error frame back to the client.
-    // A short timeout proves no frame arrives.
-    let timed = tokio::time::timeout(Duration::from_millis(300), ws.next()).await;
-    assert!(
-        timed.is_err(),
-        "abort against a started adapter must not surface an Error frame; got: {timed:?}"
-    );
+    // Drain transport-level keepalive pings (#1967) and assert no
+    // application frame surfaces within the window.
+    let deadline = std::time::Instant::now() + Duration::from_millis(300);
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
+            Ok(other) => {
+                panic!("abort against a started adapter must not surface a frame; got: {other:?}")
+            }
+            Err(_) => break,
+        }
+    }
 
     ws.send(Message::Close(None)).await.ok();
     drop(ws);
@@ -516,14 +538,168 @@ async fn session_ws_forwards_tape_appended_from_notification_bus() {
             timestamp:   jiff::Timestamp::now(),
         })
         .await;
-    let timed = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
-    assert!(
-        timed.is_err(),
-        "cross-session TapeAppended must be filtered, got: {timed:?}"
-    );
+    // Drain transport-level keepalive pings (#1967) so we only assert
+    // on application frames; no JSON frame must arrive in the window.
+    let deadline = std::time::Instant::now() + Duration::from_millis(200);
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
+            Ok(other) => panic!("cross-session TapeAppended must be filtered, got: {other:?}"),
+            Err(_) => break,
+        }
+    }
 
     ws.send(Message::Close(None)).await.ok();
     drop(ws);
     server.abort();
     tk.shutdown();
+}
+
+/// Server-side keepalive: an idle persistent session WS must receive
+/// periodic `Ping` frames from the server. Bound to scenario
+/// `Server emits periodic Ping frames on an idle persistent session WS`
+/// in `specs/issue-1967-session-ws-keepalive.spec.md`.
+///
+/// The test interval is set to 200 ms via the `#[cfg(test)]` const in
+/// `web_session.rs`; idling for ~700 ms gives at least three ticks and
+/// therefore at least two observed pings (with margin for scheduling).
+/// `tokio_tungstenite` exposes `Ping` frames raw on the client side, so
+/// counting them does not require any server hook.
+#[tokio::test]
+async fn session_ws_emits_periodic_ping_when_idle() {
+    let buffer = ReplyBuffer::new();
+    let (addr, _adapter, server) = boot_adapter(Arc::clone(&buffer)).await;
+
+    let session_key = SessionKey::new();
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
+            .await
+            .expect("ws connect");
+
+    // Drain the initial `hello` so what we observe afterwards is
+    // strictly the keepalive cadence, not connect-time traffic.
+    let _ = next_event(&mut ws).await;
+
+    // Idle for >3 keepalive intervals (200 ms) and count pings observed.
+    let deadline = std::time::Instant::now() + Duration::from_millis(700);
+    let mut pings = 0u32;
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_)))) => pings += 1,
+            Ok(Some(Ok(Message::Pong(_)))) => {}
+            Ok(Some(Ok(Message::Close(_)))) => panic!("server closed during idle keepalive"),
+            Ok(Some(Ok(other))) => panic!("unexpected non-ping frame during idle: {other:?}"),
+            Ok(Some(Err(e))) => panic!("ws error during idle: {e:?}"),
+            Ok(None) => panic!("ws stream ended during idle"),
+            Err(_) => break,
+        }
+    }
+    assert!(
+        pings >= 2,
+        "expected >=2 server-emitted pings within ~700ms idle window, got {pings}"
+    );
+
+    // Connection still alive: a follow-up close + drop must succeed.
+    ws.send(Message::Close(None))
+        .await
+        .expect("close after idle keepalive");
+    drop(ws);
+    server.abort();
+}
+
+/// Keepalive must not interfere with normal event delivery. Bound to
+/// scenario `Periodic ping does not interfere with normal event delivery`
+/// in `specs/issue-1967-session-ws-keepalive.spec.md`.
+///
+/// Publish an adapter event after one or two keepalive ticks have already
+/// fired, then assert (a) the event lands as the next `Text` frame and
+/// (b) at least one keepalive ping is observed in the idle window
+/// surrounding the event.
+#[tokio::test]
+async fn session_ws_ping_does_not_disturb_events() {
+    let buffer = ReplyBuffer::new();
+    let (addr, adapter, server) = boot_adapter(Arc::clone(&buffer)).await;
+
+    let session_key = SessionKey::new();
+    let endpoint = web_endpoint(&session_key);
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
+            .await
+            .expect("ws connect");
+    let _ = next_event(&mut ws).await; // hello
+
+    // Sleep through ~2 ping ticks (200ms each) so a ping has definitely
+    // fired before the event is published.
+    tokio::time::sleep(Duration::from_millis(450)).await;
+
+    adapter
+        .send(
+            &endpoint,
+            PlatformOutbound::Reply {
+                content:       "during-keepalive".to_owned(),
+                attachments:   Vec::new(),
+                reply_context: None,
+            },
+        )
+        .await
+        .expect("egress send during keepalive");
+
+    // Drain frames until we observe the JSON event; record any pings
+    // along the way.
+    let mut pings_before = 0u32;
+    let mut got_event = false;
+    let event_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < event_deadline && !got_event {
+        let remaining = event_deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_)))) => pings_before += 1,
+            Ok(Some(Ok(Message::Text(t)))) => {
+                let ev: WebEvent = serde_json::from_str(t.as_str()).expect("WebEvent JSON");
+                match ev {
+                    WebEvent::Message { content } => {
+                        assert_eq!(content, "during-keepalive");
+                        got_event = true;
+                    }
+                    other => panic!("unexpected event during keepalive: {other:?}"),
+                }
+            }
+            Ok(Some(Ok(Message::Pong(_)))) => {}
+            Ok(Some(Ok(Message::Close(_)))) => panic!("server closed unexpectedly"),
+            Ok(Some(Ok(other))) => panic!("unexpected frame: {other:?}"),
+            Ok(Some(Err(e))) => panic!("ws error: {e:?}"),
+            Ok(None) => panic!("stream ended unexpectedly"),
+            Err(elapsed) => panic!("timed out waiting for event during keepalive: {elapsed}"),
+        }
+    }
+    assert!(got_event, "did not observe the published event");
+
+    // Continue draining for one more interval window to confirm pings
+    // keep arriving on schedule after the event lands.
+    let post_deadline = std::time::Instant::now() + Duration::from_millis(450);
+    let mut pings_after = 0u32;
+    while std::time::Instant::now() < post_deadline {
+        let remaining = post_deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_)))) => pings_after += 1,
+            Ok(Some(Ok(Message::Pong(_)))) => {}
+            Ok(Some(Ok(Message::Text(_)))) => {}
+            Ok(Some(Ok(Message::Close(_)))) => panic!("server closed after event"),
+            Ok(Some(Ok(other))) => panic!("unexpected frame after event: {other:?}"),
+            Ok(Some(Err(e))) => panic!("ws error after event: {e:?}"),
+            Ok(None) => panic!("stream ended after event"),
+            Err(_) => break,
+        }
+    }
+    assert!(
+        pings_before + pings_after >= 1,
+        "expected at least one keepalive ping around the event delivery, got {pings_before} \
+         before + {pings_after} after"
+    );
+
+    ws.send(Message::Close(None)).await.ok();
+    drop(ws);
+    server.abort();
 }
