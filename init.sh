@@ -101,6 +101,24 @@ if gh auth status >/dev/null 2>&1; then
     else
         warn "could not query open issues via gh"
     fi
+
+    # Surface red lane-3 e2e on main so a session does not start by
+    # claiming the real-LLM contract works while it has been silently red.
+    # Warn-only: e2e.yml may legitimately be down (real LLM tokens, cost
+    # holds), and other tasks should not be blocked by that.
+    if e2e_status=$(timeout 5 gh run list \
+        --workflow=e2e.yml --branch main --limit 1 \
+        --json conclusion,url --jq '.[0]' 2>/dev/null); then
+        e2e_conclusion=$(printf '%s' "$e2e_status" | jq -r '.conclusion // ""' 2>/dev/null)
+        e2e_url=$(printf '%s' "$e2e_status" | jq -r '.url // ""' 2>/dev/null)
+        case "$e2e_conclusion" in
+            success)            ok   "e2e.yml green on main" ;;
+            failure|cancelled|timed_out)
+                                warn "e2e.yml on main is ${e2e_conclusion} — see ${e2e_url}" ;;
+            "")                 : ;;  # no runs yet / parse miss — silent
+            *)                  ok   "e2e.yml on main: ${e2e_conclusion}" ;;
+        esac
+    fi
 else
     warn "gh auth status failed — run 'gh auth login' to enable 'just agenda'"
 fi

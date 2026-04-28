@@ -426,6 +426,45 @@ pub struct StartOptions {
     pub cli_adapter: Option<Arc<rara_channels::terminal::TerminalAdapter>>,
 }
 
+/// Resolve the active `config.yaml` path using the same precedence as
+/// [`AppConfig::new`]: prefer `$CWD/config.yaml` when it exists, else fall
+/// back to [`rara_paths::config_file()`].
+///
+/// Both `AppConfig::new` (load step) and `start_with_options`
+/// (`ConfigFileSync` watch target) call this so the two stay in lock-step.
+/// Earlier, `start_with_options` hard-coded `$CWD/config.yaml` and
+/// panicked at startup whenever the only config lived at the XDG path —
+/// the exact arrangement `e2e.yml` set up via `XDG_CONFIG_HOME` after
+/// PR #1948. Re-lands the inline fix originally authored on the
+/// abandoned `issue-1850-live-e2e-in-ci` branch (commit `4f1e7f8b`) as a
+/// shared helper so the two call sites cannot drift again.
+fn resolve_config_path() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    resolve_config_path_from(&cwd, rara_paths::config_file())
+}
+
+/// Pure variant of [`resolve_config_path`] that takes the CWD and XDG
+/// path explicitly, so unit tests can drive both without touching process
+/// state.
+fn resolve_config_path_from(cwd: &Path, xdg: &Path) -> PathBuf {
+    let local = cwd.join("config.yaml");
+    if local.is_file() {
+        local
+    } else {
+        xdg.to_path_buf()
+    }
+}
+
+/// Format the wrap-error message for a `ConfigFileSync::new` failure.
+/// Includes the resolved path so an operator reading logs can identify
+/// which file is missing without re-deriving the precedence rules.
+fn config_file_sync_failure_message(path: &Path) -> String {
+    format!(
+        "Failed to initialize config file sync (resolved path: {})",
+        path.display()
+    )
+}
+
 impl AppConfig {
     /// Load config from YAML files.
     ///
@@ -563,16 +602,22 @@ pub async fn start_with_options(
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
 
-    // Resolve config file path (same logic as AppConfig::new)
-    let config_path = {
-        let mut path = std::env::current_dir().unwrap_or_default();
-        path.push("config.yaml");
-        path
-    };
-    let config_file_sync =
-        config_sync::ConfigFileSync::new(settings_provider.clone(), config.clone(), config_path)
-            .await
-            .whatever_context("Failed to initialize config file sync")?;
+    // Resolve via the shared helper so this matches AppConfig::new's
+    // precedence (local CWD override beats the XDG global file). Hard-coding
+    // `$CWD/config.yaml` here was the bug behind issue #1981 / #1850 — when
+    // CI ran in a directory without a local config, ConfigFileSync would
+    // panic on a missing file even though AppConfig::new had succeeded
+    // against the XDG path.
+    let config_path = resolve_config_path();
+    let config_file_sync = config_sync::ConfigFileSync::new(
+        settings_provider.clone(),
+        config.clone(),
+        config_path.clone(),
+    )
+    .await
+    .with_whatever_context::<_, _, snafu::Whatever>(|_| {
+        config_file_sync_failure_message(&config_path)
+    })?;
 
     // -- browser subsystem (optional) -------------------------------------
     // Start Lightpanda if a `browser:` section exists in config. Failure to
@@ -1579,6 +1624,49 @@ telemetry:\n  \
         let cfg: AppConfig = serde_yaml::from_str(&yaml).expect("yaml");
         let pyro = cfg.telemetry.pyroscope.expect("section present");
         assert!(!pyro.enabled);
+    }
+
+    #[test]
+    fn resolve_config_path_prefers_local() {
+        let cwd_dir = tempfile::tempdir().expect("cwd tempdir");
+        let xdg_dir = tempfile::tempdir().expect("xdg tempdir");
+        let local = cwd_dir.path().join("config.yaml");
+        let xdg = xdg_dir.path().join("config.yaml");
+        fs::write(&local, "stub: true\n").expect("write local");
+        fs::write(&xdg, "stub: true\n").expect("write xdg");
+
+        let resolved = super::resolve_config_path_from(cwd_dir.path(), &xdg);
+        assert_eq!(resolved, local);
+    }
+
+    #[test]
+    fn config_file_sync_failure_message_names_resolved_path() {
+        // When ConfigFileSync::new fails, start_with_options wraps the
+        // error with this message so operators reading the panic / log
+        // can identify which file is actually missing rather than guessing
+        // between $CWD/config.yaml and the XDG path.
+        let path = std::path::PathBuf::from("/tmp/nope/config.yaml");
+        let msg = super::config_file_sync_failure_message(&path);
+        assert!(
+            msg.contains("/tmp/nope/config.yaml"),
+            "message must name the resolved path, got: {msg}"
+        );
+        assert!(
+            msg.contains("config file sync"),
+            "message must identify the failing subsystem, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_config_path_falls_back_to_xdg() {
+        let cwd_dir = tempfile::tempdir().expect("cwd tempdir");
+        let xdg_dir = tempfile::tempdir().expect("xdg tempdir");
+        let xdg = xdg_dir.path().join("config.yaml");
+        fs::write(&xdg, "stub: true\n").expect("write xdg");
+        // Note: no local config.yaml under cwd_dir.
+
+        let resolved = super::resolve_config_path_from(cwd_dir.path(), &xdg);
+        assert_eq!(resolved, xdg);
     }
 
     #[test]
