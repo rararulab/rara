@@ -91,7 +91,25 @@ Verifications performed: ...
 
 These are the lessons from prior incidents. Run them on every diff.
 
-### 1. Critical spec review (lane 1 only)
+### 1. Branch base sanity check (do this FIRST, before any other check)
+
+Before reading any diff, confirm the worktree is rebased on the actual
+remote tip. A stale local `main` will produce a phantom diff that
+includes commits already on `origin/main` but not on local `main`,
+making everything look like a massive scope creep.
+
+```bash
+git -C <worktree> fetch origin main
+git -C <worktree> merge-base HEAD origin/main
+git rev-parse origin/main
+```
+
+If `merge-base` does not equal `origin/main`, the worktree is out of date.
+Hand back to the implementer with a single instruction:
+`git -C <worktree> rebase origin/main`. Do NOT proceed with code review
+on a phantom diff — the findings will be noise.
+
+### 2. Critical spec review (lane 1 only)
 
 The implementer treated the spec as ground truth. You do not. You ask:
 
@@ -118,24 +136,6 @@ The implementer treated the spec as ground truth. You do not. You ask:
 If the spec itself is wrong, the verdict is REQUEST_CHANGES with the
 spec issues called out — the implementer must NOT silently fix the spec;
 escalate to spec-author via parent.
-
-### 2. Branch base sanity check (do this FIRST)
-
-Before reading any diff, confirm the worktree is rebased on the actual
-remote tip. A stale local `main` will produce a phantom diff that
-includes commits already on `origin/main` but not on local `main`,
-making everything look like a massive scope creep.
-
-```bash
-git -C <worktree> fetch origin main
-git -C <worktree> merge-base HEAD origin/main
-git rev-parse origin/main
-```
-
-If `merge-base` does not equal `origin/main`, the worktree is out of date.
-Hand back to the implementer with a single instruction:
-`git -C <worktree> rebase origin/main`. Do NOT proceed with code review
-on a phantom diff — the findings will be noise.
 
 ### 3. Generalized cross-file regression-decision check
 
