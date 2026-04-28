@@ -27,6 +27,20 @@ env:
     @echo "  RUST_TOOLCHAIN: {{RUST_TOOLCHAIN}}"
 
 # ========================================================================================
+# Session Lifecycle — see init.sh
+# ========================================================================================
+
+[doc("session-start health check (toolchain, cargo check, schema, backend, gh)")]
+[group("🩺 Lifecycle")]
+doctor:
+    @./init.sh
+
+[doc("list open agent:claude issues from GitHub")]
+[group("🩺 Lifecycle")]
+agenda:
+    @gh issue list --label agent:claude --state open --limit 30
+
+# ========================================================================================
 # Code Quality
 # ========================================================================================
 
