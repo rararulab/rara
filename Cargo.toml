@@ -189,7 +189,7 @@ opendal = { version = "0.52", features = ["services-fs", "services-memory"] }
 parking_lot = "0.12"
 prost = "^0.14"
 protobuf = "^3.7"
-pyroscope = "0.5"
+pyroscope = "2.0"
 pyroscope_pprofrs = "0.2"
 rand = "0.10"
 rapidfuzz = "0.5"
