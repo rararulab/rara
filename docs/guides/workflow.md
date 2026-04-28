@@ -67,6 +67,22 @@ hands the user's request (verbatim) to spec-author. Spec-author:
 
 See `.claude/agents/spec-author.md` for the full contract.
 
+## Auto-chaining
+
+Once the user has acknowledged the proposed plan, the parent agent chains
+through the workflow steps mechanically: spec-author → worktree + implementer
+→ reviewer → push → PR → merge. Do NOT insert a confirmation round-trip
+between steps. In particular, after spec-author returns an issue number,
+the parent dispatches the implementer **directly** — do not ask the user
+"要不要派 implementer 把它做掉？" / "should I dispatch implementer?". The
+plan was already approved; re-asking is sycophancy, not safety.
+
+Confirmation IS still required for: (a) merging to `main` (the final
+gate), (b) destructive git operations (`reset --hard`, force-push,
+`branch -D` on shared branches), (c) `pkill` / restart on the remote
+backend. Everything between issue-filed and PR-green-and-reviewed runs
+without re-asking.
+
 ## Step 1: Worktree
 
 ```bash

@@ -45,6 +45,7 @@ These artifacts are authoritative — your work is accountable to them, not just
 ## Development Workflow
 
 All changes — no matter how small — follow the issue → worktree → PR → merge flow. No exceptions.
+Once the plan is acknowledged, chain steps without re-asking — see the "Auto-chaining" section in `docs/guides/workflow.md`.
 
 @docs/guides/workflow.md
 @docs/guides/commit-style.md
