@@ -26,7 +26,7 @@ use std::{
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::{identity::Principal, session::SessionKey};
@@ -568,11 +568,21 @@ impl JobWheel {
         let (fired, cron_expired) = self.mark_fired(&expired_ids, now);
         self.reschedule_recurring(&fired, now);
 
-        info!(
-            fired_count = fired.len(),
-            cron_expired_count = cron_expired.len(),
-            "scheduler drain completed"
-        );
+        // INFO only when the drain produced something — empty drains are
+        // per-tick heartbeat noise and go to DEBUG. See spec issue-1976.
+        if fired.is_empty() && cron_expired.is_empty() {
+            debug!(
+                fired_count = 0,
+                cron_expired_count = 0,
+                "scheduler drain completed"
+            );
+        } else {
+            info!(
+                fired_count = fired.len(),
+                cron_expired_count = cron_expired.len(),
+                "scheduler drain completed"
+            );
+        }
 
         DrainResult {
             fired,
@@ -1626,5 +1636,105 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let store = JobResultStore::new(tmp.path().to_path_buf());
         assert!(store.read_latest(&JobId::new()).await.is_none());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Log-level tests for issue-1976 (scheduler drain noise demotion)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod schedule_log_levels {
+    //! Spec: `specs/issue-1976-loki-log-noise.spec.md`.
+    //!
+    //! Verifies that empty drains (the per-tick heartbeat case) drop to
+    //! DEBUG and only non-empty drains emit INFO.
+
+    use std::sync::{Arc, Mutex};
+
+    use jiff::Timestamp;
+    use tracing::{Level, Subscriber, subscriber::with_default};
+    use tracing_subscriber::{Layer, layer::SubscriberExt, registry::Registry};
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct LineCapture {
+        lines: Arc<Mutex<Vec<(Level, String)>>>,
+    }
+
+    impl LineCapture {
+        fn snapshot(&self) -> Vec<(Level, String)> { self.lines.lock().unwrap().clone() }
+    }
+
+    impl<S: Subscriber> Layer<S> for LineCapture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Visitor(String);
+            impl tracing::field::Visit for Visitor {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 = format!("{value:?}");
+                    }
+                }
+            }
+            let mut v = Visitor(String::new());
+            event.record(&mut v);
+            let msg = v.0.trim_matches('"').to_string();
+            self.lines
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), msg));
+        }
+    }
+
+    fn capture_with<F: FnOnce()>(f: F) -> Vec<(Level, String)> {
+        let cap = LineCapture::default();
+        let subscriber = Registry::default().with(cap.clone());
+        with_default(subscriber, f);
+        cap.snapshot()
+    }
+
+    #[test]
+    fn empty_drain_emits_debug_no_info() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut wheel = JobWheel::load(tmp.path().join("jobs.json"));
+
+        let now = Timestamp::now();
+        let lines = capture_with(|| {
+            for _ in 0..5 {
+                let _ = wheel.drain_expired(now);
+            }
+        });
+
+        let drain_lines: Vec<_> = lines
+            .iter()
+            .filter(|(_, m)| m == "scheduler drain completed")
+            .collect();
+
+        let info_count = drain_lines
+            .iter()
+            .filter(|(lvl, _)| *lvl == Level::INFO)
+            .count();
+        let debug_count = drain_lines
+            .iter()
+            .filter(|(lvl, _)| *lvl == Level::DEBUG)
+            .count();
+
+        assert_eq!(
+            info_count, 0,
+            "empty drain must emit zero INFO lines, got {info_count}"
+        );
+        assert_eq!(
+            debug_count, 5,
+            "five empty drains must emit five DEBUG lines, got {debug_count}"
+        );
     }
 }

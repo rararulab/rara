@@ -33,7 +33,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use super::{
     DataFeed, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, StatusReporterRef,
@@ -139,31 +139,40 @@ impl PollingSource {
     }
 
     /// Record a fetch error: persist [`FeedStatus::Error`] only on the
-    /// first failure in a streak (transitions), and log on every one.
+    /// first failure in a streak (transitions), and emit WARN only on the
+    /// streak-entering transition; subsequent failures in the same streak
+    /// drop to DEBUG so a single misconfigured source cannot dominate the
+    /// log feed. See spec issue-1976.
     fn record_error(&self, message: String) {
-        warn!(error = %message, "poll fetch failed");
-        if !self.in_error.swap(true, Ordering::SeqCst)
-            && let Some(reporter) = self.reporter.clone()
-        {
-            let name = self.name.clone();
-            tokio::spawn(async move {
-                reporter
-                    .report(&name, FeedStatus::Error, Some(message))
-                    .await;
-            });
+        let was_in_error = self.in_error.swap(true, Ordering::SeqCst);
+        if was_in_error {
+            debug!(feed = %self.name, error = %message, "poll fetch failed");
+        } else {
+            warn!(feed = %self.name, error = %message, "poll fetch failed");
+            if let Some(reporter) = self.reporter.clone() {
+                let name = self.name.clone();
+                tokio::spawn(async move {
+                    reporter
+                        .report(&name, FeedStatus::Error, Some(message))
+                        .await;
+                });
+            }
         }
     }
 
     /// Record a successful poll. If the previous state was error, push
-    /// [`FeedStatus::Running`] with cleared `last_error`.
+    /// [`FeedStatus::Running`] with cleared `last_error` and emit a
+    /// recovery INFO so the failure→success transition is visible in
+    /// the log feed.
     fn record_success(&self) {
-        if self.in_error.swap(false, Ordering::SeqCst)
-            && let Some(reporter) = self.reporter.clone()
-        {
-            let name = self.name.clone();
-            tokio::spawn(async move {
-                reporter.report(&name, FeedStatus::Running, None).await;
-            });
+        if self.in_error.swap(false, Ordering::SeqCst) {
+            info!(feed = %self.name, "data feed recovered");
+            if let Some(reporter) = self.reporter.clone() {
+                let name = self.name.clone();
+                tokio::spawn(async move {
+                    reporter.report(&name, FeedStatus::Running, None).await;
+                });
+            }
         }
     }
 }
@@ -516,5 +525,142 @@ mod tests {
         assert!(price.unwrap() > 0.0, "price should be positive");
 
         cancel.cancel();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Log-level tests for issue-1976 (polling-failure dedup)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod data_feed_polling_log_levels {
+    //! Spec: `specs/issue-1976-loki-log-noise.spec.md`.
+    //!
+    //! Verifies that repeated `record_error` calls in the same streak
+    //! emit exactly one WARN followed by DEBUG-only repeats, and that
+    //! `record_success` after an error streak emits a recovery INFO.
+
+    use std::sync::{Arc, Mutex};
+
+    use tracing::{Level, Subscriber, subscriber::with_default};
+    use tracing_subscriber::{Layer, layer::SubscriberExt, registry::Registry};
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct LineCapture {
+        lines: Arc<Mutex<Vec<(Level, String)>>>,
+    }
+
+    impl LineCapture {
+        fn snapshot(&self) -> Vec<(Level, String)> { self.lines.lock().unwrap().clone() }
+    }
+
+    impl<S: Subscriber> Layer<S> for LineCapture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Visitor(String);
+            impl tracing::field::Visit for Visitor {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 = format!("{value:?}");
+                    }
+                }
+            }
+            let mut v = Visitor(String::new());
+            event.record(&mut v);
+            let msg = v.0.trim_matches('"').to_string();
+            self.lines
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), msg));
+        }
+    }
+
+    fn capture_with<F: FnOnce()>(f: F) -> Vec<(Level, String)> {
+        let cap = LineCapture::default();
+        let subscriber = Registry::default().with(cap.clone());
+        with_default(subscriber, f);
+        cap.snapshot()
+    }
+
+    fn build_source() -> PollingSource {
+        let config = DataFeedConfig::builder()
+            .id("log-levels".to_owned())
+            .name("log-levels-source".to_owned())
+            .feed_type(super::super::FeedType::Polling)
+            .tags(vec![])
+            .transport(serde_json::json!({
+                "url": "http://localhost:1/none",
+                "interval_secs": 3600
+            }))
+            .enabled(true)
+            .status(super::super::config::FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build();
+        PollingSource::from_config(&config).expect("config ok")
+    }
+
+    #[test]
+    fn ten_failures_emit_one_warn_and_nine_debug() {
+        let source = build_source();
+        let lines = capture_with(|| {
+            for _ in 0..10 {
+                source.record_error("HTTP 429 Too Many Requests".to_owned());
+            }
+        });
+
+        let fail_lines: Vec<_> = lines
+            .iter()
+            .filter(|(_, m)| m == "poll fetch failed")
+            .collect();
+
+        let warn_count = fail_lines
+            .iter()
+            .filter(|(lvl, _)| *lvl == Level::WARN)
+            .count();
+        let debug_count = fail_lines
+            .iter()
+            .filter(|(lvl, _)| *lvl == Level::DEBUG)
+            .count();
+
+        assert_eq!(
+            warn_count, 1,
+            "exactly one WARN expected at streak entry, got {warn_count}"
+        );
+        assert_eq!(
+            debug_count, 9,
+            "remaining nine failures must drop to DEBUG, got {debug_count}"
+        );
+    }
+
+    #[test]
+    fn recovery_after_error_emits_one_info() {
+        let source = build_source();
+        // Enter the error streak first.
+        source.record_error("transient".to_owned());
+
+        let lines = capture_with(|| {
+            source.record_success();
+        });
+
+        let recovery_lines: Vec<_> = lines
+            .iter()
+            .filter(|(lvl, m)| *lvl == Level::INFO && m == "data feed recovered")
+            .collect();
+
+        assert_eq!(
+            recovery_lines.len(),
+            1,
+            "recovery must emit exactly one INFO line"
+        );
     }
 }

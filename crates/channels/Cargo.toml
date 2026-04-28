@@ -52,6 +52,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-tungstenite = "0.29"
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

@@ -33,13 +33,26 @@ use rara_kernel::{
     io::{EgressError, Endpoint, EndpointAddress, PlatformOutbound, RawPlatformMessage},
 };
 use tokio::sync::{Mutex, watch};
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::{
     api::WeixinApiClient,
     runtime::{body_from_item_list, markdown_to_plain_text},
     storage,
 };
+
+/// Emit the per-poll log line at the right severity.
+///
+/// Empty polls are the common case and pure heartbeat noise — they go to
+/// DEBUG. The non-empty case is the semantic event ("the channel actually
+/// received traffic") and stays at INFO. See spec issue-1976.
+fn log_poll_result(count: usize) {
+    if count == 0 {
+        debug!(count = 0, "wechat poll returned messages");
+    } else {
+        info!(count, "wechat poll returned messages");
+    }
+}
 
 /// Channel adapter for WeChat iLink Bot.
 ///
@@ -187,7 +200,7 @@ impl ChannelAdapter for WechatAdapter {
                         }
 
                         if let Some(messages) = resp["msgs"].as_array() {
-                            info!(count = messages.len(), "wechat poll returned messages");
+                            log_poll_result(messages.len());
                             for msg in messages {
                                 let item_list =
                                     msg["item_list"].as_array().cloned().unwrap_or_default();
@@ -362,5 +375,113 @@ impl ChannelAdapter for WechatAdapter {
             .send_typing(session_key, typing_ticket, 1)
             .await;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod wechat_adapter_log_levels {
+    //! Spec: `specs/issue-1976-loki-log-noise.spec.md`.
+    //!
+    //! Verifies that the per-poll log line drops to DEBUG for the
+    //! `count == 0` heartbeat case while staying at INFO when the poll
+    //! actually returned messages.
+
+    use std::sync::{Arc, Mutex};
+
+    use tracing::{Level, Subscriber, subscriber::with_default};
+    use tracing_subscriber::{Layer, layer::SubscriberExt, registry::Registry};
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct LineCapture {
+        lines: Arc<Mutex<Vec<(Level, String)>>>,
+    }
+
+    impl LineCapture {
+        fn snapshot(&self) -> Vec<(Level, String)> { self.lines.lock().unwrap().clone() }
+    }
+
+    impl<S: Subscriber> Layer<S> for LineCapture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Visitor(String);
+            impl tracing::field::Visit for Visitor {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 = format!("{value:?}");
+                    }
+                }
+            }
+            let mut v = Visitor(String::new());
+            event.record(&mut v);
+            // tracing's Debug rendering of message wraps in quotes; strip
+            // them so callers can match on the raw string.
+            let msg = v.0.trim_matches('"').to_string();
+            self.lines
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), msg));
+        }
+    }
+
+    fn capture_with<F: FnOnce()>(f: F) -> Vec<(Level, String)> {
+        let cap = LineCapture::default();
+        let subscriber = Registry::default().with(cap.clone());
+        with_default(subscriber, f);
+        cap.snapshot()
+    }
+
+    #[test]
+    fn empty_poll_emits_debug_no_info() {
+        let lines = capture_with(|| log_poll_result(0));
+        let target_lines: Vec<_> = lines
+            .iter()
+            .filter(|(_, m)| m == "wechat poll returned messages")
+            .collect();
+
+        assert_eq!(
+            target_lines.len(),
+            1,
+            "expected exactly one poll-result log line"
+        );
+        assert_eq!(
+            target_lines[0].0,
+            Level::DEBUG,
+            "empty poll must emit DEBUG, not INFO"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|(lvl, m)| *lvl == Level::INFO && m == "wechat poll returned messages"),
+            "no INFO line should be emitted on empty poll"
+        );
+    }
+
+    #[test]
+    fn non_empty_poll_emits_info() {
+        let lines = capture_with(|| log_poll_result(1));
+        let target_lines: Vec<_> = lines
+            .iter()
+            .filter(|(_, m)| m == "wechat poll returned messages")
+            .collect();
+
+        assert_eq!(target_lines.len(), 1);
+        assert_eq!(
+            target_lines[0].0,
+            Level::INFO,
+            "non-empty poll must emit INFO"
+        );
     }
 }
