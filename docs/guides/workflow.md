@@ -1,204 +1,225 @@
-# Development Workflow — Issue → Worktree → PR → Merge
+# Development Workflow — Spec / Issue → Worktree → Local Commit → Review → Push → PR → Merge
 
-**Every code change — no matter how small — MUST follow this workflow.** There are zero exceptions: single-line fixes, typo corrections, config tweaks, doc updates, and refactors all go through issue + worktree + PR. The main agent must NEVER directly edit source files on the `main` branch.
+**Every code change — no matter how small — MUST follow this workflow.**
+Single-line fixes, typo corrections, config tweaks, doc updates, and refactors
+all go through the workflow below. The main agent must NEVER directly edit
+source files on the `main` branch.
+
+There are now two **lanes**, and one major change to the old flow:
+**review happens BEFORE push, gating it.** The implementer commits locally,
+the reviewer reads the worktree diff, and only on APPROVE does the code
+leave your machine.
 
 ```
-1. CREATE ISSUE    →  gh issue create + labels
-2. CREATE WORKTREE →  git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
-3. WORK            →  All edits happen inside the worktree
-4. VERIFY          →  cargo check + npm run build on worktree
-5. PUSH & PR       →  git push -u origin + gh pr create
-6. CI + REVIEW     →  In parallel: `gh pr checks {N} --watch` AND /code-review-expert
-                       (fix findings + push, loop until APPROVE; both must pass)
-7. MERGE           →  gh pr merge {N} --squash --delete-branch (after CI green AND APPROVE)
-8. CLEANUP         →  git worktree remove + git branch -d
+Lane 1 (spec-driven — feature, bugfix, anything with testable behavior):
+  0. SPEC AUTHOR    →  spec-author writes specs/issue-N-<slug>.spec.md
+                       + opens GitHub issue referencing it
+  1. WORKTREE       →  parent creates .worktrees/issue-N-<slug>
+                       and dispatches implementer
+  2. IMPLEMENT      →  implementer reads spec; codes; runs prek + lifecycle;
+                       commits LOCALLY (does not push)
+  3. REVIEW         →  reviewer reads worktree diff + spec; verdict
+                       (loop until APPROVE)
+  4. PUSH + PR      →  implementer pushes; gh pr create; gh pr checks --watch
+  5. MERGE          →  gh pr merge --squash --delete-branch (when CI green)
+  6. CLEANUP        →  git worktree remove + git branch -D
+
+Lane 2 (lightweight chore — structural, cleanup, CI, rename, config):
+  0. SPEC AUTHOR    →  spec-author writes the GitHub issue body directly
+                       (Intent + prior art + decisions + boundaries; no
+                       BDD scenarios; no specs/*.spec.md file)
+  1-6. same as lane 1 minus the spec file and minus `agent-spec lifecycle`
 ```
 
-## Step 1: Create Issue
+## Picking the lane
 
-Issues MUST use the GitHub issue templates defined in `.github/ISSUE_TEMPLATE/`. Pick the template matching the change type:
+`spec-author` makes this call. The single test:
 
-| Template | Use when |
-|----------|----------|
-| `feature_request.yml` | New feature or enhancement |
-| `bug_report.yml` | Bug fix |
-| `refactor.yml` | Code refactor or technical improvement |
-| `chore.yml` | CI, dependencies, tooling, maintenance |
+> Can I write at least one `Test:` selector that binds to a real test
+> function — one that fails before the change and passes after?
 
-```bash
-# Example: feature request
-gh issue create --template feature_request.yml \
-  --title "feat(kernel): event queue sharding" \
-  --body "$(cat <<'EOF'
-### Description
-Event queue sharding to improve throughput.
+- Yes → **lane 1**.
+- No → **lane 2**.
 
-### Component
-kernel (core runtime, heartbeat, event bus)
+If unsure, lane 2 (overhead-on-the-side-of-less). Lane 1's value is the
+BDD binding to a real test; without that binding, lane 1 produces ceremony.
 
-### Alternatives considered
-None.
-EOF
-)" --label "agent:claude" --label "core"
+See `specs/README.md` for the full lane decision criteria.
 
-# Example: bug report
-gh issue create --template bug_report.yml \
-  --title "fix(web): session token not refreshed" \
-  --body "$(cat <<'EOF'
-### Description
-Session token expires but is not refreshed automatically.
+## Step 0: spec-author
 
-### Component
-web (frontend, UI)
+`spec-author` is invoked **before any issue exists**. The parent agent
+hands the user's request (verbatim) to spec-author. Spec-author:
 
-### Steps to reproduce
-1. Login and wait 30 minutes
-2. Attempt any action
-3. 401 error
+1. Reads `goal.md` to gate the request.
+2. Runs the mandatory prior-art search (`gh issue list`, `gh pr list`,
+   `git log --grep`, `rg`). This is the wall PR #1941 walked through
+   unchallenged — do not skip.
+3. For vague requests, asks 1–3 multi-choice clarifying questions.
+4. Writes a private reproducer ("if we don't do this, this concrete bug
+   appears: 1. … 2. … 3. observed bad outcome"). If no reproducer can be
+   written, the request is too vague — escalate, do not proceed.
+5. Picks the lane.
+6. Drafts: lane 1 → `specs/issue-TBD-<slug>.spec.md`; lane 2 → issue body.
+7. Files the GitHub issue with `agent:claude` + type + component labels.
+   For lane 1, renames the spec from `issue-TBD-` to `issue-N-` once the
+   issue number is assigned, and references the spec path in the issue body.
 
-### Logs / Error output
-401 Unauthorized
+See `.claude/agents/spec-author.md` for the full contract.
 
-### Version
-rara 0.0.1
-EOF
-)" --label "agent:claude" --label "ui"
-```
+## Step 1: Worktree
 
-**Issue Labels** (all issues MUST have proper labels):
-- **Agent** (required for agent-created issues): `agent:claude`, `agent:codex` — use the label matching the agent performing the operation
-- **Type**: auto-applied by the template (`enhancement`, `bug`, `refactor`, `chore`)
-- **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
-
-## Step 2: Create Worktree
 ```bash
 git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
 ```
 
-## Step 3: Work in Worktree
-- **All code edits happen exclusively inside the worktree directory** — never in the main checkout
-- The main agent may dispatch a subagent to the worktree, or work there directly
-- When dispatching, prefer `subagent_type: implementer` (defined in `.claude/agents/implementer.md`) over `general-purpose` — it carries the project's commit/verify/PR conventions and the config-schema guardrail learned from #1907
-- Independent issues can be dispatched **in parallel** (each in its own worktree)
-- All work should be committed before moving to the next step
+The parent agent creates the worktree and then dispatches the `implementer`
+subagent. The main agent never edits in-place on `main` and never edits
+inside the main checkout — every edit is in a worktree.
 
-## Step 4: Verify Builds
-After subagent completes, verify in the worktree:
+## Step 2: Implement (lane 1 and 2)
+
+The `implementer` subagent works inside the worktree. It:
+
+1. Reads `gh issue view <N>`. For lane 1, also reads
+   `specs/issue-N-<slug>.spec.md`.
+2. Translates the request into a one-sentence outcome to verify, sends it
+   back to the parent, and waits for ACK before coding. (This catches
+   misalignment for the cost of a round-trip.)
+3. Reads the actual code it will touch.
+4. Implements the smallest change that satisfies the spec / issue.
+5. Runs `cargo check` / `cargo +nightly fmt` / `clippy` / `prek run --all-files`.
+   For frontend: `cd web && npm run build`.
+6. **Lane 1 only**: runs `just spec-lifecycle specs/issue-N-<slug>.spec.md`.
+   Every BDD scenario must pass — no `skip`, no `uncertain`.
+7. Commits locally. Conventional Commits subject + `Closes #N` in body.
+8. **Does NOT push.** Reports back to the parent with the worktree path,
+   commit SHAs, outcome verification (concrete evidence), and any
+   decisions surfaced.
+
+See `.claude/agents/implementer.md` for the full contract.
+
+### Pre-commit checks (prek)
+
+The project uses [prek](https://github.com/j178/prek). Setup once:
+
 ```bash
-cargo check -p {crate-name}   # Rust backend
-cd web && npm run build        # Frontend (if touched)
+brew install prek
+prek install
 ```
 
-## Pre-commit Checks (prek)
+Hooks (`.pre-commit-config.yaml`):
 
-The project uses [prek](https://github.com/j178/prek) for pre-commit hooks. The **final commit** in any PR must pass all checks — intermediate commits during development don't need to pass.
-
-Setup (required once after clone):
-```bash
-brew install prek              # Install prek
-prek install                   # Install git hooks into .git/hooks
-```
-
-Hooks configured in `.pre-commit-config.yaml`:
 - `cargo check --all --all-targets`
 - `cargo +nightly fmt --all -- --check`
 - `cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings`
 - `RUSTDOCFLAGS="-D warnings" cargo +nightly doc --workspace --no-deps --document-private-items`
 
-Triggers on: `.rs`, `.toml`, `Cargo.lock`, `rust-toolchain.toml` changes.
-
-Run all checks manually:
-```bash
-prek run --all-files           # Run all hooks
-just pre-commit                # Alternative: fmt + clippy + check + test
-```
-
-If pre-commit hook blocks a commit during development, fix issues before the final commit. Do NOT use `--no-verify` to skip hooks.
-
-## Step 5: Push & Create PR
-
-PRs use the template at `.github/pull_request_template.md`. Fill in all sections.
+Manual run:
 
 ```bash
-git push -u origin issue-{N}-{short-name}
-gh pr create --title "fix(scope): description (#N)" --body "$(cat <<'EOF'
-## Summary
-
-Brief description of the changes.
-
-## Type of change
-
-| Type | Label |
-|------|-------|
-| Bug fix | `bug` |
-
-## Component
-
-`core`
-
-## Closes
-
-Closes #N
-
-## Test plan
-
-- [x] `just test` passes
-- [x] `just lint` passes
-- [x] Tested locally
-EOF
-)" --label "bug" --label "core"
+prek run --all-files
+just pre-commit
 ```
-- Commit message must include `Closes #N` so the issue is auto-closed when PR merges
-- Never merge locally — all merges happen through GitHub PR
-- **PR Labels** (all PRs MUST have proper labels):
-  - **Type** (pick one): `bug`, `enhancement`, `refactor`, `chore`, `documentation`
-  - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
-  - Note: a `labeler.yml` workflow auto-labels PRs by file path, but agents must still add type + component labels explicitly via `--label` flags
 
-## Step 6: CI + Code Review (in parallel, both MANDATORY)
+The **final** commit must pass all checks. Intermediate commits during
+development don't need to pass. Do NOT use `--no-verify` to skip hooks.
 
-CI and code review are independent signals — run them concurrently. Once the implementer subagent reports done and local verification (Step 4) is green, push the PR and immediately kick off **both** the CI watch **and** the reviewer. Do not serialize them; CI doesn't catch what review catches and vice versa, so waiting for one to finish before starting the other just adds latency.
+## Step 3: Review (BEFORE push — this is the new bit)
 
-**6a. CI watch:**
+The parent dispatches the `reviewer` subagent against the worktree (not
+the PR — the PR does not exist yet). The reviewer:
+
+1. Reads `git -C <worktree> diff origin/main..HEAD`.
+2. For lane 1: runs `agent-spec lint` + `agent-spec lifecycle` against the
+   spec; runs the **critical spec review** (does the spec align with
+   `goal.md`? are scenarios non-vacuous? do they actually falsify the
+   Intent? are Boundaries narrow?).
+3. Runs the **generalized cross-file regression-decision check** —
+   `git log --since=30.days` on every file the diff touches, looking
+   for prior commits that removed / restructured the same area. This
+   is the generalized form of the #1907 lesson; it catches PR #1941's
+   pattern (re-introducing what a recent PR explicitly removed).
+4. Runs the standard `/code-review-expert` skill checks.
+5. Inspects the implementer's outcome verification — is the evidence
+   concrete? Does it verify the outcome, or only a side-effect?
+
+Verdict:
+
+- **REQUEST_CHANGES (P0/P1)**: implementer fixes in worktree (new commits,
+  no amend), re-runs verification, hands back. Loop until APPROVE.
+- **REQUEST_CHANGES on the spec itself (lane 1)**: escalate to spec-author
+  via parent. Implementer does NOT silently fix the spec.
+- **APPROVE**: implementer proceeds to step 4.
+
+See `.claude/agents/reviewer.md` for the full contract.
+
+## Step 4: Push + Open PR + Watch CI
+
+Only after reviewer APPROVE:
 
 ```bash
-gh pr checks {PR-number} --watch    # Wait for all checks to complete
+git -C <worktree> push -u origin issue-{N}-{short-name}
+
+gh pr create --base main \
+  --title "<type>(<scope>): <description> (#N)" \
+  --body "..." \
+  --label "<type>" --label "<component>"
+
+gh pr checks {PR-number} --watch
 ```
 
-If any check fails, investigate and fix in the worktree, push again, and re-verify.
+PR body uses `.github/pull_request_template.md`. Labels:
 
-**6b. Code review (in parallel):**
+- **Type** (pick one): `bug`, `enhancement`, `refactor`, `chore`, `documentation`
+- **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
 
-Run the **`/code-review-expert`** skill — the main agent invokes the skill via the `Skill` tool, or dispatches the **`reviewer`** subagent (`.claude/agents/reviewer.md`) which wraps the same skill and adds the cross-PR regression-decision check (the #1907 lesson: catch silent reversals of recent design decisions). The skill produces a verdict (APPROVE / REQUEST_CHANGES / COMMENT) plus findings graded P0–P3.
+Note: `labeler.yml` auto-labels by file path, but the implementer must
+still add type + component labels explicitly via `--label`.
 
-The agent never approves its own diff in lieu of running the skill — it comes in cold and catches what the implementer missed.
+Commit message must include `Closes #N` so the issue auto-closes on merge.
 
-- **REQUEST_CHANGES**: fix every blocking finding (P0/P1) in the worktree, push, re-run the skill. Loop until APPROVE.
-- **APPROVE with P2/P3 nits**: address only the nits that are clearly worth fixing in this PR. Don't stall on stylistic preferences.
-- **APPROVE clean**: proceed to merge once CI is also green.
+If a CI check fails: read the failure log, diagnose root cause, fix in
+the worktree, push again. Do not mark tests `#[ignore]` to make CI green.
+For genuine flakes (same test failed recently on `main`):
+`gh run rerun <id> --failed`. Cap reruns at 1.
 
-This is non-negotiable — even one-line fixes go through it. The skill is fast; the cost of skipping it (regressions like #1810) is high.
+**Why review-before-push:** CI catches platform issues (Linux ARC runner
+behavior vs your local macOS) and integration regressions. Review catches
+design issues, regression-decision reversals, and scope creep. They don't
+catch the same things, but pushing only after review APPROVE means
+PR-level CI runs on already-reviewed code — no force-pushes after review,
+no PRs lingering with "needs another round of review" comments. The
+trade-off: any platform-only failure is caught after push, which is fine
+because it's typically a one-line fix.
 
-The merge gate (Step 7) requires **both** CI green AND review APPROVE.
+## Step 5: Merge
 
-## Step 7: Merge to Main
-
-Once CI is green AND the review is APPROVE (with all blocking findings handled), merge without further confirmation — green CI + clean review IS the merge signal.
+Green CI + already-APPROVE'd review = merge.
 
 ```bash
 gh pr merge {N} --squash --delete-branch
 ```
 
-Use `--squash` so the merged commit on `main` matches the Conventional Commit subject. `--delete-branch` removes the remote branch; the local branch + worktree are removed in Step 8.
+Use `--squash` so the merged commit on `main` matches the Conventional
+Commit subject. `--delete-branch` removes the remote branch; the local
+branch and worktree are removed in step 6.
 
-## Step 8: Cleanup
+The parent has standing approval; do not re-ask.
+
+## Step 6: Cleanup
+
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
 git branch -D issue-{N}-{short-name}    # -D because the branch is gone on origin
 ```
 
-## Parallel Execution
+## Parallel execution
 
-When user requests involve multiple independent changes, split into separate issues and dispatch subagents in parallel:
-- Each subagent gets its own worktree, branch, and PR
-- PRs are reviewed and merged independently on GitHub
+When user requests involve multiple independent changes, split into
+separate issues at step 0 and dispatch implementer subagents in parallel:
+
+- Each subagent gets its own worktree, branch, and PR.
+- PRs are reviewed and merged independently on GitHub.
+- The reviewer runs per-PR; reviewers do not share context across parallel
+  PRs.

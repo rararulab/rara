@@ -3,6 +3,12 @@
 ## Communication
 - 用中文与用户交流
 
+## North Star
+
+`goal.md` at the repo root defines what rara is, what rara is NOT, and the
+observable signals that mean rara is working. Read it before drafting any
+spec or proposing any change. `spec-author` uses it as a gate; you should too.
+
 ## Project Philosophy
 
 Rara is a kernel-inspired personal AI agent in Rust — self-evolving, developer-first,
@@ -27,6 +33,9 @@ When these anchors conflict, prefer: safety (Niko) > ergonomics (BurntSushi) > m
 
 These artifacts are authoritative — your work is accountable to them, not just to the user:
 
+- `goal.md` — north star: read this **first** for any new request; spec-author uses it as a gate
+- `specs/project.spec` — project-level technical/process constraints inherited by every task spec; not the place for product direction (that's `goal.md`)
+- `specs/README.md` — lane 1 (spec-driven, BDD-bound test) vs lane 2 (lightweight chore) triage criteria; read this **before** opening an issue
 - `.pre-commit-config.yaml` — code quality gate (clippy, fmt, doc warnings)
 - `.github/ISSUE_TEMPLATE/` — issue structure and required fields
 - `.github/pull_request_template.md` — PR structure
