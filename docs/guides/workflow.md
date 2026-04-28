@@ -113,6 +113,13 @@ The `implementer` subagent works inside the worktree. It:
    commit SHAs, outcome verification (concrete evidence), and any
    decisions surfaced.
 
+If the diff touches `crates/{app,kernel,channels,acp,sandbox}/src/`, add
+or extend a Rust e2e test in the corresponding `tests/` directory
+following `docs/guides/e2e-style.md` (lane 1 = no LLM, lane 2 = scripted
+LLM via `ScriptedLlmDriver`, lane 3 = real LLM in `e2e.yml`). If
+PR-time e2e coverage is infeasible, state in the PR body which lane
+applies and why.
+
 See `.claude/agents/implementer.md` for the full contract.
 
 ### Pre-commit checks (prek)

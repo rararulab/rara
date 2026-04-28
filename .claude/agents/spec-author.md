@@ -160,8 +160,16 @@ Required sections (agent-spec DSL only allows these six top-level headers
 plus the optional `## Out of Scope`): `Intent`, `Decisions`, `Boundaries`
 (with `### Allowed Changes` and `### Forbidden`), `Acceptance Criteria`,
 optionally `Constraints`. Add `inherits: project` in the spec header so it
-picks up the constraints in `specs/project.spec`. Task-spec lint must
-score ≥ 0.7:
+picks up the constraints in `specs/project.spec`.
+
+Populate `### Allowed Changes` and `### Forbidden` as **glob lines**
+(e.g., `**/crates/foo/**`, `**/docs/guides/bar.md`), not prose bullets.
+`agent-spec lifecycle` matches the diff against globs to enforce the
+boundary; prose lists pass `lint` but fail `lifecycle`'s boundary scenario,
+forcing the implementer to retrofit globs (see PR #1977's review). One
+glob per allowed/forbidden path.
+
+Task-spec lint must score ≥ 0.7:
 
 ```bash
 just spec-lint specs/issue-<N>-<slug>.spec.md
