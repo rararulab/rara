@@ -38,6 +38,35 @@ interface SessionMenuProps {
 }
 
 /**
+ * Copy `text` to the clipboard via the legacy `document.execCommand('copy')`
+ * path. Used as a fallback when `navigator.clipboard` is unavailable, which
+ * happens whenever the page is served from a non-secure context (e.g. a LAN
+ * IP without TLS). Returns `true` on success.
+ *
+ * The textarea is positioned off-screen and marked readonly so the operation
+ * does not flash UI, scroll the page, or pop the keyboard on iOS.
+ */
+function copyTextFallback(text: string): boolean {
+  if (typeof document === 'undefined') return false;
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  textarea.style.left = '0';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  try {
+    textarea.select();
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+/**
  * Hover-revealed `⋯` menu attached to a session row or the chat-page header
  * title. Exposes two actions: copy the session id to the clipboard, and
  * regenerate the session title via the backend.
@@ -48,16 +77,29 @@ export function SessionMenu({ sessionKey, ariaLabel, onRegenerated }: SessionMen
   const [error, setError] = useState<string | null>(null);
 
   const handleCopy = async () => {
+    // `navigator.clipboard` is only defined in secure contexts (https /
+    // localhost). When the dev server is reached over a LAN IP it is
+    // `undefined`, so optional-chain the call and fall back to the legacy
+    // `document.execCommand('copy')` path before surfacing an error.
     try {
-      await navigator.clipboard.writeText(sessionKey);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(sessionKey);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+        return;
+      }
+    } catch {
+      // fall through to the execCommand fallback
+    }
+
+    if (copyTextFallback(sessionKey)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // Clipboard write may fail (insecure context, denied permission).
-      // The menu item is a debug affordance — surface the failure inline.
-      setError('复制失败');
-      setTimeout(() => setError(null), 1500);
+      return;
     }
+
+    setError('复制失败');
+    setTimeout(() => setError(null), 1500);
   };
 
   const handleRegenerate = async (e: Event) => {
