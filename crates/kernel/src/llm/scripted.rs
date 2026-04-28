@@ -132,6 +132,18 @@ impl LlmDriver for ScriptedLlmDriver {
         // so omitting them would cause scripted tool calls to be silently
         // dropped.
         let response = self.complete(request).await?;
+        // Reasoning is emitted before content because real reasoning-model
+        // streams (Kimi, MiniMax-M2, gpt-5.4-thinking) interleave or front-
+        // load reasoning tokens — the agent loop builds `accumulated_reasoning`
+        // independently of `accumulated_text`, so the relative order between
+        // the two does not affect downstream state.
+        if let Some(ref reasoning) = response.reasoning_content {
+            let _ = tx
+                .send(StreamDelta::ReasoningDelta {
+                    text: reasoning.clone(),
+                })
+                .await;
+        }
         if let Some(ref text) = response.content {
             let _ = tx.send(StreamDelta::TextDelta { text: text.clone() }).await;
         }
