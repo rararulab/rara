@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Message debug summary — aggregates tape entries belonging to a single
-//! `rara_message_id` into a structured view used by both the Telegram
+//! `rara_turn_id` into a structured view used by both the Telegram
 //! `/debug` command and the `rara debug` CLI subcommand.
 //!
 //! This module is presentation-agnostic. It produces structured data
@@ -25,9 +25,9 @@ use crate::memory::TapEntry;
 /// Aggregated debug view of a single message turn.
 #[derive(Debug, Clone)]
 pub struct MessageDebugSummary {
-    /// The `rara_message_id` this summary describes.
-    pub message_id:    String,
-    /// All tape entries that referenced the message ID.
+    /// The `rara_turn_id` this summary describes.
+    pub turn_id:       String,
+    /// All tape entries that referenced the turn ID.
     pub entries:       Vec<TapEntry>,
     /// LLM model name (first non-empty value seen in metadata).
     pub model:         Option<String>,
@@ -69,15 +69,15 @@ pub struct TimelineItem {
 
 impl MessageDebugSummary {
     /// Aggregate tape entries into a debug summary. Filters entries to
-    /// only those whose `metadata.rara_message_id` matches the target.
-    pub fn from_entries(message_id: &str, entries: Vec<TapEntry>) -> Self {
+    /// only those whose `metadata.rara_turn_id` matches the target.
+    pub fn from_entries(turn_id: &str, entries: Vec<TapEntry>) -> Self {
         let matched: Vec<TapEntry> = entries
             .into_iter()
             .filter(|e| {
                 e.metadata.as_ref().is_some_and(|m| {
-                    m.get("rara_message_id")
+                    m.get("rara_turn_id")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|id| id == message_id)
+                        .is_some_and(|id| id == turn_id)
                 })
             })
             .collect();
@@ -176,7 +176,7 @@ impl MessageDebugSummary {
         }
 
         Self {
-            message_id: message_id.to_owned(),
+            turn_id: turn_id.to_owned(),
             entries: matched,
             model,
             input_tokens,
@@ -189,6 +189,6 @@ impl MessageDebugSummary {
         }
     }
 
-    /// Returns true if no tape entries matched the message ID.
+    /// Returns true if no tape entries matched the turn ID.
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }

@@ -39,6 +39,19 @@ thread_local! {
     static TAPE_CONTEXT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Read the per-turn correlation id from a tape entry's metadata JSON,
+/// preferring the current key `rara_turn_id` and falling back to the
+/// legacy `rara_message_id` key for tapes written before issue #1978.
+///
+/// Returns `None` when neither key is present or the value is not a
+/// string.
+pub fn read_turn_id(metadata: &Value) -> Option<&str> {
+    metadata
+        .get("rara_turn_id")
+        .or_else(|| metadata.get("rara_message_id"))
+        .and_then(|v| v.as_str())
+}
+
 /// Queries shorter than this skip fuzzy matching to avoid noisy results.
 const MIN_FUZZY_QUERY_LENGTH: usize = 3;
 /// Minimum normalized similarity ratio for a fuzzy hit.
@@ -775,26 +788,30 @@ impl TapeService {
         Ok(entries.last().map(|e| e.id).unwrap_or(0))
     }
 
-    /// Find all tape entries (any kind) whose `metadata.rara_message_id`
+    /// Find all tape entries (any kind) whose `metadata.rara_turn_id`
     /// matches the given ID. Unlike [`Self::search`], this is an exact
     /// metadata filter — no text ranking, no kind restriction.
     ///
     /// Used by the `/debug` command to retrieve the full execution context
     /// (messages + tool calls + tool results) for a single turn.
-    pub async fn entries_by_message_id(
+    ///
+    /// Reads both `rara_turn_id` (current key) and `rara_message_id`
+    /// (legacy key, present in tape JSONL files written before issue
+    /// #1978). New writers only emit the new key, but existing on-disk
+    /// tapes are append-only and must remain readable.
+    pub async fn entries_by_turn_id(
         &self,
         tape_name: &str,
-        message_id: &str,
+        turn_id: &str,
     ) -> TapResult<Vec<TapEntry>> {
         let entries = self.store.read(tape_name).await?.unwrap_or_default();
         Ok(entries
             .into_iter()
             .filter(|e| {
-                e.metadata.as_ref().is_some_and(|m| {
-                    m.get("rara_message_id")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|id| id == message_id)
-                })
+                e.metadata
+                    .as_ref()
+                    .and_then(read_turn_id)
+                    .is_some_and(|id| id == turn_id)
             })
             .collect())
     }

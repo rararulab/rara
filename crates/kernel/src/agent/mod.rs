@@ -539,7 +539,7 @@ pub struct TurnTrace {
     /// Rara internal message ID for end-to-end correlation.
     /// For user-triggered turns this is the `InboundMessage.id`;
     /// for proactive turns a fresh ID is generated at dispatch time.
-    pub rara_message_id:  crate::io::MessageId,
+    pub rara_turn_id:     crate::io::MessageId,
 }
 
 /// Result of a single agent turn.
@@ -590,7 +590,7 @@ impl AgentTurnResult {
                 total_tool_calls: 0,
                 success:          true,
                 error:            None,
-                rara_message_id:  crate::io::MessageId::new(),
+                rara_turn_id:     crate::io::MessageId::new(),
             },
             cascade:               crate::cascade::CascadeTrace::empty(),
         }
@@ -971,7 +971,7 @@ pub(crate) async fn run_agent_loop(
     guard_pipeline: Arc<GuardPipeline>,
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
-    rara_message_id: crate::io::MessageId,
+    rara_turn_id: crate::io::MessageId,
     interrupted: &AtomicBool,
     interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
@@ -1009,7 +1009,7 @@ pub(crate) async fn run_agent_loop(
         guard_pipeline,
         hook_runner,
         notification_bus,
-        rara_message_id,
+        rara_turn_id,
         interrupted,
         interrupt_notify,
     )
@@ -1031,7 +1031,7 @@ async fn run_agent_loop_inner(
     guard_pipeline: Arc<GuardPipeline>,
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
-    rara_message_id: crate::io::MessageId,
+    rara_turn_id: crate::io::MessageId,
     interrupted: &AtomicBool,
     interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
@@ -1236,7 +1236,7 @@ async fn run_agent_loop_inner(
     let mut last_accumulated_text = String::new();
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
-    let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_message_id.to_string());
+    let mut cascade_asm = crate::cascade::CascadeAssembler::new(rara_turn_id.to_string());
     cascade_asm.push_user(&input_text, jiff::Timestamp::now(), None);
     // Maximum number of LLM error recoveries (tools-disabled retries) allowed
     // per agent turn before the error becomes fatal.
@@ -2115,7 +2115,7 @@ async fn run_agent_loop_inner(
 
                 // Persist intermediate text to tape (not as final).
                 let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
-                    rara_message_id: rara_message_id.to_string(),
+                    rara_turn_id: rara_turn_id.to_string(),
                     usage: last_usage,
                     model: model.clone(),
                     iteration,
@@ -2212,7 +2212,7 @@ async fn run_agent_loop_inner(
 
             // Persist final assistant message to tape.
             let meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
-                rara_message_id: rara_message_id.to_string(),
+                rara_turn_id: rara_turn_id.to_string(),
                 usage: last_usage,
                 model: model.clone(),
                 iteration,
@@ -2276,7 +2276,7 @@ async fn run_agent_loop_inner(
                 total_tool_calls: tool_calls_made,
                 success: true,
                 error: None,
-                rara_message_id,
+                rara_turn_id,
             };
             // Best-effort mood update — failure is silently logged, never
             // blocks the response.
@@ -2384,8 +2384,8 @@ async fn run_agent_loop_inner(
                                 }]
                             }),
                             serde_json::to_value(crate::memory::ToolResultMetadata {
-                                rara_message_id: rara_message_id.to_string(),
-                                tool_metrics:    vec![crate::memory::ToolMetric {
+                                rara_turn_id: rara_turn_id.to_string(),
+                                tool_metrics: vec![crate::memory::ToolMetric {
                                     name:        tool_call.name.clone(),
                                     duration_ms: 0,
                                     success:     false,
@@ -2427,7 +2427,7 @@ async fn run_agent_loop_inner(
         // Without this, the cascade trace always shows a single tick.
         {
             let mut meta = crate::memory::LlmEntryMetadata {
-                rara_message_id: rara_message_id.to_string(),
+                rara_turn_id: rara_turn_id.to_string(),
                 usage: last_usage,
                 model: model.clone(),
                 iteration,
@@ -2480,7 +2480,7 @@ async fn run_agent_loop_inner(
                 })
                 .collect();
             let tool_call_meta = serde_json::to_value(crate::memory::LlmEntryMetadata {
-                rara_message_id: rara_message_id.to_string(),
+                rara_turn_id: rara_turn_id.to_string(),
                 usage: last_usage,
                 model: model.clone(),
                 iteration,
@@ -2950,7 +2950,7 @@ async fn run_agent_loop_inner(
                     tape_name,
                     serde_json::json!({ "results": results_json.clone() }),
                     serde_json::to_value(crate::memory::ToolResultMetadata {
-                        rara_message_id: rara_message_id.to_string(),
+                        rara_turn_id: rara_turn_id.to_string(),
                         tool_metrics,
                     })
                     .ok(),
@@ -3307,7 +3307,7 @@ async fn run_agent_loop_inner(
         total_tool_calls: tool_calls_made,
         success: false,
         error: Some(exhaustion_error),
-        rara_message_id,
+        rara_turn_id,
     };
     // Best-effort mood update — failure is silently logged, never blocks the
     // response.

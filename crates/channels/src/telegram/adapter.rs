@@ -853,8 +853,8 @@ fn render_trace_detail(trace: &ExecutionTrace) -> String {
     }
 
     text.push_str(&format!(
-        "\n\n\u{1f194} <b>Message ID</b>\n  <code>{}</code>",
-        trace_html_escape(&trace.rara_message_id),
+        "\n\n\u{1f194} <b>Turn ID</b>\n  <code>{}</code>",
+        trace_html_escape(&trace.rara_turn_id),
     ));
 
     // Telegram message limit is 4096 chars.
@@ -2427,8 +2427,8 @@ async fn handle_cascade_callback(
                 "cascade: loaded tape entries"
             );
 
-            let rara_message_id = match handle.trace_service().get(trace_id).await {
-                Ok(Some(t)) => t.rara_message_id,
+            let rara_turn_id = match handle.trace_service().get(trace_id).await {
+                Ok(Some(t)) => t.rara_turn_id,
                 _ => String::new(),
             };
 
@@ -2449,7 +2449,7 @@ async fn handle_cascade_callback(
             // legacy sessions.
             let cascade = rara_kernel::cascade::load_persisted_cascade(turn_entries)
                 .unwrap_or_else(|| {
-                    rara_kernel::cascade::build_cascade(turn_entries, &rara_message_id)
+                    rara_kernel::cascade::build_cascade(turn_entries, &rara_turn_id)
                 });
 
             tracing::debug!(

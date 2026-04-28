@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `rara debug <message_id>` — print the full execution context for a
+//! `rara debug <turn_id>` — print the full execution context for a
 //! message without booting the chat UI or kernel runtime.
 //!
 //! The `execution_traces` SQLite table is the single source of truth: each
 //! turn writes a fully aggregated [`ExecutionTrace`] (model, tokens,
 //! iterations, thinking, tools, plan, rationale) keyed by
-//! `rara_message_id`.  We render that directly.  The on-disk tape is opened
+//! `rara_turn_id`.  We render that directly.  The on-disk tape is opened
 //! only as a *supplementary* timeline — one fd, streamed line-by-line.
 
 use std::{
@@ -37,15 +37,15 @@ use snafu::{ResultExt, Whatever};
 use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePools, build_sqlite_pools};
 
 #[derive(Debug, Clone, Args)]
-#[command(about = "Inspect a message by its rara_message_id")]
+#[command(about = "Inspect a message by its rara_turn_id")]
 #[command(
-    long_about = "Inspect a message by its rara_message_id.\n\nLooks up the execution trace in \
-                  the SQLite index, then attaches a chronological timeline from the on-disk tape.  \
+    long_about = "Inspect a message by its rara_turn_id.\n\nLooks up the execution trace in the \
+                  SQLite index, then attaches a chronological timeline from the on-disk tape.  \
                   Does not boot the kernel.\n\nExamples:\n  rara debug 01J4M8VW9XYZAB..."
 )]
 pub struct DebugCmd {
-    /// The rara_message_id to inspect.
-    pub message_id: String,
+    /// The rara_turn_id to inspect.
+    pub turn_id: String,
 }
 
 impl DebugCmd {
@@ -56,16 +56,16 @@ impl DebugCmd {
         let trace_service = TraceService::new(pool);
 
         let lookup = trace_service
-            .find_trace_by_message_id(&self.message_id)
+            .find_trace_by_turn_id(&self.turn_id)
             .await
             .whatever_context("trace lookup failed")?;
 
         let Some((session_id, trace)) = lookup else {
-            println!("🔍 Debug: {}", self.message_id);
+            println!("🔍 Debug: {}", self.turn_id);
             println!("{}", "─".repeat(60));
             println!(
-                "No execution trace found for this message ID.\nThe trace may have expired (30 \
-                 day retention), the turn may have failed before persistence, or the ID is for a \
+                "No execution trace found for this turn ID.\nThe trace may have expired (30 day \
+                 retention), the turn may have failed before persistence, or the ID is for a \
                  slash command (which does not produce a turn)."
             );
             return Ok(());
@@ -77,7 +77,7 @@ impl DebugCmd {
         let tape_path = find_tape_file(rara_paths::memory_dir(), &session_id);
         let timeline = match tape_path.as_deref() {
             Some(path) => {
-                collect_timeline(path, &self.message_id).whatever_context("failed to read tape")?
+                collect_timeline(path, &self.turn_id).whatever_context("failed to read tape")?
             }
             None => Vec::new(),
         };
@@ -85,7 +85,7 @@ impl DebugCmd {
         println!(
             "{}",
             render(
-                &self.message_id,
+                &self.turn_id,
                 &session_id,
                 tape_path.as_deref(),
                 &trace,
@@ -117,17 +117,17 @@ struct TimelineEvent {
     detail:    String,
 }
 
-/// Stream a single tape file and pull entries that mention `message_id`.
+/// Stream a single tape file and pull entries that mention `turn_id`.
 /// Substring filtering is the hot path; we only invoke `serde_json` on
 /// lines that already match.
-fn collect_timeline(path: &Path, message_id: &str) -> std::io::Result<Vec<TimelineEvent>> {
+fn collect_timeline(path: &Path, turn_id: &str) -> std::io::Result<Vec<TimelineEvent>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
     let mut events = Vec::new();
     for line in reader.lines() {
         let line = line?;
-        if !line.contains(message_id) {
+        if !line.contains(turn_id) {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<TapEntry>(&line) else {
@@ -205,14 +205,14 @@ fn collect_timeline(path: &Path, message_id: &str) -> std::io::Result<Vec<Timeli
 
 /// Render the full debug view as plain text for terminal output.
 fn render(
-    message_id: &str,
+    turn_id: &str,
     session_id: &str,
     tape_path: Option<&Path>,
     trace: &ExecutionTrace,
     timeline: &[TimelineEvent],
 ) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "🔍 Debug: {message_id}");
+    let _ = writeln!(out, "🔍 Debug: {turn_id}");
     let _ = writeln!(out, "  Session: {session_id}");
     if let Some(path) = tape_path {
         let _ = writeln!(out, "  Tape:    {}", path.display());

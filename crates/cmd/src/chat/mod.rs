@@ -949,7 +949,7 @@ fn stream_event_to_cli_event(event: StreamEvent) -> Option<CliEvent> {
             iterations,
             tool_calls,
             model,
-            rara_message_id: _,
+            rara_turn_id: _,
             context_window_tokens: _,
         } => CliEvent::TurnSummary {
             duration_ms,

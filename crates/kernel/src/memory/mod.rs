@@ -151,7 +151,7 @@ pub use fork_metadata::{ForkMetadata, get_fork_metadata, set_fork_metadata};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub use service::{TapeInfo, TapeSearchHit, TapeService, current_tape};
+pub use service::{TapeInfo, TapeSearchHit, TapeService, current_tape, read_turn_id};
 pub use store::FileTapeStore;
 pub use tree::{AnchorNode, AnchorTree, ForkEdge, SessionBranch};
 
@@ -241,8 +241,15 @@ pub enum TapEntryKind {
 /// that the tape alone is sufficient for post-hoc observability analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmEntryMetadata {
-    /// Internal message ID for end-to-end correlation.
-    pub rara_message_id:   String,
+    /// Per-turn correlation handle. One inbound user message produces a
+    /// single id which is then attached to every tape entry generated
+    /// during the resulting turn (user message, assistant text, reasoning,
+    /// every tool_call, every tool_result). Used by `entries_by_turn_id`
+    /// and the `/debug` flow to retrieve the full execution context of a
+    /// turn. The `serde(alias)` accepts the legacy `rara_message_id` key
+    /// from on-disk tapes written before the rename — see issue #1978.
+    #[serde(alias = "rara_message_id")]
+    pub rara_turn_id:      String,
     /// Token consumption for this LLM iteration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage:             Option<crate::llm::Usage>,
@@ -264,10 +271,14 @@ pub struct LlmEntryMetadata {
 /// Metadata attached to `ToolResult` tape entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultMetadata {
-    /// Internal message ID for end-to-end correlation.
-    pub rara_message_id: String,
+    /// Per-turn correlation handle. Mirrors `LlmEntryMetadata::rara_turn_id`
+    /// on `ToolResult` entries so a turn's tool-call results are retrievable
+    /// alongside the LLM messages they belong to. Accepts the legacy
+    /// `rara_message_id` key on read for tapes written before #1978.
+    #[serde(alias = "rara_message_id")]
+    pub rara_turn_id: String,
     /// Per-tool execution metrics.
-    pub tool_metrics:    Vec<ToolMetric>,
+    pub tool_metrics: Vec<ToolMetric>,
 }
 
 /// Execution metrics for a single tool call.

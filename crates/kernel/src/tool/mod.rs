@@ -356,7 +356,7 @@ pub struct ToolContext {
     /// Event queue for pushing outbound events.
     pub event_queue:           crate::queue::ShardedQueueRef,
     /// The inbound message ID that triggered the current turn.
-    pub rara_message_id:       crate::io::MessageId,
+    pub rara_turn_id:          crate::io::MessageId,
     /// Context window size in tokens for the current model.
     pub context_window_tokens: usize,
     /// Live tool registry for the current session (includes dynamic MCP tools).
@@ -378,7 +378,7 @@ impl std::fmt::Debug for ToolContext {
             .field("origin_endpoint", &self.origin_endpoint)
             .field("origin_user_id", &self.origin_user_id)
             .field("event_queue", &"...")
-            .field("rara_message_id", &self.rara_message_id)
+            .field("rara_turn_id", &self.rara_turn_id)
             .field("context_window_tokens", &self.context_window_tokens)
             .field("tool_registry", &self.tool_registry.as_ref().map(|_| "..."))
             .field("stream_handle", &self.stream_handle.as_ref().map(|_| "..."))
