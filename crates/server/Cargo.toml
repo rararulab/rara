@@ -26,7 +26,8 @@ axum-tracing-opentelemetry = { workspace = true }
 base = { workspace = true }
 common-runtime = { workspace = true }
 futures = { workspace = true }
-opentelemetry = { version = "0.31.0", default-features = false, features = ["metrics"] }
+opentelemetry = { version = "0.31.0", default-features = false, features = ["metrics", "trace"] }
+tracing-opentelemetry = "0.32.0"
 rara-api = { workspace = true }
 rara-error = { workspace = true }
 serde = { workspace = true }
@@ -48,6 +49,10 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+opentelemetry_sdk = { version = "0.31.0", features = ["trace"] }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

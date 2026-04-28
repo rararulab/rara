@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use axum::http::{HeaderValue, Method, header};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use snafu::Whatever;
 use tower_http::cors::CorsLayer;
 use tracing::info;
@@ -207,6 +207,15 @@ pub fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
             Method::OPTIONS,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        // Surface the OTel-derived trace headers written by
+        // `rara_server::http::inject_trace_headers` so the browser fetch API
+        // can read them. Without `expose_headers`, the browser hides every
+        // non-CORS-safelisted response header. See
+        // `specs/issue-1975-trace-id-response-header.spec.md`.
+        .expose_headers([
+            HeaderName::from_static("x-request-id"),
+            HeaderName::from_static("traceparent"),
+        ])
 }
 
 fn merge_openapi_router(
@@ -217,4 +226,62 @@ fn merge_openapi_router(
     let (r, a) = domain_router.split_for_parts();
     *router = std::mem::take(router).merge(r);
     api.merge(a);
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode, header},
+        routing::get,
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+
+    /// Spec scenario `cors_exposes_trace_headers`: the `CorsLayer` produced
+    /// by [`build_cors_layer`] must list exactly `x-request-id` and
+    /// `traceparent` on its `expose_headers` allow-list, so the browser
+    /// fetch API can read those headers across the dev-proxy boundary.
+    ///
+    /// The behavioral check (instead of poking private fields on
+    /// `CorsLayer`) is what tower-http's API supports: send a request with a
+    /// matching `Origin`, read `access-control-expose-headers` off the
+    /// response.
+    #[tokio::test]
+    async fn cors_exposes_trace_headers() {
+        let layer = build_cors_layer(&["http://localhost:5173".to_string()]);
+        let app = Router::new()
+            .route("/probe", get(|| async { StatusCode::OK }))
+            .layer(layer);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/probe")
+                    .header(header::ORIGIN, "http://localhost:5173")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let exposed = response
+            .headers()
+            .get("access-control-expose-headers")
+            .expect("expose-headers must be present on a CORS-matched response")
+            .to_str()
+            .unwrap()
+            .split(',')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            exposed,
+            vec!["x-request-id".to_string(), "traceparent".to_string()],
+            "expose_headers must list exactly x-request-id and traceparent"
+        );
+    }
 }
