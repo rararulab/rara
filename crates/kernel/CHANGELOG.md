@@ -1,0 +1,465 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.0.1] - 2026-04-28
+
+### Bug Fixes
+
+- **egress**: Fallback to persistent platform identities for stateless channels ([#25](https://github.com/rararulab/rara/issues/25))
+- **kernel**: Unify agent_turn error type from String to KernelError
+- **kernel,channels**: Prevent duplicate telegram messages and stuck Running processes
+- **kernel,boot**: Address user tape code review issues ([#75](https://github.com/rararulab/rara/issues/75))
+- **kernel**: Wire spawn_child result_tx through Session lifecycle ([#76](https://github.com/rararulab/rara/issues/76))
+- **kernel**: Cleanup spawn_child agents after first turn completion ([#76](https://github.com/rararulab/rara/issues/76))
+- **kernel**: Catch panics in turn task and log actual panic message ([#88](https://github.com/rararulab/rara/issues/88))
+- **kernel**: Store origin_endpoint in Session to prevent cross-channel reply leaks ([#96](https://github.com/rararulab/rara/issues/96))
+- **memory**: Deduplicate user message in LLM context assembly ([#101](https://github.com/rararulab/rara/issues/101))
+- **security**: Enforce tool permissions in agent loop
+- **kernel**: User-friendly context window error message ([#129](https://github.com/rararulab/rara/issues/129))
+- **tools**: Rename all tool names to match OpenAI ^[a-zA-Z0-9-]+$ pattern
+- **kernel**: Schedule-add parameter validation for LLM compatibility ([#132](https://github.com/rararulab/rara/issues/132))
+- **kernel,symphony**: Offload blocking I/O to spawn_blocking to prevent tokio starvation
+- **kernel**: Scheduled task isolation — independent tape and silent delivery ([#140](https://github.com/rararulab/rara/issues/140))
+- **kernel**: Build meaningful summary for auto-handoff anchor
+- Tape memory
+- **memory**: Improve tape search relevance
+- **mita**: Persist MitaDirective as Event entry in session tape ([#173](https://github.com/rararulab/rara/issues/173))
+- **kernel**: Move syscall job_wheel persist to spawn_blocking ([#184](https://github.com/rararulab/rara/issues/184))
+- **kernel**: Prevent orphan tape in checkout and add rollback ([#188](https://github.com/rararulab/rara/issues/188))
+- **channels**: Emit TextClear to fix tool progress notifications ([#207](https://github.com/rararulab/rara/issues/207))
+- **kernel**: Emit ToolCallStart before argument parsing ([#207](https://github.com/rararulab/rara/issues/207))
+- **kernel**: Normalize empty tool call arguments to valid JSON
+- **kernel**: Log successful tool calls
+- **kernel**: Log tool call arguments at start
+- **kernel**: Include request args in tool error log
+- **kernel**: Use info level for LLM request/response logs
+- **kernel**: Ensure ToolCallStart is emitted before ToolCallArgumentsDelta
+- **kernel**: Address review feedback — configurable rate limit, memory eviction, serde parse
+- **kernel**: Address PR review — gc wiring, clock-testable rate limiter, strum parsing ([#223](https://github.com/rararulab/rara/issues/223))
+- **kernel**: Preserve original message in NonRetryable/RetryableServer errors ([#227](https://github.com/rararulab/rara/issues/227))
+- **kernel**: 强制执行 max_concurrency 和 child_semaphore 并发限制 (#242, #243)
+- **kernel**: Add default_execution_mode to worker manifest
+- **telegram**: Harden tool-call XML stripping for streaming edge cases ([#314](https://github.com/rararulab/rara/issues/314))
+- **kernel**: Mark TurnTrace as failed and emit warning when max_iterations exhausted ([#319](https://github.com/rararulab/rara/issues/319)) ([#326](https://github.com/rararulab/rara/issues/326))
+- **llm**: Add frequency_penalty to prevent repetition loops ([#317](https://github.com/rararulab/rara/issues/317)) ([#318](https://github.com/rararulab/rara/issues/318))
+- **kernel**: Skip empty notifications instead of sending placeholder string ([#334](https://github.com/rararulab/rara/issues/334)) ([#336](https://github.com/rararulab/rara/issues/336))
+- **agents**: Add marketplace tool to rara agent manifest ([#347](https://github.com/rararulab/rara/issues/347))
+- **telegram**: Pre-render trace HTML for instant callback response ([#343](https://github.com/rararulab/rara/issues/343))
+- **kernel**: Drop PublishEvent with missing/blank payload.message ([#350](https://github.com/rararulab/rara/issues/350))
+- Resolve all clippy warnings across codebase ([#313](https://github.com/rararulab/rara/issues/313))
+- **kernel**: Suppress duplicate error message on user interrupt ([#355](https://github.com/rararulab/rara/issues/355))
+- **kernel**: Treat plan step iteration exhaustion as replan trigger ([#477](https://github.com/rararulab/rara/issues/477))
+- **kernel**: Use origin_endpoint directly for outbound routing ([#482](https://github.com/rararulab/rara/issues/482))
+- **kernel**: Add logging and thinking model fallback for session title generation ([#493](https://github.com/rararulab/rara/issues/493)) ([#494](https://github.com/rararulab/rara/issues/494))
+- **syscall-scheduler**: Move scheduler to workspace dir
+- **scheduler**: List scheduler jobs across sessions
+- **scheduler**: Update scheduler-tool's prompt
+- **kernel**: Default execution mode to Plan instead of Reactive ([#567](https://github.com/rararulab/rara/issues/567)) ([#570](https://github.com/rararulab/rara/issues/570))
+- **kernel**: Inject agent context into plan-mode planner ([#567](https://github.com/rararulab/rara/issues/567)) ([#576](https://github.com/rararulab/rara/issues/576))
+- **kernel**: Reduce plan step iterations and add early-exit guidance ([#586](https://github.com/rararulab/rara/issues/586)) ([#588](https://github.com/rararulab/rara/issues/588))
+- **kernel**: Replace byte truncation with self-summarizing child agents ([#578](https://github.com/rararulab/rara/issues/578)) ([#581](https://github.com/rararulab/rara/issues/581))
+- **kernel**: Persist intermediate assistant messages to tape for cascade tick detection ([#606](https://github.com/rararulab/rara/issues/606)) ([#608](https://github.com/rararulab/rara/issues/608))
+- **guard**: Expand whitelist and fix approval timeout race (#604, #605) ([#609](https://github.com/rararulab/rara/issues/609))
+- **kernel**: Repetition guard fixes ([#616](https://github.com/rararulab/rara/issues/616)) ([#619](https://github.com/rararulab/rara/issues/619))
+- **kernel**: Pass parsed arguments to ToolCallStart for trace summaries ([#621](https://github.com/rararulab/rara/issues/621)) ([#623](https://github.com/rararulab/rara/issues/623))
+- **kernel**: Register notified() before emptiness check in ShardQueue::wait() ([#687](https://github.com/rararulab/rara/issues/687)) ([#692](https://github.com/rararulab/rara/issues/692))
+- **kernel**: Close zombie streams when opening new stream ([#688](https://github.com/rararulab/rara/issues/688)) ([#693](https://github.com/rararulab/rara/issues/693))
+- **kernel**: Log and recover from job_wheel mutex poisoning ([#689](https://github.com/rararulab/rara/issues/689)) ([#694](https://github.com/rararulab/rara/issues/694))
+- **kernel**: Prefer accumulated_text over reasoning for TurnRationale ([#713](https://github.com/rararulab/rara/issues/713)) ([#715](https://github.com/rararulab/rara/issues/715))
+- **kernel**: Allow ancestor paths in path_scope guard for directory tools ([#727](https://github.com/rararulab/rara/issues/727)) ([#733](https://github.com/rararulab/rara/issues/733))
+- **app**: Context-mode interceptor whitelist + summary + system prompt ([#722](https://github.com/rararulab/rara/issues/722)) ([#732](https://github.com/rararulab/rara/issues/732))
+- **kernel**: Align OpenAI driver wire format with API spec ([#743](https://github.com/rararulab/rara/issues/743)) ([#745](https://github.com/rararulab/rara/issues/745))
+- **kernel**: Default ExecutionMode to Reactive and cap plan-mode iterations ([#752](https://github.com/rararulab/rara/issues/752)) ([#754](https://github.com/rararulab/rara/issues/754))
+- **kernel**: Openai wire format alignment ([#747](https://github.com/rararulab/rara/issues/747)) ([#750](https://github.com/rararulab/rara/issues/750))
+- **kernel**: Make interceptor prompt fragment dynamic to track MCP state ([#763](https://github.com/rararulab/rara/issues/763)) ([#769](https://github.com/rararulab/rara/issues/769))
+- **kernel**: Tune agent loop timeouts for responsiveness ([#770](https://github.com/rararulab/rara/issues/770)) ([#772](https://github.com/rararulab/rara/issues/772))
+- **kernel**: Add logs_dir and ~/.claude to path-scope whitelist ([#780](https://github.com/rararulab/rara/issues/780)) ([#781](https://github.com/rararulab/rara/issues/781))
+- **kernel**: Set max_tokens to 1024 in agent loop CompletionRequest ([#802](https://github.com/rararulab/rara/issues/802)) ([#803](https://github.com/rararulab/rara/issues/803))
+- **kernel**: Increase max_tokens to 2048 and optimize agent prompt ([#815](https://github.com/rararulab/rara/issues/815)) ([#816](https://github.com/rararulab/rara/issues/816))
+- **kernel**: Nudge LLM when it returns empty text after tool calls ([#855](https://github.com/rararulab/rara/issues/855)) ([#856](https://github.com/rararulab/rara/issues/856))
+- **kernel**: Send fallback reply on empty LLM response after error recovery ([#894](https://github.com/rararulab/rara/issues/894)) ([#896](https://github.com/rararulab/rara/issues/896))
+- **kernel**: Make typing_refresh respect turn cancellation ([#900](https://github.com/rararulab/rara/issues/900)) ([#903](https://github.com/rararulab/rara/issues/903))
+- **kernel**: Include descriptions in discoverable tools system prompt ([#914](https://github.com/rararulab/rara/issues/914)) ([#915](https://github.com/rararulab/rara/issues/915))
+- **kernel**: Inject system paths and improve discover-tools guidance in agent system prompt ([#919](https://github.com/rararulab/rara/issues/919)) ([#920](https://github.com/rararulab/rara/issues/920))
+- **kernel**: Reword deferred tools prompt to stop agent claiming tools unavailable ([#935](https://github.com/rararulab/rara/issues/935)) ([#937](https://github.com/rararulab/rara/issues/937))
+- **kernel**: Align deferred tool catalog with executable tool registry ([#941](https://github.com/rararulab/rara/issues/941)) ([#942](https://github.com/rararulab/rara/issues/942))
+- **kernel**: Add timeout enforcement for background agent watchers ([#928](https://github.com/rararulab/rara/issues/928)) ([#931](https://github.com/rararulab/rara/issues/931))
+- **kernel**: Allow multiple LLM error recoveries per agent turn ([#930](https://github.com/rararulab/rara/issues/930)) ([#932](https://github.com/rararulab/rara/issues/932))
+- **kernel**: Use parking_lot mutex ([#927](https://github.com/rararulab/rara/issues/927)) ([#933](https://github.com/rararulab/rara/issues/933))
+- **kernel**: Improve context estimation ([#929](https://github.com/rararulab/rara/issues/929)) ([#934](https://github.com/rararulab/rara/issues/934))
+- **kernel**: Expose full error chain in LLM provider errors ([#1017](https://github.com/rararulab/rara/issues/1017)) ([#1018](https://github.com/rararulab/rara/issues/1018))
+- **kernel**: Bypass proxy for local/private-network LLM providers ([#1020](https://github.com/rararulab/rara/issues/1020)) ([#1021](https://github.com/rararulab/rara/issues/1021))
+- Resolve contract violations found by code quality scan ([#1026](https://github.com/rararulab/rara/issues/1026)) ([#1030](https://github.com/rararulab/rara/issues/1030))
+- **kernel**: Merge system messages for strict chat template providers ([#1034](https://github.com/rararulab/rara/issues/1034)) ([#1038](https://github.com/rararulab/rara/issues/1038))
+- **kernel**: Strip <think> tags from content field ([#1054](https://github.com/rararulab/rara/issues/1054)) ([#1055](https://github.com/rararulab/rara/issues/1055))
+- **kernel,web**: Preserve multimodal image content through LLM pipeline ([#1063](https://github.com/rararulab/rara/issues/1063)) ([#1064](https://github.com/rararulab/rara/issues/1064))
+- **chat**: Preserve multimodal in api ([#1066](https://github.com/rararulab/rara/issues/1066)) ([#1067](https://github.com/rararulab/rara/issues/1067))
+- **kernel**: Preserve multimodal content on first-turn spawn ([#1068](https://github.com/rararulab/rara/issues/1068)) ([#1070](https://github.com/rararulab/rara/issues/1070))
+- **kernel**: Treat empty LLM stream as error with auto-fold recovery ([#1116](https://github.com/rararulab/rara/issues/1116)) ([#1117](https://github.com/rararulab/rara/issues/1117))
+- **kernel**: Use SessionKey/ChannelType types in ChannelMessage and ChannelBinding ([#1120](https://github.com/rararulab/rara/issues/1120)) ([#1132](https://github.com/rararulab/rara/issues/1132))
+- **cmd**: Index 'rara debug' lookup via execution_traces SQL ([#1138](https://github.com/rararulab/rara/issues/1138)) ([#1139](https://github.com/rararulab/rara/issues/1139))
+- **kernel**: Explicit backpressure retry for IOError::Full in ingress pipeline ([#1148](https://github.com/rararulab/rara/issues/1148)) ([#1158](https://github.com/rararulab/rara/issues/1158))
+- **cmd**: Render full ExecutionTrace from SQL in 'rara debug' ([#1156](https://github.com/rararulab/rara/issues/1156)) ([#1161](https://github.com/rararulab/rara/issues/1161))
+- **kernel**: Intercept XML tool calls from MiniMax in content stream ([#1166](https://github.com/rararulab/rara/issues/1166)) ([#1170](https://github.com/rararulab/rara/issues/1170))
+- **kernel**: Tool_xml safe_emit_len panics on multi-byte UTF-8 ([#1173](https://github.com/rararulab/rara/issues/1173)) ([#1174](https://github.com/rararulab/rara/issues/1174))
+- **kernel**: Handle streamed tool deltas even when stop_reason mismatches ([#1201](https://github.com/rararulab/rara/issues/1201))
+- **channels**: /debug shows all entry kinds via entries_by_message_id ([#1207](https://github.com/rararulab/rara/issues/1207)) ([#1209](https://github.com/rararulab/rara/issues/1209))
+- **kernel**: Detect vision support by model name, stop stripping images ([#1216](https://github.com/rararulab/rara/issues/1216)) ([#1218](https://github.com/rararulab/rara/issues/1218))
+- **codex-oauth**: Add ChatGPT-Account-Id header for API access ([#1241](https://github.com/rararulab/rara/issues/1241)) ([#1244](https://github.com/rararulab/rara/issues/1244))
+- **kernel**: CodexDriver reads HTTPS_PROXY for chatgpt.com connectivity ([#1248](https://github.com/rararulab/rara/issues/1248))
+- **kernel**: CodexDriver proxy support + required instructions field ([#1249](https://github.com/rararulab/rara/issues/1249))
+- **kernel**: Codex driver — extract system messages into top-level instructions field ([#1252](https://github.com/rararulab/rara/issues/1252))
+- **kernel**: Codex driver — set store=false (endpoint rejects store=true) ([#1253](https://github.com/rararulab/rara/issues/1253))
+- **kernel**: Codex driver — remove unsupported max_output_tokens parameter ([#1254](https://github.com/rararulab/rara/issues/1254))
+- **kernel**: Codex driver — strip all unsupported parameters from request body ([#1255](https://github.com/rararulab/rara/issues/1255))
+- **kernel**: Codex driver — explicitly send store=false (API defaults to true) ([#1256](https://github.com/rararulab/rara/issues/1256))
+- **kernel**: Ensure object schemas always have properties key ([#1257](https://github.com/rararulab/rara/issues/1257))
+- **kernel**: Codex driver — add 5-minute absolute stream timeout ([#1260](https://github.com/rararulab/rara/issues/1260))
+- **kernel**: Simplify context contract following bub's approach ([#1309](https://github.com/rararulab/rara/issues/1309)) ([#1310](https://github.com/rararulab/rara/issues/1310))
+- **kernel**: Disable auto-fold, remove context warnings, align with bub ([#1315](https://github.com/rararulab/rara/issues/1315)) ([#1316](https://github.com/rararulab/rara/issues/1316))
+- **channels**: Route approval requests to originating chat, not primary_chat_id ([#1319](https://github.com/rararulab/rara/issues/1319)) ([#1322](https://github.com/rararulab/rara/issues/1322))
+- **kernel**: Ack detector now catches mid-turn planning responses ([#1332](https://github.com/rararulab/rara/issues/1332)) ([#1333](https://github.com/rararulab/rara/issues/1333))
+- **kernel**: Sanitize tool names for OpenAI API compatibility ([#1342](https://github.com/rararulab/rara/issues/1342)) ([#1343](https://github.com/rararulab/rara/issues/1343))
+- **kernel**: Deliver scheduled task result to origin session ([#1360](https://github.com/rararulab/rara/issues/1360)) ([#1362](https://github.com/rararulab/rara/issues/1362))
+- **kernel**: Relax loop breaker flooding thresholds and exempt read-only tools ([#1359](https://github.com/rararulab/rara/issues/1359)) ([#1361](https://github.com/rararulab/rara/issues/1361))
+- **kernel**: Return Err(Interrupted) for new-message interrupt path ([#1372](https://github.com/rararulab/rara/issues/1372)) ([#1373](https://github.com/rararulab/rara/issues/1373))
+- **kernel**: Close spawn_child race that leaks child semaphore permits ([#1376](https://github.com/rararulab/rara/issues/1376)) ([#1378](https://github.com/rararulab/rara/issues/1378))
+- **kernel**: Add deferred tier to task and spawn-background tools ([#1375](https://github.com/rararulab/rara/issues/1375)) ([#1377](https://github.com/rararulab/rara/issues/1377))
+- **kernel**: Add feed dispatch task, SqliteFeedStore, and sync registry with admin routes ([#1419](https://github.com/rararulab/rara/issues/1419))
+- **kernel**: Classify SSE transport errors as retryable ([#1422](https://github.com/rararulab/rara/issues/1422)) ([#1424](https://github.com/rararulab/rara/issues/1424))
+- **kernel**: Session title stuck as Untitled after switching ([#1433](https://github.com/rararulab/rara/issues/1433)) ([#1436](https://github.com/rararulab/rara/issues/1436))
+- **kimi-oauth**: Add User-Agent header and filter empty assistant messages ([#1434](https://github.com/rararulab/rara/issues/1434)) ([#1435](https://github.com/rararulab/rara/issues/1435))
+- **kimi-oauth**: Clear frequency_penalty for Kimi code models ([#1442](https://github.com/rararulab/rara/issues/1442)) ([#1443](https://github.com/rararulab/rara/issues/1443))
+- **kernel**: Persist reasoning_content in Message for thinking mode ([#1445](https://github.com/rararulab/rara/issues/1445)) ([#1447](https://github.com/rararulab/rara/issues/1447))
+- **kernel**: Persist reasoning_content in Message for thinking mode ([#1445](https://github.com/rararulab/rara/issues/1445)) ([#1452](https://github.com/rararulab/rara/issues/1452))
+- **kernel**: Polling feed stops after first event due to missing HTTP timeout ([#1449](https://github.com/rararulab/rara/issues/1449)) ([#1450](https://github.com/rararulab/rara/issues/1450))
+- **kernel**: Persist reasoning_content in Message for thinking mode ([#1445](https://github.com/rararulab/rara/issues/1445)) ([#1453](https://github.com/rararulab/rara/issues/1453))
+- **channels**: Route ask-user question back to originating Telegram topic ([#1461](https://github.com/rararulab/rara/issues/1461)) ([#1462](https://github.com/rararulab/rara/issues/1462))
+- **channels**: Harden ask-user — identity gate, sensitive DM routing, inline options ([#1464](https://github.com/rararulab/rara/issues/1464)) ([#1465](https://github.com/rararulab/rara/issues/1465))
+- **channels**: Route guard approval back to origin topic + identity gate ([#1466](https://github.com/rararulab/rara/issues/1466)) ([#1467](https://github.com/rararulab/rara/issues/1467))
+- **kernel**: Raise StreamHub broadcast capacity to avoid dropped text deltas ([#1473](https://github.com/rararulab/rara/issues/1473)) ([#1479](https://github.com/rararulab/rara/issues/1479))
+- **kernel**: Tool_call_id mismatch after interrupt causes Kimi 400 ([#1487](https://github.com/rararulab/rara/issues/1487)) ([#1489](https://github.com/rararulab/rara/issues/1489))
+- **kernel**: Separate session reap from list() ([#1491](https://github.com/rararulab/rara/issues/1491)) ([#1494](https://github.com/rararulab/rara/issues/1494))
+- **kernel**: Deliver outbound envelopes for web-originated messages ([#1499](https://github.com/rararulab/rara/issues/1499)) ([#1500](https://github.com/rararulab/rara/issues/1500))
+- **kernel**: Auto-register non-web endpoints on ingress ([#1511](https://github.com/rararulab/rara/issues/1511)) ([#1515](https://github.com/rararulab/rara/issues/1515))
+- **channels**: Identity gate compares kernel UserId, not platform id ([#1533](https://github.com/rararulab/rara/issues/1533)) ([#1536](https://github.com/rararulab/rara/issues/1536))
+- **llm**: Gpt-5.4 reasoning effort clamp ([#1567](https://github.com/rararulab/rara/issues/1567)) ([#1568](https://github.com/rararulab/rara/issues/1568))
+- **web**: Surface agent errors via WebEvent ([#1573](https://github.com/rararulab/rara/issues/1573)) ([#1574](https://github.com/rararulab/rara/issues/1574))
+- **kernel**: Persist error in rt.result on turn failure ([#1501](https://github.com/rararulab/rara/issues/1501)) ([#1502](https://github.com/rararulab/rara/issues/1502))
+- **ci**: Fix rust 1.95 clippy lints ([#1667](https://github.com/rararulab/rara/issues/1667)) ([#1668](https://github.com/rararulab/rara/issues/1668))
+- **kernel**: Strip narrator prefixes and strengthen title_gen prompt ([#1787](https://github.com/rararulab/rara/issues/1787)) ([#1791](https://github.com/rararulab/rara/issues/1791))
+- **store,kernel**: Root-cause SQLite writer contention causing silent trace loss ([#1843](https://github.com/rararulab/rara/issues/1843)) ([#1845](https://github.com/rararulab/rara/issues/1845))
+- **kernel,channels**: Emit TextClear on laziness nudge to clear stale stream text ([#1852](https://github.com/rararulab/rara/issues/1852)) ([#1860](https://github.com/rararulab/rara/issues/1860))
+- **kernel**: Split title prompt into system + user messages ([#1870](https://github.com/rararulab/rara/issues/1870)) ([#1871](https://github.com/rararulab/rara/issues/1871))
+- **kernel,web**: Structured LLM error surfacing and suppress empty failure traces ([#1926](https://github.com/rararulab/rara/issues/1926)) ([#1938](https://github.com/rararulab/rara/issues/1938))
+- **kernel**: Inherit parent session LLM override on spawn_agent ([#1932](https://github.com/rararulab/rara/issues/1932)) ([#1934](https://github.com/rararulab/rara/issues/1934))
+- **kernel**: Resolve subagent LLM overrides via parent-chain walk ([#1958](https://github.com/rararulab/rara/issues/1958)) ([#1959](https://github.com/rararulab/rara/issues/1959))
+
+### Documentation
+
+- **memory**: Add detailed what/how/why comments to tape memory module ([#64](https://github.com/rararulab/rara/issues/64))
+- **kernel**: Add detailed comments to start_llm_turn explaining lifecycle phases
+- **telegram**: Add implementation comments for anchor tree flows
+- **kernel**: Enrich checkout action description in TapeTool ([#202](https://github.com/rararulab/rara/issues/202))
+- **kernel**: Add AGENT.md guidelines for IngressRateLimiter and GroupPolicy
+- **kernel**: Add 'why' reasoning to AGENT.md guidelines
+- **kernel**: Add AGENT.md section for tape-driven message rebuild + context budget ([#229](https://github.com/rararulab/rara/issues/229))
+- Update README to reflect tape-based architecture ([#783](https://github.com/rararulab/rara/issues/783)) ([#784](https://github.com/rararulab/rara/issues/784))
+- Simplify readme with logo ([#1088](https://github.com/rararulab/rara/issues/1088)) ([#1089](https://github.com/rararulab/rara/issues/1089))
+- Add inspired-by credits ([#1091](https://github.com/rararulab/rara/issues/1091)) ([#1092](https://github.com/rararulab/rara/issues/1092))
+- **kernel**: Add ARCHITECTURE.md mapping kernel data flow and module roles ([#1140](https://github.com/rararulab/rara/issues/1140)) ([#1150](https://github.com/rararulab/rara/issues/1150))
+- **kernel**: Rewrite delegation tools and tool tier docs in AGENT.md ([#1382](https://github.com/rararulab/rara/issues/1382))
+
+### Features
+
+- **kernel**: Implement KernelHandle as event-queue-based public API ([#23](https://github.com/rararulab/rara/issues/23))
+- **session**: 添加 SessionIndex trait 和 FileSessionIndex 实现 ([#43](https://github.com/rararulab/rara/issues/43))
+- **cmd**: Improve TUI session Gantt chart with metrics overlay and time axis
+- **memory**: Add user tape for cross-session user memory ([#70](https://github.com/rararulab/rara/issues/70))
+- **kernel**: Add group chat proactive reply with two-step LLM judgment ([#71](https://github.com/rararulab/rara/issues/71))
+- **kernel**: Add KnowledgeConfig struct ([#81](https://github.com/rararulab/rara/issues/81))
+- **kernel**: Add knowledge layer — items, categories, embedding, extractor, tool ([#81](https://github.com/rararulab/rara/issues/81))
+- **kernel**: Wire knowledge layer into kernel event loop and boot sequence ([#81](https://github.com/rararulab/rara/issues/81))
+- **channels**: Support sending images to users in Telegram ([#91](https://github.com/rararulab/rara/issues/91))
+- **memory**: Add source_ids to compaction anchor and entry lookup by ID ([#104](https://github.com/rararulab/rara/issues/104))
+- **memory**: Expose source references in knowledge search and add resolve_sources ([#105](https://github.com/rararulab/rara/issues/105))
+- **memory**: Support fork from specific entry ID ([#107](https://github.com/rararulab/rara/issues/107))
+- **agent**: Emit intent/progress during long multi-step tool executions ([#116](https://github.com/rararulab/rara/issues/116))
+- **kernel**: Dynamic MCP tool injection into agent loop ([#126](https://github.com/rararulab/rara/issues/126))
+- **kernel**: Replace oneshot result channel with mpsc AgentEvent channel ([#127](https://github.com/rararulab/rara/issues/127))
+- **kernel**: Run_agent_loop emits milestones via mpsc channel ([#127](https://github.com/rararulab/rara/issues/127))
+- **kernel**: Exec_spawn collects milestones into tool result ([#127](https://github.com/rararulab/rara/issues/127))
+- **kernel**: Usage collection, tape tools, and context contract ([#130](https://github.com/rararulab/rara/issues/130))
+- **llm**: Image compression pipeline for vision input ([#131](https://github.com/rararulab/rara/issues/131))
+- **kernel**: Add scheduled task system ([#132](https://github.com/rararulab/rara/issues/132))
+- **kernel**: Auto-handoff on context window overflow ([#134](https://github.com/rararulab/rara/issues/134))
+- **kernel**: ScheduledJobAgent + enriched task notifications ([#135](https://github.com/rararulab/rara/issues/135))
+- **kernel**: KernelEvent::SendNotification + fix PublishEvent syscall ([#137](https://github.com/rararulab/rara/issues/137))
+- **kernel**: Runtime context guard with token feedback ([#149](https://github.com/rararulab/rara/issues/149))
+- **llm**: Add Message::tool_result_multimodal() constructor
+- **kernel**: Add ToolOutput type and update AgentTool::execute() signature
+- **kernel**: Add desired_session_key to spawn_with_input ([#164](https://github.com/rararulab/rara/issues/164))
+- **kernel**: Store LLM usage metadata on assistant tape entries ([#165](https://github.com/rararulab/rara/issues/165))
+- **memory**: Add estimated_context_tokens to TapeInfo ([#165](https://github.com/rararulab/rara/issues/165))
+- **kernel**: Expose estimated_context_tokens in tape.info tool ([#165](https://github.com/rararulab/rara/issues/165))
+- **kernel**: Use estimated_context_tokens in context pressure warnings ([#165](https://github.com/rararulab/rara/issues/165))
+- **memory**: User tape knowledge distillation via anchor ([#170](https://github.com/rararulab/rara/issues/170))
+- **kernel**: Render soul prompt with runtime state via SoulRenderer ([#174](https://github.com/rararulab/rara/issues/174))
+- **kernel**: Add mood inference hook at end of agent loop ([#176](https://github.com/rararulab/rara/issues/176))
+- **kernel**: Add rate limit retry with exponential backoff for LLM calls
+- **telegram**: Add /anchors and /checkout commands
+- **kernel**: Add checkout action to tape tool ([#188](https://github.com/rararulab/rara/issues/188))
+- **kernel**: Teach LLM about anchor navigation in runtime prompt ([#188](https://github.com/rararulab/rara/issues/188))
+- **kernel**: Inject SessionIndex into TapeTool for real checkout ([#193](https://github.com/rararulab/rara/issues/193))
+- **kernel**: Add checkout_root action to TapeTool ([#204](https://github.com/rararulab/rara/issues/204))
+- **channels**: Include raw args in tool parse failure error ([#207](https://github.com/rararulab/rara/issues/207))
+- **kernel**: Log LLM request and response at debug level
+- **kernel**: Add GroupPolicy enum to channel types (#219-adjacent)
+- **kernel**: Add IngressRateLimiter with sliding-window per-key limiting
+- **kernel**: Wire IngressRateLimiter into IOSubsystem resolve path
+- **kernel**: Add context budget for tool result truncation ([#228](https://github.com/rararulab/rara/issues/228))
+- **kernel**: Add /msg_version command and session/manifest routing ([#257](https://github.com/rararulab/rara/issues/257))
+- **channels**: Plan-execute TG 三级显示策略 + 单消息编辑流 ([#267](https://github.com/rararulab/rara/issues/267))
+- **telegram**: Show input/output token counts in progress UX ([#304](https://github.com/rararulab/rara/issues/304))
+- **kernel,telegram**: Rara_message_id end-to-end tracing and debug_trace tool ([#337](https://github.com/rararulab/rara/issues/337))
+- **kernel**: Background agent spawning with proactive result delivery ([#340](https://github.com/rararulab/rara/issues/340))
+- **kernel**: Context folding — auto-anchor with pressure-driven summarization ([#357](https://github.com/rararulab/rara/issues/357))
+- **kernel**: Implement ContextFolder and FoldBranchTool ([#376](https://github.com/rararulab/rara/issues/376))
+- **kernel,telegram**: Auto-generate session title & redesign /sessions UI ([#434](https://github.com/rararulab/rara/issues/434))
+- **kernel**: External agent.md prompt ([#451](https://github.com/rararulab/rara/issues/451))
+- **kernel**: Centralize loading hints with random selection ([#455](https://github.com/rararulab/rara/issues/455))
+- **channels**: Add /status command with session info and scheduled jobs ([#450](https://github.com/rararulab/rara/issues/450)) ([#453](https://github.com/rararulab/rara/issues/453))
+- **kernel**: Implement TaskReport type system and notification subscription bus ([#438](https://github.com/rararulab/rara/issues/438)) ([#439](https://github.com/rararulab/rara/issues/439))
+- **dock**: Generative UI canvas workbench ([#424](https://github.com/rararulab/rara/issues/424))
+- **kernel**: Agent knowledge directory with index + on-demand loading ([#466](https://github.com/rararulab/rara/issues/466)) ([#469](https://github.com/rararulab/rara/issues/469))
+- **kernel**: Read-file adaptive paging based on context window ([#468](https://github.com/rararulab/rara/issues/468)) ([#471](https://github.com/rararulab/rara/issues/471))
+- **kernel**: Default execution mode to plan (v2) ([#479](https://github.com/rararulab/rara/issues/479)) ([#481](https://github.com/rararulab/rara/issues/481))
+- **kernel**: Add browser automation subsystem via Lightpanda + CDP ([#473](https://github.com/rararulab/rara/issues/473))
+- **kernel**: Inject installed skills into agent system prompt ([#487](https://github.com/rararulab/rara/issues/487))
+- **channels**: Add session delete buttons and relative time in /sessions ([#492](https://github.com/rararulab/rara/issues/492))
+- **tool-macro**: Add ToolDef derive macro infrastructure ([#514](https://github.com/rararulab/rara/issues/514))
+- **kernel**: Implement pause_turn circuit breaker for agent loop ([#506](https://github.com/rararulab/rara/issues/506)) ([#508](https://github.com/rararulab/rara/issues/508))
+- **tool-macro**: Migrate kernel tools to ToolDef ([#510](https://github.com/rararulab/rara/issues/510)) ([#517](https://github.com/rararulab/rara/issues/517))
+- **web**: Cascade viewer — agent execution trace side panel ([#513](https://github.com/rararulab/rara/issues/513))
+- **acp**: Add native acp client crate ([#504](https://github.com/rararulab/rara/issues/504))
+- **kernel**: Enrich tape metadata with typed structs for latency, model, and stop_reason ([#548](https://github.com/rararulab/rara/issues/548)) ([#551](https://github.com/rararulab/rara/issues/551))
+- **kernel**: Add PathScopeGuard for file-access scope enforcement ([#579](https://github.com/rararulab/rara/issues/579)) ([#582](https://github.com/rararulab/rara/issues/582))
+- **kernel**: Session-level dynamic whitelist for PathScopeGuard approvals ([#596](https://github.com/rararulab/rara/issues/596)) ([#597](https://github.com/rararulab/rara/issues/597))
+- **kernel**: Streaming repetition guard for LLM output loops ([#602](https://github.com/rararulab/rara/issues/602)) ([#614](https://github.com/rararulab/rara/issues/614))
+- **kernel**: Add session-length handoff reminder and strengthen topic-switch prompt ([#615](https://github.com/rararulab/rara/issues/615))
+- **kernel**: Show LLM reasoning for tool calls in progress display ([#661](https://github.com/rararulab/rara/issues/661)) ([#664](https://github.com/rararulab/rara/issues/664))
+- **channels**: Enhance guard approval UI with context, timing, and expiration ([#653](https://github.com/rararulab/rara/issues/653)) ([#665](https://github.com/rararulab/rara/issues/665))
+- **kernel**: Add LlmModelLister and LlmEmbedder extension traits ([#762](https://github.com/rararulab/rara/issues/762)) ([#766](https://github.com/rararulab/rara/issues/766))
+- **kernel**: Add tool call loop breaker ([#773](https://github.com/rararulab/rara/issues/773)) ([#775](https://github.com/rararulab/rara/issues/775))
+- **kernel**: Deferred tool loading — reduce per-turn token overhead ([#756](https://github.com/rararulab/rara/issues/756)) ([#768](https://github.com/rararulab/rara/issues/768))
+- **kernel**: Per-tool execution timeout granularity ([#778](https://github.com/rararulab/rara/issues/778)) ([#782](https://github.com/rararulab/rara/issues/782))
+- **kernel**: Stream bash stdout in real-time during tool execution ([#777](https://github.com/rararulab/rara/issues/777)) ([#788](https://github.com/rararulab/rara/issues/788))
+- **app**: Port kota file tools — in-process grep/find, delete-file, create-directory ([#808](https://github.com/rararulab/rara/issues/808)) ([#810](https://github.com/rararulab/rara/issues/810))
+- **channels**: Add WeChat iLink Bot channel adapter ([#827](https://github.com/rararulab/rara/issues/827)) ([#830](https://github.com/rararulab/rara/issues/830))
+- **kernel**: Discover-tools finds skills ([#833](https://github.com/rararulab/rara/issues/833)) ([#835](https://github.com/rararulab/rara/issues/835))
+- **kernel**: Task tool — preset-based background agent delegation ([#845](https://github.com/rararulab/rara/issues/845)) ([#847](https://github.com/rararulab/rara/issues/847))
+- **kernel**: Add explore task preset and delegation routing ([#873](https://github.com/rararulab/rara/issues/873)) ([#875](https://github.com/rararulab/rara/issues/875))
+- **kernel**: Inject deferred tool names into agent system prompt ([#902](https://github.com/rararulab/rara/issues/902)) ([#906](https://github.com/rararulab/rara/issues/906))
+- **tools**: Include parameter summaries in discover-tools results ([#925](https://github.com/rararulab/rara/issues/925)) ([#926](https://github.com/rararulab/rara/issues/926))
+- **channels**: Improve Telegram progress UX (#947, #948, #949) ([#951](https://github.com/rararulab/rara/issues/951))
+- **kernel**: Add ToolHint, UserQuestionManager, and ask-user tool ([#945](https://github.com/rararulab/rara/issues/945)) ([#952](https://github.com/rararulab/rara/issues/952))
+- **kernel**: Codex OAuth as first-class LLM provider ([#950](https://github.com/rararulab/rara/issues/950)) ([#953](https://github.com/rararulab/rara/issues/953))
+- **kernel**: Telegram voice message STT via local whisper-server ([#998](https://github.com/rararulab/rara/issues/998)) ([#1003](https://github.com/rararulab/rara/issues/1003))
+- **cmd**: Rara setup interactive configuration wizard ([#1008](https://github.com/rararulab/rara/issues/1008)) ([#1011](https://github.com/rararulab/rara/issues/1011))
+- **kernel**: Detect model vision capability and strip image blocks ([#1076](https://github.com/rararulab/rara/issues/1076)) ([#1078](https://github.com/rararulab/rara/issues/1078))
+- **app**: Auto-manage whisper-server lifecycle ([#1081](https://github.com/rararulab/rara/issues/1081)) ([#1082](https://github.com/rararulab/rara/issues/1082))
+- **web**: Voice message input via microphone recording ([#1084](https://github.com/rararulab/rara/issues/1084)) ([#1085](https://github.com/rararulab/rara/issues/1085))
+- **browser**: Enforce navigation timeout and make wait_for timeout configurable ([#1107](https://github.com/rararulab/rara/issues/1107)) ([#1108](https://github.com/rararulab/rara/issues/1108))
+- **kernel**: Batch file reads and 429 rate-limit recovery ([#1118](https://github.com/rararulab/rara/issues/1118)) ([#1119](https://github.com/rararulab/rara/issues/1119))
+- **cmd**: Add 'rara debug <message_id>' CLI command ([#1135](https://github.com/rararulab/rara/issues/1135)) ([#1136](https://github.com/rararulab/rara/issues/1136))
+- **kernel**: Per-session child concurrency semaphore ([#1144](https://github.com/rararulab/rara/issues/1144)) ([#1155](https://github.com/rararulab/rara/issues/1155))
+- **kernel**: Add AgentTool::validate semantic validation step ([#1183](https://github.com/rararulab/rara/issues/1183)) ([#1185](https://github.com/rararulab/rara/issues/1185))
+- **kernel**: GLM-5.1 provider-specific optimizations ([#1196](https://github.com/rararulab/rara/issues/1196)) ([#1197](https://github.com/rararulab/rara/issues/1197))
+- **kernel**: Add safety axes + concurrency partitioning ([#1186](https://github.com/rararulab/rara/issues/1186)) ([#1192](https://github.com/rararulab/rara/issues/1192))
+- **kernel**: Tool execution hooks — PreToolUse / PostToolUse / PostToolUseFailure ([#1204](https://github.com/rararulab/rara/issues/1204)) ([#1208](https://github.com/rararulab/rara/issues/1208))
+- **kernel**: Scheduling architecture hardening — 10 improvements from matklad review ([#1222](https://github.com/rararulab/rara/issues/1222)) ([#1245](https://github.com/rararulab/rara/issues/1245))
+- **kernel**: Add CodexDriver for ChatGPT backend Responses API ([#1246](https://github.com/rararulab/rara/issues/1246)) ([#1247](https://github.com/rararulab/rara/issues/1247))
+- **kernel**: Add LifecycleHook trait and registry for turn/fold events ([#1286](https://github.com/rararulab/rara/issues/1286)) ([#1288](https://github.com/rararulab/rara/issues/1288))
+- **kernel**: Implement SkillNudge + MemoryNudge lifecycle hooks ([#1290](https://github.com/rararulab/rara/issues/1290)) ([#1292](https://github.com/rararulab/rara/issues/1292))
+- **kernel**: Self-continuation signal to prevent GPT stop-and-ask ([#1301](https://github.com/rararulab/rara/issues/1301)) ([#1306](https://github.com/rararulab/rara/issues/1306))
+- **kernel**: Interrupt agent turn on new user message ([#1317](https://github.com/rararulab/rara/issues/1317)) ([#1318](https://github.com/rararulab/rara/issues/1318))
+- **kernel**: Add task delegation guidance to context_contract ([#1321](https://github.com/rararulab/rara/issues/1321)) ([#1323](https://github.com/rararulab/rara/issues/1323))
+- **agents**: Make safety fragment act-by-default to improve proactivity ([#1320](https://github.com/rararulab/rara/issues/1320)) ([#1324](https://github.com/rararulab/rara/issues/1324))
+- **kernel**: Runtime ack detection to prevent lazy LLM responses ([#1329](https://github.com/rararulab/rara/issues/1329)) ([#1330](https://github.com/rararulab/rara/issues/1330))
+- **kernel**: GPT-specific anti-narration prompt + raise ack length to 2000 ([#1340](https://github.com/rararulab/rara/issues/1340)) ([#1341](https://github.com/rararulab/rara/issues/1341))
+- **kernel**: Hermes-aligned tool-use enforcement for GPT/Gemini/Grok ([#1340](https://github.com/rararulab/rara/issues/1340)) ([#1344](https://github.com/rararulab/rara/issues/1344))
+- **kernel**: Add WHEN TO USE guidance to task tool and promote spawn-background to core ([#1348](https://github.com/rararulab/rara/issues/1348)) ([#1352](https://github.com/rararulab/rara/issues/1352))
+- **kernel**: Three-tier ack detection for verbose GPT narration ([#1349](https://github.com/rararulab/rara/issues/1349)) ([#1353](https://github.com/rararulab/rara/issues/1353))
+- **kernel**: Integrate talk-normal anti-slop output style rules ([#1350](https://github.com/rararulab/rara/issues/1350)) ([#1354](https://github.com/rararulab/rara/issues/1354))
+- **kernel**: Hermes-aligned agent loop efficiency improvements ([#1384](https://github.com/rararulab/rara/issues/1384)) ([#1387](https://github.com/rararulab/rara/issues/1387))
+- **kernel**: Add SQLite FTS5 index for tape-search ([#1399](https://github.com/rararulab/rara/issues/1399)) ([#1414](https://github.com/rararulab/rara/issues/1414))
+- **kimi-oauth**: Add Kimi Code OAuth provider via kimi-cli token sharing ([#1420](https://github.com/rararulab/rara/issues/1420)) ([#1423](https://github.com/rararulab/rara/issues/1423))
+- **kernel**: Route FeedEvents to subscribers via SubscriptionRegistry ([#1429](https://github.com/rararulab/rara/issues/1429)) ([#1431](https://github.com/rararulab/rara/issues/1431))
+- **channels**: Telegram forum topics — auto-create, route, and delete ([#1430](https://github.com/rararulab/rara/issues/1430)) ([#1440](https://github.com/rararulab/rara/issues/1440))
+- **channels**: Telegram reply keyboard with session status + forum topic lifecycle ([#1454](https://github.com/rararulab/rara/issues/1454)) ([#1455](https://github.com/rararulab/rara/issues/1455))
+- **channels**: Forum topic naming — deep-link, LLM title sync, /rename ([#1460](https://github.com/rararulab/rara/issues/1460)) ([#1463](https://github.com/rararulab/rara/issues/1463))
+- **llm**: Openrouter vision catalog ([#1480](https://github.com/rararulab/rara/issues/1480)) ([#1482](https://github.com/rararulab/rara/issues/1482))
+- **channels**: Show model + context in TG pin floating preview ([#1541](https://github.com/rararulab/rara/issues/1541)) ([#1544](https://github.com/rararulab/rara/issues/1544))
+- **kernel**: Jieba pre-segment tape fts ([#1577](https://github.com/rararulab/rara/issues/1577)) ([#1578](https://github.com/rararulab/rara/issues/1578))
+- **llm**: MiniMax-M2 streaming robustness — driver + kernel + adapter ([#1630](https://github.com/rararulab/rara/issues/1630)) ([#1649](https://github.com/rararulab/rara/issues/1649))
+- **kernel,web**: Route background task replies back to originating channel ([#1793](https://github.com/rararulab/rara/issues/1793)) ([#1823](https://github.com/rararulab/rara/issues/1823))
+- **kernel,channels,web**: Push session events for non-user tape mutations ([#1849](https://github.com/rararulab/rara/issues/1849)) ([#1858](https://github.com/rararulab/rara/issues/1858))
+- **tool**: Expose run_code via boxlite ([#1700](https://github.com/rararulab/rara/issues/1700)) ([#1861](https://github.com/rararulab/rara/issues/1861))
+- **backend**: Regenerate session title endpoint ([#1884](https://github.com/rararulab/rara/issues/1884)) ([#1889](https://github.com/rararulab/rara/issues/1889))
+- **telemetry**: Adopt OTel GenAI + OpenInference semconv on spans ([#1856](https://github.com/rararulab/rara/issues/1856)) ([#1863](https://github.com/rararulab/rara/issues/1863))
+- **sandbox**: Replace path-scope guard with sandbox-enforced FS boundary ([#1936](https://github.com/rararulab/rara/issues/1936)) ([#1946](https://github.com/rararulab/rara/issues/1946))
+
+### Miscellaneous Tasks
+
+- Establish job backend baseline
+- Change default HTTP port from 3000 to 25555
+- Format
+- Tidy project
+- Format code
+- **kernel**: Replace From<(&str, Option<u16>)> with explicit classify_provider_error, add stage constants
+- Rustfmt formatting pass, fix Helm replicas/workers from `true` to `1`
+- Format
+- Clean
+- **kernel**: Add usearch dependency for knowledge layer ([#81](https://github.com/rararulab/rara/issues/81))
+- Change jobs_path
+- Format
+- Add tool timeout
+- Support composio config
+- **kernel**: Add perf TODO for anchor tree session loading ([#188](https://github.com/rararulab/rara/issues/188))
+- Format
+- Format
+- Auto tool
+- **channels**: Add delivery debug logging for wechat send path ([#881](https://github.com/rararulab/rara/issues/881)) ([#882](https://github.com/rararulab/rara/issues/882))
+- **kernel**: Increase default_max_iterations from 12 to 60 ([#1313](https://github.com/rararulab/rara/issues/1313)) ([#1313](https://github.com/rararulab/rara/issues/1313))
+- **app,web**: Remove rara-dock subsystem ([#1895](https://github.com/rararulab/rara/issues/1895)) ([#1900](https://github.com/rararulab/rara/issues/1900))
+- **app**: Remove rara-composio integration ([#1894](https://github.com/rararulab/rara/issues/1894)) ([#1899](https://github.com/rararulab/rara/issues/1899))
+- **harness**: Codify e2e contract + lane-1/lane-2 examples ([#1973](https://github.com/rararulab/rara/issues/1973)) ([#1977](https://github.com/rararulab/rara/issues/1977))
+
+### Performance
+
+- **cascade**: Build CascadeTrace incrementally during agent loop ([#625](https://github.com/rararulab/rara/issues/625)) ([#632](https://github.com/rararulab/rara/issues/632))
+- **kernel**: Batch sequential event handling in run_processor ([#1141](https://github.com/rararulab/rara/issues/1141)) ([#1152](https://github.com/rararulab/rara/issues/1152))
+- **kernel**: In-memory tape index for anchor and kind lookups ([#1147](https://github.com/rararulab/rara/issues/1147)) ([#1157](https://github.com/rararulab/rara/issues/1157))
+- **base**: Use NonZeroU128 in define_id! for Option<Id> niche optimization ([#1149](https://github.com/rararulab/rara/issues/1149)) ([#1160](https://github.com/rararulab/rara/issues/1160))
+- **backend**: Single FTS query for session search ([#1662](https://github.com/rararulab/rara/issues/1662)) ([#1674](https://github.com/rararulab/rara/issues/1674))
+
+### Refactor
+
+- Decouple telegram bot with grpc/http boundary ([#94](https://github.com/rararulab/rara/issues/94))
+- **kernel**: Extract SecuritySubsystem
+- **kernel**: Extract AuditSubsystem
+- **kernel**: Flatten KernelInner, add strum derives, instrument macros, and Arc type aliases
+- **kernel**: Use join_all for concurrent event batch processing ([#20](https://github.com/rararulab/rara/issues/20))
+- **kernel**: Migrate external callers to KernelHandle, demote Kernel methods ([#24](https://github.com/rararulab/rara/issues/24))
+- **kernel**: Remove redundant spawn methods from Kernel
+- **kernel**: Remove async-openai and legacy LLM provider layer
+- **kernel**: Add OutboundEnvelope constructors, eliminate duplicate struct literals
+- **kernel**: Extract routing helpers from handle_user_message
+- **kernel**: Reduce ProcessHandle boilerplate with helper methods
+- **kernel**: Consolidate queue/KV/LLM subsystems, remove rara-queue crate
+- **kernel**: Replace manual map_err with snafu ResultExt ([#33](https://github.com/rararulab/rara/issues/33))
+- **kernel**: Replace manual enum match with strum derives ([#34](https://github.com/rararulab/rara/issues/34))
+- **kernel**: Replace manual Debug impls with derive_more::Debug ([#35](https://github.com/rararulab/rara/issues/35))
+- **kernel**: Dissolve defaults/ module into domain modules ([#36](https://github.com/rararulab/rara/issues/36))
+- **kernel**: Split session.rs into directory module, fix external import paths ([#36](https://github.com/rararulab/rara/issues/36))
+- **kernel**: 将 RuntimeTable 从类型别名提升为领域结构体 ([#39](https://github.com/rararulab/rara/issues/39))
+- **kernel**: 提取 DeliverySubsystem 子组件 ([#39](https://github.com/rararulab/rara/issues/39))
+- **kernel**: 提取 SyscallDispatcher 子组件 ([#39](https://github.com/rararulab/rara/issues/39))
+- **kernel**: 平铺过度拆分的子模块 ([#40](https://github.com/rararulab/rara/issues/40))
+- Replace Consul with YAML config, continue SQLite migration, add session resumption
+- **kernel**: Introduce EventBase for unified event metadata
+- **llm**: Per-provider default_model and fallback_models ([#47](https://github.com/rararulab/rara/issues/47))
+- **kernel**: Session-centric runtime ([#48](https://github.com/rararulab/rara/issues/48))
+- **kernel**: Migrate from Memory+SessionRepository to tape ([#51](https://github.com/rararulab/rara/issues/51))
+- Make it compile
+- **kernel**: Remove SessionResolver, simplify ChannelBinding ([#63](https://github.com/rararulab/rara/issues/63))
+- **kernel**: Extract TapeTool from SyscallTool into dedicated tool
+- **kernel**: Improve TapeTool error handling, add between_anchors action ([#68](https://github.com/rararulab/rara/issues/68))
+- **kernel**: Decouple proactive judgment into GroupMessage event ([#79](https://github.com/rararulab/rara/issues/79))
+- **kernel**: Make knowledge layer a required component, not optional ([#81](https://github.com/rararulab/rara/issues/81))
+- **kernel**: Remove enabled flag from KnowledgeConfig ([#81](https://github.com/rararulab/rara/issues/81))
+- **app**: Align knowledge config with settings-first architecture
+- **memory**: Compaction shrinks read set instead of deleting history ([#103](https://github.com/rararulab/rara/issues/103))
+- **memory**: Define typed HandoffState contract for anchor state ([#106](https://github.com/rararulab/rara/issues/106))
+- **kernel**: ScheduledTask as dedicated KernelEvent + notifications ([#133](https://github.com/rararulab/rara/issues/133))
+- **kernel**: Split schedule-add into three LLM-friendly tools
+- **kernel**: Rewrite tape tool description with topic-driven anchor and recall guidance
+- **mita**: Replace submit_message with typed MitaDirective ([#171](https://github.com/rararulab/rara/issues/171))
+- **soul**: Remove all fallback logic, use built-in defaults directly
+- **kernel**: Spawn per event instead of join_all to prevent batch blocking ([#185](https://github.com/rararulab/rara/issues/185))
+- **kernel**: Extract InMemorySessionIndex to shared test utility ([#188](https://github.com/rararulab/rara/issues/188))
+- **kernel**: Move checkout_anchor to TapeService ([#188](https://github.com/rararulab/rara/issues/188))
+- **kernel**: 每次迭代从 tape 重建 LLM messages，消除双写冗余 ([#229](https://github.com/rararulab/rara/issues/229))
+- **kernel**: Replace Chinese prompts with English in agent loop ([#229](https://github.com/rararulab/rara/issues/229))
+- **kernel**: Consolidate tool impls into tool/ module ([#264](https://github.com/rararulab/rara/issues/264))
+- **memory**: Remove MAX_USER_NOTES truncation, trust anchor boundary ([#407](https://github.com/rararulab/rara/issues/407))
+- **kernel**: Migrate browser tools to ToolDef derive macro ([#511](https://github.com/rararulab/rara/issues/511)) ([#518](https://github.com/rararulab/rara/issues/518))
+- **app**: Migrate app, dock, and knowledge tools to ToolDef derive macro ([#512](https://github.com/rararulab/rara/issues/512)) ([#519](https://github.com/rararulab/rara/issues/519))
+- **tool**: Typed Output associated type for ToolExecute ([#524](https://github.com/rararulab/rara/issues/524)) ([#533](https://github.com/rararulab/rara/issues/533))
+- **telemetry**: Migrate metrics from Prometheus pull to OpenTelemetry push ([#568](https://github.com/rararulab/rara/issues/568))
+- **tg**: Unify plan and progress into single in-progress message ([#580](https://github.com/rararulab/rara/issues/580)) ([#583](https://github.com/rararulab/rara/issues/583))
+- **kernel**: Plan mode agent loop fixes (#648 #649 #650) ([#667](https://github.com/rararulab/rara/issues/667))
+- **kernel**: Prompt review — fix 12 findings ([#755](https://github.com/rararulab/rara/issues/755)) ([#758](https://github.com/rararulab/rara/issues/758))
+- **kernel**: Flatten spawn-background params — remove nested manifest ([#764](https://github.com/rararulab/rara/issues/764)) ([#767](https://github.com/rararulab/rara/issues/767))
+- **tools**: Token diet — aggressive tool tiering + new file tools + browser prompt ([#805](https://github.com/rararulab/rara/issues/805)) ([#806](https://github.com/rararulab/rara/issues/806))
+- **kernel**: Drop output interceptor ([#809](https://github.com/rararulab/rara/issues/809)) ([#811](https://github.com/rararulab/rara/issues/811))
+- **agents**: Prompt diet — cut tokens ~49% ([#823](https://github.com/rararulab/rara/issues/823)) ([#824](https://github.com/rararulab/rara/issues/824))
+- **kernel**: Tool schema diet — split tape + compress descriptions ([#825](https://github.com/rararulab/rara/issues/825)) ([#826](https://github.com/rararulab/rara/issues/826))
+- **kernel**: Prompt diet tool tiering ([#831](https://github.com/rararulab/rara/issues/831)) ([#832](https://github.com/rararulab/rara/issues/832))
+- **agents**: Align system prompts with Claude Code patterns ([#841](https://github.com/rararulab/rara/issues/841)) ([#844](https://github.com/rararulab/rara/issues/844))
+- **app**: Remove swagger-ui support ([#904](https://github.com/rararulab/rara/issues/904))
+- Remove dead code identified by desloppify scan ([#1025](https://github.com/rararulab/rara/issues/1025)) ([#1029](https://github.com/rararulab/rara/issues/1029))
+- **kernel**: Fix KernelHandle API inconsistencies ([#1027](https://github.com/rararulab/rara/issues/1027)) ([#1031](https://github.com/rararulab/rara/issues/1031))
+- Replace magic strings with typed enums ([#1033](https://github.com/rararulab/rara/issues/1033)) ([#1036](https://github.com/rararulab/rara/issues/1036))
+- **agents**: Optimize agent prompts with prompt-refinery framework ([#1105](https://github.com/rararulab/rara/issues/1105)) ([#1106](https://github.com/rararulab/rara/issues/1106))
+- **kernel**: Replace anyhow with snafu typed errors in kernel internals ([#1124](https://github.com/rararulab/rara/issues/1124)) ([#1129](https://github.com/rararulab/rara/issues/1129))
+- **kernel**: Make LlmCredential fields private with constructor ([#1122](https://github.com/rararulab/rara/issues/1122)) ([#1131](https://github.com/rararulab/rara/issues/1131))
+- **kernel**: Introduce ToolName newtype for type-safe tool identifiers ([#1123](https://github.com/rararulab/rara/issues/1123)) ([#1133](https://github.com/rararulab/rara/issues/1133))
+- **kernel**: Type-state InboundMessage<Unresolved/Resolved> ([#1125](https://github.com/rararulab/rara/issues/1125)) ([#1134](https://github.com/rararulab/rara/issues/1134))
+- **kernel**: Type-state Principal<Lookup> vs Principal<Resolved> ([#1121](https://github.com/rararulab/rara/issues/1121)) ([#1137](https://github.com/rararulab/rara/issues/1137))
+- **kernel**: Remove single-impl EventQueue trait, use ShardedEventQueue directly ([#1142](https://github.com/rararulab/rara/issues/1142)) ([#1151](https://github.com/rararulab/rara/issues/1151))
+- **kernel**: SessionState transitions via methods ([#1143](https://github.com/rararulab/rara/issues/1143)) ([#1153](https://github.com/rararulab/rara/issues/1153))
+- **workspace**: Extract browser/stt from kernel into driver crates ([#1146](https://github.com/rararulab/rara/issues/1146)) ([#1154](https://github.com/rararulab/rara/issues/1154))
+- **agent**: Split run_agent_loop into sans-IO machine + runner ([#1145](https://github.com/rararulab/rara/issues/1145)) ([#1159](https://github.com/rararulab/rara/issues/1159))
+- **kernel**: Clean up io.rs (typestate, constructors, dead code, hot path) ([#1180](https://github.com/rararulab/rara/issues/1180)) ([#1184](https://github.com/rararulab/rara/issues/1184))
+- **kernel**: Rewrite Codex driver — full Responses API event handling ([#1250](https://github.com/rararulab/rara/issues/1250)) ([#1251](https://github.com/rararulab/rara/issues/1251))
+- **kernel**: Unify Codex into OpenAiDriver via ApiFormat enum ([#1287](https://github.com/rararulab/rara/issues/1287)) ([#1293](https://github.com/rararulab/rara/issues/1293))
+- **kernel**: Restrict tape-anchor to topic-switch only ([#1355](https://github.com/rararulab/rara/issues/1355)) ([#1356](https://github.com/rararulab/rara/issues/1356))
+- **kernel,sessions,skills**: Replace map_err with snafu context ([#1458](https://github.com/rararulab/rara/issues/1458)) ([#1459](https://github.com/rararulab/rara/issues/1459))
+- **kernel**: Own trace build and save ([#1613](https://github.com/rararulab/rara/issues/1613)) ([#1614](https://github.com/rararulab/rara/issues/1614))
+- **kernel**: Unified background-agent framework ([#1631](https://github.com/rararulab/rara/issues/1631)) ([#1650](https://github.com/rararulab/rara/issues/1650))
+- **kernel**: Agent fallback chain ([#1670](https://github.com/rararulab/rara/issues/1670)) ([#1671](https://github.com/rararulab/rara/issues/1671))
+- **kernel**: Session-centric StreamHub event bus ([#1647](https://github.com/rararulab/rara/issues/1647)) ([#1652](https://github.com/rararulab/rara/issues/1652))
+- **db**: Migrate sqlx consumers to diesel ([#1702](https://github.com/rararulab/rara/issues/1702)) ([#1737](https://github.com/rararulab/rara/issues/1737))
+- **db**: Catch up with main and port new sqlx code ([#1744](https://github.com/rararulab/rara/issues/1744)) ([#1746](https://github.com/rararulab/rara/issues/1746))
+- **db**: Third catchup with main ([#1747](https://github.com/rararulab/rara/issues/1747)) ([#1751](https://github.com/rararulab/rara/issues/1751))
+- **db**: Fourth catchup with main ([#1747](https://github.com/rararulab/rara/issues/1747)) ([#1752](https://github.com/rararulab/rara/issues/1752))
+- **data-feed**: Snafu errors + admin gating ([#1739](https://github.com/rararulab/rara/issues/1739)) ([#1782](https://github.com/rararulab/rara/issues/1782))
+- **kernel**: Rename rara_message_id to rara_turn_id ([#1978](https://github.com/rararulab/rara/issues/1978)) ([#1991](https://github.com/rararulab/rara/issues/1991))
+
+### Revert
+
+- **channels**: Back out today's Telegram routing changes
+- **kernel**: Back out today's proactivity changes
+- **kernel**: Back out remaining afternoon changes
+- Restore April 13 changes previously rolled back
+
+### Styling
+
+- **browser**: Fix rustfmt alignment in BrowserFetchResult ([#1112](https://github.com/rararulab/rara/issues/1112)) ([#1113](https://github.com/rararulab/rara/issues/1113))
+- **channels**: Fix formatting ([#1338](https://github.com/rararulab/rara/issues/1338)) ([#1339](https://github.com/rararulab/rara/issues/1339))
+
+### Testing
+
+- **memory**: Add tests for estimated_context_tokens ([#165](https://github.com/rararulab/rara/issues/165))
+- **kernel**: Add E2E tests for anchor checkout flow ([#197](https://github.com/rararulab/rara/issues/197))
+- **kernel**: Add rate limiter window expiry test
+- **kernel**: Add ScriptedLlmDriver and CI-ready E2E test harness ([#1172](https://github.com/rararulab/rara/issues/1172)) ([#1175](https://github.com/rararulab/rara/issues/1175))
+- **kernel**: Tool call round-trip E2E test with FakeTool ([#1177](https://github.com/rararulab/rara/issues/1177)) ([#1182](https://github.com/rararulab/rara/issues/1182))
+- **kernel**: Failure mode E2E tests for LLM/tool/iteration errors ([#1179](https://github.com/rararulab/rara/issues/1179)) ([#1188](https://github.com/rararulab/rara/issues/1188))
+
+<!-- generated by git-cliff -->
