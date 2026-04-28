@@ -150,19 +150,25 @@ person if they aren't written down.
 3. **Runtime files need staging.** boxlite expects the following files
    to be present at its runtime directory before the first box will
    start:
-   - `boxlite-guest`
-   - `libkrunfw.dylib` (macOS) / `libkrunfw.so` (linux)
-   - `mke2fs`
    - `boxlite-shim`
+   - `boxlite-guest`
+   - `mke2fs`
    - `debugfs`
+   - the versioned `libkrunfw` SONAME — `libkrunfw.5.dylib` on macOS or
+     `libkrunfw.so.5` on Linux for boxlite v0.8.2. Boxlite's runtime
+     `dlopen`s the versioned filename embedded in the binary; an
+     unversioned `libkrunfw.dylib`/`libkrunfw.so` symlink is **not**
+     required.
 
    Staging is automated via `rara setup boxlite` (see
-   `docs/guides/boxlite-runtime.md`). The destination is:
+   `docs/guides/boxlite-runtime.md`). It downloads the upstream prebuilt
+   runtime tarball directly — no `cargo build -p rara-sandbox` is
+   required first. The destination is:
    - macOS: `~/Library/Application Support/boxlite/runtimes/v0.8.2/`
    - Linux: `$XDG_DATA_HOME/boxlite/runtimes/v0.8.2/`
      (fallback `~/.local/share/boxlite/runtimes/v0.8.2/`)
 
-   Run `cargo build -p rara-sandbox` once (without `BOXLITE_DEPS_STUB`)
-   so boxlite's build.rs downloads the platform tarball, then run
-   `rara setup boxlite` to copy the files into place. The version
-   segment must match the `tag = "v…"` in this crate's `Cargo.toml`.
+   The version segment must match the `tag = "v…"` in this crate's
+   `Cargo.toml`; `BOXLITE_VERSION` in `crates/cmd/src/setup/boxlite.rs`
+   is enforced against that tag by the `version_matches_sandbox_dep`
+   test.
