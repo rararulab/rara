@@ -73,7 +73,7 @@ inherits. It is not the place to argue about product direction; that is
 
 ## Why we adopted this
 
-Discussed 2026-04-27. The triggering case was PR #1941, which added a
+Discussed 2026-04-27. The triggering case was PR 1941, which added a
 real-LLM e2e workflow on every push to `main`. Its assertions
 (`saw_anchor`, `read_file_calls >= 9`) tested OpenAI's instruction-following,
 not rara's tape-memory code. Root cause: the gap between "user request"

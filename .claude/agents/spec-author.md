@@ -70,8 +70,8 @@ gh pr list --search "<keywords>" --state all --limit 20
 # Commit messages mentioning the keywords (catches deletions and reversions)
 git log --all --grep "<keywords>" --since=180.days --oneline
 
-# Current code referencing the keywords
-rg "<keywords>" --type-add 'workflow:*.yml' -tworkflow -trust -tmd
+# Current code referencing the keywords (yaml covers .yml workflows)
+rg "<keywords>" -tyaml -trust -tmd
 ```
 
 Pick keywords that are **specific to the request**, not generic. For PR #1941
@@ -131,27 +131,45 @@ real test function — one that fails before the change and passes after?"**
   after issue creation).
 - No → lane 2, write a chore issue body directly.
 
-### 6. Draft
+### 6. File the issue first to get the number
+
+Open the issue **before** writing the spec file, so the spec can be named
+with the real number from the start. Use a placeholder body that you will
+overwrite in step 7.
+
+```bash
+gh issue create \
+  --title "<type>(<scope>): <short description>" \
+  --label "agent:claude" --label "<type>" --label "<component>" \
+  --body "Spec coming — placeholder, will be overwritten."
+```
+
+Capture the assigned number `N`.
+
+### 7. Draft
 
 **Lane 1 — Task Contract**:
 
 ```bash
-# Scaffold from template
-agent-spec init --level task --lang en --name "<slug>"
-# Edit the resulting .spec file
+# Scaffold from template, with the real issue number
+agent-spec init --level task --lang en --name "issue-<N>-<slug>"
+# Edit the resulting specs/issue-<N>-<slug>.spec.md file
 ```
 
 Required sections (agent-spec DSL only allows these six top-level headers
 plus the optional `## Out of Scope`): `Intent`, `Decisions`, `Boundaries`
 (with `### Allowed Changes` and `### Forbidden`), `Acceptance Criteria`,
-optionally `Constraints`. Lint must score ≥ 0.7:
+optionally `Constraints`. Add `inherits: project` in the spec header so it
+picks up the constraints in `specs/project.spec`. Task-spec lint must
+score ≥ 0.7:
 
 ```bash
-agent-spec lint specs/issue-TBD-<slug>.spec.md --min-score 0.7
+just spec-lint specs/issue-<N>-<slug>.spec.md
 ```
 
-Markdown gotcha: `#1941` will be parsed as a heading. Write "PR 1941" or
-"issue 1941" in prose.
+Markdown gotcha: `#1941` will be parsed by `agent-spec` as a heading and
+break parse. Write "PR 1941" or "issue 1941" in prose, never the `#`
+form.
 
 **Lane 2 — chore issue body**:
 
@@ -163,25 +181,19 @@ BDD scenarios:
 - Boundaries (Allowed / Forbidden)
 - Out of scope
 
-### 7. File the issue
+### 8. Edit the issue body to point at the spec (lane 1) or to the full content (lane 2)
 
 ```bash
-gh issue create \
-  --title "<type>(<scope>): <short description>" \
-  --label "agent:claude" --label "<type>" --label "<component>" \
-  --body "..."
+gh issue edit <N> --body "..."
 ```
 
-For lane 1, after the issue number `N` is assigned, rename the spec file
-from `specs/issue-TBD-<slug>.spec.md` to `specs/issue-N-<slug>.spec.md`
-and reference it in the issue body:
+For lane 1, the final body must include `Spec: specs/issue-<N>-<slug>.spec.md`
+plus the prior-art summary so the implementer and reviewer can see the same
+context without opening the spec file.
 
-> Spec: `specs/issue-N-<slug>.spec.md`
+For lane 2, the body is the full content from step 7.
 
-The issue body must include the prior-art summary (PRs and commits you
-checked) so the implementer and reviewer can see the same context.
-
-### 8. Hand off
+### 9. Hand off
 
 Report back to the parent:
 

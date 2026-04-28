@@ -67,3 +67,8 @@ change, or cleanup, spec-author MUST answer:
 
 Either question being unclear is grounds for asking the user, not for
 proceeding.
+
+**Default-deny tiebreak.** When multiple signals overlap, when "Hermes does
+this and we have a weak engineering reason", or when the answers feel
+genuinely close — reject and surface the ambiguity to the user. It is cheap
+to redo a rejection. It is expensive to ship the wrong thing.

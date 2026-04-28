@@ -47,12 +47,19 @@ git -C <worktree> log origin/main..HEAD --oneline
 For lane 1, also:
 
 ```bash
-# Spec must lint clean
-agent-spec lint <spec-path> --min-score 0.7
+# Task spec must lint clean (project.spec is exempt — it is a constraint
+# declaration, not a BDD spec; it has no scenarios by design and will
+# always score 0 on the BDD-shaped lint).
+agent-spec lint <task-spec-path> --min-score 0.7
 
-# Spec must verify against the worktree
-agent-spec lifecycle <spec-path> --code <worktree> --format json
+# Task spec must verify against the worktree
+agent-spec lifecycle <task-spec-path> --code <worktree> --format json
 ```
+
+The `--min-score 0.7` gate applies **only to task specs** (anything under
+`specs/issue-N-*.spec.md`). It does **not** apply to `specs/project.spec`,
+which intentionally has no scenarios — its job is to declare inherited
+constraints, not to be verified.
 
 If lifecycle has any `fail`, `skip`, or `uncertain` scenario → REQUEST_CHANGES
 with the failing scenario names. Do not APPROVE on partial verification.
@@ -112,20 +119,41 @@ If the spec itself is wrong, the verdict is REQUEST_CHANGES with the
 spec issues called out — the implementer must NOT silently fix the spec;
 escalate to spec-author via parent.
 
-### 2. Generalized cross-file regression-decision check
+### 2. Branch base sanity check (do this FIRST)
+
+Before reading any diff, confirm the worktree is rebased on the actual
+remote tip. A stale local `main` will produce a phantom diff that
+includes commits already on `origin/main` but not on local `main`,
+making everything look like a massive scope creep.
+
+```bash
+git -C <worktree> fetch origin main
+git -C <worktree> merge-base HEAD origin/main
+git rev-parse origin/main
+```
+
+If `merge-base` does not equal `origin/main`, the worktree is out of date.
+Hand back to the implementer with a single instruction:
+`git -C <worktree> rebase origin/main`. Do NOT proceed with code review
+on a phantom diff — the findings will be noise.
+
+### 3. Generalized cross-file regression-decision check
 
 The implementer sees the diff in isolation. You check whether the diff
 reverses a recent explicit decision in the same area. **This applies to
 every file in the diff, not just config.**
 
-For each file (or directory) the diff touches:
+Batch form first (one call covers the whole diff):
 
 ```bash
-# Has this file been the subject of a deletion/inlining/removal recently?
-git log --since=30.days --diff-filter=D -- <file>
-git log --since=30.days --grep="remove\|delete\|drop\|inline\|const" -- <file>
-git log --since=30.days --oneline -- <file>
+TOUCHED=$(git -C <worktree> diff origin/main..HEAD --name-only)
+git log --since=30.days --oneline -- $TOUCHED
+git log --since=30.days --grep="remove\|delete\|drop\|inline\|const" -- $TOUCHED
 ```
+
+Only fan out to per-file inspection when a hit appears in the batch
+output. For directory renames, run the log on both the old and new
+directory paths.
 
 If a prior commit in the last ~30 days mentions removing or restructuring
 the same file or a tightly-related file → this is a P0 finding. The
@@ -141,7 +169,7 @@ PR #1941 happened because it re-introduced coverage that PR #1930 had
 explicitly deleted. The pattern recurs across config, workflows, tests,
 and migrations — so the check is no longer scoped to config.
 
-### 3. Config-schema sanity (kept from old reviewer.md)
+### 4. Config-schema sanity (kept from old reviewer.md)
 
 For any new field in top-level `Config` (`crates/app/src/lib.rs`):
 
@@ -151,7 +179,7 @@ For any new field in top-level `Config` (`crates/app/src/lib.rs`):
   a different value) → P0; should be a Rust `const` next to the
   mechanism (`docs/guides/anti-patterns.md` and `specs/project.spec`).
 
-### 4. Style-anchor adherence
+### 5. Style-anchor adherence
 
 Quick spot-checks against `docs/guides/rust-style.md`:
 
@@ -163,7 +191,7 @@ Quick spot-checks against `docs/guides/rust-style.md`:
 - Hardcoded config defaults in Rust (DB URL, file paths, etc.) → P0
   (`anti-patterns.md` and `specs/project.spec`).
 
-### 5. AGENT.md hygiene
+### 6. AGENT.md hygiene
 
 If the diff creates a new crate or significantly restructures one:
 
@@ -172,7 +200,7 @@ If the diff creates a new crate or significantly restructures one:
 - Crate's invariants changed → `AGENT.md` updated in same PR → P1 if
   missing.
 
-### 6. Test coverage signal
+### 7. Test coverage signal
 
 For bug fixes (lane 1 or 2): is there a test that fails before the fix
 and passes after? If not, P1 — explain that without a regression test
@@ -184,7 +212,7 @@ this. Verify they exist and are non-vacuous (see check 1).
 For lane 2 (cleanup, structural): no test signal expected. Pass on this
 check.
 
-### 7. Outcome verification (replaces the old "report says tests passed")
+### 8. Outcome verification (replaces the old "report says tests passed")
 
 The implementer's report includes an "outcome verification" field with
 observable evidence that the change does what the issue asked for. Read

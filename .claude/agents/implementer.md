@@ -53,6 +53,22 @@ If any of these are missing, stop and ask the parent — do not improvise.
 
 ## Workflow
 
+### 0. Confirm the worktree is rebased on the actual remote tip
+
+A stale local `main` will cause the worktree to branch from a point behind
+`origin/main`, producing a phantom diff that includes commits already on
+the remote but not on local main. Always check first:
+
+```bash
+git -C <worktree> fetch origin main
+LOCAL_BASE=$(git -C <worktree> merge-base HEAD origin/main)
+REMOTE=$(git rev-parse origin/main)
+[ "$LOCAL_BASE" = "$REMOTE" ] && echo "ok: branch is on origin/main" || echo "STALE — rebase required"
+```
+
+If stale: `git -C <worktree> rebase origin/main`. If the rebase has
+conflicts, surface to parent rather than guessing.
+
 ### 1. Read the spec (lane 1) or the issue (lane 2)
 
 ```bash
@@ -113,11 +129,12 @@ For lane 1 specifically: also run
 
 ```bash
 just spec-lifecycle specs/issue-N-<slug>.spec.md
-# or directly: agent-spec lifecycle specs/issue-N-<slug>.spec.md --code .
 ```
 
 The lifecycle gate must pass. Every BDD scenario must end up `pass`, not
-`skip` or `uncertain`.
+`skip` or `uncertain`. Use the `just` wrapper (not raw `agent-spec`) so
+you and the reviewer use the same flags — the recipe pins `--change-scope
+worktree --format text`.
 
 If any test for the affected crate exists, run it: `cargo test -p <crate>`.
 
@@ -209,6 +226,13 @@ the worktree, push again. Do not mark tests `#[ignore]` to make CI green.
 If a failure looks transient, check `gh run list --branch main --limit 10`
 to see if the same test failed recently on main (genuine flake) — only
 then `gh run rerun <id> --failed`. Cap reruns at 1.
+
+**Re-review after a post-push code fix.** If you push code changes in
+response to a CI failure, hand back to the parent for a fresh reviewer
+pass before resuming `gh pr checks --watch`. Exception: a pure flake
+rerun (no new commit) does not need re-review. The principle is "every
+code change the reviewer hasn't seen gets re-reviewed", which keeps the
+gate honest.
 
 ### 10. Merge
 

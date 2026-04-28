@@ -33,9 +33,9 @@ When these anchors conflict, prefer: safety (Niko) > ergonomics (BurntSushi) > m
 
 These artifacts are authoritative — your work is accountable to them, not just to the user:
 
-- `goal.md` — north star (what rara is / is NOT / signals)
-- `specs/project.spec` — project-level constraints inherited by every task spec
-- `specs/README.md` — lane 1 vs lane 2 triage criteria
+- `goal.md` — north star: read this **first** for any new request; spec-author uses it as a gate
+- `specs/project.spec` — project-level technical/process constraints inherited by every task spec; not the place for product direction (that's `goal.md`)
+- `specs/README.md` — lane 1 (spec-driven, BDD-bound test) vs lane 2 (lightweight chore) triage criteria; read this **before** opening an issue
 - `.pre-commit-config.yaml` — code quality gate (clippy, fmt, doc warnings)
 - `.github/ISSUE_TEMPLATE/` — issue structure and required fields
 - `.github/pull_request_template.md` — PR structure
