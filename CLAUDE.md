@@ -1,5 +1,7 @@
 # CLAUDE.md — Rara Development Guide
 
+**新会话第一步：`./init.sh`**（or `just doctor`）— 一键检查工具链、`cargo check`、schema、远端 backend，以及 open `agent:claude` issue 数量。
+
 ## Communication
 - 用中文与用户交流
 
