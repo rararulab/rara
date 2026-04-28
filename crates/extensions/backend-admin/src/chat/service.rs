@@ -728,8 +728,8 @@ impl SessionService {
     /// The turn is identified by the seq of any message produced within
     /// it (most commonly the assistant reply the user clicked on). We
     /// find the owning user-message tape entry, read its
-    /// `rara_message_id` metadata, and look the trace up via
-    /// [`TraceService::find_trace_by_message_id`].
+    /// `rara_turn_id` metadata, and look the trace up via
+    /// [`TraceService::find_trace_by_turn_id`].
     ///
     /// Returns `InvalidRequest` when no user message precedes `seq` and
     /// `NotFound` when no trace has been persisted for the resolved
@@ -752,7 +752,7 @@ impl SessionService {
         // Walk the tape mirroring `tap_entries_to_chat_messages`'s seq
         // counter so we can correlate `message_seq` back to the specific
         // user-message TapEntry. We keep that entry's `metadata`
-        // (which is where `rara_message_id` is recorded) rather than
+        // (which is where `rara_turn_id` is recorded) rather than
         // re-deriving it — the kernel writes it at turn start and it
         // uniquely keys the persisted trace row.
         let i_seq = message_seq as i64;
@@ -787,27 +787,25 @@ impl SessionService {
             });
         };
 
-        let rara_message_id = user_entry
+        let rara_turn_id = user_entry
             .metadata
             .as_ref()
-            .and_then(|m| m.get("rara_message_id"))
+            .and_then(|m| m.get("rara_turn_id"))
             .and_then(Value::as_str)
             .ok_or_else(|| ChatError::NotFound {
-                message: format!(
-                    "user message at seq {message_seq} has no rara_message_id metadata"
-                ),
+                message: format!("user message at seq {message_seq} has no rara_turn_id metadata"),
             })?;
 
         let trace = self
             .trace_service
-            .find_trace_by_message_id(rara_message_id)
+            .find_trace_by_turn_id(rara_turn_id)
             .await
             .map_err(|e| ChatError::SessionError {
                 message: format!("failed to query execution trace: {e}"),
             })?;
 
         trace.map(|(_, t)| t).ok_or_else(|| ChatError::NotFound {
-            message: format!("no execution trace recorded for message {rara_message_id}"),
+            message: format!("no execution trace recorded for message {rara_turn_id}"),
         })
     }
 

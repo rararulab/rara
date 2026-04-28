@@ -108,7 +108,7 @@ export type StreamEvent =
       iterations: number;
       tool_calls: number;
       model: string;
-      rara_message_id: string;
+      rara_turn_id: string;
     }
   | {
       type: 'plan_created';
@@ -477,6 +477,6 @@ export interface ExecutionTrace {
   /** High-level rationale the LLM stated for this turn, when any. */
   turn_rationale?: string;
   tools: ToolTraceEntry[];
-  /** Rara internal message ID for end-to-end correlation. */
-  rara_message_id: string;
+  /** Per-turn correlation handle: stable across every entry produced by the same inbound message. */
+  rara_turn_id: string;
 }

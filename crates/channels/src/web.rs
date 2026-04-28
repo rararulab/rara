@@ -333,7 +333,7 @@ pub(crate) fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> 
             iterations,
             tool_calls,
             model,
-            rara_message_id: _,
+            rara_turn_id: _,
             context_window_tokens: _,
         } => Some(WebEvent::TurnMetrics {
             duration_ms,

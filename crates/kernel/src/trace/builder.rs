@@ -284,11 +284,11 @@ impl TraceBuilder {
     /// would yield an empty trace, which is acceptable because the
     /// single caller (the kernel turn task) invokes it exactly once.
     ///
-    /// `rara_message_id` is the [`crate::io::MessageId`] string form that
+    /// `rara_turn_id` is the [`crate::io::MessageId`] string form that
     /// correlates this turn back to the triggering inbound message; it is
     /// passed in rather than observed because it originates outside the
     /// stream (from the dispatch metadata).
-    pub fn finalize(&self, rara_message_id: String) -> ExecutionTrace {
+    pub fn finalize(&self, rara_turn_id: String) -> ExecutionTrace {
         let duration_secs = self.turn_started.elapsed().as_secs();
         let State {
             model,
@@ -346,7 +346,7 @@ impl TraceBuilder {
             plan_steps,
             turn_rationale,
             tools,
-            rara_message_id,
+            rara_turn_id,
         }
     }
 
@@ -436,7 +436,7 @@ mod tests {
             iterations:            3,
             tool_calls:            2,
             model:                 "gpt-5".into(),
-            rara_message_id:       "ignored".into(),
+            rara_turn_id:          "ignored".into(),
             context_window_tokens: Some(128_000),
         });
         let trace = b.finalize(mid());

@@ -1001,7 +1001,7 @@ pub enum StreamEvent {
         iterations:            usize,
         tool_calls:            usize,
         model:                 String,
-        rara_message_id:       String,
+        rara_turn_id:          String,
         /// Authoritative context window size (in tokens) for the model used
         /// this turn. Populated from
         /// `ModelCapabilities::context_window_tokens`. `None` only if

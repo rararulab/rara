@@ -371,7 +371,7 @@ mod tests {
             origin_endpoint:       None,
             origin_user_id:        None,
             event_queue:           build_queue(),
-            rara_message_id:       MessageId::new(),
+            rara_turn_id:          MessageId::new(),
             context_window_tokens: 0,
             tool_registry:         None,
             stream_handle:         None,

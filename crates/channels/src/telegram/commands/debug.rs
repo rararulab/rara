@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `/debug <message_id>` command — retrieve full execution context for a
-//! message by walking the session tape.
+//! `/debug <turn_id>` command — retrieve full execution context for a
+//! turn by walking the session tape.
 //!
 //! Aggregation lives in [`rara_kernel::debug::MessageDebugSummary`]; this
 //! handler only renders the result as Telegram HTML.
@@ -47,8 +47,8 @@ impl CommandHandler for DebugCommandHandler {
     fn commands(&self) -> Vec<CommandDefinition> {
         vec![CommandDefinition {
             name:        "debug".to_owned(),
-            description: "Debug a message by its ID".to_owned(),
-            usage:       Some("/debug <message_id>".to_owned()),
+            description: "Debug a turn by its ID".to_owned(),
+            usage:       Some("/debug <turn_id>".to_owned()),
         }]
     }
 
@@ -57,27 +57,27 @@ impl CommandHandler for DebugCommandHandler {
         command: &CommandInfo,
         context: &CommandContext,
     ) -> Result<CommandResult, KernelError> {
-        let message_id = command.args.trim();
-        if message_id.is_empty() {
+        let turn_id = command.args.trim();
+        if turn_id.is_empty() {
             return Ok(CommandResult::Text(
-                "Usage: /debug <message_id>\n\nThe message ID is shown at the bottom of each \
-                 response trace (🆔 Message ID)."
+                "Usage: /debug <turn_id>\n\nThe turn ID is shown at the bottom of each response \
+                 trace (🆔 Turn ID)."
                     .to_owned(),
             ));
         }
 
         // Exact metadata filter on the current session's tape — returns all
         // entry kinds (messages, tool calls, tool results, events) so the
-        // debug view shows the complete execution context.
+        // debug view shows the complete execution context for this turn.
         let entries = self
             .tape_service
-            .entries_by_message_id(&context.session_key, message_id)
+            .entries_by_turn_id(&context.session_key, turn_id)
             .await
             .map_err(|e| KernelError::Other {
                 message: format!("tape lookup failed: {e}").into(),
             })?;
 
-        let summary = MessageDebugSummary::from_entries(message_id, entries);
+        let summary = MessageDebugSummary::from_entries(turn_id, entries);
         Ok(CommandResult::Html(render_html(&summary)))
     }
 }

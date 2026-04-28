@@ -67,8 +67,12 @@ pub struct ExecutionTrace {
     pub turn_rationale:   Option<String>,
     /// Tool execution records.
     pub tools:            Vec<ToolTraceEntry>,
-    /// Rara internal message ID for end-to-end correlation.
-    pub rara_message_id:  String,
+    /// Per-turn correlation handle. Stable across every entry produced by
+    /// the same inbound message. Accepts the legacy `rara_message_id` key
+    /// on read for `execution_traces.trace_data` rows persisted before
+    /// issue #1978.
+    #[serde(alias = "rara_message_id")]
+    pub rara_turn_id:     String,
 }
 
 /// Record of a single tool invocation within a turn.
@@ -215,29 +219,34 @@ impl TraceService {
         Ok(row.map(|r| r.session_id))
     }
 
-    /// Find the session and full execution trace for a `rara_message_id`.
+    /// Find the session and full execution trace for a `rara_turn_id`.
     ///
     /// Returns the indexed `session_id` column plus the parsed
     /// [`ExecutionTrace`] from `trace_data` — the trace already aggregates
     /// model, tokens, iterations, thinking, tools, plan steps, and
     /// rationale, so callers do not need to re-derive these from tape
     /// entries.
+    ///
+    /// Reads both `$.rara_turn_id` (current key) and `$.rara_message_id`
+    /// (legacy key) via `COALESCE`. Existing rows written before issue
+    /// #1978 carry the legacy key; new writes only emit the new key.
     #[tracing::instrument(skip_all)]
-    pub async fn find_trace_by_message_id(
+    pub async fn find_trace_by_turn_id(
         &self,
-        message_id: &str,
+        turn_id: &str,
     ) -> Result<Option<(String, ExecutionTrace)>> {
         use diesel::OptionalExtension;
 
         let mut conn = self.pools.reader.get().await.context(DieselPoolSnafu)?;
 
-        // `json_extract(trace_data, '$.rara_message_id') = ?` has no DSL
-        // analogue — diesel lacks a cross-backend JSON1 helper. Emit the
-        // predicate via `sql::<Bool>` per docs/guides/db-diesel-migration.md.
+        // No diesel DSL exists for SQLite JSON1; emit the predicate as raw
+        // SQL per docs/guides/db-diesel-migration.md. `COALESCE` lets one
+        // query match both the new and legacy keys without a UNION.
         let predicate = diesel::dsl::sql::<diesel::sql_types::Bool>(
-            "json_extract(trace_data, '$.rara_message_id') = ",
+            "COALESCE(json_extract(trace_data, '$.rara_turn_id'), json_extract(trace_data, \
+             '$.rara_message_id')) = ",
         )
-        .bind::<Text, _>(message_id);
+        .bind::<Text, _>(turn_id);
 
         let row: Option<TraceSessionAndDataRow> = execution_traces::table
             .filter(predicate)

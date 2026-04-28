@@ -1699,7 +1699,7 @@ impl Kernel {
             .append_message(
                 &tape_name,
                 tape_payload,
-                Some(serde_json::json!({"rara_message_id": msg.id.to_string()})),
+                Some(serde_json::json!({"rara_turn_id": msg.id.to_string()})),
             )
             .await
         {
@@ -2321,7 +2321,7 @@ impl Kernel {
                 .append_message(
                     &tape_name,
                     tape_payload,
-                    Some(serde_json::json!({"rara_message_id": msg.id.to_string()})),
+                    Some(serde_json::json!({"rara_turn_id": msg.id.to_string()})),
                 )
                 .await
             {
@@ -2585,7 +2585,7 @@ impl Kernel {
                     origin_endpoint: origin_endpoint.clone(),
                     origin_user_id,
                     event_queue: event_queue.clone(),
-                    rara_message_id: msg_id.clone(),
+                    rara_turn_id: msg_id.clone(),
                     context_window_tokens: 0,
                     tool_registry: None, // set later in agent loop with live registry
                     stream_handle: None, // set per-tool-call in agent loop
@@ -2604,9 +2604,9 @@ impl Kernel {
                     user_text
                 };
 
-                // Use the inbound message ID as the turn's rara_message_id
+                // Use the inbound message ID as the turn's rara_turn_id
                 // for end-to-end correlation.
-                let rara_message_id = msg_id.clone();
+                let rara_turn_id = msg_id.clone();
 
                 // Fire pre_turn lifecycle hooks.
                 lifecycle_hooks
@@ -2631,7 +2631,7 @@ impl Kernel {
                         guard_pipeline,
                         hook_runner,
                         notification_bus,
-                        rara_message_id,
+                        rara_turn_id,
                         &interrupted,
                         &interrupt_notify,
                     )
@@ -2650,7 +2650,7 @@ impl Kernel {
                         guard_pipeline,
                         hook_runner,
                         notification_bus,
-                        rara_message_id,
+                        rara_turn_id,
                         &interrupted,
                         &interrupt_notify,
                     )
@@ -2692,7 +2692,7 @@ impl Kernel {
                         iterations:            result.iterations,
                         tool_calls:            result.tool_calls,
                         model:                 result.model.clone(),
-                        rara_message_id:       result.trace.rara_message_id.to_string(),
+                        rara_turn_id:       result.trace.rara_turn_id.to_string(),
                         context_window_tokens: result.context_window_tokens,
                     });
                     stream_handle.emit(crate::io::StreamEvent::TurnUsage {

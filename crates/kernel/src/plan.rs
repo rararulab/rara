@@ -257,7 +257,7 @@ pub(crate) async fn run_plan_loop(
     guard_pipeline: Arc<GuardPipeline>,
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
-    rara_message_id: crate::io::MessageId,
+    rara_turn_id: crate::io::MessageId,
     interrupted: &AtomicBool,
     interrupt_notify: &tokio::sync::Notify,
 ) -> Result<AgentTurnResult> {
@@ -394,7 +394,7 @@ pub(crate) async fn run_plan_loop(
                     guard_pipeline.clone(),
                     hook_runner.clone(),
                     notification_bus.clone(),
-                    rara_message_id,
+                    rara_turn_id,
                     interrupted,
                     interrupt_notify,
                     &mut total_iterations,
@@ -706,7 +706,7 @@ pub(crate) async fn run_plan_loop(
             } else {
                 None
             },
-            rara_message_id,
+            rara_turn_id,
         },
         cascade:               crate::cascade::CascadeTrace::empty(),
     })
@@ -1297,7 +1297,7 @@ async fn execute_inline_step(
     guard_pipeline: Arc<GuardPipeline>,
     hook_runner: crate::hooks::HookRunnerRef,
     notification_bus: NotificationBusRef,
-    rara_message_id: crate::io::MessageId,
+    rara_turn_id: crate::io::MessageId,
     interrupted: &AtomicBool,
     interrupt_notify: &tokio::sync::Notify,
     total_iterations: &mut usize,
@@ -1362,7 +1362,7 @@ async fn execute_inline_step(
         guard_pipeline,
         hook_runner,
         notification_bus,
-        rara_message_id,
+        rara_turn_id,
         interrupted,
         interrupt_notify,
     )
@@ -1473,7 +1473,7 @@ mod tests {
                 total_tool_calls: 25,
                 success,
                 error: error.map(|s| s.to_owned()),
-                rara_message_id: MessageId::new(),
+                rara_turn_id: MessageId::new(),
             },
             cascade:               crate::cascade::CascadeTrace {
                 message_id: String::new(),

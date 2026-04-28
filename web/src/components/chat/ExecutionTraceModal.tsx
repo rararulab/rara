@@ -151,9 +151,9 @@ function TraceBody({ trace }: { trace: ExecutionTrace }) {
         </div>
       </Section>
 
-      <Section emoji="🆔" title="Message ID">
+      <Section emoji="🆔" title="Turn ID">
         <code className="block rounded bg-muted/60 px-2 py-1 font-mono text-xs break-all">
-          {trace.rara_message_id}
+          {trace.rara_turn_id}
         </code>
       </Section>
     </div>
