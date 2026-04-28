@@ -152,14 +152,44 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
   };
 }
 
-class ApiError extends Error {
+/**
+ * Error thrown for non-2xx HTTP responses from the rara backend.
+ *
+ * `requestId` carries the `x-request-id` response header (a 32-hex OTel
+ * trace_id) when the backend emitted one. It is the join key into Langfuse
+ * and Loki — surface it in any user-visible error message so support can
+ * resolve a trace from a single paste. See
+ * `specs/issue-1975-trace-id-response-header.spec.md`.
+ */
+export class ApiError extends Error {
   readonly status: number;
+  readonly requestId?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, requestId?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    if (requestId) this.requestId = requestId;
   }
+}
+
+/** Lower-cased response header carrying the backend's OTel trace_id. */
+const REQUEST_ID_HEADER = 'x-request-id';
+
+/**
+ * Construct an `ApiError` and emit one `console.error` line that includes
+ * the request id. This is the dominant error surface (the codebase has no
+ * single global toast/error renderer); a developer triaging a user bug
+ * report can copy the id from devtools straight into Langfuse / Loki.
+ */
+function raiseApiError(status: number, message: string, requestId?: string): ApiError {
+  const err = new ApiError(status, message, requestId);
+  if (requestId) {
+    console.error(`[api] ${status} ${message} (request_id=${requestId})`);
+  } else {
+    console.error(`[api] ${status} ${message}`);
+  }
+  return err;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -225,14 +255,16 @@ async function request<T>(
       signal,
     });
 
+    const requestId = res.headers.get(REQUEST_ID_HEADER) ?? undefined;
+
     if (res.status === 401) {
       handleUnauthorized();
-      throw new ApiError(401, 'Unauthorized');
+      throw raiseApiError(401, 'Unauthorized', requestId);
     }
 
     if (!res.ok) {
       const text = await res.text();
-      throw new ApiError(res.status, text || res.statusText);
+      throw raiseApiError(res.status, text || res.statusText, requestId);
     }
     if (res.status === 204) return undefined as T;
     return res.json();
@@ -269,13 +301,14 @@ async function requestBlob(
       headers,
       signal: controller.signal,
     });
+    const requestId = res.headers.get(REQUEST_ID_HEADER) ?? undefined;
     if (res.status === 401) {
       handleUnauthorized();
-      throw new ApiError(401, 'Unauthorized');
+      throw raiseApiError(401, 'Unauthorized', requestId);
     }
     if (!res.ok) {
       const text = await res.text();
-      throw new ApiError(res.status, text || res.statusText);
+      throw raiseApiError(res.status, text || res.statusText, requestId);
     }
     return res.blob();
   } catch (err) {

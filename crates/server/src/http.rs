@@ -20,13 +20,13 @@ use std::{
 use axum::{
     Router,
     extract::{DefaultBodyLimit, MatchedPath, Request},
-    http::{Method, StatusCode, Uri},
+    http::{HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
 use base::readable_size::ReadableSize;
-use opentelemetry::{KeyValue, global, metrics::Histogram};
+use opentelemetry::{KeyValue, global, metrics::Histogram, trace::TraceContextExt};
 use rara_error::{ConnectionSnafu, ParseAddressSnafu, Result};
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
@@ -35,6 +35,62 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tower_http::{timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{Span, info};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+/// Lowercase header name carrying the OTel trace_id as 32 hex chars.
+///
+/// Surfaced to the browser so a user reporting a bug can paste this ID
+/// into Langfuse/Loki and resolve the trace in seconds. See
+/// `specs/issue-1975-trace-id-response-header.spec.md`.
+pub const TRACE_HEADER_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+
+/// W3C Trace Context header carrying the same trace_id alongside the
+/// active span_id, formatted as `00-<32hex>-<16hex>-01`.
+pub const TRACE_HEADER_TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
+
+/// Inject `x-request-id` and `traceparent` response headers carrying the
+/// OTel trace_id of the current `http_request` span.
+///
+/// Layered AFTER `TraceLayer::new_for_http()` so the span is already active
+/// when this middleware reads the OTel context. If the span has no valid
+/// trace_id (e.g. request rejected before the trace layer ran) the headers
+/// are simply omitted — partial information beats no information, and an
+/// empty header value is worse than the header being absent.
+pub async fn inject_trace_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+
+    let context = Span::current().context();
+    let span_ref = context.span();
+    let span_context = span_ref.span_context();
+    if !span_context.is_valid() {
+        return response;
+    }
+
+    let trace_id_hex = format!(
+        "{:032x}",
+        u128::from_be_bytes(span_context.trace_id().to_bytes())
+    );
+    if let Ok(value) = HeaderValue::from_str(&trace_id_hex) {
+        response
+            .headers_mut()
+            .insert(TRACE_HEADER_REQUEST_ID, value);
+    }
+
+    let span_id_bytes = span_context.span_id().to_bytes();
+    // span_id of all zeros is invalid even when trace_id is set; skip
+    // traceparent rather than emit a malformed value.
+    if span_id_bytes != [0u8; 8] {
+        let span_id_hex = format!("{:016x}", u64::from_be_bytes(span_id_bytes));
+        let traceparent = format!("00-{trace_id_hex}-{span_id_hex}-01");
+        if let Ok(value) = HeaderValue::from_str(&traceparent) {
+            response
+                .headers_mut()
+                .insert(TRACE_HEADER_TRACEPARENT, value);
+        }
+    }
+
+    response
+}
 
 use super::ServiceHandler;
 
@@ -195,6 +251,7 @@ where
         .merge(api_router)
         .fallback(route_not_found)
         .layer(middleware::from_fn(observe_http_metrics))
+        .layer(middleware::from_fn(inject_trace_headers))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<_>| {
