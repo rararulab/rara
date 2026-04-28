@@ -52,7 +52,13 @@
 //! [`Hello`]: crate::web::WebEvent::Hello
 //! [`TapeAppended`]: crate::web::WebEvent::TapeAppended
 
-use std::sync::Arc;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     extract::{
@@ -69,6 +75,47 @@ use rara_kernel::{
 use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
+
+/// Server-side WebSocket keepalive interval for the persistent per-session
+/// WS. Idle connections to a non-loopback backend get reaped by intermediate
+/// NAT mappings, browser tab throttling, or LAN routers in the 30s–5min
+/// window, even though the backend is healthy (see #1967). Emitting a
+/// `Ping` frame at this cadence keeps the wire warm so the mapping survives.
+///
+/// This is mechanism tuning — not deploy-relevant — so it lives as a Rust
+/// `const` next to the function it tunes (see
+/// `docs/guides/anti-patterns.md` "Mechanism constants are not config"),
+/// not a YAML knob. Production cadence is 30 seconds.
+const SESSION_WS_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Test-only override for [`SESSION_WS_KEEPALIVE_INTERVAL`], expressed in
+/// milliseconds. Zero (the default) means "use the production const".
+///
+/// `#[cfg(test)]` cannot be used here because integration tests in
+/// `crates/channels/tests/` link against the library crate compiled
+/// without the `test` cfg, so a `cfg(test)`-gated const would always be
+/// the production value at the call site. An atomic override set by
+/// integration tests via [`set_session_ws_keepalive_interval_for_tests`]
+/// is the smallest indirection that lets the BDD scenarios finish in
+/// sub-second walltime without polluting the production code path with
+/// a Cargo feature.
+static SESSION_WS_KEEPALIVE_OVERRIDE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Override the server-side keepalive ping interval for testing. Setting
+/// the value to zero restores the production constant. Not part of the
+/// public API stability surface — integration tests only.
+#[doc(hidden)]
+pub fn set_session_ws_keepalive_interval_for_tests(interval: Option<Duration>) {
+    let ms = interval.map(|d| d.as_millis() as u64).unwrap_or(0);
+    SESSION_WS_KEEPALIVE_OVERRIDE_MS.store(ms, Ordering::Relaxed);
+}
+
+fn session_ws_keepalive_interval() -> Duration {
+    match SESSION_WS_KEEPALIVE_OVERRIDE_MS.load(Ordering::Relaxed) {
+        0 => SESSION_WS_KEEPALIVE_INTERVAL,
+        ms => Duration::from_millis(ms),
+    }
+}
 
 use crate::web::{
     WebAdapter, WebAdapterState, WebEvent, bearer_token_from_headers, build_raw_platform_message,
@@ -333,6 +380,11 @@ async fn handle_session_ws(
     let send_task = {
         let session_key_str = session_key_str.clone();
         tokio::spawn(async move {
+            // First tick fires immediately; skip it so the first ping
+            // lands one full interval after connect rather than racing
+            // the `hello` frame.
+            let mut keepalive = tokio::time::interval(session_ws_keepalive_interval());
+            keepalive.tick().await;
             loop {
                 tokio::select! {
                     msg = ws_event_rx.recv() => {
@@ -355,6 +407,22 @@ async fn handle_session_ws(
                             );
                             break;
                         }
+                    }
+                    _ = keepalive.tick() => {
+                        // tungstenite/axum auto-replies Pong at the
+                        // protocol layer regardless of payload, so an
+                        // empty Ping is sufficient to keep the wire warm.
+                        if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() {
+                            debug!(
+                                session_key = %session_key_str,
+                                "session WS keepalive ping failed, closing"
+                            );
+                            break;
+                        }
+                        debug!(
+                            session_key = %session_key_str,
+                            "session WS keepalive ping"
+                        );
                     }
                     _ = shutdown_rx.changed() => {
                         debug!(
