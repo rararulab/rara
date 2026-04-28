@@ -89,6 +89,7 @@ tempfile.workspace = true
 test-case = "^3"
 tower.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
