@@ -71,6 +71,40 @@ use crate::{
 
 /// Estimated chars-per-token ratio for context size estimation.
 const CHARS_PER_TOKEN: usize = 4;
+
+/// Decide whether — and with what canonical `content` — an
+/// intermediate-iteration assistant turn should be persisted to tape.
+///
+/// Reasoning-capable models (MiniMax-M2, gpt-5.4-thinking, …) sometimes
+/// route every output token to `reasoning_content` and leave only stray
+/// whitespace (`"\n"`, `"\n\n"`) in the visible `content`. Persisting that
+/// whitespace verbatim produces tape rows that render as empty assistant
+/// bubbles in the UI and pollute the next turn's context rebuild.
+///
+/// The rule:
+/// - Text is whitespace-only **and** reasoning is empty → return `None` (skip
+///   the `append_message` call entirely). The accompanying tool-call row, if
+///   any, still preserves the cascade-tick boundary established by PR 608.
+/// - Text is whitespace-only but reasoning is non-empty → return `Some("")`
+///   (persist the row with canonical empty content; reasoning carries the real
+///   signal, and the row keeps the cascade-tick boundary).
+/// - Text has any non-whitespace character → return `Some(text)` verbatim (no
+///   trim, no normalization on real content).
+///
+/// The terminal `!has_tool_calls` rejection at line 2175 is unchanged —
+/// it already publishes a structured `TurnError` for empty terminal
+/// turns and is not the gap this helper closes.
+fn intermediate_message_content(text: &str, reasoning: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        if reasoning.is_empty() {
+            None
+        } else {
+            Some(String::new())
+        }
+    } else {
+        Some(text.to_string())
+    }
+}
 /// Context usage threshold (fraction) at which a SHOULD-handoff hint is
 /// injected.
 const CONTEXT_WARN_THRESHOLD: f64 = 0.70;
@@ -2037,24 +2071,31 @@ async fn run_agent_loop_inner(
                     "laziness detected, nudging model to take action"
                 );
                 // Persist intermediate assistant text to tape so the model
-                // sees its own plan in context after rebuild.
-                let _ = tape
-                    .append_message(
-                        tape_name,
-                        {
-                            let mut payload = serde_json::json!({
-                                "role": "assistant",
-                                "content": &accumulated_text,
-                            });
-                            if !accumulated_reasoning.is_empty() {
-                                payload["reasoning_content"] =
-                                    serde_json::json!(&accumulated_reasoning);
-                            }
-                            payload
-                        },
-                        None,
-                    )
-                    .await;
+                // sees its own plan in context after rebuild. Whitespace-only
+                // content with empty reasoning is dropped; whitespace-only
+                // content with non-empty reasoning persists with canonical
+                // empty `content` (see `intermediate_message_content`).
+                if let Some(canonical_content) =
+                    intermediate_message_content(&accumulated_text, &accumulated_reasoning)
+                {
+                    let _ = tape
+                        .append_message(
+                            tape_name,
+                            {
+                                let mut payload = serde_json::json!({
+                                    "role": "assistant",
+                                    "content": canonical_content,
+                                });
+                                if !accumulated_reasoning.is_empty() {
+                                    payload["reasoning_content"] =
+                                        serde_json::json!(&accumulated_reasoning);
+                                }
+                                payload
+                            },
+                            None,
+                        )
+                        .await;
+                }
                 // Persist tier-specific nudge to tape.
                 let _ = tape
                     .append_message(
@@ -2128,23 +2169,31 @@ async fn run_agent_loop_inner(
                     },
                 })
                 .ok();
-                let _ = tape
-                    .append_message(
-                        tape_name,
-                        {
-                            let mut payload = serde_json::json!({
-                                "role": "assistant",
-                                "content": &accumulated_text,
-                            });
-                            if !accumulated_reasoning.is_empty() {
-                                payload["reasoning_content"] =
-                                    serde_json::json!(&accumulated_reasoning);
-                            }
-                            payload
-                        },
-                        meta,
-                    )
-                    .await;
+                // Whitespace-only intermediate content with empty reasoning
+                // is suppressed (see `intermediate_message_content`); the
+                // wake message below still posts so continuation flow
+                // remains observable in tape.
+                if let Some(canonical_content) =
+                    intermediate_message_content(&accumulated_text, &accumulated_reasoning)
+                {
+                    let _ = tape
+                        .append_message(
+                            tape_name,
+                            {
+                                let mut payload = serde_json::json!({
+                                    "role": "assistant",
+                                    "content": canonical_content,
+                                });
+                                if !accumulated_reasoning.is_empty() {
+                                    payload["reasoning_content"] =
+                                        serde_json::json!(&accumulated_reasoning);
+                                }
+                                payload
+                            },
+                            meta,
+                        )
+                        .await;
+                }
 
                 // Persist wake message to tape so it survives the message
                 // rebuild at the top of the next iteration.
@@ -2425,6 +2474,15 @@ async fn run_agent_loop_inner(
         // Persist intermediate assistant message to tape so that
         // `build_cascade` can detect tick boundaries between iterations.
         // Without this, the cascade trace always shows a single tick.
+        //
+        // Suppression rule (issue #1979): when the visible content is
+        // whitespace-only and reasoning is empty, the row is skipped —
+        // the subsequent `ToolCall` row alone preserves the tick boundary
+        // PR 608 introduced. When content is whitespace-only but
+        // reasoning is non-empty, persist with canonical empty `content`
+        // so the UI does not render a stray-newline assistant bubble.
+        if let Some(canonical_content) =
+            intermediate_message_content(&accumulated_text, &accumulated_reasoning)
         {
             let mut meta = crate::memory::LlmEntryMetadata {
                 rara_message_id: rara_message_id.to_string(),
@@ -2444,7 +2502,7 @@ async fn run_agent_loop_inner(
                     {
                         let mut payload = serde_json::json!({
                             "role": "assistant",
-                            "content": &accumulated_text,
+                            "content": canonical_content,
                         });
                         if !accumulated_reasoning.is_empty() {
                             payload["reasoning_content"] =
@@ -3364,7 +3422,8 @@ mod tests {
 
     use super::{
         ContextPressure, PendingToolCall, build_runtime_contract_prompt, classify_context_pressure,
-        infer_has_tool_calls, resolve_soul_prompt, should_remind_tape_search,
+        infer_has_tool_calls, intermediate_message_content, resolve_soul_prompt,
+        should_remind_tape_search,
     };
     #[test]
     fn classify_context_pressure_returns_normal_below_threshold() {
@@ -3493,5 +3552,98 @@ mod tests {
     fn infer_has_tool_calls_false_without_pending_calls() {
         let pending = HashMap::new();
         assert!(!infer_has_tool_calls(&pending));
+    }
+
+    // -----------------------------------------------------------------
+    // intermediate_message_content — issue #1979
+    //
+    // Each test below maps to a Scenario in
+    // `specs/issue-1979-suppress-whitespace-assistant-tape.spec.md`.
+    // -----------------------------------------------------------------
+
+    /// Scenario: whitespace-only content with no reasoning is dropped from
+    /// tape.
+    #[test]
+    fn intermediate_write_drops_whitespace_only_message() {
+        assert_eq!(intermediate_message_content("\n", ""), None);
+        assert_eq!(intermediate_message_content("", ""), None);
+        assert_eq!(intermediate_message_content("   \n\t  ", ""), None);
+    }
+
+    /// Scenario: whitespace content with non-empty reasoning persists with
+    /// empty content (canonicalized to `""`, not the raw whitespace).
+    #[test]
+    fn intermediate_write_canonicalizes_whitespace_content_when_reasoning_present() {
+        assert_eq!(
+            intermediate_message_content("\n\n", "some 55-token chain of thought"),
+            Some(String::new())
+        );
+        assert_eq!(
+            intermediate_message_content("\n", "reasoning"),
+            Some(String::new())
+        );
+    }
+
+    /// Scenario: laziness-nudge intermediate write respects the same gate.
+    /// (The helper is shared across all three intermediate-write sites, so
+    /// the same gate semantics apply at the laziness branch as at the
+    /// cascade-tick branch.)
+    #[test]
+    fn laziness_nudge_suppresses_whitespace_intermediate_message() {
+        assert_eq!(intermediate_message_content("\n", ""), None);
+        assert_eq!(intermediate_message_content("", ""), None);
+    }
+
+    /// Scenario: terminal-turn rejection at line 2175 is unchanged.
+    ///
+    /// This is a regression guard. The intermediate-write fix in
+    /// `intermediate_message_content` must not perturb the existing
+    /// terminal-turn protection added in PR 1641. We assert two things:
+    ///
+    /// 1. `TurnFailureKind::EmptyTurn` still exists on the public surface (the
+    ///    terminal block constructs it unconditionally for empty
+    ///    `accumulated_text`).
+    /// 2. The terminal block in `agent/mod.rs` still gates on
+    ///    `accumulated_text.trim().is_empty()` — a source-level check is the
+    ///    right fidelity here because the surrounding agent loop is not
+    ///    unit-testable in isolation, and `intermediate_message_content`
+    ///    deliberately stays out of the terminal path.
+    #[test]
+    fn terminal_empty_turn_still_emits_turn_error() {
+        // (1) public-surface check — round-trip through PartialEq so this
+        // regression guard catches a rename or removal of the variant.
+        assert_eq!(
+            crate::agent::turn_error::TurnFailureKind::EmptyTurn,
+            crate::agent::turn_error::TurnFailureKind::EmptyTurn
+        );
+        // (2) source-level regression guard
+        let src = include_str!("mod.rs");
+        assert!(
+            src.contains("if accumulated_text.trim().is_empty() || stream_failure.is_some()"),
+            "terminal-turn rejection guard at agent/mod.rs (post-line-2200 block) was removed or \
+             reworded; PR 1641's contract for empty terminal turns must stay intact — see \
+             specs/issue-1979-suppress-whitespace-assistant-tape.spec.md scenario 'terminal-turn \
+             rejection at line 2175 is unchanged'"
+        );
+    }
+
+    /// Scenario: real assistant content is unchanged (no trim, no
+    /// canonicalization on non-whitespace content).
+    #[test]
+    fn non_whitespace_content_persists_byte_for_byte() {
+        assert_eq!(
+            intermediate_message_content("Here's the answer: 42", ""),
+            Some("Here's the answer: 42".to_string())
+        );
+        // Mostly-whitespace but not whitespace-only — must survive intact.
+        assert_eq!(
+            intermediate_message_content("\n\n让我查一下…\n", ""),
+            Some("\n\n让我查一下…\n".to_string())
+        );
+        // Reasoning value must not influence non-whitespace content.
+        assert_eq!(
+            intermediate_message_content("real text", "reasoning"),
+            Some("real text".to_string())
+        );
     }
 }
