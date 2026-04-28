@@ -27,7 +27,10 @@
 //! `Message` row with whitespace-only `content` for the affected turn.
 //! The cascade-tick boundary is preserved through the `ToolCall` row.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use rara_kernel::{
     identity::Principal,
@@ -36,6 +39,27 @@ use rara_kernel::{
     testing::{FakeTool, TestKernelBuilder, scripted_response},
 };
 use serde_json::json;
+
+/// Redirect `rara_paths::config_dir()` / `workspace_dir()` to a process-wide
+/// tempdir so the `Kernel::new` initialisation path doesn't attempt to create
+/// `~/.config/rara/workspace`. CI runners (`/home/runner/.config`) aren't
+/// writable by the test process, which surfaces as a `workspace_dir` panic in
+/// `rara_paths` on the first build.
+///
+/// The `OnceLock<TempDir>` is deliberately never dropped — it must outlive the
+/// test because `rara_paths`'s own `OnceLock`s cache the path and never
+/// re-read.
+fn ensure_test_paths_isolated() {
+    static SHARED_TEST_CONFIG: OnceLock<tempfile::TempDir> = OnceLock::new();
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let shared = SHARED_TEST_CONFIG
+            .get_or_init(|| tempfile::tempdir().expect("create shared test config dir"));
+        let _ = std::panic::catch_unwind(|| {
+            rara_paths::set_custom_config_dir(shared.path());
+        });
+    });
+}
 
 /// Build a scripted response that mimics a reasoning model finalizing
 /// whitespace `content` while routing all tokens to `reasoning_content`,
@@ -64,6 +88,7 @@ fn whitespace_with_reasoning_and_tool_call() -> CompletionResponse {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn whitespace_intermediate_iteration_does_not_pollute_tape() {
+    ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
 
     // Iteration 1: whitespace content + reasoning + tool call (the exact
