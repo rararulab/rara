@@ -33,3 +33,4 @@ Closes #
 - [ ] `just test` passes
 - [ ] `just lint` passes
 - [ ] Tested locally
+- [ ] Live E2E updated (or N/A) for new user-facing behaviour

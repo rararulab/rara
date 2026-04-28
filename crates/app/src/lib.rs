@@ -563,11 +563,19 @@ pub async fn start_with_options(
         Arc::new(settings_svc.clone());
     info!("Runtime settings service loaded");
 
-    // Resolve config file path (same logic as AppConfig::new)
+    // Pick the config file `ConfigFileSync` should watch + write back to.
+    // Mirrors `AppConfig::new` precedence: local `./config.yaml` wins when
+    // present (matches dev-from-repo-root habit), otherwise fall back to the
+    // canonical XDG location used by deployed installs and CI.
     let config_path = {
-        let mut path = std::env::current_dir().unwrap_or_default();
-        path.push("config.yaml");
-        path
+        let local = std::env::current_dir()
+            .unwrap_or_default()
+            .join("config.yaml");
+        if local.is_file() {
+            local
+        } else {
+            rara_paths::config_file().to_path_buf()
+        }
     };
     let config_file_sync =
         config_sync::ConfigFileSync::new(settings_provider.clone(), config.clone(), config_path)

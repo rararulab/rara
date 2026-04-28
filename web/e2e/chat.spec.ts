@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import path from "node:path";
+import path from 'node:path';
 import { test, expect, type APIRequestContext } from '@playwright/test';
 
 // ---------------------------------------------------------------------------
@@ -36,10 +36,18 @@ async function deleteSession(request: APIRequestContext, key: string) {
 // ---------------------------------------------------------------------------
 
 test.describe('Chat E2E (real backend)', () => {
-  test.beforeEach(async ({ request }) => {
+  // Live suite — fail loud if the backend is unreachable instead of
+  // silently skipping. CI boots `rara server` with an isolated config
+  // before this runs (see `.github/workflows/web-ci.yml`).
+  // Locally: `cargo run -p rara-cli -- server` against `~/.config/rara/config.yaml`,
+  // then `npm run test:e2e:live`.
+  test.beforeAll(async ({ request }) => {
     const health = await request.get('/api/v1/health');
     if (!health.ok()) {
-      test.skip(true, 'Backend not running at localhost:25555');
+      throw new Error(
+        `rara backend not reachable at /api/v1/health (status ${health.status()}). ` +
+          `Start it with \`cargo run -p rara-cli -- server\` (or \`just run\`) and retry.`,
+      );
     }
   });
 
@@ -64,11 +72,7 @@ test.describe('Chat E2E (real backend)', () => {
     await expect(textarea).toBeVisible({ timeout: 15_000 });
 
     // When the backend is online the placeholder should NOT contain "offline".
-    await expect(textarea).not.toHaveAttribute(
-      'placeholder',
-      /offline/i,
-      { timeout: 15_000 },
-    );
+    await expect(textarea).not.toHaveAttribute('placeholder', /offline/i, { timeout: 15_000 });
 
     // Textarea should be enabled.
     await expect(textarea).toBeEnabled();
@@ -154,9 +158,7 @@ test.describe('Chat E2E (real backend)', () => {
     expect(sessions.some((s: { key: string }) => s.key === key)).toBeTruthy();
 
     // Delete.
-    const delRes = await request.delete(
-      `/api/v1/chat/sessions/${encodeURIComponent(key)}`,
-    );
+    const delRes = await request.delete(`/api/v1/chat/sessions/${encodeURIComponent(key)}`);
     expect(delRes.ok()).toBeTruthy();
 
     // Verify it is gone.
@@ -206,9 +208,7 @@ test.describe('Chat E2E (real backend)', () => {
     // Retrieve sessions from the API and find the one with our title.
     const listRes = await request.get('/api/v1/chat/sessions?limit=100&offset=0');
     const sessions = await listRes.json();
-    const created = sessions.find(
-      (s: { title: string }) => s.title === 'E2E test message',
-    );
+    const created = sessions.find((s: { title: string }) => s.title === 'E2E test message');
     if (created) {
       await deleteSession(request, created.key);
     }
@@ -244,37 +244,29 @@ test.describe('Chat E2E (real backend)', () => {
     await expect(sendButton).toBeDisabled();
   });
 
-  test("web chat accepts local image attachments", async ({ page }) => {
-    await page.goto("/agent?tab=chat");
+  test('web chat accepts local image attachments', async ({ page }) => {
+    await page.goto('/agent?tab=chat');
 
-    const textarea = page.getByRole("textbox");
+    const textarea = page.getByRole('textbox');
     await expect(textarea).toBeVisible({ timeout: 15_000 });
-    await expect(textarea).not.toHaveAttribute("placeholder", /offline/i, {
+    await expect(textarea).not.toHaveAttribute('placeholder', /offline/i, {
       timeout: 15_000,
     });
 
     const fileInput = page.locator('input[type="file"][accept*="image"]');
     await expect(fileInput).toHaveCount(1);
 
-    await fileInput.setInputFiles(
-      path.join(process.cwd(), "e2e/fixtures/test-image.svg"),
-    );
+    await fileInput.setInputFiles(path.join(process.cwd(), 'e2e/fixtures/test-image.svg'));
 
-    await expect(
-      page.locator('img[src^="data:image/svg+xml;base64,"]'),
-    ).toHaveCount(1);
-    await expect(
-      page.getByRole("button", { name: "Send message" }),
-    ).toBeEnabled();
+    await expect(page.locator('img[src^="data:image/svg+xml;base64,"]')).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled();
   });
 
   // -----------------------------------------------------------------------
   // 9. Textarea placeholder shows correct text when online
   // -----------------------------------------------------------------------
 
-  test('textarea placeholder is correct when server is online', async ({
-    page,
-  }) => {
+  test('textarea placeholder is correct when server is online', async ({ page }) => {
     await page.goto('/agent?tab=chat');
 
     const textarea = page.getByRole('textbox');
@@ -304,10 +296,7 @@ test.describe('Chat E2E (real backend)', () => {
   // 11. WebSocket connection establishes on session select
   // -----------------------------------------------------------------------
 
-  test('WebSocket connection establishes when a session is active', async ({
-    page,
-    request,
-  }) => {
+  test('WebSocket connection establishes when a session is active', async ({ page, request }) => {
     const key = testSessionKey();
 
     // Create a session via API first.
@@ -356,10 +345,7 @@ test.describe('Chat E2E (real backend)', () => {
   // 12. Send a message via WebSocket
   // -----------------------------------------------------------------------
 
-  test('send a message via WebSocket and see it in the chat', async ({
-    page,
-    request,
-  }) => {
+  test('send a message via WebSocket and see it in the chat', async ({ page, request }) => {
     const key = testSessionKey();
 
     // Create a session via API.
@@ -439,10 +425,9 @@ test.describe('Chat E2E (real backend)', () => {
     });
 
     try {
-      const patchRes = await request.patch(
-        `/api/v1/chat/sessions/${encodeURIComponent(key)}`,
-        { data: { title: 'Updated Title' } },
-      );
+      const patchRes = await request.patch(`/api/v1/chat/sessions/${encodeURIComponent(key)}`, {
+        data: { title: 'Updated Title' },
+      });
       expect(patchRes.ok()).toBeTruthy();
 
       const updated = await patchRes.json();
