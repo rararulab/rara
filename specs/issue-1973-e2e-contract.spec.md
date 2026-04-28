@@ -165,6 +165,7 @@ spec-author after this PR merges.
 - **/crates/kernel/tests/e2e_contract_lane2_scripted.rs
 - **/crates/kernel/Cargo.toml
 - **/specs/issue-1973-e2e-contract.spec.md
+- **/.claude/agents/spec-author.md
 
 ### Forbidden
 
