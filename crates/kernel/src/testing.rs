@@ -21,7 +21,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Once, OnceLock},
 };
 
 use async_trait::async_trait;
@@ -440,6 +440,15 @@ impl TestKernelBuilder {
         // Skills prompt (empty)
         let skill_prompt_provider: crate::handle::SkillPromptProvider = Arc::new(|| String::new());
 
+        // Redirect `rara_paths` config + data globals to a per-process
+        // tempdir before any kernel code resolves them. Without this, the
+        // agent loop's `build_system_prompt` calls `rara_paths::workspace_dir()`
+        // which falls back to `$HOME/.config/rara/workspace`; on the
+        // `arc-runner-set` CI runner `$HOME` is read-only and the resulting
+        // `mkdir_all` panics with EACCES (issue #1989). Mirrors the pattern
+        // used by `crates/channels/tests/web_session_smoke.rs`.
+        redirect_rara_paths_for_tests();
+
         // Per-test scheduler dir — isolates `jobs.json` / `in_flight.json` /
         // `subscriptions.json` from every other test running in the same
         // process. `rara_paths::workspace_dir()` is a `OnceLock` global, so
@@ -666,6 +675,31 @@ impl AgentTool for ValidatingFakeTool {
     }
 }
 
+/// Redirect `rara_paths` config and data directories to a per-process
+/// tempdir, exactly once per test binary.
+///
+/// `rara_paths::set_custom_*_dir` panics on second invocation, so the calls
+/// are guarded by `Once`. The tempdir is held in a `OnceLock` static so it
+/// outlives every `TestKernelBuilder` constructed in the same process.
+fn redirect_rara_paths_for_tests() {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    static INIT: Once = Once::new();
+    let root = ROOT.get_or_init(|| {
+        let dir =
+            std::env::temp_dir().join(format!("rara-test-kernel-builder-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create test kernel builder root");
+        dir
+    });
+    INIT.call_once(|| {
+        let config = root.join("rara_config");
+        let data = root.join("rara_data");
+        std::fs::create_dir_all(&config).expect("create test config dir");
+        std::fs::create_dir_all(&data).expect("create test data dir");
+        rara_paths::set_custom_config_dir(&config);
+        rara_paths::set_custom_data_dir(&data);
+    });
+}
+
 /// Convenience helper: build a [`CompletionResponse`] with tool calls.
 pub fn scripted_tool_call_response(
     tool_calls: Vec<crate::llm::ToolCallRequest>,
@@ -677,5 +711,43 @@ pub fn scripted_tool_call_response(
         stop_reason: StopReason::ToolCalls,
         usage: None,
         model: "scripted".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Calling `redirect_rara_paths_for_tests` twice in the same binary must
+    /// not panic — the second call is a no-op because `rara_paths`'s
+    /// `set_custom_*` panic on re-init. After both calls,
+    /// `rara_paths::config_dir()` / `data_dir()` resolve to the tempdir
+    /// roots seeded by the first call.
+    #[test]
+    fn test_kernel_builder_redirect_is_idempotent() {
+        redirect_rara_paths_for_tests();
+        let config_first = rara_paths::config_dir().clone();
+        let data_first = rara_paths::data_dir().clone();
+
+        // Second call must not panic and must not move the resolved paths.
+        redirect_rara_paths_for_tests();
+        assert_eq!(rara_paths::config_dir(), &config_first);
+        assert_eq!(rara_paths::data_dir(), &data_first);
+
+        // The redirect must have escaped `$HOME/.config/rara`; the resolved
+        // dirs live under `std::env::temp_dir()` per the helper.
+        let tmp = std::env::temp_dir();
+        assert!(
+            config_first.starts_with(&tmp),
+            "config dir {} should live under temp dir {}",
+            config_first.display(),
+            tmp.display()
+        );
+        assert!(
+            data_first.starts_with(&tmp),
+            "data dir {} should live under temp dir {}",
+            data_first.display(),
+            tmp.display()
+        );
     }
 }
