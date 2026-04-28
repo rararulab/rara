@@ -27,12 +27,39 @@
 //!
 //! Companion to `e2e_contract_lane1_no_llm.rs` (lane 1, no LLM).
 
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    sync::Once,
+    time::{Duration, Instant},
+};
 
 use rara_kernel::{
     identity::Principal,
     testing::{TestKernelBuilder, scripted_response},
 };
+
+/// Override `rara_paths` to a stable per-process temp dir so the kernel
+/// doesn't try to create `~/.config/rara/workspace` — on the Linux ARC
+/// runner `HOME` is read-only and `workspace_dir()` would otherwise
+/// fail. Mirrors `web_session_smoke::init_test_env`.
+fn init_test_env() {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    static INIT: Once = Once::new();
+    let root = ROOT.get_or_init(|| {
+        let dir =
+            std::env::temp_dir().join(format!("rara-kernel-lane2-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create test env root");
+        dir
+    });
+    INIT.call_once(move || {
+        let data = root.join("rara_data");
+        let config = root.join("rara_config");
+        std::fs::create_dir_all(&data).expect("create test data dir");
+        std::fs::create_dir_all(&config).expect("create test config dir");
+        rara_paths::set_custom_data_dir(&data);
+        rara_paths::set_custom_config_dir(&config);
+    });
+}
 
 /// One scripted response → exactly one recorded turn whose preview
 /// reflects the scripted text. The `TurnTrace.success` flag is true and
@@ -41,6 +68,7 @@ use rara_kernel::{
 /// single iteration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lane2_scripted_single_turn_records_expected_trace() {
+    init_test_env();
     let tmp = tempfile::tempdir().expect("tempdir");
     let tk = TestKernelBuilder::new(tmp.path())
         .responses(vec![scripted_response("scripted hello")])
