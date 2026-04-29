@@ -15,10 +15,10 @@ grpc:
   server_address: "127.0.0.1:50051"
 
 owner_token: "ci-owner-token-not-a-real-secret"
-owner_user_id: "ci"
+owner_user_id: "ryan"
 
 users:
-  - name: "ci"
+  - name: "ryan"
     role: root
     platforms: []
 
