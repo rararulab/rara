@@ -20,19 +20,40 @@
 //! **off on success, 100% on error**, with a hard `max_chars` truncation so
 //! a runaway tool output cannot blow up trace ingest.
 //!
-//! Configuration lives in YAML (no Rust-side defaults — see crate guidelines):
+//! Configuration is optional in YAML — when omitted the sampler still runs
+//! with safe built-in defaults (the mechanism is default-on; suppressing
+//! payloads requires an explicit `on_error: 0.0`):
 //!
 //! ```yaml
 //! telemetry:
 //!   payload_sampling:
 //!     on_error: 1.0     # sample every error
-//!     on_success: 0.0   # off in prod; 0.05 in dev
-//!     max_chars: 1000   # hard cap per attribute
+//!     on_success: 1.0   # 1.0 needed to populate Langfuse Input/Output
+//!     max_chars: 4000   # hard cap per attribute
 //! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+/// Default per-attribute character cap when no explicit `max_chars` is given.
+///
+/// Tuned so trace ingest stays well under typical OTLP payload limits
+/// (Langfuse ingest tolerates up to a few hundred KB per attribute, but
+/// keeping the cap at 4 KB keeps the UI snappy and protects against
+/// runaway tool outputs). Mechanism-level tuning lives next to the
+/// mechanism per the rara `anti-patterns.md` guideline; not exposed as YAML.
+pub const DEFAULT_MAX_CHARS: usize = 4_000;
+
+/// Default sampling rate on errored operations. Errors are always
+/// interesting; sample every one.
+pub const DEFAULT_ON_ERROR: f64 = 1.0;
+
+/// Default sampling rate on successful operations. The Langfuse UI needs
+/// `langfuse.*.input` / `langfuse.*.output` populated to show the trace
+/// content panel as non-empty (#2002), so the default-on rate is `1.0`.
+/// Operators who want to dial this back set `on_success` explicitly in YAML.
+pub const DEFAULT_ON_SUCCESS: f64 = 1.0;
 
 /// Outcome of the operation being sampled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,18 +66,29 @@ pub enum Outcome {
 
 /// Configuration for the Layer B payload sampler.
 ///
-/// All fields are required in YAML — there is no `Default` impl per the
-/// rara config guideline ("no hardcoded defaults in Rust").
+/// Fields are optional in YAML; when absent the corresponding
+/// `DEFAULT_ON_*` / `DEFAULT_MAX_CHARS` constant from this module is
+/// used. Missing the whole `payload_sampling` block falls back to a
+/// fully default-on sampler — see [`PayloadSampler::from_optional_config`].
 #[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
 pub struct PayloadSamplingConfig {
     /// Sampling probability when [`Outcome::Error`] (range `0.0..=1.0`).
-    pub on_error:   f64,
+    /// Defaults to [`DEFAULT_ON_ERROR`] when absent.
+    #[serde(default)]
+    pub on_error:   Option<f64>,
     /// Sampling probability when [`Outcome::Success`] (range `0.0..=1.0`).
-    pub on_success: f64,
-    /// Maximum number of bytes (UTF-8 chars) kept per sampled attribute. Any
-    /// payload longer than this is truncated and the corresponding
-    /// `*.truncated` attribute is set to `true`.
-    pub max_chars:  usize,
+    /// Defaults to [`DEFAULT_ON_SUCCESS`] when absent — the Langfuse UI
+    /// needs the input / output attributes populated to render content,
+    /// so the mechanism is default-on.
+    #[serde(default)]
+    pub on_success: Option<f64>,
+    /// Maximum number of UTF-8 chars kept per sampled attribute. Any
+    /// payload longer than this is truncated; the truncation marker
+    /// `… [truncated]` is appended in-band so reviewers can tell the
+    /// payload was cut.
+    /// Defaults to [`DEFAULT_MAX_CHARS`] when absent.
+    #[serde(default)]
+    pub max_chars:  Option<usize>,
 }
 
 /// Decision about whether to attach Layer B payloads to a span.
@@ -79,29 +111,54 @@ pub enum SamplingDecision {
 /// and error decisions so changing one rate doesn't perturb the other.
 #[derive(Debug)]
 pub struct PayloadSampler {
-    config:        PayloadSamplingConfig,
+    config:        ResolvedConfig,
     success_count: AtomicU64,
     error_count:   AtomicU64,
 }
 
+/// Resolved sampler parameters with all `Option` fields filled in. Internal
+/// only — the public surface remains [`PayloadSamplingConfig`] which keeps
+/// fields optional so YAML can omit them.
+#[derive(Debug, Clone, Copy)]
+struct ResolvedConfig {
+    on_error:   f64,
+    on_success: f64,
+    max_chars:  usize,
+}
+
 impl PayloadSampler {
-    /// Construct a sampler from validated config.
+    /// Construct a sampler from a config block. Missing fields fall back to
+    /// the `DEFAULT_*` constants in this module.
     ///
     /// Probabilities outside `[0.0, 1.0]` are clamped to that range; this is
     /// a defense against typos like `on_error: 100` (meant `1.0`) silently
     /// causing the sampler to never fire.
     #[must_use]
     pub fn new(config: PayloadSamplingConfig) -> Self {
-        let config = PayloadSamplingConfig {
-            on_error:   config.on_error.clamp(0.0, 1.0),
-            on_success: config.on_success.clamp(0.0, 1.0),
-            max_chars:  config.max_chars,
+        let resolved = ResolvedConfig {
+            on_error:   config.on_error.unwrap_or(DEFAULT_ON_ERROR).clamp(0.0, 1.0),
+            on_success: config
+                .on_success
+                .unwrap_or(DEFAULT_ON_SUCCESS)
+                .clamp(0.0, 1.0),
+            max_chars:  config.max_chars.unwrap_or(DEFAULT_MAX_CHARS),
         };
         Self {
-            config,
+            config:        resolved,
             success_count: AtomicU64::new(0),
-            error_count: AtomicU64::new(0),
+            error_count:   AtomicU64::new(0),
         }
+    }
+
+    /// Default-on sampler used when YAML omits the `payload_sampling` block.
+    ///
+    /// Mechanism-level tuning lives next to the mechanism per the rara
+    /// `anti-patterns.md` guideline ("would a deploy operator have a real
+    /// reason to pick a different value?" — for Langfuse trace UI population
+    /// the answer is no, so the defaults are a `const`, not a YAML knob).
+    #[must_use]
+    pub fn from_optional_config(config: Option<PayloadSamplingConfig>) -> Self {
+        Self::new(config.unwrap_or_else(|| PayloadSamplingConfig::builder().build()))
     }
 
     /// Decide whether to attach Layer B payloads for an operation with the
@@ -151,6 +208,29 @@ pub fn truncate(s: &str, max_chars: usize) -> (String, bool) {
     (truncated, true)
 }
 
+/// In-band truncation marker appended to a sampled payload that exceeded
+/// `max_chars`. Set in-band rather than as a separate `*.truncated` boolean
+/// because Langfuse does not recognize bespoke `*.truncated` keys (#2002),
+/// and a reviewer reading the trace JSON or UI needs an obvious cue.
+pub const TRUNCATION_MARKER: &str = " … [truncated]";
+
+/// Truncate `s` to at most `max_chars` UTF-8 characters and, when truncation
+/// occurred, append [`TRUNCATION_MARKER`]. Returned string is always valid
+/// UTF-8 and at most `max_chars + TRUNCATION_MARKER.chars().count()` chars.
+///
+/// This is the helper agent-loop spans should call before writing
+/// `langfuse.observation.input` / `langfuse.observation.output`: Langfuse
+/// reads those keys verbatim, so the marker must live inside the value.
+#[must_use]
+pub fn truncate_with_marker(s: &str, max_chars: usize) -> String {
+    let (out, truncated) = truncate(s, max_chars);
+    if truncated {
+        format!("{out}{TRUNCATION_MARKER}")
+    } else {
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +249,35 @@ mod tests {
         for _ in 0..100 {
             assert_eq!(sampler.decide(Outcome::Success), SamplingDecision::Skip);
         }
+    }
+
+    #[test]
+    fn from_optional_config_none_falls_back_to_defaults_on() {
+        // Mechanism is default-on per #2002 — `None` config must NOT mean
+        // "sampler disabled". Both success and error fire on the first call.
+        let sampler = PayloadSampler::from_optional_config(None);
+        assert!(matches!(
+            sampler.decide(Outcome::Success),
+            SamplingDecision::Record { max_chars }
+                if max_chars == DEFAULT_MAX_CHARS
+        ));
+        assert!(matches!(
+            sampler.decide(Outcome::Error),
+            SamplingDecision::Record { max_chars }
+                if max_chars == DEFAULT_MAX_CHARS
+        ));
+    }
+
+    #[test]
+    fn config_omits_fields_falls_back_to_defaults() {
+        // Operator wrote `payload_sampling: {}` — every field absent.
+        let cfg = PayloadSamplingConfig::builder().build();
+        let sampler = PayloadSampler::new(cfg);
+        assert!(matches!(
+            sampler.decide(Outcome::Success),
+            SamplingDecision::Record { max_chars }
+                if max_chars == DEFAULT_MAX_CHARS
+        ));
     }
 
     #[test]
@@ -233,6 +342,17 @@ mod tests {
         assert!(truncated);
         // No panic, valid UTF-8.
         let _ = out.as_bytes();
+    }
+
+    #[test]
+    fn truncate_with_marker_appends_marker_only_when_cut() {
+        // Short payload — marker MUST NOT appear, otherwise reviewers see
+        // `[truncated]` on every short trace.
+        let short = truncate_with_marker("hi", 10);
+        assert_eq!(short, "hi");
+        // Long payload — marker appended in-band so Langfuse UI shows it.
+        let long = truncate_with_marker("hello world", 5);
+        assert_eq!(long, format!("hello{TRUNCATION_MARKER}"));
     }
 
     #[test]
