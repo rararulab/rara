@@ -23,7 +23,10 @@ jobs:
     name: Detect Changes
     runs-on: arc-runner-set
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+      docs: ${{ steps.filter.outputs.docs }}
+      specs: ${{ steps.filter.outputs.specs }}
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -35,25 +38,36 @@ jobs:
         id: filter
         with:
           filters: |
-            code:
+            rust:
               - 'crates/**'
               - 'api/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              - '.github/workflows/rust.yml'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/rust.yml'
+              - '.github/workflows/lint.yml'
+              - '.github/workflows/e2e.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/web-ci.yml'
+            docs:
+              - 'docs/**'
+              - '*.md'
+              - 'README*'
+            specs:
+              - 'specs/**'
 
   lint:
     name: Lint
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/lint.yml
 
   rust:
     name: Rust
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
 
   release-pr:

@@ -31,10 +31,43 @@ defaults:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: arc-runner-set
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Filter paths
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'api/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/rust.yml'
+              - '.github/workflows/lint.yml'
+              - '.github/workflows/e2e.yml'
+
   real-llm-e2e:
     name: Real-LLM E2E
+    needs: changes
+    # Skip the real-LLM suite when nothing in the rust bucket changed on a
+    # push to main (e.g. docs- or specs-only merges). workflow_dispatch
+    # always runs so maintainers can trigger ad-hoc.
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: arc-runner-set
     env:
       # ARC runners can't build native boxlite (meson/ninja/patchelf missing),
