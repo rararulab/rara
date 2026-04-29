@@ -1021,11 +1021,12 @@ pub(crate) async fn run_agent_loop(
     // recognises the `langfuse.*` namespace and renders the trace's
     // session / user / environment / Input / Output columns from these
     // values (#2002).
-    let langfuse_environment = handle
-        .config()
-        .langfuse_environment
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
+    // `langfuse.environment` is optional trace metadata: when unset we skip
+    // recording the field rather than writing a literal `"unknown"`, so the
+    // Langfuse UI does not show a permanently-empty environment partition.
+    // Contrast with `gen_ai.system` below, which falls back to `"unknown"`
+    // because Langfuse generation observations require it.
+    let langfuse_environment = handle.config().langfuse_environment.clone();
     let turn_span = info_span!(
         "agent_turn",
         session_key = %session_key,
@@ -1040,11 +1041,14 @@ pub(crate) async fn run_agent_loop(
         "gen_ai.usage.output_tokens" = tracing::field::Empty,
         "langfuse.session.id" = %session_key,
         "langfuse.user.id" = tool_context.user_id.as_str(),
-        "langfuse.environment" = langfuse_environment.as_str(),
+        "langfuse.environment" = tracing::field::Empty,
         "langfuse.observation.type" = common_telemetry::attrs::OBSERVATION_TYPE_SPAN,
         "langfuse.trace.input" = tracing::field::Empty,
         "langfuse.trace.output" = tracing::field::Empty,
     );
+    if let Some(env) = langfuse_environment.as_deref() {
+        turn_span.record("langfuse.environment", env);
+    }
     use tracing::Instrument as _;
     run_agent_loop_inner(
         handle,
@@ -1618,7 +1622,7 @@ async fn run_agent_loop_inner(
         let llm_provider: &str = provider_override
             .as_deref()
             .or(provider_hint)
-            .unwrap_or("default");
+            .unwrap_or("unknown");
         let iter_span = info_span!(
             "llm_iteration",
             iter = iteration,
