@@ -813,9 +813,32 @@ pub async fn start_with_options(
         boot::McpDynamicToolProvider::new(rara.mcp_manager.clone()),
     ));
 
+    // Build the Layer B payload sampler. Default-on so the Langfuse UI
+    // renders trace Input / Output without per-deployment YAML — operators
+    // who want to dial back `on_success` set the field explicitly.
+    let payload_sampler = Arc::new(
+        common_telemetry::payload_sampler::PayloadSampler::from_optional_config(
+            config.telemetry.payload_sampling.clone(),
+        ),
+    );
+
+    // Reuse the existing `telemetry.otlp.deployment_environment` YAML key as
+    // the source for `langfuse.environment`. Adding a new YAML key would
+    // collide with `anti-patterns.md` ("would a deploy operator have a real
+    // reason to pick a different value?" — they already pick this one for
+    // `deployment.environment.name`). Falls back to `telemetry.env`.
+    let langfuse_environment = config
+        .telemetry
+        .otlp
+        .as_ref()
+        .and_then(|o| o.deployment_environment.clone())
+        .or_else(|| config.telemetry.env.clone());
+
     let kernel_config = rara_kernel::kernel::KernelConfig {
         mita_heartbeat_interval: Some(config.mita.heartbeat_interval),
         context_folding: config.context_folding.clone(),
+        payload_sampler: Some(payload_sampler),
+        langfuse_environment,
         ..Default::default()
     };
 

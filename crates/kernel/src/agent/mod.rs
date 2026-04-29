@@ -1016,6 +1016,16 @@ pub(crate) async fn run_agent_loop(
     // `#[tracing::instrument(fields(...))]`, so the span is built manually
     // and the body runs inside `.instrument(span)` to keep the future
     // `Send`.
+    // The Langfuse UI keys (`langfuse.*`) live alongside the existing
+    // `rara.*` Layer A keys: detector contract is unchanged, but Langfuse
+    // recognises the `langfuse.*` namespace and renders the trace's
+    // session / user / environment / Input / Output columns from these
+    // values (#2002).
+    let langfuse_environment = handle
+        .config()
+        .langfuse_environment
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
     let turn_span = info_span!(
         "agent_turn",
         session_key = %session_key,
@@ -1028,6 +1038,12 @@ pub(crate) async fn run_agent_loop(
         "gen_ai.request.model" = tracing::field::Empty,
         "gen_ai.usage.input_tokens" = tracing::field::Empty,
         "gen_ai.usage.output_tokens" = tracing::field::Empty,
+        "langfuse.session.id" = %session_key,
+        "langfuse.user.id" = tool_context.user_id.as_str(),
+        "langfuse.environment" = langfuse_environment.as_str(),
+        "langfuse.observation.type" = common_telemetry::attrs::OBSERVATION_TYPE_SPAN,
+        "langfuse.trace.input" = tracing::field::Empty,
+        "langfuse.trace.output" = tracing::field::Empty,
     );
     use tracing::Instrument as _;
     run_agent_loop_inner(
@@ -1069,6 +1085,23 @@ async fn run_agent_loop_inner(
     interrupted: &AtomicBool,
     interrupt_notify: &tokio::sync::Notify,
 ) -> crate::error::Result<AgentTurnResult> {
+    // Layer B trace input — record the user's prompt on the root agent_turn
+    // span so the Langfuse traces list shows non-empty Input. Sampled +
+    // truncated via the configured PayloadSampler so a multi-MB pasted log
+    // doesn't blow up trace ingest.
+    if let Some(sampler) = handle.config().payload_sampler.as_ref() {
+        if let common_telemetry::payload_sampler::SamplingDecision::Record { max_chars } =
+            sampler.decide(common_telemetry::payload_sampler::Outcome::Success)
+        {
+            let preview =
+                common_telemetry::payload_sampler::truncate_with_marker(&user_text, max_chars);
+            tracing::Span::current().record(
+                common_telemetry::attrs::LANGFUSE_TRACE_INPUT,
+                preview.as_str(),
+            );
+        }
+    }
+
     // Query context via syscalls.
     let manifest = handle.session_manifest(session_key)?;
     let full_tools = handle.session_tool_registry(session_key).await?;
@@ -1573,6 +1606,19 @@ async fn run_agent_loop_inner(
         // LLM call span. Marked as kind=LLM per OpenInference; gen_ai.* fields
         // are populated as the stream progresses (TTFT on first delta, usage on
         // Done). `rara.turn.iteration` lets the detector spot tool-loop runaway.
+        //
+        // Langfuse-recognized keys (`langfuse.observation.*`) sit alongside the
+        // detector-contract keys so the same span renders correctly in the
+        // Langfuse UI without losing detector compatibility.
+        //
+        // Provider name is derived from the resolved override / hint chain;
+        // changing `DriverRegistry::resolve` to return the driver name was a
+        // larger blast radius than #2002 needed, so we approximate with the
+        // hint that was supplied.
+        let llm_provider: &str = provider_override
+            .as_deref()
+            .or(provider_hint)
+            .unwrap_or("default");
         let iter_span = info_span!(
             "llm_iteration",
             iter = iteration,
@@ -1584,10 +1630,15 @@ async fn run_agent_loop_inner(
             "openinference.span.kind" = common_telemetry::attrs::SPAN_KIND_LLM,
             "rara.turn.iteration" = iteration,
             "gen_ai.request.model" = model.as_str(),
+            "gen_ai.system" = llm_provider,
             "gen_ai.server.time_to_first_token" = tracing::field::Empty,
             "gen_ai.usage.input_tokens" = tracing::field::Empty,
             "gen_ai.usage.output_tokens" = tracing::field::Empty,
             "gen_ai.response.finish_reasons" = tracing::field::Empty,
+            "langfuse.observation.type" = common_telemetry::attrs::OBSERVATION_TYPE_GENERATION,
+            "langfuse.observation.input" = tracing::field::Empty,
+            "langfuse.observation.output" = tracing::field::Empty,
+            "langfuse.observation.model.parameters" = tracing::field::Empty,
         );
         let _iter_guard = iter_span.enter();
 
@@ -1637,6 +1688,35 @@ async fn run_agent_loop_inner(
             top_p:               None,
             emit_reasoning:      false,
         };
+
+        // Layer B — sample the request messages onto the LLM span. Langfuse
+        // renders this as the observation's Input panel; without it the
+        // generation observation in the UI shows "(no input)".
+        if let Some(sampler) = handle.config().payload_sampler.as_ref() {
+            if let common_telemetry::payload_sampler::SamplingDecision::Record { max_chars } =
+                sampler.decide(common_telemetry::payload_sampler::Outcome::Success)
+            {
+                let serialized = serde_json::to_string(&request.messages).unwrap_or_default();
+                let preview =
+                    common_telemetry::payload_sampler::truncate_with_marker(&serialized, max_chars);
+                iter_span.record(
+                    common_telemetry::attrs::LANGFUSE_OBSERVATION_INPUT,
+                    preview.as_str(),
+                );
+                // Model parameters — JSON so Langfuse renders them as a
+                // structured panel rather than a flat string.
+                let params = serde_json::json!({
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                    "frequency_penalty": request.frequency_penalty,
+                    "parallel_tool_calls": request.parallel_tool_calls,
+                });
+                iter_span.record(
+                    common_telemetry::attrs::LANGFUSE_OBSERVATION_MODEL_PARAMETERS,
+                    params.to_string().as_str(),
+                );
+            }
+        }
 
         // Start streaming via LlmDriver
         let (tx, mut rx) = mpsc::channel::<llm::StreamDelta>(128);
@@ -1954,6 +2034,38 @@ async fn run_agent_loop_inner(
 
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
         iter_span.record("has_tools", has_tool_calls);
+
+        // Layer B — sample the assistant output onto the LLM span. Combines
+        // visible text with any tool-call summary so the Langfuse UI shows
+        // what the model produced this iteration, even on tool-only turns.
+        if let Some(sampler) = handle.config().payload_sampler.as_ref() {
+            if let common_telemetry::payload_sampler::SamplingDecision::Record { max_chars } =
+                sampler.decide(common_telemetry::payload_sampler::Outcome::Success)
+            {
+                let tool_summary: Vec<serde_json::Value> = pending_tool_calls
+                    .values()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments_buf,
+                        })
+                    })
+                    .collect();
+                let output = serde_json::json!({
+                    "text": accumulated_text,
+                    "tool_calls": tool_summary,
+                });
+                let preview = common_telemetry::payload_sampler::truncate_with_marker(
+                    &output.to_string(),
+                    max_chars,
+                );
+                iter_span.record(
+                    common_telemetry::attrs::LANGFUSE_OBSERVATION_OUTPUT,
+                    preview.as_str(),
+                );
+            }
+        }
 
         {
             let text_preview: String = accumulated_text.chars().take(500).collect();
@@ -2630,11 +2742,36 @@ async fn run_agent_loop_inner(
                     "tool.name" = name.as_str(),
                     "tool.outcome" = tracing::field::Empty,
                     "rara.tool.error.kind" = tracing::field::Empty,
+                    "langfuse.observation.type" = common_telemetry::attrs::OBSERVATION_TYPE_SPAN,
+                    "langfuse.observation.input" = tracing::field::Empty,
+                    "langfuse.observation.output" = tracing::field::Empty,
+                    "langfuse.observation.level" = tracing::field::Empty,
                 );
+                let payload_sampler = handle.config().payload_sampler.clone();
                 async move {
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
                     info!(tool = %name, args = %args, "tool call started");
+
+                    // Record the tool call arguments as the observation's
+                    // Input panel — sampled + truncated so a multi-MB JSON
+                    // does not pollute the trace.
+                    if let Some(sampler) = payload_sampler.as_ref() {
+                        if let common_telemetry::payload_sampler::SamplingDecision::Record {
+                            max_chars,
+                        } =
+                            sampler.decide(common_telemetry::payload_sampler::Outcome::Success)
+                        {
+                            let preview = common_telemetry::payload_sampler::truncate_with_marker(
+                                &args.to_string(),
+                                max_chars,
+                            );
+                            tool_span.record(
+                                common_telemetry::attrs::LANGFUSE_OBSERVATION_INPUT,
+                                preview.as_str(),
+                            );
+                        }
+                    }
 
                     // Runtime permission guard — deny if user cannot use this tool.
                     if let Some(ref user) = user_ref {
@@ -2825,6 +2962,24 @@ async fn run_agent_loop_inner(
                             Ok(result) => {
                                 tool_span.record("success", true);
                                 tool_span.record("tool.outcome", "success");
+                                // Layer B — record the tool result JSON as
+                                // the observation Output panel so reviewers
+                                // see what the tool returned without leaving
+                                // Langfuse.
+                                if let Some(sampler) = payload_sampler.as_ref() {
+                                    if let common_telemetry::payload_sampler::SamplingDecision::Record { max_chars } =
+                                        sampler.decide(common_telemetry::payload_sampler::Outcome::Success)
+                                    {
+                                        let preview = common_telemetry::payload_sampler::truncate_with_marker(
+                                            &result.json.to_string(),
+                                            max_chars,
+                                        );
+                                        tool_span.record(
+                                            common_telemetry::attrs::LANGFUSE_OBSERVATION_OUTPUT,
+                                            preview.as_str(),
+                                        );
+                                    }
+                                }
                                 let dur = tool_start.elapsed().as_millis() as u64;
                                 info!(tool = %name, duration_ms = dur, "tool call succeeded");
                                 guard_pipeline.post_execute(&session_key_for_guard, &name);
@@ -2855,6 +3010,27 @@ async fn run_agent_loop_inner(
                                     "rara.tool.error.kind",
                                     classify_tool_error(&e.to_string()),
                                 );
+                                // Layer B — record the error message as the
+                                // observation Output and bump severity to
+                                // ERROR so Langfuse highlights the row.
+                                tool_span.record(
+                                    common_telemetry::attrs::LANGFUSE_OBSERVATION_LEVEL,
+                                    common_telemetry::attrs::OBSERVATION_LEVEL_ERROR,
+                                );
+                                if let Some(sampler) = payload_sampler.as_ref() {
+                                    if let common_telemetry::payload_sampler::SamplingDecision::Record { max_chars } =
+                                        sampler.decide(common_telemetry::payload_sampler::Outcome::Error)
+                                    {
+                                        let preview = common_telemetry::payload_sampler::truncate_with_marker(
+                                            &e.to_string(),
+                                            max_chars,
+                                        );
+                                        tool_span.record(
+                                            common_telemetry::attrs::LANGFUSE_OBSERVATION_OUTPUT,
+                                            preview.as_str(),
+                                        );
+                                    }
+                                }
                                 warn!(tool = %name, args = %args_snapshot, error = %e, "tool execution failed");
                                 let dur = tool_start.elapsed().as_millis() as u64;
 
@@ -3403,6 +3579,23 @@ async fn run_agent_loop_inner(
     }
 
     tracing::Span::current().record(common_telemetry::attrs::RARA_TURN_OUTCOME, "success");
+    // Layer B trace output — final assistant text on the agent_turn root.
+    // Without this Langfuse renders empty Output in the traces list, even
+    // though Layer A (rara.*) was set correctly.
+    if let Some(sampler) = handle.config().payload_sampler.as_ref() {
+        if let common_telemetry::payload_sampler::SamplingDecision::Record { max_chars } =
+            sampler.decide(common_telemetry::payload_sampler::Outcome::Success)
+        {
+            let preview = common_telemetry::payload_sampler::truncate_with_marker(
+                &last_accumulated_text,
+                max_chars,
+            );
+            tracing::Span::current().record(
+                common_telemetry::attrs::LANGFUSE_TRACE_OUTPUT,
+                preview.as_str(),
+            );
+        }
+    }
     Ok(AgentTurnResult {
         text: last_accumulated_text,
         iterations: actual_iterations,

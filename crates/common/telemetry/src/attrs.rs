@@ -14,7 +14,7 @@
 
 //! Stable telemetry attribute keys — the contract an external detector reads.
 //!
-//! `SCHEMA_VERSION: 0.1.0`. Adding attributes is a **minor** change. Renaming
+//! `SCHEMA_VERSION: 0.2.0`. Adding attributes is a **minor** change. Renaming
 //! or removing one is a **major** change and will break the downstream
 //! detector agent — bump the schema version and announce.
 //!
@@ -25,17 +25,20 @@
 //!   attributes alone.
 //! - **Layer B — content sampling** (see [`crate::payload_sampler`]): set only
 //!   when the sampler decides. Bounded by `max_chars`. Used for diagnosis after
-//!   Layer A flags a regression.
+//!   Layer A flags a regression. Layer B payloads are written under the
+//!   `langfuse.*.input` / `langfuse.*.output` keys so Langfuse renders them in
+//!   its UI directly.
 //! - **Layer C — pointers, never embedded payloads**: e.g. [`RARA_LOG_FILE`]
 //!   points to a hourly log file rather than embedding the lines.
 //!
 //! Upstream OTel GenAI semantic conventions are imported via
 //! `opentelemetry_semantic_conventions::attribute::*` — never hardcode the
-//! string form of those keys.
+//! string form of those keys. Langfuse-specific keys (`langfuse.*`) are not
+//! in the OTel semconv registry and are hardcoded here.
 
 /// The semantic-convention version exported by this module. Bumped when
 /// attributes are renamed or removed. Detectors pin against this value.
-pub const SCHEMA_VERSION: &str = "0.1.0";
+pub const SCHEMA_VERSION: &str = "0.2.0";
 
 // ---------------------------------------------------------------------------
 // rara.* — rara-specific attributes
@@ -115,28 +118,6 @@ pub const RARA_LOG_FILE: &str = "rara.log.file";
 // rara.* — Layer B (sampled payload) attributes
 // ---------------------------------------------------------------------------
 
-/// Sampled prompt text (Layer B). Truncation is signalled by
-/// [`RARA_PROMPT_TRUNCATED`].
-pub const RARA_PROMPT: &str = "rara.prompt";
-/// True when [`RARA_PROMPT`] was truncated to the sampler's `max_chars`.
-pub const RARA_PROMPT_TRUNCATED: &str = "rara.prompt.truncated";
-
-/// Sampled completion text (Layer B). Truncation is signalled by
-/// [`RARA_COMPLETION_TRUNCATED`].
-pub const RARA_COMPLETION: &str = "rara.completion";
-/// True when [`RARA_COMPLETION`] was truncated to the sampler's `max_chars`.
-pub const RARA_COMPLETION_TRUNCATED: &str = "rara.completion.truncated";
-
-/// Sampled tool input JSON (Layer B).
-pub const RARA_TOOL_INPUT: &str = "rara.tool.input";
-/// True when [`RARA_TOOL_INPUT`] was truncated.
-pub const RARA_TOOL_INPUT_TRUNCATED: &str = "rara.tool.input.truncated";
-
-/// Sampled tool output JSON (Layer B).
-pub const RARA_TOOL_OUTPUT: &str = "rara.tool.output";
-/// True when [`RARA_TOOL_OUTPUT`] was truncated.
-pub const RARA_TOOL_OUTPUT_TRUNCATED: &str = "rara.tool.output.truncated";
-
 /// Sampled error message chain (Layer B). Always set when sampler decides
 /// "on_error".
 pub const RARA_ERROR_MESSAGE: &str = "rara.error.message";
@@ -179,6 +160,75 @@ pub const TOOL_NAME: &str = "tool.name";
 
 /// Tool execution outcome. One of: `success`, `error`.
 pub const TOOL_OUTCOME: &str = "tool.outcome";
+
+// ---------------------------------------------------------------------------
+// langfuse.* — Langfuse-recognized attributes
+//
+// Langfuse maps these directly into its UI's session/user/environment filters
+// and the trace/observation Input/Output panels. They are NOT in the OTel
+// semconv registry; the canonical reference is the Langfuse OTel docs:
+// https://langfuse.com/docs/opentelemetry/get-started
+// ---------------------------------------------------------------------------
+
+/// Langfuse session id — Langfuse groups traces sharing this value into a
+/// single session view.
+pub const LANGFUSE_SESSION_ID: &str = "langfuse.session.id";
+
+/// Langfuse user id — surfaces in the per-user breakdown.
+pub const LANGFUSE_USER_ID: &str = "langfuse.user.id";
+
+/// Trace-level input (typically the user's prompt for the turn). Rendered in
+/// the Langfuse traces list "Input" column.
+pub const LANGFUSE_TRACE_INPUT: &str = "langfuse.trace.input";
+
+/// Trace-level output (typically the final assistant reply). Rendered in the
+/// Langfuse traces list "Output" column.
+pub const LANGFUSE_TRACE_OUTPUT: &str = "langfuse.trace.output";
+
+/// Deployment environment label (e.g. `"dev"`, `"prod"`). Lets Langfuse
+/// filter / aggregate by environment.
+pub const LANGFUSE_ENVIRONMENT: &str = "langfuse.environment";
+
+/// Observation type. Langfuse-recognized values: `"generation"` for LLM
+/// calls, `"span"` for everything else (tool execution, root agent turn).
+pub const LANGFUSE_OBSERVATION_TYPE: &str = "langfuse.observation.type";
+
+/// Observation type value: an LLM generation. Maps to Langfuse's
+/// `GENERATION` observation, which expects model + usage + input + output.
+pub const OBSERVATION_TYPE_GENERATION: &str = "generation";
+
+/// Observation type value: a generic span (root turn, tool execution, etc.).
+pub const OBSERVATION_TYPE_SPAN: &str = "span";
+
+/// Per-observation input payload. For LLM observations, the serialized
+/// request messages; for tool observations, the call arguments.
+pub const LANGFUSE_OBSERVATION_INPUT: &str = "langfuse.observation.input";
+
+/// Per-observation output payload. For LLM observations, the assistant
+/// response; for tool observations, the tool result JSON.
+pub const LANGFUSE_OBSERVATION_OUTPUT: &str = "langfuse.observation.output";
+
+/// Observation severity level. Langfuse-recognized values include
+/// `DEBUG`, `DEFAULT`, `WARNING`, `ERROR`. Rara only sets this to
+/// [`OBSERVATION_LEVEL_ERROR`] on tool-failure spans; absence implies
+/// `DEFAULT`.
+pub const LANGFUSE_OBSERVATION_LEVEL: &str = "langfuse.observation.level";
+
+/// Observation level value used on errored tool / generation observations.
+pub const OBSERVATION_LEVEL_ERROR: &str = "ERROR";
+
+/// JSON-serialized model parameters (temperature, max_tokens, top_p, …)
+/// attached to LLM generation observations.
+pub const LANGFUSE_OBSERVATION_MODEL_PARAMETERS: &str = "langfuse.observation.model.parameters";
+
+/// JSON-serialized token usage details (e.g.
+/// `{"input": 123, "output": 456}`). Optional — Langfuse already reads
+/// `gen_ai.usage.*` for primary token counts.
+pub const LANGFUSE_OBSERVATION_USAGE_DETAILS: &str = "langfuse.observation.usage_details";
+
+/// JSON-serialized cost details. Optional — populated only when the
+/// provider returns explicit USD costs.
+pub const LANGFUSE_OBSERVATION_COST_DETAILS: &str = "langfuse.observation.cost_details";
 
 // ---------------------------------------------------------------------------
 // Convenience re-exports of upstream GenAI keys most commonly used on spans.
@@ -239,5 +289,45 @@ mod tests {
             GEN_AI_SERVER_TIME_TO_FIRST_TOKEN,
             "gen_ai.server.time_to_first_token"
         );
+    }
+
+    /// Langfuse keys are hardcoded — Langfuse does not publish a semconv
+    /// crate. Renaming any of these silently empties the Langfuse UI panels,
+    /// which is exactly what #2002 fixed; pin the strings.
+    #[test]
+    fn langfuse_keys_have_stable_strings() {
+        assert_eq!(LANGFUSE_SESSION_ID, "langfuse.session.id");
+        assert_eq!(LANGFUSE_USER_ID, "langfuse.user.id");
+        assert_eq!(LANGFUSE_TRACE_INPUT, "langfuse.trace.input");
+        assert_eq!(LANGFUSE_TRACE_OUTPUT, "langfuse.trace.output");
+        assert_eq!(LANGFUSE_ENVIRONMENT, "langfuse.environment");
+        assert_eq!(LANGFUSE_OBSERVATION_TYPE, "langfuse.observation.type");
+        assert_eq!(OBSERVATION_TYPE_GENERATION, "generation");
+        assert_eq!(OBSERVATION_TYPE_SPAN, "span");
+        assert_eq!(LANGFUSE_OBSERVATION_INPUT, "langfuse.observation.input");
+        assert_eq!(LANGFUSE_OBSERVATION_OUTPUT, "langfuse.observation.output");
+        assert_eq!(LANGFUSE_OBSERVATION_LEVEL, "langfuse.observation.level");
+        assert_eq!(OBSERVATION_LEVEL_ERROR, "ERROR");
+        assert_eq!(
+            LANGFUSE_OBSERVATION_MODEL_PARAMETERS,
+            "langfuse.observation.model.parameters"
+        );
+        assert_eq!(
+            LANGFUSE_OBSERVATION_USAGE_DETAILS,
+            "langfuse.observation.usage_details"
+        );
+        assert_eq!(
+            LANGFUSE_OBSERVATION_COST_DETAILS,
+            "langfuse.observation.cost_details"
+        );
+    }
+
+    #[test]
+    fn schema_version_is_bumped_for_langfuse_renames() {
+        // 0.1.0 -> 0.2.0 was the major bump that removed `rara.prompt`,
+        // `rara.completion`, `rara.tool.input`, `rara.tool.output` (plus
+        // their `*.truncated` siblings) in favour of the `langfuse.*`
+        // observation keys. Detectors pin against this value.
+        assert_eq!(SCHEMA_VERSION, "0.2.0");
     }
 }

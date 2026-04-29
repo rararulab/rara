@@ -152,6 +152,22 @@ pub struct KernelConfig {
     /// Tool execution hook commands (PreToolUse / PostToolUse /
     /// PostToolUseFailure).
     pub hooks:                   HooksConfig,
+    /// Layer B payload sampler used by `agent::run_agent_loop` to gate
+    /// whether the prompt / completion / tool-input / tool-output payloads
+    /// are recorded on spans (as `langfuse.*.input` / `langfuse.*.output`).
+    ///
+    /// `None` means the agent loop skips payload recording entirely.
+    /// `app/src/lib.rs` populates this from `telemetry.payload_sampling`,
+    /// falling back to a default-on sampler so the Langfuse UI never shows
+    /// blank Input / Output panels (#2002).
+    #[default(_code = "None")]
+    pub payload_sampler:         Option<Arc<common_telemetry::payload_sampler::PayloadSampler>>,
+    /// Deployment environment label (e.g. `"dev"`, `"prod"`) emitted on
+    /// agent_turn spans as `langfuse.environment` so Langfuse can filter
+    /// traces by environment. Reuses
+    /// `telemetry.otlp.deployment_environment` from YAML — no new key.
+    #[default(_code = "None")]
+    pub langfuse_environment:    Option<String>,
 }
 
 /// Shared reference to a
