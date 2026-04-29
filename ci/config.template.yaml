@@ -32,3 +32,9 @@ llm:
       base_url: "${OPENAI_BASE_URL}"
       api_key: "${OPENAI_API_KEY}"
       default_model: "${OPENAI_MODEL}"
+
+knowledge:
+  embedding_model: "text-embedding-3-small"
+  embedding_dimensions: 1536
+  search_top_k: 10
+  similarity_threshold: 0.85
