@@ -415,6 +415,11 @@ pub(crate) fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> 
         // Terminal marker from StreamHub::close — surface as per-turn Done.
         // The session-level bus itself stays open across turns.
         StreamEvent::StreamClosed { .. } => Some(WebEvent::Done),
+        // Multi-agent topology events (#1999) — kept as kernel-internal
+        // signals for now. Web rendering is a separate downstream concern.
+        StreamEvent::SubagentSpawned { .. }
+        | StreamEvent::SubagentDone { .. }
+        | StreamEvent::TapeForked { .. } => None,
     }
 }
 

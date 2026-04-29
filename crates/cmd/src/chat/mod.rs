@@ -1043,6 +1043,11 @@ fn stream_event_to_cli_event(event: StreamEvent) -> Option<CliEvent> {
         // and emits its own Done — returning None here prevents a duplicate
         // Done from the explicit terminal marker (see fn doc comment).
         StreamEvent::StreamClosed { .. } => return None,
+        // Multi-agent topology events (#1999) — kernel-internal signals;
+        // CLI rendering is a separate downstream spec.
+        StreamEvent::SubagentSpawned { .. }
+        | StreamEvent::SubagentDone { .. }
+        | StreamEvent::TapeForked { .. } => return None,
     })
 }
 

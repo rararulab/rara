@@ -1149,6 +1149,59 @@ pub enum StreamEvent {
         /// The stream that just closed.
         stream_id: String,
     },
+    /// A child session has been spawned under a parent session.
+    ///
+    /// Emitted by `Kernel::handle_spawn_agent` on the **parent** session's bus
+    /// only when `parent_id.is_some()` — root user-initiated spawns produce
+    /// no topology event because there is no parent bus to emit on. Carries
+    /// enough context for live subscribers (e.g. the web multi-agent UI) to
+    /// render the parent–child relationship without scraping
+    /// `ToolCallStart.arguments`.
+    SubagentSpawned {
+        /// Parent session that owns the spawn.
+        parent_session: SessionKey,
+        /// Newly created child session.
+        child_session:  SessionKey,
+        /// Manifest name of the spawned agent (e.g. `"researcher"`).
+        manifest_name:  String,
+    },
+    /// A previously spawned child session has completed.
+    ///
+    /// Emitted by `Kernel::handle_child_completed` on the parent session's
+    /// bus. `success` mirrors `AgentRunLoopResult.success` from the child's
+    /// final result.
+    SubagentDone {
+        /// Parent session that observed the completion.
+        parent_session: SessionKey,
+        /// Child session that finished.
+        child_session:  SessionKey,
+        /// Whether the child's terminal `AgentRunLoopResult` reported success.
+        success:        bool,
+    },
+    /// A tape has been forked from a parent tape inside the session's turn.
+    ///
+    /// Emitted by tape-fork call sites (notably the agent-turn transactional
+    /// fork) on the session's bus, so live subscribers can render fork
+    /// lineage. `forked_from` / `forked_at_anchor` align with `ForkMetadata`
+    /// in `crates/kernel/src/memory/fork_metadata.rs`. `child_tape` is kept
+    /// alongside because downstream subscribers (topology UI) need the new
+    /// tape's identifier to correlate subsequent events on the fork — there
+    /// is no other channel that surfaces it.
+    TapeForked {
+        /// Parent session that owns the fork.
+        parent_session:   SessionKey,
+        /// Original tape name the fork is anchored on (mirrors
+        /// `ForkMetadata.forked_from`).
+        forked_from:      String,
+        /// Allocated fork tape name as returned by `TapeStore::fork`.
+        child_tape:       String,
+        /// Anchor name when the fork was anchored to a specific anchor;
+        /// `None` for the agent-turn transactional fork (no anchor).
+        /// Mirrors `ForkMetadata.forked_at_anchor` (which stores `""` for
+        /// unanchored; the topology event uses `Option` to make the
+        /// distinction explicit on the wire).
+        forked_at_anchor: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1438,6 +1491,30 @@ impl StreamHub {
                 }
             }
         }
+    }
+
+    /// Emit a stream event directly to the **session-level** event bus,
+    /// bypassing the per-stream channels.
+    ///
+    /// This is the right surface for **session-scoped topology events**
+    /// (`SubagentSpawned`, `SubagentDone`, `TapeForked`) that must reach
+    /// long-lived subscribers regardless of whether the session currently
+    /// has an active stream. Compare with [`Self::emit_to_session`], which only
+    /// writes through per-stream channels — events emitted there reach the
+    /// session bus only via the bridge spawned in [`Self::open`], so they
+    /// are silently dropped when the session is between turns and has no
+    /// open stream.
+    ///
+    /// The bus is created on demand if it does not yet exist, mirroring
+    /// [`subscribe_session_events`](Self::subscribe_session_events). This
+    /// keeps the timing requirement loose: subscribers can attach before or
+    /// after the emission and observe the same event stream.
+    pub fn emit_to_session_bus(&self, session_key: &SessionKey, event: StreamEvent) {
+        let entry = self
+            .session_events
+            .entry(*session_key)
+            .or_insert_with(|| broadcast::channel(self.capacity).0);
+        let _ = entry.send(event);
     }
 
     /// Subscribe to the **session-level** event bus.
