@@ -9,7 +9,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -Dwarnings
+  # RUSTFLAGS intentionally unset here — `.cargo/config.toml` is the single
+  # source of truth (it carries `-D warnings` plus the mold linker flag).
+  # Setting env `RUSTFLAGS` would replace (not merge) the config.toml
+  # rustflags array, silently dropping `-fuse-ld=mold`. See #2009.
   RUST_BACKTRACE: true
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
@@ -49,6 +52,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+
+      # TEMPORARY (#2009): pre-flight check that `clang` + `mold` exist on
+      # the arc-runner image before we rely on `linker = "clang"` and
+      # `-fuse-ld=mold` in `.cargo/config.toml`. Drop this step once the
+      # initial CI run on this PR confirms both binaries are present.
+      - name: Pre-flight — verify clang and mold are on PATH
+        run: |
+          set -euxo pipefail
+          command -v clang
+          clang --version
+          command -v mold
+          mold --version
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings

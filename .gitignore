@@ -63,7 +63,9 @@ site/.astro/
 # Local git worktrees (in-repo)
 .worktrees/
 
-.cargo/
+.cargo/*
+# Track the project-wide cargo config (linker flags, target stanzas) — see #2009
+!.cargo/config.toml
 
 # Node (Playwright screenshot script)
 node_modules/
