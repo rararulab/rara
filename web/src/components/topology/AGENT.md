@@ -9,6 +9,19 @@ turns plus a right-rail worker inbox of spawned subagents.
 
 ## Architecture
 
+The page is a craft-style 3-pane shell hosted by `pages/Topology.tsx`:
+`SessionPicker` (left, 280px) | `TimelineView` (centre, flex) |
+`WorkerInbox` + `TapeLineageView` (right, 320px). The shell auto-selects
+the most-recent session on first load so users never have to paste a
+session UUID — task #9 of #1999 fixed that UX complaint by replacing
+the old free-text "root session key" input with a clickable list.
+
+- `SessionPicker.tsx` — left rail. Lists the most-recently updated
+  sessions via `useQuery(['topology', 'chat-sessions'])` against
+  `GET /api/v1/chat/sessions?limit=50`, polls every 30s, and exposes
+  a `+ New` button that POSTs `/api/v1/chat/sessions` with a default
+  title. Calls `onAutoSelect(firstKey)` once when the URL has no key
+  so the shell can redirect `/topology` → `/topology/{key}`.
 - `TimelineView.tsx` — vertical list of `TurnCard`s; filters the
   topology event buffer down to a single `viewSessionKey` (root by
   default; the worker inbox swaps in a child key when one is selected).
@@ -26,8 +39,11 @@ turns plus a right-rail worker inbox of spawned subagents.
   `Topology` page's `viewChild` state so the timeline focuses on that
   child. The back-to-root affordance lives in the timeline header, not
   the inbox.
-- `TapeLineageView.tsx` — collapsible panel above the timeline that
-  renders the tape fork forest as a hand-drawn SVG. Default collapsed.
+- `TapeLineageView.tsx` — right-rail panel (under the worker inbox)
+  that renders the tape fork forest as a hand-drawn SVG. Default
+  collapsed. Lives in the right rail rather than above the timeline so
+  the centre column is dedicated to the conversation stream — matches
+  the craft "right rail = meta" pattern.
   Pure SVG (no d3 / dagre) because tape forests are tiny (≤ a few dozen
   nodes per session) and a static layout keeps the view
   snapshot-testable. Highlights nodes whose `sessionKey` matches the
@@ -49,7 +65,10 @@ session` is many-to-one, so a click would not unambiguously map to
 Data flow:
 
 ```
-backend StreamHub
+GET /api/v1/chat/sessions
+  → SessionPicker (left rail) → URL navigates to /topology/{key}
+                                       │
+backend StreamHub                       ▼
   → /api/v1/kernel/chat/topology/{root} WS  (TopologyFrame)
     → useTopologySubscription            (TopologyEventEntry[])
       ├→ TimelineView.filter(viewSessionKey)
@@ -108,6 +127,14 @@ backend StreamHub
   with a Map keyed by session — order across sessions is meaningful
   for the timeline (a child spawn marker must appear in the parent's
   turn at the right point).
+- Do NOT auto-create a session when the list is empty — the empty
+  state shows a `Create session` button instead. Auto-creating on
+  mount produces phantom sessions every time someone visits
+  `/topology` cold; the user must opt in.
+- Do NOT bring back the free-text "root session key" input. The whole
+  point of task #9 was to stop exposing session UUIDs to the user. If
+  deep linking is needed, share the `/topology/{key}` URL — the
+  picker will auto-select the matching row when the URL has a key.
 
 ## Dependencies
 
@@ -115,5 +142,11 @@ backend StreamHub
   exports the `TopologyWebFrame` extension union.
 - `@/agent/session-ws-client` — type-only import for the base
   `WebFrame` union (kept synced with `crates/channels/src/web.rs`).
+- `@/api/client` — REST helper for the session list / create calls
+  the picker drives.
+- `@tanstack/react-query` — `SessionPicker` uses the same
+  `useQuery`/`useMutation` pattern as `Subscriptions.tsx` so the cache
+  key (`['topology', 'chat-sessions']`) is the single invalidation
+  point if a future surface needs to nudge the picker.
 - `@/components/ui/{card,badge,button,input}` — local shadcn-style
   primitives.
