@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/structured/AdminApprovalRequest.tsx
@@ -5,9 +6,9 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { ShieldAlert, Check, X } from 'lucide-react'
-import { Button } from '~vendor/components/ui/button'
-import { Switch } from '~vendor/components/ui/switch'
-import { Label } from '~vendor/components/ui/label'
+import { Button } from '~vendor/components/electron-ui/button'
+import { Switch } from '~vendor/components/electron-ui/switch'
+import { Label } from '~vendor/components/electron-ui/label'
 import { cn } from '~vendor/lib/utils'
 
 export interface AdminApprovalRequestData {

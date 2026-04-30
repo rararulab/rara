@@ -20,7 +20,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "~vendor/*": ["./src/vendor/craft-ui/*"]
+      "~vendor/*": ["./src/vendor/craft-ui/*"],
+      "@craft-agent/*": ["./src/vendor/craft-ui/_stubs/craft-agent/*"],
+      "@config/*": ["./src/vendor/craft-ui/_stubs/config/*"]
     },
 
     /* Linting */

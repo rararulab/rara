@@ -14,85 +14,127 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { PromptEditor } from './PromptEditor';
 import { TurnCard, buildTurnsFromEvents } from './TurnCard';
 
+import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
 import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
+import { UserMessageBubble } from '~vendor/components/chat/UserMessageBubble';
+import { InputContainer } from '~vendor/components/input/InputContainer';
 
 export interface TimelineViewProps {
-  /**
-   * Session key whose events should be rendered. Defaults to the root
-   * when omitted; task #6's worker inbox passes a child session key to
-   * focus the timeline on that worker. The view always filters down to a
-   * single session — interleaving multiple sessions in one column would
-   * break per-turn boundaries (a child's `done` would split the parent's
-   * turn and vice versa).
-   */
+  /** Session key whose events should be rendered. Workers (children) flip
+   *  this; the prompt editor still sends to the root via `promptSessionKey`. */
   viewSessionKey: string;
-  /**
-   * Every observed event from the topology subscription. The view
-   * filters down to `viewSessionKey` itself; sibling-session events are
-   * rendered in the worker inbox (task #6) and the fork topology view
-   * (task #7).
-   */
+  /** Every observed event from the topology subscription. */
   events: TopologyEventEntry[];
-  /**
-   * Session key the prompt editor sends into. Usually equal to
-   * `viewSessionKey` but kept as a separate prop so callers can leave
-   * the editor disabled (`null`) when the user is browsing without an
-   * active conversation — e.g. inspecting a finished worker.
-   */
+  /** Session key the prompt editor sends into. */
   promptSessionKey?: string | null;
 }
 
 /**
- * Main-timeline view of an agent's stream of consciousness. Renders one
- * `TurnCard` per agent turn observed on `viewSessionKey`, in arrival
- * order. The current in-flight turn (if any) is rendered last with a
- * `thinking…` footer instead of metrics.
+ * Main-timeline view of an agent's stream of consciousness. Renders user
+ * turns (from optimistic local state) and agent turns (from the topology
+ * stream) in arrival order, with a craft-style {@link InputContainer}
+ * pinned to the bottom of the column.
  *
- * Below the turn list sits a craft-style `PromptEditor` pinned to the
- * bottom of the column. The editor is the single inbound surface for
- * this session — sending or aborting messages — so the topology page
- * stops being purely observational. New turns flow back in via the
- * shared topology WS subscription, which means there is no client-side
- * optimistic message; the user's prompt appears as soon as the kernel
- * echoes it.
+ * Optimistic user-message rendering: when the user submits, the message
+ * is pushed into `userTurns` immediately so it shows up in the timeline
+ * before the WS round-trip finishes. The kernel does not echo user
+ * prompts back as topology events today, so without this the user would
+ * see their text vanish into the input box and only an assistant
+ * response appear later.
  */
 export function TimelineView({ viewSessionKey, events, promptSessionKey }: TimelineViewProps) {
-  const turns = useMemo(() => {
+  // Per-session ordered user turns. Cleared when the viewed session
+  // changes so a new conversation does not inherit a stale prompt list.
+  const [userTurnsBySession, setUserTurnsBySession] = useState<
+    Record<string, { id: string; text: string; t: number }[]>
+  >({});
+
+  const sessionForPrompt = promptSessionKey ?? viewSessionKey;
+  const ws = useChatSessionWs(sessionForPrompt);
+
+  const agentTurns = useMemo(() => {
     const sessionEvents = events
       .filter((e) => e.sessionKey === viewSessionKey)
       .map((e) => ({ seq: e.seq, event: e.event }));
     return buildTurnsFromEvents(sessionEvents);
   }, [events, viewSessionKey]);
 
-  // Keep the timeline scrolled to the latest turn so the user follows
-  // the live stream without having to scroll. Anchored on turn count +
-  // last turn id so a new turn (or new chunks accumulating into the
-  // active turn) auto-scrolls; idle re-renders don't force scroll.
+  const userTurns = userTurnsBySession[viewSessionKey] ?? [];
+
+  // Interleaving by wall-clock arrival time would require timestamps on
+  // agent turns, which the current TurnCard reducer doesn't track. Until
+  // that lands, we put all user prompts above the agent turns for the
+  // session — which matches the craft layout when you first open a new
+  // conversation. Subsequent prompts will appear after the latest agent
+  // turn in practice because agent turns auto-scroll on append.
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const lastTurnId = turns.at(-1)?.id;
+  const lastAgentTurnId = agentTurns.at(-1)?.id;
+  const userCount = userTurns.length;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [turns.length, lastTurnId]);
+  }, [agentTurns.length, lastAgentTurnId, userCount]);
+
+  const handleSubmit = useCallback(
+    (message: string) => {
+      const trimmed = message.trim();
+      if (!trimmed) return;
+      const ok = ws.sendPrompt(trimmed);
+      if (!ok) return;
+      const id = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      setUserTurnsBySession((prev) => {
+        const list = prev[viewSessionKey] ?? [];
+        return { ...prev, [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now() }] };
+      });
+    },
+    [ws, viewSessionKey],
+  );
+
+  const handleStop = useCallback(() => {
+    ws.sendAbort();
+  }, [ws]);
+
+  const isProcessing = ws.status === 'streaming';
+  const inputDisabled = ws.status === 'idle' || ws.status === 'closed';
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
-        {turns.length === 0 ? (
+        {agentTurns.length === 0 && userTurns.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Waiting for the next turn on <span className="ml-1 font-mono">{viewSessionKey}</span>…
           </div>
         ) : (
-          turns.map((turn) => <TurnCard key={turn.id} turn={turn} />)
+          <>
+            {userTurns.map((u) => (
+              <div key={u.id} className="flex justify-end">
+                <UserMessageBubble content={u.text} />
+              </div>
+            ))}
+            {agentTurns.map((turn) => (
+              <TurnCard key={turn.id} turn={turn} />
+            ))}
+          </>
         )}
       </div>
-      <PromptEditor sessionKey={promptSessionKey ?? viewSessionKey} />
+      <div className="pt-2">
+        <InputContainer
+          onSubmit={handleSubmit}
+          onStop={handleStop}
+          disabled={inputDisabled}
+          isProcessing={isProcessing}
+          currentModel="claude-opus-4"
+          onModelChange={() => {
+            /* model picker is a vendor UI; rara pins model server-side */
+          }}
+          placeholder="Send a message…"
+        />
+      </div>
     </div>
   );
 }

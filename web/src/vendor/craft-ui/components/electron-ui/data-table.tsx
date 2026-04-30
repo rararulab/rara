@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/data-table.tsx
@@ -23,7 +24,7 @@ import {
   getExpandedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { Button } from '~vendor/components/ui/button'
+import { Button } from '~vendor/components/electron-ui/button'
 import {
   Table,
   TableBody,
@@ -31,7 +32,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '~vendor/components/ui/table'
+} from '~vendor/components/electron-ui/table'
 import { cn } from '~vendor/lib/utils'
 
 interface DataTableProps<TData, TValue> {

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/skill-avatar.tsx
@@ -10,8 +11,8 @@
  */
 
 import { Zap } from 'lucide-react'
-import { EntityIcon } from '~vendor/components/ui/entity-icon'
-import { useEntityIcon } from '~vendor/lib/icon-cache'
+import { EntityIcon } from '~vendor/components/electron-ui/entity-icon'
+import { useEntityIcon } from '~vendor/lib/electron/icon-cache'
 import type { IconSize } from '@craft-agent/shared/icons'
 import type { LoadedSkill } from '../../../shared/types'
 

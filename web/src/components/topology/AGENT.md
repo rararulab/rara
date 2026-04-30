@@ -25,23 +25,18 @@ the old free-text "root session key" input with a clickable list.
 - `TimelineView.tsx` — vertical list of `TurnCard`s; filters the
   topology event buffer down to a single `viewSessionKey` (root by
   default; the worker inbox swaps in a child key when one is selected).
-  Hosts the `PromptEditor` pinned at the bottom; the centre column is
-  `flex flex-col`, turns scroll inside the upper region, the editor
-  sticks to the floor.
-- `PromptEditor.tsx` — craft-style composer at the bottom of the
-  timeline. Owns `useChatSessionWs` (one per-session WebSocket) and
-  exposes attachment / `@`-mention / voice / model picker / thinking
-  picker / Send-or-Stop affordances. Multimodal prompts go on the wire
-  as `MessageContent::Multimodal`; voice recordings ride as
-  `audio_base64` blocks that the backend's `transcribe_audio_blocks`
-  pass folds into transcribed text before the kernel sees them. Model
-  and thinking-level pickers PATCH `/api/v1/chat/sessions/{key}` rather
-  than carrying per-turn overrides — the backend `Prompt` frame has no
-  per-turn override slot and the standing convention is "session =
-  pinned config". The editor always sends into the **root** session —
-  browsing a worker child via the inbox stays observation-only; the
-  editor stays bound to the root so replies do not get written to a
-  sandbox tape the user did not pick.
+  Hosts the vendored craft `InputContainer` pinned at the bottom and
+  renders user prompts via the vendored `UserMessageBubble`; the centre
+  column is `flex flex-col`, turns scroll inside the upper region, the
+  editor sticks to the floor. Owns `useChatSessionWs` (one per-session
+  WebSocket) and pushes plain-text prompts. The editor always sends into
+  the **root** session — browsing a worker child via the inbox stays
+  observation-only so replies do not get written to a sandbox tape the
+  user did not pick. User-message rendering is **optimistic**: the typed
+  text is added to local state on submit so it appears before the
+  backend round-trip; the kernel does not echo user prompts back as
+  topology events today, and history-on-reload is deferred (no
+  `GET /messages` endpoint yet).
 - `TurnCard.tsx` — one turn = one card. Owns the reducer
   `buildTurnsFromEvents` that folds a flat `WebFrame` stream into
   `TurnCardData[]` (text, reasoning, tool calls, markers, metrics,

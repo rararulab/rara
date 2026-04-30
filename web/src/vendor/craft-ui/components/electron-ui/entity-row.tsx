@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/entity-row.tsx
@@ -21,18 +22,18 @@
 import * as React from 'react'
 import { useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
-import { Separator } from '~vendor/components/ui/separator'
+import { Separator } from '~vendor/components/electron-ui/separator'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   StyledDropdownMenuContent,
-} from '~vendor/components/ui/styled-dropdown'
+} from '~vendor/components/electron-ui/styled-dropdown'
 import {
   ContextMenu,
   ContextMenuTrigger,
   StyledContextMenuContent,
-} from '~vendor/components/ui/styled-context-menu'
-import { DropdownMenuProvider, ContextMenuProvider } from '~vendor/components/ui/menu-context'
+} from '~vendor/components/electron-ui/styled-context-menu'
+import { DropdownMenuProvider, ContextMenuProvider } from '~vendor/components/electron-ui/menu-context'
 import { cn } from '~vendor/lib/utils'
 
 export interface EntityRowProps {

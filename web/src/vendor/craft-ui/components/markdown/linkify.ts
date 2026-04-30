@@ -1,9 +1,10 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/packages/ui/src/components/markdown/linkify.ts
  */
 import LinkifyIt from 'linkify-it'
-import { FILE_EXTENSIONS_PATTERN } from '../../lib/file-classification'
+import { FILE_EXTENSIONS_PATTERN } from '../../lib/pkg/file-classification'
 
 /**
  * Linkify - URL and file path detection for markdown preprocessing

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /*
  * Copyright 2025 Rararulab
  *

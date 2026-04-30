@@ -1,12 +1,13 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/structured/CredentialRequest.tsx
  */
 import { useState, useCallback } from 'react'
 import { Key, User, Lock, Eye, EyeOff, Check, X } from 'lucide-react'
-import { Button } from '~vendor/components/ui/button'
-import { Input } from '~vendor/components/ui/input'
-import { Label } from '~vendor/components/ui/label'
+import { Button } from '~vendor/components/electron-ui/button'
+import { Input } from '~vendor/components/electron-ui/input'
+import { Label } from '~vendor/components/electron-ui/label'
 import { cn } from '~vendor/lib/utils'
 import type { CredentialRequest as CredentialRequestType, CredentialResponse } from '../../../../../shared/types'
 import { validateBasicAuthCredentials, getPasswordValue, getPasswordLabel, getPasswordPlaceholder } from '~vendor/utils/auth-validation'

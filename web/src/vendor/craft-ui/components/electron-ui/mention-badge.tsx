@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/mention-badge.tsx
@@ -5,8 +6,8 @@
 import * as React from 'react'
 import { X } from 'lucide-react'
 import { cn } from '~vendor/lib/utils'
-import { SkillAvatar } from '~vendor/components/ui/skill-avatar'
-import { SourceAvatar } from '~vendor/components/ui/source-avatar'
+import { SkillAvatar } from '~vendor/components/electron-ui/skill-avatar'
+import { SourceAvatar } from '~vendor/components/electron-ui/source-avatar'
 import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import type { MentionItemType } from './mention-menu'
 

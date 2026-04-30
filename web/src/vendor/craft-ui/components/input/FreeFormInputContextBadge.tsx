@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/FreeFormInputContextBadge.tsx
@@ -5,7 +6,7 @@
 import * as React from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
-import { FadingText } from '~vendor/components/ui/fading-text'
+import { FadingText } from '~vendor/components/electron-ui/fading-text'
 import { cn } from '~vendor/lib/utils'
 
 export interface FreeFormInputContextBadgeProps {

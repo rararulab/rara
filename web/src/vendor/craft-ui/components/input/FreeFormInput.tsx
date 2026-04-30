@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/FreeFormInput.tsx
@@ -19,61 +20,61 @@ import {
 } from 'lucide-react'
 import { Icon_Home, Icon_Folder, Spinner } from '@craft-agent/ui'
 
-import * as storage from '~vendor/lib/local-storage'
+import * as storage from '~vendor/lib/electron/local-storage'
 import { useDirectoryPicker } from '~vendor/hooks/useDirectoryPicker'
 import { ServerDirectoryBrowser } from '~vendor/components/ServerDirectoryBrowser'
-import { Button } from '~vendor/components/ui/button'
+import { Button } from '~vendor/components/electron-ui/button'
 import {
   InlineSlashCommand,
   useInlineSlashCommand,
   type SlashCommandId,
-} from '~vendor/components/ui/slash-command-menu'
+} from '~vendor/components/electron-ui/slash-command-menu'
 import {
   InlineMentionMenu,
   useInlineMention,
   type MentionItem,
   type MentionItemType,
-} from '~vendor/components/ui/mention-menu'
+} from '~vendor/components/electron-ui/mention-menu'
 import {
   InlineLabelMenu,
   useInlineLabelMenu,
-} from '~vendor/components/ui/label-menu'
+} from '~vendor/components/electron-ui/label-menu'
 import type { LabelConfig } from '@craft-agent/shared/labels'
-import { parseMentions } from '~vendor/lib/mentions'
-import { RichTextInput, type RichTextInputHandle } from '~vendor/components/ui/rich-text-input'
+import { parseMentions } from '~vendor/lib/electron/mentions'
+import { RichTextInput, type RichTextInputHandle } from '~vendor/components/electron-ui/rich-text-input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuSub,
   DropdownMenuPortal,
-} from '~vendor/components/ui/dropdown-menu'
+} from '~vendor/components/electron-ui/dropdown-menu'
 import {
   StyledDropdownMenuContent,
   StyledDropdownMenuItem,
   StyledDropdownMenuSeparator,
   StyledDropdownMenuSubTrigger,
   StyledDropdownMenuSubContent,
-} from '~vendor/components/ui/styled-dropdown'
-import { Popover, PopoverTrigger, PopoverContent } from '~vendor/components/ui/popover'
+} from '~vendor/components/electron-ui/styled-dropdown'
+import { Popover, PopoverTrigger, PopoverContent } from '~vendor/components/electron-ui/popover'
 import { cn } from '~vendor/lib/utils'
-import { coerceInputText } from '~vendor/lib/input-text'
-import { isMac, PATH_SEP, getPathBasename } from '~vendor/lib/platform'
-import { applySmartTypography } from '~vendor/lib/smart-typography'
+import { coerceInputText } from '~vendor/lib/electron/input-text'
+import { isMac, PATH_SEP, getPathBasename } from '~vendor/lib/electron/platform'
+import { applySmartTypography } from '~vendor/lib/electron/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
 import { ANTHROPIC_MODELS, getModelShortName, getModelDisplayName, getModelContextWindow, type ModelDefinition } from '@config/models'
 import { resolveEffectiveConnectionSlug, isCompatProvider, isLocalConnection } from '@config/llm-connections'
 import { useOptionalAppShellContext } from '~vendor/context/AppShellContext'
-import { EditPopover, getEditConfig } from '~vendor/components/ui/EditPopover'
-import { SourceAvatar } from '~vendor/components/ui/source-avatar'
-import { SourceSelectorPopover } from '~vendor/components/ui/SourceSelectorPopover'
+import { EditPopover, getEditConfig } from '~vendor/components/electron-ui/EditPopover'
+import { SourceAvatar } from '~vendor/components/electron-ui/source-avatar'
+import { SourceSelectorPopover } from '~vendor/components/electron-ui/SourceSelectorPopover'
 import { ConnectionIcon } from '~vendor/components/icons/ConnectionIcon'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import type { FileAttachment, LoadedSource, LoadedSkill } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
 import { type ThinkingLevel, THINKING_LEVELS, getThinkingLevelNameKey } from '@craft-agent/shared/agent/thinking-levels'
 import { useEscapeInterrupt } from '~vendor/context/EscapeInterruptContext'
-import { hasOpenOverlay } from '~vendor/lib/overlay-detection'
+import { hasOpenOverlay } from '~vendor/lib/electron/overlay-detection'
 import { ToolbarStatusSlot } from './ToolbarStatusSlot'
 import { buildPlanApprovalMessage } from '../plan-approval-message'
 import { shouldHandleScopedInputEvent } from './input-event-guards'

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/config/session-status-config.tsx
@@ -8,8 +9,8 @@ import type { StatusConfig } from '@craft-agent/shared/statuses'
 import { isEmoji } from '@craft-agent/shared/utils/icon-constants'
 import { resolveEntityColor, getDefaultStatusColor } from '@craft-agent/shared/colors'
 import type { EntityColor } from '@craft-agent/shared/colors'
-import { StatusIcon } from '~vendor/components/ui/status-icon'
-import { iconCache } from '~vendor/lib/icon-cache'
+import { StatusIcon } from '~vendor/components/electron-ui/status-icon'
+import { iconCache } from '~vendor/lib/electron/icon-cache'
 
 // ============================================================================
 // Types

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/InputErrorBoundary.tsx
@@ -6,7 +7,7 @@ import * as React from 'react'
 import * as Sentry from '@sentry/electron/renderer'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, RefreshCw, Trash2 } from 'lucide-react'
-import { Button } from '~vendor/components/ui/button'
+import { Button } from '~vendor/components/electron-ui/button'
 
 interface InputErrorBoundaryProps {
   sessionId?: string

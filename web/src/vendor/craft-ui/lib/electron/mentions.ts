@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/lib/mentions.ts
@@ -13,7 +14,7 @@
  */
 
 import type { ContentBadge } from '@craft-agent/core'
-import type { MentionItemType } from '~vendor/components/ui/mention-menu'
+import type { MentionItemType } from '~vendor/components/electron-ui/mention-menu'
 import type { LoadedSkill, LoadedSource } from '../../shared/types'
 import { AGENTS_PLUGIN_NAME } from '@craft-agent/shared/skills/types'
 import { getSourceIconSync, getSkillIconSync } from './icon-cache'

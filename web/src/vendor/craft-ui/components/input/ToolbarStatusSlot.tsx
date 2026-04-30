@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/ToolbarStatusSlot.tsx
@@ -23,7 +24,7 @@ import { useAtomValue } from 'jotai'
 import { useTranslation, Trans } from 'react-i18next'
 import { Spinner } from '@craft-agent/ui'
 import { cn } from '~vendor/lib/utils'
-import { Kbd } from '~vendor/components/ui/kbd'
+import { Kbd } from '~vendor/components/electron-ui/kbd'
 import { getHostname, getThemeLuminance } from '~vendor/components/browser/utils'
 import { browserInstancesAtom } from '~vendor/atoms/browser-pane'
 import type { BrowserInstanceInfo } from '../../../../shared/types'

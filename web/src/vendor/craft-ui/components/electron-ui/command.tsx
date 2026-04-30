@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/command.tsx
@@ -7,7 +8,7 @@ import { Command as CommandPrimitive } from 'cmdk'
 import { Search } from 'lucide-react'
 
 import { cn } from '~vendor/lib/utils'
-import { Dialog, DialogContent } from '~vendor/components/ui/dialog'
+import { Dialog, DialogContent } from '~vendor/components/electron-ui/dialog'
 
 function Command({
   className,

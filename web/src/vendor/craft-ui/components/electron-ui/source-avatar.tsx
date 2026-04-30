@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/source-avatar.tsx
@@ -15,8 +16,8 @@
 
 import * as React from 'react'
 import { Globe, HardDrive, Mail, Plug } from 'lucide-react'
-import { EntityIcon, type IconComponent } from '~vendor/components/ui/entity-icon'
-import { useEntityIcon, logoUrlCache } from '~vendor/lib/icon-cache'
+import { EntityIcon, type IconComponent } from '~vendor/components/electron-ui/entity-icon'
+import { useEntityIcon, logoUrlCache } from '~vendor/lib/electron/icon-cache'
 import { McpIcon } from '~vendor/components/icons/McpIcon'
 import type { LoadedSource } from '@craft-agent/shared/sources/types'
 import type { IconSize, ResolvedEntityIcon } from '@craft-agent/shared/icons'

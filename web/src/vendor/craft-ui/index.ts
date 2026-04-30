@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored craft-agents-oss UI primitives — entry point.
  *

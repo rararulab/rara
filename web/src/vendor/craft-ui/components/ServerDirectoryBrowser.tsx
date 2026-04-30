@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ServerDirectoryBrowser.tsx
@@ -10,9 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from '~vendor/components/ui/dialog'
-import { Button } from '~vendor/components/ui/button'
-import { Input } from '~vendor/components/ui/input'
+} from '~vendor/components/electron-ui/dialog'
+import { Button } from '~vendor/components/electron-ui/button'
+import { Input } from '~vendor/components/electron-ui/input'
 import { useRegisterModal } from '~vendor/context/ModalContext'
 import type { DirectoryListingResult } from '../../shared/types'
 import { FolderIcon, FolderSymlinkIcon, ChevronRightIcon } from 'lucide-react'

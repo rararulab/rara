@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Minimal `react-i18next` stand-in for vendored craft-ui components.
  *

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/mention-menu.tsx
@@ -5,9 +6,9 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '~vendor/lib/utils'
-import { FadingText } from '~vendor/components/ui/fading-text'
-import { SkillAvatar } from '~vendor/components/ui/skill-avatar'
-import { SourceAvatar } from '~vendor/components/ui/source-avatar'
+import { FadingText } from '~vendor/components/electron-ui/fading-text'
+import { SkillAvatar } from '~vendor/components/electron-ui/skill-avatar'
+import { SourceAvatar } from '~vendor/components/electron-ui/source-avatar'
 import type { LoadedSkill, LoadedSource, FileSearchResult } from '../../../shared/types'
 import { AGENTS_PLUGIN_NAME } from '@craft-agent/shared/skills/types'
 

@@ -1,19 +1,20 @@
+// @ts-nocheck
 /**
  * Vendored from craft-agents-oss v0.8.12 (Apache-2.0).
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/rich-text-input.tsx
  */
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { coerceInputText } from '~vendor/lib/input-text'
+import { coerceInputText } from '~vendor/lib/electron/input-text'
 import { cn } from '~vendor/lib/utils'
-import { findMentionMatches, parseMentions, type MentionMatch } from '~vendor/lib/mentions'
+import { findMentionMatches, parseMentions, type MentionMatch } from '~vendor/lib/electron/mentions'
 import {
   loadSourceIcon,
   loadSkillIcon,
   getSourceIconSync,
   getSkillIconSync,
   EMOJI_ICON_PREFIX,
-} from '~vendor/lib/icon-cache'
+} from '~vendor/lib/electron/icon-cache'
 import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import type { MentionItemType } from './mention-menu'
 
