@@ -1,0 +1,15 @@
+.{
+    .name = .tape_codec_zig,
+    .version = "0.1.0",
+    // Generated once via `zig init` and frozen. Do not regenerate without
+    // a real reason — see the comment in upstream zig-init output about
+    // hostile forks.
+    .fingerprint = 0x845d029ad5f3fb26,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

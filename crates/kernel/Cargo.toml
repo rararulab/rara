@@ -14,6 +14,10 @@ description = "Unified agent orchestrator: lifecycle, memory, LLM execution, too
 [features]
 default = []
 testing = []
+# Proof-of-concept: route the tape JSONL codec through the Zig static
+# library (`tape-codec-zig`) instead of the default `serde_json` path.
+# Off by default; opt-in for measurement and review (issue #2007).
+zig-codec = ["dep:tape-codec-zig", "tape-codec-zig/zig-codec"]
 
 [dependencies]
 anyhow.workspace = true
@@ -64,6 +68,7 @@ diesel-async.workspace = true
 rara-model.workspace = true
 yunara-store.workspace = true
 strum = { workspace = true, features = ["derive"] }
+tape-codec-zig = { workspace = true, optional = true }
 subtle.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }

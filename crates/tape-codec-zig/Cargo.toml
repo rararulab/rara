@@ -1,0 +1,42 @@
+[package]
+name = "tape-codec-zig"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Proof-of-concept JSONL codec for TapEntry implemented in Zig 0.16 (issue #2007)"
+
+[features]
+# Default ON for this crate so `cargo test -p tape-codec-zig` works
+# without a feature flag. The kernel-side switch is gated separately
+# (see `crates/kernel/Cargo.toml`).
+default = ["zig-codec"]
+zig-codec = []
+
+[dependencies]
+snafu.workspace = true
+
+[dev-dependencies]
+jiff.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[lints.rust]
+# FFI to the Zig static lib is unsafe by definition; the workspace-wide
+# `unsafe_code = "deny"` would block this crate's `extern "C"` block and
+# pointer dereferences. Scope the allowance here.
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

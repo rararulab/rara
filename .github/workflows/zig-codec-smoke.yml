@@ -1,0 +1,50 @@
+name: zig-codec-smoke
+
+# Observability-only smoke test for the issue #2007 PoC. Builds and tests
+# the `tape-codec-zig` crate plus the `rara-kernel` package with the
+# `zig-codec` feature enabled, on macOS and Linux. NOT a merge gate —
+# the spec's `Out of Scope` explicitly disallows wiring this into
+# required CI checks. The job exists so that a future maintainer can
+# look at recent runs and answer "does Zig still build on Linux?"
+# without spinning up a runner manually.
+
+on:
+  pull_request:
+    paths:
+      - "crates/tape-codec-zig/**"
+      - "crates/kernel/Cargo.toml"
+      - "crates/kernel/src/memory/store.rs"
+      - "crates/kernel/src/memory/codec.rs"
+      - "crates/kernel/src/memory/error.rs"
+      - "Cargo.toml"
+      - ".github/workflows/zig-codec-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: smoke ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.16
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Verify zig version
+        run: zig version
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test -p tape-codec-zig
+        run: cargo test -p tape-codec-zig
+
+      - name: cargo build -p rara-kernel --features zig-codec
+        run: cargo build -p rara-kernel --features zig-codec

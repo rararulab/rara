@@ -95,3 +95,10 @@ config/*
 logs/
 .claude/worktrees/
 node-compile-cache/
+
+# cargo build --timings HTML artifacts captured under specs/ for PoCs
+specs/**/timings/*.html
+
+# Zig build cache (written next to zig/build.zig on every `zig build`)
+.zig-cache/
+zig/zig-out/
