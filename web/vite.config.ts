@@ -102,6 +102,11 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss(), docsBookPlugin()],
     resolve: {
+      // Vendor (`craft-agents-oss`) and rara both pull in radix primitives.
+      // Without dedupe, vite's prebundle can produce two React copies, which
+      // causes radix's `useScope` hook to crash with "Cannot read properties
+      // of null (reading 'useMemo')" the moment a DropdownMenu mounts.
+      dedupe: ['react', 'react-dom'],
       alias: {
         // Vendor alias must be matched before '@' so vendor-internal '~vendor/...'
         // imports stay isolated from rara's own '@/...' tree.

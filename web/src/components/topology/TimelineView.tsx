@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { TurnCard, buildTurnsFromEvents } from './TurnCard';
@@ -22,6 +23,7 @@ import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
 import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 import { UserMessageBubble } from '~vendor/components/chat/UserMessageBubble';
 import { InputContainer } from '~vendor/components/input/InputContainer';
+import { EscapeInterruptProvider } from '~vendor/context/EscapeInterruptContext';
 
 export interface TimelineViewProps {
   /** Session key whose events should be rendered. Workers (children) flip
@@ -123,17 +125,26 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
         )}
       </div>
       <div className="pt-2">
-        <InputContainer
-          onSubmit={handleSubmit}
-          onStop={handleStop}
-          disabled={inputDisabled}
-          isProcessing={isProcessing}
-          currentModel="claude-opus-4"
-          onModelChange={() => {
-            /* model picker is a vendor UI; rara pins model server-side */
-          }}
-          placeholder="Send a message…"
-        />
+        {/* Vendor InputContainer reaches for an EscapeInterruptProvider
+         *  (double-Esc interrupt UX) and a radix TooltipProvider (toolbar
+         *  hover hints). Wrap locally rather than at the App root so the
+         *  provider lifetime tracks the timeline view, and rara's other
+         *  pages stay free of vendor-side context noise. */}
+        <EscapeInterruptProvider>
+          <TooltipPrimitive.Provider delayDuration={300}>
+            <InputContainer
+              onSubmit={handleSubmit}
+              onStop={handleStop}
+              disabled={inputDisabled}
+              isProcessing={isProcessing}
+              currentModel="claude-opus-4"
+              onModelChange={() => {
+                /* model picker is a vendor UI; rara pins model server-side */
+              }}
+              placeholder="Send a message…"
+            />
+          </TooltipPrimitive.Provider>
+        </EscapeInterruptProvider>
       </div>
     </div>
   );
