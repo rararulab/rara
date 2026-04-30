@@ -1,0 +1,18 @@
+# Cargo configuration. This file is the single source of truth for
+# rustflags so that future linker/lint flag additions don't get silently
+# dropped by an env-level `RUSTFLAGS` override (cargo replaces, never
+# merges, when env `RUSTFLAGS` is set). See issue #2009.
+#
+# Any future RUSTFLAGS additions go here, NOT in `.github/workflows/*.yml`
+# `env:` blocks.
+
+# Linux CI runners (`arc-runner-set`) have `mold` baked into the image
+# (#1942) but rustc was never told to use it — so every link step fell
+# back to GNU ld. This stanza closes that gap.
+#
+# Target-scoped: macOS dev machines see no change (mold doesn't run on
+# Darwin). `linker = "clang"` is the canonical mold invocation per
+# mold's README and matches tokio / bevy / helix configs.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-D", "warnings"]

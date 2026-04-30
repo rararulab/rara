@@ -9,7 +9,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -Dwarnings
+  # RUSTFLAGS intentionally unset here — `.cargo/config.toml` is the single
+  # source of truth (it carries `-D warnings` plus the mold linker flag).
+  # Setting env `RUSTFLAGS` would replace (not merge) the config.toml
+  # rustflags array, silently dropping `-fuse-ld=mold`. See #2009.
   RUST_BACKTRACE: true
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
