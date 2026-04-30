@@ -21,35 +21,43 @@ import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 import { TurnCard, buildTurnsFromEvents } from './TurnCard';
 
 export interface TimelineViewProps {
-  /** Root session key being observed (used for empty-state copy). */
-  rootSessionKey: string;
   /**
-   * Every observed event from the topology subscription. The view filters
-   * down to root-session events itself; descendant-session events are
-   * intentionally not rendered here (task #6 owns the worker inbox).
+   * Session key whose events should be rendered. Defaults to the root
+   * when omitted; task #6's worker inbox passes a child session key to
+   * focus the timeline on that worker. The view always filters down to a
+   * single session — interleaving multiple sessions in one column would
+   * break per-turn boundaries (a child's `done` would split the parent's
+   * turn and vice versa).
+   */
+  viewSessionKey: string;
+  /**
+   * Every observed event from the topology subscription. The view
+   * filters down to `viewSessionKey` itself; sibling-session events are
+   * rendered in the worker inbox (task #6) and the fork topology view
+   * (task #7).
    */
   events: TopologyEventEntry[];
 }
 
 /**
  * Main-timeline view of an agent's stream of consciousness. Renders one
- * `TurnCard` per agent turn observed on the root session, in arrival
+ * `TurnCard` per agent turn observed on `viewSessionKey`, in arrival
  * order. The current in-flight turn (if any) is rendered last with a
  * `thinking…` footer instead of metrics.
  */
-export function TimelineView({ rootSessionKey, events }: TimelineViewProps) {
+export function TimelineView({ viewSessionKey, events }: TimelineViewProps) {
   const turns = useMemo(() => {
-    const rootEvents = events
-      .filter((e) => e.sessionKey === rootSessionKey)
+    const sessionEvents = events
+      .filter((e) => e.sessionKey === viewSessionKey)
       .map((e) => ({ seq: e.seq, event: e.event }));
-    return buildTurnsFromEvents(rootEvents);
-  }, [events, rootSessionKey]);
+    return buildTurnsFromEvents(sessionEvents);
+  }, [events, viewSessionKey]);
 
   if (turns.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
         Waiting for the next turn on{' '}
-        <span className="ml-1 font-mono">{rootSessionKey}</span>…
+        <span className="ml-1 font-mono">{viewSessionKey}</span>…
       </div>
     );
   }

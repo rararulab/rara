@@ -5,18 +5,27 @@
 Frontend for the multi-agent observability surface (umbrella issue
 #1999). Renders the cross-session topology WebSocket stream
 (`/api/v1/kernel/chat/topology/{root}`) as a main timeline of agent
-turns with inline spawn / done / fork markers.
+turns plus a right-rail worker inbox of spawned subagents.
 
 ## Architecture
 
 - `TimelineView.tsx` — vertical list of `TurnCard`s; filters the
-  topology event buffer down to the root session.
+  topology event buffer down to a single `viewSessionKey` (root by
+  default; the worker inbox swaps in a child key when one is selected).
 - `TurnCard.tsx` — one turn = one card. Owns the reducer
   `buildTurnsFromEvents` that folds a flat `WebFrame` stream into
   `TurnCardData[]` (text, reasoning, tool calls, markers, metrics,
   usage). Splits on `done`.
 - `SpawnMarker.tsx` — compact inline marker for `subagent_spawned`,
   `subagent_done`, `tape_forked`.
+- `WorkerInbox.tsx` — right-rail derived view. The reducer
+  `deriveWorkers` folds the same event buffer into one `WorkerInfo`
+  per spawned child (status, manifest name, last activity seq, event
+  count). Pure; re-runs via `useMemo`.
+- `WorkerCard.tsx` — clickable card per worker; click swaps the
+  `Topology` page's `viewChild` state so the timeline focuses on that
+  child. The back-to-root affordance lives in the timeline header, not
+  the inbox.
 - The WebSocket plumbing lives in `@/hooks/use-topology-subscription`,
   not here. The hook also defines the `TopologyWebFrame` union — an
   extension of `WebFrame` (from `@/agent/session-ws-client`) with the
@@ -29,9 +38,10 @@ Data flow:
 backend StreamHub
   → /api/v1/kernel/chat/topology/{root} WS  (TopologyFrame)
     → useTopologySubscription            (TopologyEventEntry[])
-      → TimelineView.filter(rootSessionKey)
-        → buildTurnsFromEvents
-          → TurnCard[]
+      ├→ TimelineView.filter(viewSessionKey)
+      │    → buildTurnsFromEvents → TurnCard[]
+      └→ WorkerInbox.deriveWorkers
+           → WorkerCard[]
 ```
 
 ## Critical Invariants
@@ -40,10 +50,13 @@ backend StreamHub
   the same input — `TimelineView` re-derives turns on every event push.
   Stash any mutable accumulator in `useMemo` deps, never in module
   scope.
-- **Root-only filter.** `TimelineView` must filter `events` by
-  `sessionKey === rootSessionKey` before reducing. Descendant events
-  are tasks #6 (worker inbox) / #7 (fork topology) — rendering them in
-  the main timeline would double-count and break per-turn boundaries.
+- **Single-session filter.** `TimelineView` must filter `events` by
+  `sessionKey === viewSessionKey` before reducing — never interleave
+  multiple sessions in one column. A child's `done` would split the
+  parent's turn (and vice versa), breaking per-turn boundaries. The
+  `viewSessionKey` is the root by default; the worker inbox passes a
+  child key to focus on a worker. Cross-session structure is task #7's
+  fork topology view, not the timeline.
 - **Mechanism constants stay in the hook.** Reconnect schedule lives in
   `use-topology-subscription` next to the socket logic, mirroring
   `session-ws-client`. Do NOT pull it out into config — see
@@ -55,9 +68,14 @@ backend StreamHub
   `@/agent/session-ws-client`'s `WebFrame` union — that file is the
   per-session client and `RaraAgent` does not consume topology
   variants. Task #8 will unify the two.
-- Do NOT render descendant-session events in `TimelineView`. Tasks #6
-  (worker inbox right rail) and #7 (fork topology) own descendant
-  rendering.
+- Do NOT render multiple sessions in one `TimelineView` instance. Use
+  the `viewSessionKey` prop and let `WorkerInbox` switch focus instead.
+  Fork topology (parent ↔ child relationships, anchor lines) is task
+  #7 and lives in its own component, not `TimelineView`.
+- Do NOT drop completed / failed workers from `WorkerInbox`. The
+  surface is an observation deck — historical workers stay visible so
+  operators can inspect what ran. If inbox length becomes a UX problem,
+  add a filter, don't garbage-collect.
 - Do NOT render `phase`, `progress`, `attachment`, `approval_*`, or
   `tape_appended` frames here yet — the reducer drops them on purpose
   to keep cards focused. Wire them in only when there's a concrete UI

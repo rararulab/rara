@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { Network } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { ArrowLeft, Network } from 'lucide-react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { TimelineView } from '@/components/topology/TimelineView';
+import { WorkerInbox } from '@/components/topology/WorkerInbox';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,8 +44,16 @@ export default function Topology() {
   const { rootSessionKey } = useParams<{ rootSessionKey?: string }>();
   const navigate = useNavigate();
   const [draft, setDraft] = useState(rootSessionKey ?? '');
+  // Which session the main timeline shows. `null` = root view; a child
+  // session key focuses on that worker. Reset whenever the root changes
+  // so a new connection always lands on the root view.
+  const [viewChild, setViewChild] = useState<string | null>(null);
 
   const subscription = useTopologySubscription(rootSessionKey ?? null);
+
+  useEffect(() => {
+    setViewChild(null);
+  }, [rootSessionKey]);
 
   const handleConnect = (e: FormEvent) => {
     e.preventDefault();
@@ -78,33 +87,37 @@ export default function Topology() {
 
       {rootSessionKey ? (
         <div className="flex flex-1 min-h-0 gap-3">
-          <div className="flex flex-1 min-w-0 flex-col overflow-auto">
+          <div className="flex flex-1 min-w-0 flex-col gap-2 overflow-auto">
+            {viewChild && (
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setViewChild(null)}
+                >
+                  <ArrowLeft className="mr-1 h-3 w-3" />
+                  back to root
+                </Button>
+                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  viewing {viewChild}
+                </span>
+              </div>
+            )}
             <TimelineView
-              rootSessionKey={rootSessionKey}
+              viewSessionKey={viewChild ?? rootSessionKey}
               events={subscription.events}
             />
           </div>
 
-          <aside className="hidden w-64 shrink-0 flex-col gap-2 border-l pl-3 md:flex">
-            <div className="text-xs font-medium text-muted-foreground">Sessions</div>
-            <div className="space-y-1">
-              {[...subscription.sessions.entries()].map(([key, parent]) => (
-                <div
-                  key={key}
-                  className="flex flex-col rounded border bg-muted/20 px-2 py-1.5 text-[11px]"
-                >
-                  <span className="truncate font-mono text-foreground">{key}</span>
-                  {parent && (
-                    <span className="truncate font-mono text-muted-foreground">
-                      ↳ from {parent}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="mt-auto text-[10px] text-muted-foreground">
-              Worker inbox arrives in task #6 — see issue #1999.
-            </div>
+          <aside className="hidden w-64 shrink-0 flex-col gap-2 border-l border-border pl-3 md:flex">
+            <div className="text-xs font-medium text-muted-foreground">Workers</div>
+            <WorkerInbox
+              rootSessionKey={rootSessionKey}
+              events={subscription.events}
+              activeChildSession={viewChild}
+              onSelectChild={setViewChild}
+            />
           </aside>
         </div>
       ) : (
