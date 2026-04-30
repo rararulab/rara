@@ -89,9 +89,9 @@ export default function Topology() {
           />
         </aside>
 
-        <main className="flex flex-1 min-w-0 flex-col overflow-auto p-3">
+        <main className="flex flex-1 min-w-0 min-h-0 flex-col p-3">
           {rootSessionKey ? (
-            <div className="flex flex-1 flex-col gap-2">
+            <div className="flex flex-1 min-h-0 flex-col gap-2">
               {viewChild && (
                 <div className="flex items-center gap-2">
                   <Button
@@ -111,6 +111,11 @@ export default function Topology() {
               <TimelineView
                 viewSessionKey={viewChild ?? rootSessionKey}
                 events={subscription.events}
+                // The editor always sends into the root session — sending
+                // into a worker child would write to a sandbox tape that
+                // the user did not pick. Browsing a child via the worker
+                // inbox is observation-only; replies still go to root.
+                promptSessionKey={rootSessionKey}
               />
             </div>
           ) : (

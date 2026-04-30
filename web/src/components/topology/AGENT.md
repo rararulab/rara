@@ -25,6 +25,23 @@ the old free-text "root session key" input with a clickable list.
 - `TimelineView.tsx` — vertical list of `TurnCard`s; filters the
   topology event buffer down to a single `viewSessionKey` (root by
   default; the worker inbox swaps in a child key when one is selected).
+  Hosts the `PromptEditor` pinned at the bottom; the centre column is
+  `flex flex-col`, turns scroll inside the upper region, the editor
+  sticks to the floor.
+- `PromptEditor.tsx` — craft-style composer at the bottom of the
+  timeline. Owns `useChatSessionWs` (one per-session WebSocket) and
+  exposes attachment / `@`-mention / voice / model picker / thinking
+  picker / Send-or-Stop affordances. Multimodal prompts go on the wire
+  as `MessageContent::Multimodal`; voice recordings ride as
+  `audio_base64` blocks that the backend's `transcribe_audio_blocks`
+  pass folds into transcribed text before the kernel sees them. Model
+  and thinking-level pickers PATCH `/api/v1/chat/sessions/{key}` rather
+  than carrying per-turn overrides — the backend `Prompt` frame has no
+  per-turn override slot and the standing convention is "session =
+  pinned config". The editor always sends into the **root** session —
+  browsing a worker child via the inbox stays observation-only; the
+  editor stays bound to the root so replies do not get written to a
+  sandbox tape the user did not pick.
 - `TurnCard.tsx` — one turn = one card. Owns the reducer
   `buildTurnsFromEvents` that folds a flat `WebFrame` stream into
   `TurnCardData[]` (text, reasoning, tool calls, markers, metrics,
@@ -56,11 +73,20 @@ session` is many-to-one, so a click would not unambiguously map to
   assigns `(x, y)` by depth (column) and a stable per-session DFS order
   (row). Constants (`NODE_WIDTH`, `COL_GAP`, …) live next to the layout,
   not in config — they tune the mechanism, not deployment behavior.
-- The WebSocket plumbing lives in `@/hooks/use-topology-subscription`,
-  not here. The hook also defines the `TopologyWebFrame` union — an
-  extension of `WebFrame` (from `@/agent/session-ws-client`) with the
-  three topology variants the backend forwards. Keep them there until
-  task #8 collapses the per-session and topology clients.
+- The cross-session topology WebSocket lives in
+  `@/hooks/use-topology-subscription` (read-only stream of every event
+  on root + descendants). The per-session **send** WebSocket lives in
+  `@/hooks/use-chat-session-ws`, which is a thin React wrapper around
+  `SessionWsClient` from `@/agent/session-ws-client` — it owns one
+  socket per `sessionKey` for `prompt` / `abort` traffic. The two
+  sockets are intentionally distinct: one fans-in events from many
+  sessions, the other fans-out user input to one. The hook also
+  defines the `TopologyWebFrame` union — an extension of `WebFrame`
+  with the three topology variants. Keep them there until task #8
+  collapses the per-session and topology clients.
+- Model + skills caches live in `@/hooks/use-chat-models` and
+  `@/hooks/use-skills`. Both are react-query hooks with `staleTime`
+  matching the backend cache TTL (5 min for models, 1 min for skills).
 
 Data flow:
 

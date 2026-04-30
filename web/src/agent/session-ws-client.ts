@@ -148,6 +148,16 @@ export type PromptContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image_base64'; media_type: string; data: string }
   | {
+      // Server-side STT replaces `audio_base64` blocks with the
+      // transcribed `text` block before the kernel sees them — see
+      // `crates/channels/src/web.rs::transcribe_audio_blocks`. The
+      // client only base64-encodes the recorded blob; transcription
+      // never happens here.
+      type: 'audio_base64';
+      media_type: string;
+      data: string;
+    }
+  | {
       type: 'file_base64';
       media_type: string;
       data: string;
