@@ -27,10 +27,7 @@
 //! `Message` row with whitespace-only `content` for the affected turn.
 //! The cascade-tick boundary is preserved through the `ToolCall` row.
 
-use std::{
-    sync::OnceLock,
-    time::{Duration, Instant},
-};
+use std::{sync::OnceLock, time::Duration};
 
 use rara_kernel::{
     identity::Principal,
@@ -141,19 +138,15 @@ async fn whitespace_intermediate_iteration_does_not_pollute_tape() {
         .await
         .expect("spawn agent");
 
-    // Wait for the turn to record so we know the agent loop has finished.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let traces = tk.handle.get_process_turns(session_key);
-        if !traces.is_empty() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "kernel did not record a turn within 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // Subscribe to the session event bus immediately after spawn (before the
+    // agent loop has reached the LLM call) and await `TurnMetrics`. This is
+    // the event-driven replacement for the deadline+sleep poll: wakeup is
+    // driven by the kernel emitting the turn-complete event; the timeout is
+    // a safety bound that should never fire on a healthy turn.
+    tk.watch_turn(session_key)
+        .wait(Duration::from_secs(30))
+        .await
+        .expect("turn metrics");
 
     // Read the tape directly via the kernel's exposed TapeService.
     let tape_name = session_key.to_string();

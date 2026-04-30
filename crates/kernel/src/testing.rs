@@ -22,9 +22,11 @@ use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Once, OnceLock},
+    time::Duration,
 };
 
 use async_trait::async_trait;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePools, build_sqlite_pools};
 
@@ -32,12 +34,12 @@ use crate::{
     agent::{AgentManifest, AgentRegistry, AgentRole, ManifestLoader},
     handle::KernelHandle,
     identity::{KernelUser, Permission, Role, UserStoreRef},
-    io::IOSubsystem,
+    io::{IOSubsystem, StreamEvent},
     kernel::{Kernel, KernelConfig},
     llm::{CompletionResponse, DriverRegistry, LlmDriverRef, ScriptedLlmDriver, StopReason},
     memory::{FileTapeStore, TapeService},
     security::{ApprovalManager, ApprovalPolicy, SecuritySubsystem},
-    session::test_utils::InMemorySessionIndex,
+    session::{SessionKey, test_utils::InMemorySessionIndex},
     tool::{AgentTool, AgentToolRef, ToolContext, ToolOutput, ToolRegistry},
 };
 
@@ -497,6 +499,41 @@ impl TestKernel {
     /// Shut down the kernel gracefully.
     pub fn shutdown(&self) { self.cancel_token.cancel(); }
 
+    /// Subscribe to the per-session event bus *before* a prompt is sent and
+    /// return a [`TurnWaiter`] that resolves when the next
+    /// [`StreamEvent::TurnMetrics`] arrives.
+    ///
+    /// Call this **before** spawning the agent / sending the prompt — a fast
+    /// scripted turn can complete in well under a second, and a subscription
+    /// established after the prompt would miss the only `TurnMetrics` the
+    /// kernel emits. The intended call shape is:
+    ///
+    /// ```ignore
+    /// let waiter = tk.watch_turn(session_key);
+    /// // send prompt / spawn agent here ...
+    /// waiter.wait(Duration::from_secs(30)).await.expect("turn metrics");
+    /// ```
+    ///
+    /// `TurnMetrics` drives the wakeup; the helper then performs a short
+    /// bounded check that the per-session process-turn trace has actually
+    /// been pushed to the process table. The kernel emits `TurnMetrics`
+    /// from the agent task and pushes the trace from the kernel event-loop
+    /// task that handles `TurnCompleted`, so the two are sequenced but live
+    /// in separate task chains and the trace can lag the metrics by a
+    /// scheduler hop. This bridges that gap without falling back to
+    /// wall-clock-only polling.
+    pub fn watch_turn(&self, session_key: SessionKey) -> TurnWaiter {
+        let rx = self
+            .handle
+            .stream_hub()
+            .subscribe_session_events(&session_key);
+        TurnWaiter {
+            rx,
+            session_key,
+            handle: self.handle.clone(),
+        }
+    }
+
     /// Seed a pre-built [`JobEntry`](crate::schedule::JobEntry) directly onto
     /// the wheel, bypassing the `RegisterJob` syscall path.
     ///
@@ -507,6 +544,72 @@ impl TestKernel {
     /// deliberately named to warn off in-crate callers.
     pub fn seed_job(&self, entry: crate::schedule::JobEntry) {
         self.handle.__seed_job_unsafe_test_harness(entry);
+    }
+}
+
+/// Handle returned by [`TestKernel::watch_turn`] that awaits the next
+/// turn-complete event on a per-session event subscription established
+/// before the prompt was sent.
+///
+/// The subscription lives in the receiver, so the bus retains events until
+/// [`Self::wait`] is called even if the turn completes immediately after
+/// the prompt is dispatched.
+pub struct TurnWaiter {
+    rx:          broadcast::Receiver<StreamEvent>,
+    session_key: SessionKey,
+    handle:      KernelHandle,
+}
+
+impl TurnWaiter {
+    /// Block until the next turn for this session has completed and its
+    /// turn trace is observable via [`KernelHandle::get_process_turns`],
+    /// or `timeout` elapses.
+    ///
+    /// Wakeup is driven by [`StreamEvent::TurnMetrics`] on the per-session
+    /// event bus — that event fires once per turn just before the agent
+    /// task closes its stream. The kernel then dispatches a `TurnCompleted`
+    /// event which the kernel event-loop task handles by calling
+    /// `push_turn_trace`. Because those two steps live in separate tasks,
+    /// after the metrics wakeup we yield and re-check `get_process_turns`
+    /// on a short fixed interval, all bounded by the same `timeout`.
+    ///
+    /// The timeout is a safety bound — on a healthy turn the function
+    /// returns as soon as the trace lands (typically within one scheduler
+    /// hop of the metrics event), not when the deadline fires.
+    pub async fn wait(mut self, timeout: Duration) -> std::result::Result<(), String> {
+        tokio::time::timeout(timeout, async {
+            // Phase 1: wait for the turn-complete event.
+            loop {
+                match self.rx.recv().await {
+                    Ok(StreamEvent::TurnMetrics { .. }) => break,
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return Err(format!(
+                            "session event bus for {} closed before TurnMetrics arrived",
+                            self.session_key
+                        ));
+                    }
+                }
+            }
+
+            // Phase 2: bridge the cross-task gap until the trace lands in
+            // the process table. The first yield is usually enough; the
+            // 5 ms cadence is just a backstop for runners under heavy load.
+            loop {
+                if !self.handle.get_process_turns(self.session_key).is_empty() {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            format!(
+                "timed out after {:?} waiting for turn trace on session {}",
+                timeout, self.session_key
+            )
+        })?
     }
 }
 

@@ -27,11 +27,7 @@
 //!
 //! Companion to `e2e_contract_lane1_no_llm.rs` (lane 1, no LLM).
 
-use std::{
-    path::PathBuf,
-    sync::Once,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, sync::Once, time::Duration};
 
 use rara_kernel::{
     identity::Principal,
@@ -85,21 +81,15 @@ async fn lane2_scripted_single_turn_records_expected_trace() {
         .await
         .expect("spawn agent");
 
-    // Wait for the agent loop to record a turn. Polling matches the
-    // pattern used by other kernel-DI e2e tests (e.g.
-    // `web_session_smoke::session_ws_prompt_reaches_kernel`).
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let traces = loop {
-        let traces = tk.handle.get_process_turns(session_key);
-        if !traces.is_empty() {
-            break traces;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "kernel did not record a turn within 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    // Wait for the agent loop to record a turn via the per-session event
+    // bus rather than wall-clock polling — the kernel emits `TurnMetrics`
+    // immediately before pushing the turn trace, so on return the trace
+    // table is guaranteed populated.
+    tk.watch_turn(session_key)
+        .wait(Duration::from_secs(30))
+        .await
+        .expect("turn metrics");
+    let traces = tk.handle.get_process_turns(session_key);
 
     assert_eq!(traces.len(), 1, "expected exactly one recorded turn");
     let turn = &traces[0];
