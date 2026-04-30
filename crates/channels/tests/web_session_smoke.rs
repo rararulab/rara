@@ -350,6 +350,93 @@ async fn session_ws_prompt_reaches_kernel() {
     tk.shutdown();
 }
 
+/// An inbound `prompt` frame carrying a `model` field must override the
+/// model the agent loop uses for that turn. Mirrors the picker selection
+/// path: vendor `InputContainer` exposes `currentModel`, the topology
+/// view forwards it on submit, the WS frame carries it as a top-level
+/// field, and `web_session.rs::apply_model_override` pins the model on
+/// the session entry so `agent/mod.rs` `model_override` reads it on
+/// resolve. We assert the override survives all the way to `TurnTrace.model`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_ws_prompt_with_model_override_pins_turn_model() {
+    use rara_kernel::testing::{TestKernelBuilder, scripted_response};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_env();
+
+    let tk = TestKernelBuilder::new(tmp.path())
+        .responses(vec![
+            scripted_response("hello back"),
+            scripted_response("(padding)"),
+        ])
+        .build()
+        .await;
+
+    let buffer = ReplyBuffer::new();
+    let adapter = Arc::new(
+        WebAdapter::new(OWNER_TOKEN.to_owned(), OWNER_USER_ID.to_owned())
+            .with_reply_buffer(Arc::clone(&buffer)),
+    );
+    adapter
+        .start(tk.handle.clone())
+        .await
+        .expect("adapter start");
+
+    let app = axum::Router::new().nest("/chat", adapter.router());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("local_addr");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("axum serve");
+    });
+
+    let session_key = SessionKey::new();
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
+            .await
+            .expect("ws connect");
+    let _ = next_event(&mut ws).await; // hello
+
+    let waiter = tk.watch_turn(session_key);
+
+    // The default agent manifest pins `Some("scripted-model")` and the
+    // provider default is also `"scripted-model"`. We send a deliberately
+    // different id so an unforwarded override would resolve to the
+    // baseline and the assertion would fail.
+    let override_model = "alt-scripted-model";
+    let prompt = serde_json::json!({
+        "type": "prompt",
+        "content": "pick alt model",
+        "model": override_model,
+    })
+    .to_string();
+    ws.send(Message::Text(prompt.into()))
+        .await
+        .expect("send prompt");
+
+    waiter
+        .wait(Duration::from_secs(30))
+        .await
+        .expect("turn metrics");
+    let turn = tk
+        .handle
+        .get_process_turns(session_key)
+        .last()
+        .cloned()
+        .expect("at least one turn");
+    assert!(turn.success, "turn should succeed: {:?}", turn.error);
+    assert_eq!(
+        turn.model, override_model,
+        "agent loop must honour the per-prompt model override"
+    );
+
+    ws.send(Message::Close(None)).await.ok();
+    drop(ws);
+    server.abort();
+    tk.shutdown();
+}
+
 /// An inbound `abort` frame must reach the kernel through
 /// `KernelHandle::send_signal(_, Signal::Interrupt)`. With a started
 /// adapter the WS path returns silently (no client-visible Error frame),

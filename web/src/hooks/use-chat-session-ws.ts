@@ -38,6 +38,7 @@ import {
   SessionWsClient,
   type LifecycleEvent,
   type PromptContent,
+  type PromptOptions,
   type WebFrame,
 } from '@/agent/session-ws-client';
 
@@ -58,7 +59,7 @@ export interface ChatSessionWs {
    *  Cleared on the next successful `hello`. */
   error: string | null;
   /** Push a `prompt` frame. Returns `false` if the socket is not open. */
-  sendPrompt: (content: PromptContent) => boolean;
+  sendPrompt: (content: PromptContent, options?: PromptOptions) => boolean;
   /** Push an `abort` frame. Returns `false` if the socket is not open. */
   sendAbort: () => boolean;
 }
@@ -140,10 +141,10 @@ export function useChatSessionWs(sessionKey: string | null): ChatSessionWs {
     };
   }, [sessionKey]);
 
-  const sendPrompt = useCallback((content: PromptContent): boolean => {
+  const sendPrompt = useCallback((content: PromptContent, options?: PromptOptions): boolean => {
     const client = clientRef.current;
     if (!client) return false;
-    const ok = client.prompt(content);
+    const ok = client.prompt(content, options);
     if (ok) {
       // Optimistically flip to streaming so the Send button morphs to
       // Stop immediately; the backend `typing` frame will confirm.

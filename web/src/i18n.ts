@@ -19,10 +19,26 @@ import { initReactI18next } from 'react-i18next';
 
 // Vendor (`craft-agents-oss`) sprinkles `useTranslation()` throughout the
 // chat + input tree without owning the i18next bootstrap. We don't ship
-// translations of vendor strings — falling back to the i18n key text is
-// acceptable while we don't have a localisation surface — but the hook
-// still requires an initialised instance, otherwise the first vendor
-// render warns and any consumer reading `t(...)` ends up with `undefined`.
+// translations of vendor strings, but raw keys like `chat.attachFiles`
+// surfacing in the toolbar are noisy. Convert the last dotted segment to
+// a humanised label on the fly — `chat.attachFiles` → "Attach files",
+// `thinking.notSupported` → "Not supported". Cheap, no per-key data to
+// maintain as vendor evolves.
+function humaniseKey(key: string): string {
+  const tail = key.split('.').pop() ?? key;
+  // Split camelCase / PascalCase / snake_case / kebab-case, lowercase the
+  // run, then capitalise the first letter of the whole label so it reads
+  // like "Attach files" rather than "attach Files".
+  const spaced = tail
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .trim();
+  if (!spaced) return key;
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 void i18n.use(initReactI18next).init({
   lng: 'en',
   fallbackLng: 'en',
@@ -33,6 +49,7 @@ void i18n.use(initReactI18next).init({
   // and hide the fallback behind nested-object lookups.
   keySeparator: false,
   nsSeparator: false,
+  parseMissingKeyHandler: humaniseKey,
 });
 
 export default i18n;

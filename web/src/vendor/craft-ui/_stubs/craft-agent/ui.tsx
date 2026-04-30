@@ -3,8 +3,6 @@
  * vendored chat + input tree. Real shapes live elsewhere; this is the minimum surface
  * needed for the BFS closure to compile. */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { type ReactNode } from 'react';
-
 import { usePlatform as usePlatformReal } from '../../context/PlatformContext';
 
 export type ActivityItem = any;
@@ -43,18 +41,20 @@ export function Spinner(props: { className?: string }) {
   return <span className={props.className} aria-hidden>⏳</span>;
 }
 
-export function Tooltip({ children }: { children?: ReactNode }) {
-  return <>{children}</>;
-}
-export function TooltipTrigger({ children }: { children?: ReactNode }) {
-  return <>{children}</>;
-}
-export function TooltipContent({ children }: { children?: ReactNode }) {
-  return <>{children}</>;
-}
-export function TooltipProvider({ children }: { children?: ReactNode }) {
-  return <>{children}</>;
-}
+// Tooltip + dropdown surfaces are re-exported from the real radix-backed
+// implementations vendored alongside this stub. The earlier `Passthrough`
+// shims rendered every dropdown item as a flat sibling of the toolbar
+// button (radix's open/closed gating was bypassed entirely), which made
+// the model picker visually unusable. The stub still wins resolution for
+// the `@craft-agent/ui` import — vite alias is set in `vite.config.ts` —
+// but it now stitches through to the same components the rest of the
+// vendor closure would import directly.
+export {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '../../components/tooltip';
 
 export function FilterableSelectPopover(_props: any): any {
   return null;
@@ -68,14 +68,17 @@ export function getFileTypeLabel(_path: string): string {
   return 'file';
 }
 
-const Passthrough = ({ children }: { children?: ReactNode }) => <>{children}</>;
+export {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuShortcut,
+} from '../../components/electron-ui/dropdown-menu';
 
-export const DropdownMenu = Passthrough;
-export const DropdownMenuTrigger = Passthrough;
-export const DropdownMenuSub = Passthrough;
-export const DropdownMenuShortcut = Passthrough;
-export const StyledDropdownMenuContent = Passthrough;
-export const StyledDropdownMenuItem = Passthrough;
-export const StyledDropdownMenuSeparator = Passthrough;
-export const StyledDropdownMenuSubTrigger = Passthrough;
-export const StyledDropdownMenuSubContent = Passthrough;
+export {
+  StyledDropdownMenuContent,
+  StyledDropdownMenuItem,
+  StyledDropdownMenuSeparator,
+  StyledDropdownMenuSubTrigger,
+  StyledDropdownMenuSubContent,
+} from '../../components/ui/StyledDropdown';

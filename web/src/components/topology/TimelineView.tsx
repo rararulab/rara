@@ -146,7 +146,10 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
     (message: string) => {
       const trimmed = message.trim();
       if (!trimmed) return;
-      const ok = ws.sendPrompt(trimmed);
+      // Forward the picker's current selection as the per-turn override.
+      // Empty string means "use whatever the backend default resolves to",
+      // which the WS client drops rather than sending a blank `model` field.
+      const ok = ws.sendPrompt(trimmed, currentModel ? { model: currentModel } : undefined);
       if (!ok) return;
       const id = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setUserTurnsBySession((prev) => {
@@ -154,7 +157,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
         return { ...prev, [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now() }] };
       });
     },
-    [ws, viewSessionKey],
+    [ws, viewSessionKey, currentModel],
   );
 
   const handleStop = useCallback(() => {
