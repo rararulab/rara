@@ -32,8 +32,9 @@ use yunara_store::diesel_pool::{DieselPoolConfig, DieselSqlitePools, build_sqlit
 
 use crate::{
     agent::{AgentManifest, AgentRegistry, AgentRole, ManifestLoader},
+    error::KernelError,
     handle::KernelHandle,
-    identity::{KernelUser, Permission, Role, UserStoreRef},
+    identity::{KernelUser, Lookup, Permission, Principal, Role, UserStoreRef},
     io::{IOSubsystem, StreamEvent},
     kernel::{Kernel, KernelConfig},
     llm::{CompletionResponse, DriverRegistry, LlmDriverRef, ScriptedLlmDriver, StopReason},
@@ -532,6 +533,48 @@ impl TestKernel {
             session_key,
             handle: self.handle.clone(),
         }
+    }
+
+    /// Subscribe to the per-session event bus *and then* spawn a named agent
+    /// keyed by the same [`SessionKey`], returning the key plus a
+    /// [`TurnWaiter`] that observes the next [`StreamEvent::TurnMetrics`].
+    ///
+    /// This is the race-free counterpart to manually calling
+    /// [`KernelHandle::spawn_named`] followed by [`Self::watch_turn`]: a fast
+    /// scripted turn can complete in well under a millisecond, so a
+    /// subscription established *after* the spawn returns may miss the only
+    /// `TurnMetrics` event the kernel emits. Pre-allocating the session key
+    /// lets us subscribe before the agent task is even started, closing the
+    /// window entirely.
+    ///
+    /// ```ignore
+    /// let (session_key, waiter) = tk
+    ///     .spawn_named_watching("test-agent", "ping", Principal::lookup("test"))
+    ///     .await
+    ///     .expect("spawn");
+    /// waiter.wait(Duration::from_secs(30)).await.expect("turn metrics");
+    /// ```
+    pub async fn spawn_named_watching(
+        &self,
+        agent_name: &str,
+        input: impl Into<String>,
+        principal: Principal<Lookup>,
+    ) -> crate::error::Result<(SessionKey, TurnWaiter)> {
+        let manifest =
+            self.handle
+                .agent_registry()
+                .get(agent_name)
+                .ok_or(KernelError::ManifestNotFound {
+                    name: agent_name.to_string(),
+                })?;
+        // Pre-allocate the session key so we can subscribe to its event bus
+        // before the spawn — see the doc comment for the race rationale.
+        let session_key = SessionKey::new();
+        let waiter = self.watch_turn(session_key);
+        self.handle
+            .spawn_with_input(manifest, input.into(), principal, None, Some(session_key))
+            .await?;
+        Ok((session_key, waiter))
     }
 
     /// Seed a pre-built [`JobEntry`](crate::schedule::JobEntry) directly onto

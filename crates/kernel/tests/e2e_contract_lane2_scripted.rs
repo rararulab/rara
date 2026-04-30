@@ -71,13 +71,13 @@ async fn lane2_scripted_single_turn_records_expected_trace() {
         .build()
         .await;
 
-    // `spawn_named` posts a `SpawnAgent` event to the kernel's queue and
-    // awaits the resulting session key — the tightest single-turn entry
-    // point that reaches the LLM driver.
+    // `spawn_named_watching` pre-allocates the session key, subscribes to
+    // its event bus, *then* posts the `SpawnAgent` event — closing the race
+    // window where a fast scripted turn could emit `TurnMetrics` before a
+    // post-spawn subscription was established.
     let principal = Principal::lookup("test");
-    let session_key = tk
-        .handle
-        .spawn_named("test-agent", "ping".to_string(), principal, None)
+    let (session_key, waiter) = tk
+        .spawn_named_watching("test-agent", "ping", principal)
         .await
         .expect("spawn agent");
 
@@ -85,7 +85,7 @@ async fn lane2_scripted_single_turn_records_expected_trace() {
     // bus rather than wall-clock polling — the kernel emits `TurnMetrics`
     // immediately before pushing the turn trace, so on return the trace
     // table is guaranteed populated.
-    tk.watch_turn(session_key)
+    waiter
         .wait(Duration::from_secs(30))
         .await
         .expect("turn metrics");

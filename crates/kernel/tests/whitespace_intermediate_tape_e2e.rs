@@ -131,19 +131,18 @@ async fn whitespace_intermediate_iteration_does_not_pollute_tape() {
         .build()
         .await;
 
+    // `spawn_named_watching` pre-allocates the session key and subscribes to
+    // its event bus *before* the kernel starts the agent task — so even a
+    // turn that completes in microseconds cannot emit `TurnMetrics` before
+    // the receiver exists. Wakeup is driven by the kernel emitting the
+    // turn-complete event; the timeout is a safety bound.
     let principal = Principal::lookup("test");
-    let session_key = tk
-        .handle
-        .spawn_named("test-agent", "ping".to_string(), principal, None)
+    let (session_key, waiter) = tk
+        .spawn_named_watching("test-agent", "ping", principal)
         .await
         .expect("spawn agent");
 
-    // Subscribe to the session event bus immediately after spawn (before the
-    // agent loop has reached the LLM call) and await `TurnMetrics`. This is
-    // the event-driven replacement for the deadline+sleep poll: wakeup is
-    // driven by the kernel emitting the turn-complete event; the timeout is
-    // a safety bound that should never fire on a healthy turn.
-    tk.watch_turn(session_key)
+    waiter
         .wait(Duration::from_secs(30))
         .await
         .expect("turn metrics");
