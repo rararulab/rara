@@ -27,10 +27,7 @@
 //! `Message` row with whitespace-only `content` for the affected turn.
 //! The cascade-tick boundary is preserved through the `ToolCall` row.
 
-use std::{
-    sync::OnceLock,
-    time::{Duration, Instant},
-};
+use std::{sync::OnceLock, time::Duration};
 
 use rara_kernel::{
     identity::Principal,
@@ -134,26 +131,21 @@ async fn whitespace_intermediate_iteration_does_not_pollute_tape() {
         .build()
         .await;
 
+    // `spawn_named_watching` pre-allocates the session key and subscribes to
+    // its event bus *before* the kernel starts the agent task — so even a
+    // turn that completes in microseconds cannot emit `TurnMetrics` before
+    // the receiver exists. Wakeup is driven by the kernel emitting the
+    // turn-complete event; the timeout is a safety bound.
     let principal = Principal::lookup("test");
-    let session_key = tk
-        .handle
-        .spawn_named("test-agent", "ping".to_string(), principal, None)
+    let (session_key, waiter) = tk
+        .spawn_named_watching("test-agent", "ping", principal)
         .await
         .expect("spawn agent");
 
-    // Wait for the turn to record so we know the agent loop has finished.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let traces = tk.handle.get_process_turns(session_key);
-        if !traces.is_empty() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "kernel did not record a turn within 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    waiter
+        .wait(Duration::from_secs(30))
+        .await
+        .expect("turn metrics");
 
     // Read the tape directly via the kernel's exposed TapeService.
     let tape_name = session_key.to_string();

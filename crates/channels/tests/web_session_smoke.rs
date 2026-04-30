@@ -308,6 +308,12 @@ async fn session_ws_prompt_reaches_kernel() {
             .expect("ws connect");
     let _ = next_event(&mut ws).await; // hello
 
+    // Subscribe to the per-session event bus *before* sending the prompt so
+    // a fast scripted turn cannot complete before the subscription exists.
+    // Wakeup is then driven by the kernel's `TurnMetrics` event rather than
+    // by wall-clock polling.
+    let waiter = tk.watch_turn(session_key);
+
     let prompt = serde_json::json!({
         "type": "prompt",
         "content": "hello server",
@@ -317,20 +323,15 @@ async fn session_ws_prompt_reaches_kernel() {
         .await
         .expect("send prompt");
 
-    // Wait for the kernel to register a session + complete a turn driven
-    // by this prompt. Polling matches the pattern used in `web_e2e.rs`.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let traces = loop {
-        let traces = tk.handle.get_process_turns(session_key);
-        if !traces.is_empty() {
-            break traces;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "kernel did not record a turn for the prompt within 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    waiter
+        .wait(Duration::from_secs(30))
+        .await
+        .expect("turn metrics");
+    let traces = tk.handle.get_process_turns(session_key);
+    assert!(
+        !traces.is_empty(),
+        "kernel emitted TurnMetrics but recorded no turn"
+    );
     let turn = traces.last().expect("at least one turn");
     assert!(turn.success, "turn should succeed: {:?}", turn.error);
     let preview = turn
