@@ -17,8 +17,6 @@
 import { ChevronDown, ChevronRight, GitFork } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
-
 import {
   buildTapeForest,
   layoutTapeForest,
@@ -26,6 +24,8 @@ import {
   NODE_WIDTH,
   type PositionedTapeNode,
 } from './tape-tree-layout';
+
+import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 
 export interface TapeLineageViewProps {
   /** Every observed event from the topology subscription. */
@@ -157,13 +157,7 @@ function EdgePath({
   const d = `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
   return (
     <g>
-      <path
-        d={d}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity={0.35}
-        strokeWidth={1}
-      />
+      <path d={d} fill="none" stroke="currentColor" strokeOpacity={0.35} strokeWidth={1} />
       {anchor && (
         <text
           x={midX}
@@ -179,13 +173,7 @@ function EdgePath({
   );
 }
 
-function TapeNodeRect({
-  node,
-  highlighted,
-}: {
-  node: PositionedTapeNode;
-  highlighted: boolean;
-}) {
+function TapeNodeRect({ node, highlighted }: { node: PositionedTapeNode; highlighted: boolean }) {
   const tooltip = [
     `tape: ${node.tapeName}`,
     `session: ${node.sessionKey}`,
@@ -205,11 +193,7 @@ function TapeNodeRect({
         height={NODE_HEIGHT}
         rx={4}
         ry={4}
-        className={
-          highlighted
-            ? 'fill-primary/15 stroke-primary'
-            : 'fill-muted/40 stroke-border'
-        }
+        className={highlighted ? 'fill-primary/15 stroke-primary' : 'fill-muted/40 stroke-border'}
         strokeWidth={1}
       />
       <text

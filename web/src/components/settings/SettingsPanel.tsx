@@ -428,12 +428,14 @@ function ConnectionCard() {
   const [url, setUrl] = useState(savedUrl);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Tick state forces re-render every second so "Last heartbeat" stays fresh
-  // without having to refetch the health endpoint.
-  const [, setNowTick] = useState(0);
+  // `nowMs` ticks once per second so "Last heartbeat" stays fresh without
+  // refetching the health endpoint. Stored in state (rather than calling
+  // `Date.now()` inline) so the render path stays pure — the new
+  // `react-hooks/purity` rule otherwise flags `Date.now()` in render.
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    const id = setInterval(() => setNowTick((t) => t + 1), 1000);
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -489,7 +491,7 @@ function ConnectionCard() {
   }
 
   const lastHeartbeatAgo = healthQuery.data
-    ? formatRelative(healthQuery.data.fetchedAt, Date.now())
+    ? formatRelative(healthQuery.data.fetchedAt, nowMs)
     : null;
 
   return (

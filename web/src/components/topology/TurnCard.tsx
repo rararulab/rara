@@ -16,10 +16,10 @@
 
 import { Activity, Clock, Hammer, Loader2 } from 'lucide-react';
 
+import { SpawnMarker, type SpawnMarkerKind } from './SpawnMarker';
+
 import { Card } from '@/components/ui/card';
 import type { TopologyWebFrame } from '@/hooks/use-topology-subscription';
-
-import { SpawnMarker, type SpawnMarkerKind } from './SpawnMarker';
 
 /**
  * A single agent turn rendered as a card. A turn starts at the first

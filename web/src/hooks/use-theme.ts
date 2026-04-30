@@ -78,7 +78,7 @@ applyDarkClass(resolveIsDark(currentTheme));
 
 /** React hook providing theme state and controls. */
 export function useTheme() {
-  const theme = useSyncExternalStore(subscribe, getSnapshot, () => 'system' as Theme);
+  const theme = useSyncExternalStore<Theme>(subscribe, getSnapshot, () => 'system');
 
   const isDark = useMemo(() => resolveIsDark(theme), [theme]);
 

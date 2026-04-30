@@ -16,9 +16,9 @@
 
 import { useMemo } from 'react';
 
-import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
-
 import { WorkerCard, type WorkerInfo, type WorkerStatus } from './WorkerCard';
+
+import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 
 export interface WorkerInboxProps {
   /** Root session key — workers are children of this root (directly or transitively). */
@@ -47,10 +47,7 @@ export function WorkerInbox({
   activeChildSession,
   onSelectChild,
 }: WorkerInboxProps) {
-  const workers = useMemo(
-    () => deriveWorkers(rootSessionKey, events),
-    [rootSessionKey, events],
-  );
+  const workers = useMemo(() => deriveWorkers(rootSessionKey, events), [rootSessionKey, events]);
 
   if (workers.length === 0) {
     return (
@@ -81,10 +78,7 @@ export function WorkerInbox({
  * The root session itself is excluded — the back-to-root affordance
  * lives in the timeline header, not in the inbox.
  */
-export function deriveWorkers(
-  rootSessionKey: string,
-  events: TopologyEventEntry[],
-): WorkerInfo[] {
+export function deriveWorkers(rootSessionKey: string, events: TopologyEventEntry[]): WorkerInfo[] {
   const byChild = new Map<string, WorkerInfo>();
 
   for (const entry of events) {

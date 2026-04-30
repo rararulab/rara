@@ -16,9 +16,9 @@
 
 import { useMemo } from 'react';
 
-import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
-
 import { TurnCard, buildTurnsFromEvents } from './TurnCard';
+
+import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 
 export interface TimelineViewProps {
   /**
@@ -56,8 +56,7 @@ export function TimelineView({ viewSessionKey, events }: TimelineViewProps) {
   if (turns.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        Waiting for the next turn on{' '}
-        <span className="ml-1 font-mono">{viewSessionKey}</span>…
+        Waiting for the next turn on <span className="ml-1 font-mono">{viewSessionKey}</span>…
       </div>
     );
   }

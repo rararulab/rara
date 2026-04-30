@@ -82,12 +82,17 @@ export function useSessionTimeline(
   const [isStreaming, setIsStreaming] = useState(false);
 
   // Read through refs so the WS effect does not re-subscribe every time
-  // the 5s turns refetch mutates turn count or query identity.
+  // the 5s turns refetch mutates turn count or query identity. The
+  // assignments live in a sync effect (not the render body) so the
+  // `react-hooks/refs` rule stays satisfied — refs are only mutated
+  // outside render.
   const turnsLenRef = useRef(0);
-  turnsLenRef.current = turns.length;
-
   const refetchTurnsRef = useRef(turnsQuery.refetch);
-  refetchTurnsRef.current = turnsQuery.refetch;
+
+  useEffect(() => {
+    turnsLenRef.current = turns.length;
+    refetchTurnsRef.current = turnsQuery.refetch;
+  });
 
   // Depending only on (sessionKey, sessionState) prevents the WS from
   // reconnecting whenever the 5s turns refetch mutates historical data.

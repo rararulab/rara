@@ -34,8 +34,8 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { buildWsBaseUrl } from '@/adapters/ws-base-url';
-import { getAccessToken } from '@/api/client';
 import type { WebFrame } from '@/agent/session-ws-client';
+import { getAccessToken } from '@/api/client';
 
 // ---------------------------------------------------------------------------
 // Wire frames — server → client (topology endpoint)

@@ -42,7 +42,18 @@ import tseslint from 'typescript-eslint'
 // legacy code.
 
 export default defineConfig([
-  globalIgnores(['dist', 'playwright-report', 'coverage', '.vite', 'e2e', 'playwright.config.ts']),
+  globalIgnores([
+    'dist',
+    'playwright-report',
+    'coverage',
+    '.vite',
+    'e2e',
+    'playwright.config.ts',
+    // Vendored craft-ui sources are excluded from the typed project
+    // (see web/tsconfig.app.json `exclude`). ESLint's project service
+    // therefore can't load them — skip the entire tree from lint.
+    'src/vendor/**',
+  ]),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
