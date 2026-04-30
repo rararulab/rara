@@ -241,6 +241,39 @@ pub enum WebEvent {
     /// (see `crate::web_session`). Frontend uses it to confirm the socket
     /// is established before arming reconnect logic.
     Hello,
+    /// A subagent (child session) was spawned by a parent session.
+    /// Forwarded for the multi-agent topology UI so spawn lineage can be
+    /// rendered without scraping `ToolCallStart.arguments`. Mirrors
+    /// [`StreamEvent::SubagentSpawned`].
+    ///
+    /// [`StreamEvent::SubagentSpawned`]: rara_kernel::io::StreamEvent::SubagentSpawned
+    SubagentSpawned {
+        parent_session: String,
+        child_session:  String,
+        manifest_name:  String,
+    },
+    /// A previously spawned subagent has completed. `success` mirrors the
+    /// child's terminal `AgentRunLoopResult.success`. Mirrors
+    /// [`StreamEvent::SubagentDone`].
+    ///
+    /// [`StreamEvent::SubagentDone`]: rara_kernel::io::StreamEvent::SubagentDone
+    SubagentDone {
+        parent_session: String,
+        child_session:  String,
+        success:        bool,
+    },
+    /// A tape was forked from a parent tape inside the session's turn.
+    /// Mirrors [`StreamEvent::TapeForked`]; `forked_at_anchor` is `None`
+    /// for the agent-turn / plan-step transactional forks (no anchor).
+    ///
+    /// [`StreamEvent::TapeForked`]: rara_kernel::io::StreamEvent::TapeForked
+    TapeForked {
+        parent_session:   String,
+        forked_from:      String,
+        child_tape:       String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        forked_at_anchor: Option<String>,
+    },
     /// A new entry was appended to the session's tape. Emitted on the
     /// persistent per-session WS in two situations:
     ///
@@ -415,11 +448,39 @@ pub(crate) fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> 
         // Terminal marker from StreamHub::close — surface as per-turn Done.
         // The session-level bus itself stays open across turns.
         StreamEvent::StreamClosed { .. } => Some(WebEvent::Done),
-        // Multi-agent topology events (#1999) — kept as kernel-internal
-        // signals for now. Web rendering is a separate downstream concern.
-        StreamEvent::SubagentSpawned { .. }
-        | StreamEvent::SubagentDone { .. }
-        | StreamEvent::TapeForked { .. } => None,
+        // Multi-agent topology events (#1999). Forwarded so the standard
+        // `/session/{key}` socket can render spawn / completion / fork
+        // markers inline; the cross-session `/topology/{root}` endpoint
+        // also reuses this mapping for its per-session forwarders.
+        StreamEvent::SubagentSpawned {
+            parent_session,
+            child_session,
+            manifest_name,
+        } => Some(WebEvent::SubagentSpawned {
+            parent_session: parent_session.to_string(),
+            child_session: child_session.to_string(),
+            manifest_name,
+        }),
+        StreamEvent::SubagentDone {
+            parent_session,
+            child_session,
+            success,
+        } => Some(WebEvent::SubagentDone {
+            parent_session: parent_session.to_string(),
+            child_session: child_session.to_string(),
+            success,
+        }),
+        StreamEvent::TapeForked {
+            parent_session,
+            forked_from,
+            child_tape,
+            forked_at_anchor,
+        } => Some(WebEvent::TapeForked {
+            parent_session: parent_session.to_string(),
+            forked_from,
+            child_tape,
+            forked_at_anchor,
+        }),
     }
 }
 
@@ -546,6 +607,10 @@ impl WebAdapter {
             .route(
                 "/session/{session_key}",
                 get(crate::web_session::session_ws_handler),
+            )
+            .route(
+                "/topology/{root_session_key}",
+                get(crate::web_topology::topology_ws_handler),
             )
             .with_state(state)
     }
