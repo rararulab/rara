@@ -165,6 +165,10 @@ and consider TigerBeetle's heavier `zig build` orchestration.
 ### Allowed Changes
 - crates/tape-codec-zig/**
 - **/crates/tape-codec-zig/**
+- zig/**
+- **/zig/**
+- .gitignore
+- **/.gitignore
 - crates/kernel/Cargo.toml
 - **/crates/kernel/Cargo.toml
 - crates/kernel/src/memory/store.rs

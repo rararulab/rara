@@ -261,3 +261,30 @@ re-directed the file to its current location at
 alongside the timing artifacts under `specs/`. The spec should
 be updated to match in a follow-up. No behavior is affected; this
 is purely documentation placement.
+
+
+## Structure note (post-review)
+
+Review surfaced two issues with the initial PoC layout:
+
+1. **Layout looked like a Rust crate that shells out to a Zig compiler**,
+   not a Zig project linked from Rust. `crates/tape-codec-zig/build.rs`
+   invoked `zig build-lib` directly on a single `.zig` file with no
+   `build.zig` or `build.zig.zon`. For Phase-0 evaluation that is the
+   wrong onboarding signal — every future Zig module would duplicate the
+   setup.
+2. **Linux CI failed** with `relocation R_X86_64_32 cannot be used
+   against local symbol`. Rust on Linux defaults to PIE; static archives
+   must be PIC. macOS does not enforce this so local verification missed
+   it.
+
+Both are fixed by moving Zig source under a top-level `zig/` project
+with a real `build.zig` + `build.zig.zon`. The wrapper crate `build.rs`
+now runs `zig build --prefix $OUT_DIR -Drelease=true` against `../../zig`
+and links the produced `libtape_codec_zig_static.a`. PIC is declared on
+the Module in `build.zig` (`pic = true`), not as a CLI flag — declarative
+so a second platform never sees the wrong codegen.
+
+Future Zig modules add a new lib target in `zig/build.zig` and a new
+Rust wrapper crate; no per-crate `.zig-version`, no per-crate Zig
+toolchain shellout.

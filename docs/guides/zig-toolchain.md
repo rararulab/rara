@@ -1,8 +1,9 @@
 # Zig 0.16 Toolchain — Optional, PoC-only
 
 This file documents how to install Zig 0.16 for the issue #2007 codec
-PoC (`crates/tape-codec-zig/`). Zig is **not required** for default rara
-development; only contributors who pass `--features zig-codec` to a
+PoC. Zig source lives in the top-level `zig/` project; the Rust FFI
+wrapper is `crates/tape-codec-zig/`. Zig is **not required** for default
+rara development; only contributors who pass `--features zig-codec` to a
 kernel build, or who run `cargo test -p tape-codec-zig`, need it.
 
 If `POC_RESULTS.md` lands with a "do not adopt Zig" conclusion, this
@@ -10,7 +11,8 @@ file goes away with the rest of the PoC.
 
 ## Version
 
-Pinned to **0.16.0** via `crates/tape-codec-zig/.zig-version`. Note
+Pinned to **0.16.0** via `zig/.zig-version` (single source of truth —
+do not add per-crate `.zig-version` files). Note
 this also matches the Zig version transitively required by `zlob`
 (workspace pin `=1.3.2`, see top-level `Cargo.toml`), so the toolchain
 already exists in the CI image used by `zlob`-touching PRs.
