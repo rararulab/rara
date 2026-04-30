@@ -56,6 +56,11 @@ pub enum TapError {
     /// Internal invariant failure in cache or worker lifecycle management.
     #[snafu(display("tape state error: {message}"))]
     State { message: String },
+
+    /// Failure inside the `tape-codec-zig` PoC codec (issue #2007). Only
+    /// reachable when the kernel is built with `--features zig-codec`.
+    #[snafu(display("tape Zig codec error: {message}"))]
+    ZigCodec { message: String },
 }
 
 /// Convenience result alias used by all tape modules.

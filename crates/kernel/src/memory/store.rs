@@ -38,6 +38,14 @@ use urlencoding::{decode, encode};
 
 use super::{TAPE_FILE_SUFFIX, TapEntry, TapEntryKind, TapError, TapResult};
 
+// Pluggable JSONL codec (issue #2007). Declared from `store.rs` rather
+// than `mod.rs` so the PoC scope stays inside the boundaries listed in
+// the spec. When `feature = "zig-codec"` is on, `encode_entry` round-
+// trips through the Zig static lib; otherwise both helpers are thin
+// shims around `serde_json`.
+#[path = "codec.rs"]
+mod codec;
+
 type Job = Box<dyn FnOnce(&mut WorkerState) + Send + 'static>;
 
 /// In-memory secondary index over a tape's cached entries.
@@ -256,8 +264,7 @@ impl TapeFile {
             if trimmed.is_empty() {
                 continue;
             }
-            let entry = serde_json::from_slice::<TapEntry>(trimmed)
-                .context(super::error::JsonDecodeSnafu)?;
+            let entry = codec::decode_entry(trimmed)?;
             self.push_entry(entry);
         }
 
@@ -334,7 +341,7 @@ impl TapeFile {
 
         for mut entry in entries {
             entry.id = next_id;
-            let mut encoded = serde_json::to_vec(&entry).context(super::error::JsonEncodeSnafu)?;
+            let mut encoded = codec::encode_entry(&entry)?;
             encoded.push(b'\n');
             encoded_batch.extend_from_slice(&encoded);
             stored.push(entry);

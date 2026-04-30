@@ -95,3 +95,6 @@ config/*
 logs/
 .claude/worktrees/
 node-compile-cache/
+
+# cargo build --timings HTML artifacts captured under specs/ for PoCs
+specs/**/timings/*.html

@@ -135,6 +135,7 @@ members = [
     "crates/drivers/browser",
     "crates/drivers/stt",
     "crates/drivers/tts",
+    "crates/tape-codec-zig",
 ]
 
 [workspace.dependencies]
@@ -293,6 +294,7 @@ fff-query-parser = { git = "https://github.com/dmtrKovalenko/fff.nvim", rev = "e
 zlob = "=1.3.2"
 
 rara-tool-macro = { path = "crates/common/tool-macro" }
+tape-codec-zig = { path = "crates/tape-codec-zig", default-features = false }
 yunara-store = { path = "crates/common/yunara-store" }
 
 # Config for 'cargo dist'
