@@ -33,7 +33,7 @@ turns plus a right-rail worker inbox of spawned subagents.
   snapshot-testable. Highlights nodes whose `sessionKey` matches the
   current `viewSessionKey` so the panel and timeline stay visually
   linked. Click is intentionally not a navigation action — `tape ↔
-  session` is many-to-one, so a click would not unambiguously map to
+session` is many-to-one, so a click would not unambiguously map to
   one worker; use the inbox to switch focus.
 - `tape-tree-layout.ts` — pure reducer + layered layout. `buildTapeForest`
   folds `tape_forked` events into `{nodes, edges}`; `layoutTapeForest`

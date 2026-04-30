@@ -24,10 +24,7 @@ import { WorkerInbox } from '@/components/topology/WorkerInbox';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  useTopologySubscription,
-  type TopologyStatus,
-} from '@/hooks/use-topology-subscription';
+import { useTopologySubscription, type TopologyStatus } from '@/hooks/use-topology-subscription';
 
 /**
  * Multi-agent observability page — main timeline view (task #5 of #1999).

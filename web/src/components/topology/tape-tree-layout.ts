@@ -104,8 +104,7 @@ export function buildTapeForest(events: TopologyEventEntry[]): {
   const edges: TapeEdge[] = [];
   const seenEdge = new Set<string>();
 
-  const idOf = (sessionKey: string, tapeName: string): string =>
-    `${sessionKey}::${tapeName}`;
+  const idOf = (sessionKey: string, tapeName: string): string => `${sessionKey}::${tapeName}`;
 
   for (const entry of events) {
     const frame = entry.event;
