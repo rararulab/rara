@@ -18,6 +18,14 @@
 @import 'tailwindcss';
 @plugin "@tailwindcss/typography";
 @import 'highlight.js/styles/github.css' layer(base);
+/*
+ * Vendored craft-agents-oss design tokens — loaded LAST so the unlayered
+ * `:root` declarations win the cascade against pi-web-ui's tokens and
+ * become the source of truth for `--accent` / `--success` / `--info` /
+ * `--destructive`. Once #8 (remove pi-web-ui) lands, the import above
+ * goes away and craft becomes the only token system.
+ */
+@import './vendor/craft-ui/styles/index.css';
 
 @theme {
   /* Re-export pi-web-ui / mini-lit color tokens so Tailwind utilities work */
@@ -40,23 +48,22 @@
   --color-ring: var(--ring);
   --color-canvas: var(--canvas);
 
-  /* Semantic status colors — rara admin */
-  --color-ok: #7bc4a0;
-  --color-warn: #e8b86d;
-  --color-err: #d46a6a;
+  /*
+   * Semantic status colors. After the craft-agents-oss takeover, these
+   * resolve through the vendored `--success` / `--info` / `--destructive`
+   * tokens declared on `:root` (see `./vendor/craft-ui/styles/index.css`),
+   * so light/dark variants come from craft and rara stops carrying its
+   * own hardcoded palette for them. `pop` / `pop-hover` / `subtle` keep
+   * their original rara-rose values — craft has no equivalent.
+   */
+  --color-ok: var(--success);
+  --color-warn: var(--info);
+  --color-err: var(--destructive);
+  --color-success: var(--success);
+  --color-info: var(--info);
   --color-pop: #e8788a;
   --color-pop-hover: #d4606f;
   --color-subtle: #b8a0a4;
-
-  /*
-   * Additional semantic aliases used by the agent-live card. `success`
-   * echoes the existing `ok` emerald so status badges don't invent a new
-   * hue; `info` is a restrained blue in the same tonal family as the
-   * multi-ca glass bubble (oklch-based) for neutral informational
-   * surfaces. Neither replaces `ok` — both are pure aliases.
-   */
-  --color-success: #7bc4a0;
-  --color-info: oklch(0.6 0.14 250);
 
   /* Motion */
   --motion-fast: 150ms;
@@ -72,13 +79,13 @@
     'Courier New', monospace;
 
   /*
-   * Brand accent — pink, balanced near Tailwind pink-500 (#EC4899). Intentionally
-   * separate from `--color-primary` so admin surfaces (rose) and accent marks
-   * (pink) can coexist on the same page without fighting. Use `bg-brand`,
-   * `text-brand`, `border-brand` in markup.
+   * Brand accent — aliased to craft's `--accent` (vendored purple) so the
+   * brand mark and the broader accent system stay in lockstep. Markup
+   * keeps using `bg-brand` / `text-brand` / `border-brand`; the swatch
+   * comes from `./vendor/craft-ui/styles/index.css`.
    */
-  --color-brand: oklch(0.68 0.22 0);
-  --color-brand-foreground: oklch(0.99 0 0);
+  --color-brand: var(--accent);
+  --color-brand-foreground: var(--accent-foreground);
 
   /* Radius scale — cards stay compact (0.75rem) to match hero admin. */
   --radius-card: 0.75rem;
