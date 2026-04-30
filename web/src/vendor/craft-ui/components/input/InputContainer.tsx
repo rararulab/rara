@@ -4,11 +4,11 @@
  */
 import * as React from 'react'
 import { motion, AnimatePresence, useMotionValue, useMotionValueEvent, animate } from 'motion/react'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 import { FreeFormInput, type FreeFormInputProps } from './FreeFormInput'
 import { StructuredInput } from './StructuredInput'
-import type { RichTextInputHandle } from '@/components/ui/rich-text-input'
-import { useOptionalAppShellContext } from '@/context/AppShellContext'
+import type { RichTextInputHandle } from '~vendor/components/ui/rich-text-input'
+import { useOptionalAppShellContext } from '~vendor/context/AppShellContext'
 import type { StructuredInputState, StructuredResponse, InputMode } from './structured/types'
 
 interface InputContainerProps extends Omit<FreeFormInputProps, 'inputRef'> {

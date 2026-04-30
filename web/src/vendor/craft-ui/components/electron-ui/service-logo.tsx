@@ -10,7 +10,7 @@
  */
 
 import * as React from 'react'
-import { CrossfadeAvatar } from '@/components/ui/avatar'
+import { CrossfadeAvatar } from '~vendor/components/ui/avatar'
 
 interface ServiceLogoProps {
   logo?: string | null  // Google Favicon URL

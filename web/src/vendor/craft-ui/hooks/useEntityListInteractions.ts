@@ -15,8 +15,8 @@
  */
 
 import { useState, useCallback, useMemo, useRef } from 'react'
-import { useRovingTabIndex } from '@/hooks/keyboard'
-import * as MultiSelect from '@/hooks/useMultiSelect'
+import { useRovingTabIndex } from '~vendor/hooks/keyboard'
+import * as MultiSelect from '~vendor/hooks/useMultiSelect'
 
 // ============================================================================
 // Types

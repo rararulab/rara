@@ -4,12 +4,12 @@
  */
 import { useState, useCallback } from 'react'
 import { Key, User, Lock, Eye, EyeOff, Check, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { cn } from '@/lib/utils'
+import { Button } from '~vendor/components/ui/button'
+import { Input } from '~vendor/components/ui/input'
+import { Label } from '~vendor/components/ui/label'
+import { cn } from '~vendor/lib/utils'
 import type { CredentialRequest as CredentialRequestType, CredentialResponse } from '../../../../../shared/types'
-import { validateBasicAuthCredentials, getPasswordValue, getPasswordLabel, getPasswordPlaceholder } from '@/utils/auth-validation'
+import { validateBasicAuthCredentials, getPasswordValue, getPasswordLabel, getPasswordPlaceholder } from '~vendor/utils/auth-validation'
 
 interface CredentialRequestProps {
   request: CredentialRequestType

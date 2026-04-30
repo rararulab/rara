@@ -6,8 +6,8 @@ import * as React from 'react'
 import { Command as CommandPrimitive } from 'cmdk'
 import { Search } from 'lucide-react'
 
-import { cn } from '@/lib/utils'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { cn } from '~vendor/lib/utils'
+import { Dialog, DialogContent } from '~vendor/components/ui/dialog'
 
 function Command({
   className,

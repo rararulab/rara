@@ -4,10 +4,10 @@
  */
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
-import { FadingText } from '@/components/ui/fading-text'
-import { SkillAvatar } from '@/components/ui/skill-avatar'
-import { SourceAvatar } from '@/components/ui/source-avatar'
+import { cn } from '~vendor/lib/utils'
+import { FadingText } from '~vendor/components/ui/fading-text'
+import { SkillAvatar } from '~vendor/components/ui/skill-avatar'
+import { SourceAvatar } from '~vendor/components/ui/source-avatar'
 import type { LoadedSkill, LoadedSource, FileSearchResult } from '../../../shared/types'
 import { AGENTS_PLUGIN_NAME } from '@craft-agent/shared/skills/types'
 

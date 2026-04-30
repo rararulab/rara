@@ -6,7 +6,7 @@ import * as React from 'react'
 import * as Sentry from '@sentry/electron/renderer'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, RefreshCw, Trash2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '~vendor/components/ui/button'
 
 interface InputErrorBoundaryProps {
   sessionId?: string

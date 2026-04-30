@@ -4,8 +4,8 @@
  */
 import * as React from "react"
 import * as ResizablePrimitive from "react-resizable-panels"
-import { cn } from "@/lib/utils"
-import { useResizeGradient } from "@/hooks/useResizeGradient"
+import { cn } from "~vendor/lib/utils"
+import { useResizeGradient } from "~vendor/hooks/useResizeGradient"
 
 interface GradientResizeHandleProps {
   className?: string

@@ -10,7 +10,7 @@ import {
   type ThemeFile,
   type ShikiThemeConfig,
 } from '@config/theme'
-import { useTheme as useThemeContext } from '@/context/ThemeContext'
+import { useTheme as useThemeContext } from '~vendor/context/ThemeContext'
 
 interface UseThemeOptions {
   /**

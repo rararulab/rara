@@ -18,8 +18,8 @@
  */
 
 import * as React from 'react'
-import { CrossfadeAvatar } from '@/components/ui/avatar'
-import { cn } from '@/lib/utils'
+import { CrossfadeAvatar } from '~vendor/components/ui/avatar'
+import { cn } from '~vendor/lib/utils'
 import type { ResolvedEntityIcon, IconSize } from '@craft-agent/shared/icons'
 import { ICON_SIZE_CLASSES, ICON_EMOJI_SIZES } from '@craft-agent/shared/icons'
 

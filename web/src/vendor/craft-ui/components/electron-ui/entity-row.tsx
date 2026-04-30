@@ -21,19 +21,19 @@
 import * as React from 'react'
 import { useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
-import { Separator } from '@/components/ui/separator'
+import { Separator } from '~vendor/components/ui/separator'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   StyledDropdownMenuContent,
-} from '@/components/ui/styled-dropdown'
+} from '~vendor/components/ui/styled-dropdown'
 import {
   ContextMenu,
   ContextMenuTrigger,
   StyledContextMenuContent,
-} from '@/components/ui/styled-context-menu'
-import { DropdownMenuProvider, ContextMenuProvider } from '@/components/ui/menu-context'
-import { cn } from '@/lib/utils'
+} from '~vendor/components/ui/styled-context-menu'
+import { DropdownMenuProvider, ContextMenuProvider } from '~vendor/components/ui/menu-context'
+import { cn } from '~vendor/lib/utils'
 
 export interface EntityRowProps {
   /** Left icon area — rendered in-flow as a flex child before the content column.

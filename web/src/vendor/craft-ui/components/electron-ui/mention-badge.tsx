@@ -4,9 +4,9 @@
  */
 import * as React from 'react'
 import { X } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { SkillAvatar } from '@/components/ui/skill-avatar'
-import { SourceAvatar } from '@/components/ui/source-avatar'
+import { cn } from '~vendor/lib/utils'
+import { SkillAvatar } from '~vendor/components/ui/skill-avatar'
+import { SourceAvatar } from '~vendor/components/ui/source-avatar'
 import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import type { MentionItemType } from './mention-menu'
 

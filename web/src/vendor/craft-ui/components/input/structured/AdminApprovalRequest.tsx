@@ -5,10 +5,10 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { ShieldAlert, Check, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
-import { cn } from '@/lib/utils'
+import { Button } from '~vendor/components/ui/button'
+import { Switch } from '~vendor/components/ui/switch'
+import { Label } from '~vendor/components/ui/label'
+import { cn } from '~vendor/lib/utils'
 
 export interface AdminApprovalRequestData {
   appName: string

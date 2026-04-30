@@ -15,7 +15,7 @@ import {
   ContextMenuSubContent,
   ContextMenuPortal,
 } from "./context-menu"
-import { cn } from "@/lib/utils"
+import { cn } from "~vendor/lib/utils"
 
 /**
  * Styled Context Menu Components

@@ -19,7 +19,8 @@
     /* Path alias */
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "~vendor/*": ["./src/vendor/craft-ui/*"]
     },
 
     /* Linting */

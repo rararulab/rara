@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import { getDefaultStore } from 'jotai'
-import { sessionMetaMapAtom } from '@/atoms/sessions'
+import { sessionMetaMapAtom } from '~vendor/atoms/sessions'
 
 type JotaiStore = ReturnType<typeof getDefaultStore>
 

@@ -11,8 +11,8 @@ import {
   DrawerHeader,
   DrawerTitle,
   DrawerClose,
-} from '@/components/ui/drawer'
-import { cn } from '@/lib/utils'
+} from '~vendor/components/ui/drawer'
+import { cn } from '~vendor/lib/utils'
 import {
   PERMISSION_MODE_CONFIG,
   PERMISSION_MODE_ORDER,

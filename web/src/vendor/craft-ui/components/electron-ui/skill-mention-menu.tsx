@@ -8,8 +8,8 @@
  */
 
 import * as React from 'react'
-import { cn } from '@/lib/utils'
-import { SkillAvatar } from '@/components/ui/skill-avatar'
+import { cn } from '~vendor/lib/utils'
+import { SkillAvatar } from '~vendor/components/ui/skill-avatar'
 import type { LoadedSkill } from '../../../shared/types'
 
 // ============================================================================

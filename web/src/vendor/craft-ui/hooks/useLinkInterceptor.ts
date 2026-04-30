@@ -20,7 +20,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { classifyFile, type FilePreviewType } from '@craft-agent/ui'
-import { getLanguageFromPath } from '@/lib/file-utils'
+import { getLanguageFromPath } from '~vendor/lib/file-utils'
 
 // ── Preview state types ────────────────────────────────────────────────────────
 // Each variant carries the data needed to render its specific overlay.

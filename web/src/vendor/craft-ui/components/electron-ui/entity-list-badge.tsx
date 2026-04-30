@@ -14,7 +14,7 @@
 
 import * as React from 'react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 
 export interface EntityListBadgeProps {
   /** Badge content (text or icon) */

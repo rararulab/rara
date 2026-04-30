@@ -19,11 +19,11 @@ import { GripHorizontal } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react' // motion used for backdrop only
 import { Popover, PopoverTrigger, PopoverContent } from './popover'
 import { Button } from './button'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 import { usePlatform } from '@craft-agent/ui'
 import type { ContentBadge, Session, CreateSessionOptions } from '../../../shared/types'
-import { useActiveWorkspace, useAppShellContext, useSession, usePendingPermission, usePendingCredential } from '@/context/AppShellContext'
-import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
+import { useActiveWorkspace, useAppShellContext, useSession, usePendingPermission, usePendingCredential } from '~vendor/context/AppShellContext'
+import { useEscapeInterrupt } from '~vendor/context/EscapeInterruptContext'
 import { ChatDisplay } from '../app-shell/ChatDisplay'
 
 /** Rotating placeholder keys for compact mode input - short, action-oriented */

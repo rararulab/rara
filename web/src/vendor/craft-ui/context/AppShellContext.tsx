@@ -13,7 +13,7 @@
 import * as React from 'react'
 import { createContext, useContext, useCallback } from 'react'
 import { useAtomValue } from 'jotai'
-import type { ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
+import type { ChatDisplayHandle } from '~vendor/components/app-shell/ChatDisplay'
 import type {
   Session,
   Workspace,
@@ -29,7 +29,7 @@ import type {
   LlmConnectionWithStatus,
   TestAutomationResult,
 } from '../../shared/types'
-import type { SessionStatus as SessionStatusConfig } from '@/config/session-status-config'
+import type { SessionStatus as SessionStatusConfig } from '~vendor/config/session-status-config'
 import type { SessionOptions, SessionOptionUpdates } from '../hooks/useSessionOptions'
 import { defaultSessionOptions } from '../hooks/useSessionOptions'
 import { sessionAtomFamily } from '../atoms/sessions'

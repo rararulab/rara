@@ -17,8 +17,8 @@ import { useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { automationsAtom } from '@/atoms/automations'
-import { parseAutomationsConfig, type AutomationListItem, type TestResult, type ExecutionEntry } from '@/components/automations/types'
+import { automationsAtom } from '~vendor/atoms/automations'
+import { parseAutomationsConfig, type AutomationListItem, type TestResult, type ExecutionEntry } from '~vendor/components/automations/types'
 
 async function loadAutomationsFromServer(workspaceId: string): Promise<AutomationListItem[]> {
   const json = await window.electronAPI.getAutomations(workspaceId)

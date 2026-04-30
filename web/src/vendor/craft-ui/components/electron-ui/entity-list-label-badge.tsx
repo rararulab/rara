@@ -5,7 +5,7 @@
 import { useState } from "react"
 import { parseLabelEntry, formatLabelEntry, formatDisplayValue } from "@craft-agent/shared/labels"
 import { resolveEntityColor } from "@craft-agent/shared/colors"
-import { useTheme } from "@/context/ThemeContext"
+import { useTheme } from "~vendor/context/ThemeContext"
 import { LabelValuePopover } from "./label-value-popover"
 import { LabelValueTypeIcon } from "./label-icon"
 import type { LabelConfig } from "@craft-agent/shared/labels"

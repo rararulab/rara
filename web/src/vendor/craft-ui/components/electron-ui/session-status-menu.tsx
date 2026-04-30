@@ -6,14 +6,14 @@ import * as React from 'react'
 import { useTranslation } from "react-i18next"
 import { Command as CommandPrimitive } from 'cmdk'
 import { Archive, ArchiveRestore } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 import {
   type SessionStatusId,
   type SessionStatus,
   getStateIcon,
   getStateColor,
   getStatusIconStyle,
-} from '@/config/session-status-config'
+} from '~vendor/config/session-status-config'
 
 // Re-export types for backwards compatibility
 export { type SessionStatusId, type SessionStatus, getStateIcon, getStateColor }

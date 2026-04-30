@@ -5,7 +5,7 @@
 import * as React from "react"
 import { X, Image as ImageIcon } from "lucide-react"
 import { Spinner, FileTypeIcon, getFileTypeLabel } from "@craft-agent/ui"
-import { cn } from "@/lib/utils"
+import { cn } from "~vendor/lib/utils"
 import type { FileAttachment } from "../../../shared/types"
 
 // Re-export for backward compatibility

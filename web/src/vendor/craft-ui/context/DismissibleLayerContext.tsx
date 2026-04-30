@@ -7,7 +7,7 @@ import {
   setDismissibleLayerBridge,
   type DismissibleLayerBridge,
   type DismissibleLayerRegistration,
-} from '@/lib/dismissible-layer-bridge'
+} from '~vendor/lib/dismissible-layer-bridge'
 
 export interface DismissibleLayer extends Required<Pick<DismissibleLayerRegistration, 'id' | 'type' | 'priority' | 'close'>> {
   isOpen: boolean

@@ -10,11 +10,11 @@
  */
 
 import * as React from 'react'
-import { useAction } from '@/actions'
+import { useAction } from '~vendor/actions'
 import { EntityList } from './entity-list'
 import { EntityRow } from './entity-row'
-import { useEntityListInteractions } from '@/hooks/useEntityListInteractions'
-import type { createEntitySelection } from '@/hooks/useEntitySelection'
+import { useEntityListInteractions } from '~vendor/hooks/useEntityListInteractions'
+import type { createEntitySelection } from '~vendor/hooks/useEntitySelection'
 
 export interface EntityPanelItem {
   icon?: React.ReactNode

@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import type { StatusConfig } from '@craft-agent/shared/statuses'
-import { clearIconCache } from '@/config/session-status-config'
+import { clearIconCache } from '~vendor/config/session-status-config'
 
 export interface UseStatusesResult {
   statuses: StatusConfig[]

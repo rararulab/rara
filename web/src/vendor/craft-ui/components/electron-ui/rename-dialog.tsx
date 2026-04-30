@@ -10,10 +10,10 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { useRegisterModal } from "@/context/ModalContext"
+} from "~vendor/components/ui/dialog"
+import { Input } from "~vendor/components/ui/input"
+import { Button } from "~vendor/components/ui/button"
+import { useRegisterModal } from "~vendor/context/ModalContext"
 
 interface RenameDialogProps {
   open: boolean

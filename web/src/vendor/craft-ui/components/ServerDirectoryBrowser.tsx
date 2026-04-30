@@ -10,10 +10,10 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { useRegisterModal } from '@/context/ModalContext'
+} from '~vendor/components/ui/dialog'
+import { Button } from '~vendor/components/ui/button'
+import { Input } from '~vendor/components/ui/input'
+import { useRegisterModal } from '~vendor/context/ModalContext'
 import type { DirectoryListingResult } from '../../shared/types'
 import { FolderIcon, FolderSymlinkIcon, ChevronRightIcon } from 'lucide-react'
 import { Spinner } from '@craft-agent/ui'

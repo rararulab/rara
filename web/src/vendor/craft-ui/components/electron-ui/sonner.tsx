@@ -3,7 +3,7 @@
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/sonner.tsx
  */
 import { Toaster as Sonner, type ToasterProps } from "sonner"
-import { useTheme } from "@/context/ThemeContext"
+import { useTheme } from "~vendor/context/ThemeContext"
 
 // Empty fragment to hide all toast icons
 const NoIcon = () => <></>

@@ -6,8 +6,8 @@ import * as React from 'react'
 import { Check, DatabaseZap } from 'lucide-react'
 import { FilterableSelectPopover } from '@craft-agent/ui'
 
-import { cn } from '@/lib/utils'
-import { SourceAvatar } from '@/components/ui/source-avatar'
+import { cn } from '~vendor/lib/utils'
+import { SourceAvatar } from '~vendor/components/ui/source-avatar'
 import type { LoadedSource } from '../../../shared/types'
 
 export interface SourceSelectorPopoverProps {

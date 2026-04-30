@@ -5,8 +5,8 @@
 import * as React from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
-import { FadingText } from '@/components/ui/fading-text'
-import { cn } from '@/lib/utils'
+import { FadingText } from '~vendor/components/ui/fading-text'
+import { cn } from '~vendor/lib/utils'
 
 export interface FreeFormInputContextBadgeProps {
   /** Left area - fully customizable (icon, avatar stack, etc.) */

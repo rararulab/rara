@@ -3,11 +3,11 @@
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/app-shell/input/ChatInputZone.tsx
  */
 import * as React from 'react'
-import { cn } from '@/lib/utils'
-import { CHAT_LAYOUT } from '@/config/layout'
+import { cn } from '~vendor/lib/utils'
+import { CHAT_LAYOUT } from '~vendor/config/layout'
 import { flattenLabels, type LabelConfig } from '@craft-agent/shared/labels'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
-import type { SessionStatus } from '@/config/session-status-config'
+import type { SessionStatus } from '~vendor/config/session-status-config'
 import type { BackgroundTask } from '../ActiveTasksBar'
 import { ActiveOptionBadges } from '../ActiveOptionBadges'
 import { InputContainer } from './InputContainer'

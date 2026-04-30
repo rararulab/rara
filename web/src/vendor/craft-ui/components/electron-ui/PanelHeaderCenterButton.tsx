@@ -5,7 +5,7 @@
 import * as React from 'react'
 import { forwardRef } from 'react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 
 interface PanelHeaderCenterButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Icon as React element - caller controls size/styling */

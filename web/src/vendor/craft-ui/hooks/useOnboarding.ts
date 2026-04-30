@@ -18,10 +18,10 @@ import type {
   OnboardingState,
   OnboardingStep,
   ApiSetupMethod,
-} from '@/components/onboarding'
-import type { ProviderChoice } from '@/components/onboarding/ProviderSelectStep'
-import type { LocalModelSubmitData } from '@/components/onboarding/LocalModelStep'
-import type { ApiKeySubmitData } from '@/components/apisetup'
+} from '~vendor/components/onboarding'
+import type { ProviderChoice } from '~vendor/components/onboarding/ProviderSelectStep'
+import type { LocalModelSubmitData } from '~vendor/components/onboarding/LocalModelStep'
+import type { ApiKeySubmitData } from '~vendor/components/apisetup'
 import type { CustomEndpointConfig } from '@config/llm-connections'
 import type { SetupNeeds, LlmConnectionSetup } from '../../shared/types'
 

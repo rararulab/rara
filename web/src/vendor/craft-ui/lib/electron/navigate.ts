@@ -9,7 +9,7 @@
  * Works by dispatching a custom event that the NavigationContext listens for.
  *
  * Usage:
- *   import { navigate, routes } from '@/lib/navigate'
+ *   import { navigate, routes } from '~vendor/lib/navigate'
  *
  *   navigate(routes.tab.settings())
  *   navigate(routes.action.newChat({ agentId: 'claude' }))

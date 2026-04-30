@@ -4,10 +4,10 @@
  */
 import { createContext, useContext } from "react"
 import type { LabelConfig } from "@craft-agent/shared/labels"
-import type { SessionStatusId, SessionStatus } from "@/config/session-status-config"
-import type { SessionMeta } from "@/atoms/sessions"
-import type { SessionOptions } from "@/hooks/useSessionOptions"
-import type { ContentSearchResult } from "@/hooks/useSessionSearch"
+import type { SessionStatusId, SessionStatus } from "~vendor/config/session-status-config"
+import type { SessionMeta } from "~vendor/atoms/sessions"
+import type { SessionOptions } from "~vendor/hooks/useSessionOptions"
+import type { ContentSearchResult } from "~vendor/hooks/useSessionSearch"
 
 export interface SessionListContextValue {
   // Session action callbacks (shared across all items)

@@ -11,7 +11,7 @@
 
 import { useAtom } from 'jotai'
 import { useCallback } from 'react'
-import { backgroundTasksAtomFamily, type BackgroundTask } from '@/atoms/sessions'
+import { backgroundTasksAtomFamily, type BackgroundTask } from '~vendor/atoms/sessions'
 
 export interface UseBackgroundTasksOptions {
   /** Session ID to track tasks for */

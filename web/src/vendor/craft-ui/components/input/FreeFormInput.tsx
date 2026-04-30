@@ -19,61 +19,61 @@ import {
 } from 'lucide-react'
 import { Icon_Home, Icon_Folder, Spinner } from '@craft-agent/ui'
 
-import * as storage from '@/lib/local-storage'
-import { useDirectoryPicker } from '@/hooks/useDirectoryPicker'
-import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
-import { Button } from '@/components/ui/button'
+import * as storage from '~vendor/lib/local-storage'
+import { useDirectoryPicker } from '~vendor/hooks/useDirectoryPicker'
+import { ServerDirectoryBrowser } from '~vendor/components/ServerDirectoryBrowser'
+import { Button } from '~vendor/components/ui/button'
 import {
   InlineSlashCommand,
   useInlineSlashCommand,
   type SlashCommandId,
-} from '@/components/ui/slash-command-menu'
+} from '~vendor/components/ui/slash-command-menu'
 import {
   InlineMentionMenu,
   useInlineMention,
   type MentionItem,
   type MentionItemType,
-} from '@/components/ui/mention-menu'
+} from '~vendor/components/ui/mention-menu'
 import {
   InlineLabelMenu,
   useInlineLabelMenu,
-} from '@/components/ui/label-menu'
+} from '~vendor/components/ui/label-menu'
 import type { LabelConfig } from '@craft-agent/shared/labels'
-import { parseMentions } from '@/lib/mentions'
-import { RichTextInput, type RichTextInputHandle } from '@/components/ui/rich-text-input'
+import { parseMentions } from '~vendor/lib/mentions'
+import { RichTextInput, type RichTextInputHandle } from '~vendor/components/ui/rich-text-input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuSub,
   DropdownMenuPortal,
-} from '@/components/ui/dropdown-menu'
+} from '~vendor/components/ui/dropdown-menu'
 import {
   StyledDropdownMenuContent,
   StyledDropdownMenuItem,
   StyledDropdownMenuSeparator,
   StyledDropdownMenuSubTrigger,
   StyledDropdownMenuSubContent,
-} from '@/components/ui/styled-dropdown'
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
-import { coerceInputText } from '@/lib/input-text'
-import { isMac, PATH_SEP, getPathBasename } from '@/lib/platform'
-import { applySmartTypography } from '@/lib/smart-typography'
+} from '~vendor/components/ui/styled-dropdown'
+import { Popover, PopoverTrigger, PopoverContent } from '~vendor/components/ui/popover'
+import { cn } from '~vendor/lib/utils'
+import { coerceInputText } from '~vendor/lib/input-text'
+import { isMac, PATH_SEP, getPathBasename } from '~vendor/lib/platform'
+import { applySmartTypography } from '~vendor/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
 import { ANTHROPIC_MODELS, getModelShortName, getModelDisplayName, getModelContextWindow, type ModelDefinition } from '@config/models'
 import { resolveEffectiveConnectionSlug, isCompatProvider, isLocalConnection } from '@config/llm-connections'
-import { useOptionalAppShellContext } from '@/context/AppShellContext'
-import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
-import { SourceAvatar } from '@/components/ui/source-avatar'
-import { SourceSelectorPopover } from '@/components/ui/SourceSelectorPopover'
-import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
+import { useOptionalAppShellContext } from '~vendor/context/AppShellContext'
+import { EditPopover, getEditConfig } from '~vendor/components/ui/EditPopover'
+import { SourceAvatar } from '~vendor/components/ui/source-avatar'
+import { SourceSelectorPopover } from '~vendor/components/ui/SourceSelectorPopover'
+import { ConnectionIcon } from '~vendor/components/icons/ConnectionIcon'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import type { FileAttachment, LoadedSource, LoadedSkill } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
 import { type ThinkingLevel, THINKING_LEVELS, getThinkingLevelNameKey } from '@craft-agent/shared/agent/thinking-levels'
-import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
-import { hasOpenOverlay } from '@/lib/overlay-detection'
+import { useEscapeInterrupt } from '~vendor/context/EscapeInterruptContext'
+import { hasOpenOverlay } from '~vendor/lib/overlay-detection'
 import { ToolbarStatusSlot } from './ToolbarStatusSlot'
 import { buildPlanApprovalMessage } from '../plan-approval-message'
 import { shouldHandleScopedInputEvent } from './input-event-guards'

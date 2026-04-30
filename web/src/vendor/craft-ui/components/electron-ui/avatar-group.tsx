@@ -9,7 +9,7 @@
  */
 
 import * as React from 'react'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 
 interface AvatarGroupProps {
   children: React.ReactNode

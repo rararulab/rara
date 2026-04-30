@@ -4,7 +4,7 @@
  */
 import * as React from "react"
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from "react"
-import { setCurrentZone } from '@/actions/keybinding-context'
+import { setCurrentZone } from '~vendor/actions/keybinding-context'
 
 /**
  * Focus zone identifiers - ordered for Tab navigation

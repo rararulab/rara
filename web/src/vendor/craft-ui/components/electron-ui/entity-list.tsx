@@ -17,15 +17,15 @@
 
 import * as React from 'react'
 import { ChevronRight } from 'lucide-react'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { ScrollArea } from '~vendor/components/ui/scroll-area'
 import {
   ContextMenu,
   ContextMenuTrigger,
   StyledContextMenuContent,
   StyledContextMenuItem,
   StyledContextMenuSeparator,
-} from '@/components/ui/styled-context-menu'
-import { cn } from '@/lib/utils'
+} from '~vendor/components/ui/styled-context-menu'
+import { cn } from '~vendor/lib/utils'
 
 // ============================================================================
 // Types

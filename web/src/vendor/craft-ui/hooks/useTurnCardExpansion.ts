@@ -12,7 +12,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import * as storage from '@/lib/local-storage'
+import * as storage from '~vendor/lib/local-storage'
 
 const MAX_SESSIONS = 100
 

@@ -3,7 +3,7 @@
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/components/ui/fading-text.tsx
  */
 import { useRef, useState, useLayoutEffect } from 'react'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 
 interface FadingTextProps {
   children: React.ReactNode

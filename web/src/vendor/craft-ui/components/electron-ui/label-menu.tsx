@@ -4,11 +4,11 @@
  */
 import * as React from 'react'
 import { Check, Plus } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '~vendor/lib/utils'
 import { LabelIcon } from './label-icon'
 import type { LabelConfig } from '@craft-agent/shared/labels'
 import { createLabelMenuItems, filterItems, segmentScore, type LabelMenuItem } from './label-menu-utils'
-import { getStatusIconStyle, type SessionStatus } from '@/config/session-status-config'
+import { getStatusIconStyle, type SessionStatus } from '~vendor/config/session-status-config'
 
 export { createLabelMenuItems, filterItems, type LabelMenuItem } from './label-menu-utils'
 

@@ -4,9 +4,9 @@
  */
 import { useEffect } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { useModalRegistry } from '@/context/ModalContext'
-import { useDismissibleLayerRegistry } from '@/context/DismissibleLayerContext'
-import { panelStackAtom, closePanelAtom, focusedPanelIdAtom } from '@/atoms/panel-stack'
+import { useModalRegistry } from '~vendor/context/ModalContext'
+import { useDismissibleLayerRegistry } from '~vendor/context/DismissibleLayerContext'
+import { panelStackAtom, closePanelAtom, focusedPanelIdAtom } from '~vendor/atoms/panel-stack'
 import type { WindowCloseRequest } from '../../shared/types'
 
 /**

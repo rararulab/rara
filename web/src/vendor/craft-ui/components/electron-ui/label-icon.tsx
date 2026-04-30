@@ -12,8 +12,8 @@
 import type { IconSize } from '@craft-agent/shared/icons'
 import type { EntityColor } from '@craft-agent/shared/colors'
 import { resolveEntityColor } from '@craft-agent/shared/colors'
-import { useTheme } from '@/context/ThemeContext'
-import { cn } from '@/lib/utils'
+import { useTheme } from '~vendor/context/ThemeContext'
+import { cn } from '~vendor/lib/utils'
 import { Hash, CalendarDays, Type } from 'lucide-react'
 import type { LabelConfig } from '@craft-agent/shared/labels'
 

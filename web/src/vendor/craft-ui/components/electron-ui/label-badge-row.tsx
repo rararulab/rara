@@ -23,8 +23,8 @@ import { MetadataBadge } from './metadata-badge'
 import { parseLabelEntry, formatLabelEntry, formatDisplayValue } from '@craft-agent/shared/labels'
 import type { LabelConfig } from '@craft-agent/shared/labels'
 import { resolveEntityColor } from '@craft-agent/shared/colors'
-import { useTheme } from '@/context/ThemeContext'
-import { cn } from '@/lib/utils'
+import { useTheme } from '~vendor/context/ThemeContext'
+import { cn } from '~vendor/lib/utils'
 
 export interface LabelBadgeRowProps {
   /** Applied session labels (encoded strings like "bug" or "priority::3") */

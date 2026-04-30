@@ -5,13 +5,13 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { isToday, isYesterday, format, startOfDay } from "date-fns"
 
-import { searchLog } from "@/lib/logger"
+import { searchLog } from "~vendor/lib/logger"
 import { parseLabelEntry } from "@craft-agent/shared/labels"
 import { fuzzyScore } from "@craft-agent/shared/search"
-import { getSessionTitle, getSessionStatus } from "@/utils/session"
-import type { SessionMeta } from "@/atoms/sessions"
+import { getSessionTitle, getSessionStatus } from "~vendor/utils/session"
+import type { SessionMeta } from "~vendor/atoms/sessions"
 import type { ViewConfig } from "@craft-agent/shared/views"
-import type { SessionFilter } from "@/contexts/NavigationContext"
+import type { SessionFilter } from "~vendor/contexts/NavigationContext"
 
 // ---------------------------------------------------------------------------
 // Constants

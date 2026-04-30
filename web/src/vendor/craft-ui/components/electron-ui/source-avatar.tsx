@@ -15,9 +15,9 @@
 
 import * as React from 'react'
 import { Globe, HardDrive, Mail, Plug } from 'lucide-react'
-import { EntityIcon, type IconComponent } from '@/components/ui/entity-icon'
-import { useEntityIcon, logoUrlCache } from '@/lib/icon-cache'
-import { McpIcon } from '@/components/icons/McpIcon'
+import { EntityIcon, type IconComponent } from '~vendor/components/ui/entity-icon'
+import { useEntityIcon, logoUrlCache } from '~vendor/lib/icon-cache'
+import { McpIcon } from '~vendor/components/icons/McpIcon'
 import type { LoadedSource } from '@craft-agent/shared/sources/types'
 import type { IconSize, ResolvedEntityIcon } from '@craft-agent/shared/icons'
 import { SourceStatusIndicator, deriveConnectionStatus } from './source-status-indicator'

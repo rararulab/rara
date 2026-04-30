@@ -9,7 +9,7 @@
  * Use these instead of accessing navigator.platform directly.
  *
  * @example
- * import { isMac, isWindows, PATH_SEP, getPathBasename } from '@/lib/platform'
+ * import { isMac, isWindows, PATH_SEP, getPathBasename } from '~vendor/lib/platform'
  *
  * // Platform checks
  * const modifier = isMac ? '⌘' : 'Ctrl'

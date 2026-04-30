@@ -103,6 +103,9 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss(), docsBookPlugin()],
     resolve: {
       alias: {
+        // Vendor alias must be matched before '@' so vendor-internal '~vendor/...'
+        // imports stay isolated from rara's own '@/...' tree.
+        '~vendor': path.resolve(__dirname, './src/vendor/craft-ui'),
         '@': path.resolve(__dirname, './src'),
       },
     },

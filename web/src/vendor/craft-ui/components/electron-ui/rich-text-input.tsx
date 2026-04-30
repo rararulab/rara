@@ -4,16 +4,16 @@
  */
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { coerceInputText } from '@/lib/input-text'
-import { cn } from '@/lib/utils'
-import { findMentionMatches, parseMentions, type MentionMatch } from '@/lib/mentions'
+import { coerceInputText } from '~vendor/lib/input-text'
+import { cn } from '~vendor/lib/utils'
+import { findMentionMatches, parseMentions, type MentionMatch } from '~vendor/lib/mentions'
 import {
   loadSourceIcon,
   loadSkillIcon,
   getSourceIconSync,
   getSkillIconSync,
   EMOJI_ICON_PREFIX,
-} from '@/lib/icon-cache'
+} from '~vendor/lib/icon-cache'
 import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import type { MentionItemType } from './mention-menu'
 

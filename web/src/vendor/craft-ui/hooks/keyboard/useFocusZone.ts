@@ -3,7 +3,7 @@
  * Source: https://github.com/lukilabs/craft-agents-oss/blob/d9c585b8a1e5dc4557e3006b0fffaaa587f5dbb7/apps/electron/src/renderer/hooks/keyboard/useFocusZone.ts
  */
 import { useRef, useEffect, useCallback } from "react"
-import { useFocusContext, type FocusZoneId, type FocusIntent, type FocusZoneOptions } from "@/context/FocusContext"
+import { useFocusContext, type FocusZoneId, type FocusIntent, type FocusZoneOptions } from "~vendor/context/FocusContext"
 
 interface UseFocusZoneOptions {
   /** Unique zone identifier */
