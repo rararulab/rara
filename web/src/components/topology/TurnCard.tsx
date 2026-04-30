@@ -293,9 +293,14 @@ export function buildTurnsFromEvents(
         break;
       }
       case 'done': {
-        if (current) {
-          current.inFlight = false;
-          turns.push(current);
+        // `ensure` mutates `current` from a closure, which TS control-flow
+        // analysis can't see — without the cast, TS narrows `current` to
+        // `null` after the prior-iteration assignment below and then to
+        // `never` inside the truthy branch.
+        const turn = current as TurnCardData | null;
+        if (turn) {
+          turn.inFlight = false;
+          turns.push(turn);
           current = null;
         }
         break;
