@@ -1,16 +1,17 @@
 // @ts-nocheck
-/* Vendor stub: @config/models — Anthropic model catalog used by FreeFormInput. */
+/* Vendor stub: @config/models — emptied for rara so the model picker never
+ * flashes upstream's hardcoded Claude entries. The real catalog comes from
+ * `useChatModels()` (GET /api/v1/chat/models) wired through
+ * AppShellContext.llmConnections in TimelineView; this fallback only fires
+ * when the context is missing entirely. Helper functions keep their
+ * fallback-to-id behavior, so unknown ids render as their own slug. */
 export interface ModelDefinition {
   name: string;
   slug: string;
   contextWindow: number;
 }
 
-export const ANTHROPIC_MODELS: ModelDefinition[] = [
-  { name: 'Claude Opus 4', slug: 'claude-opus-4', contextWindow: 200_000 },
-  { name: 'Claude Sonnet 4', slug: 'claude-sonnet-4', contextWindow: 200_000 },
-  { name: 'Claude Haiku 4', slug: 'claude-haiku-4', contextWindow: 200_000 },
-];
+export const ANTHROPIC_MODELS: ModelDefinition[] = [];
 
 const BY_SLUG: Record<string, ModelDefinition> = Object.fromEntries(
   ANTHROPIC_MODELS.map((m) => [m.slug, m]),
