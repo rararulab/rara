@@ -26,6 +26,20 @@ turns plus a right-rail worker inbox of spawned subagents.
   `Topology` page's `viewChild` state so the timeline focuses on that
   child. The back-to-root affordance lives in the timeline header, not
   the inbox.
+- `TapeLineageView.tsx` — collapsible panel above the timeline that
+  renders the tape fork forest as a hand-drawn SVG. Default collapsed.
+  Pure SVG (no d3 / dagre) because tape forests are tiny (≤ a few dozen
+  nodes per session) and a static layout keeps the view
+  snapshot-testable. Highlights nodes whose `sessionKey` matches the
+  current `viewSessionKey` so the panel and timeline stay visually
+  linked. Click is intentionally not a navigation action — `tape ↔
+  session` is many-to-one, so a click would not unambiguously map to
+  one worker; use the inbox to switch focus.
+- `tape-tree-layout.ts` — pure reducer + layered layout. `buildTapeForest`
+  folds `tape_forked` events into `{nodes, edges}`; `layoutTapeForest`
+  assigns `(x, y)` by depth (column) and a stable per-session DFS order
+  (row). Constants (`NODE_WIDTH`, `COL_GAP`, …) live next to the layout,
+  not in config — they tune the mechanism, not deployment behavior.
 - The WebSocket plumbing lives in `@/hooks/use-topology-subscription`,
   not here. The hook also defines the `TopologyWebFrame` union — an
   extension of `WebFrame` (from `@/agent/session-ws-client`) with the
@@ -40,8 +54,10 @@ backend StreamHub
     → useTopologySubscription            (TopologyEventEntry[])
       ├→ TimelineView.filter(viewSessionKey)
       │    → buildTurnsFromEvents → TurnCard[]
-      └→ WorkerInbox.deriveWorkers
-           → WorkerCard[]
+      ├→ WorkerInbox.deriveWorkers
+      │    → WorkerCard[]
+      └→ TapeLineageView (buildTapeForest → layoutTapeForest)
+           → SVG nodes + edges
 ```
 
 ## Critical Invariants
@@ -70,8 +86,16 @@ backend StreamHub
   variants. Task #8 will unify the two.
 - Do NOT render multiple sessions in one `TimelineView` instance. Use
   the `viewSessionKey` prop and let `WorkerInbox` switch focus instead.
-  Fork topology (parent ↔ child relationships, anchor lines) is task
-  #7 and lives in its own component, not `TimelineView`.
+  Tape fork lineage lives in `TapeLineageView`, not `TimelineView`.
+- Do NOT make `TapeLineageView` nodes clickable for navigation. Tapes
+  and sessions are not 1:1 (one session can host many fork tapes), so a
+  click would not unambiguously map to one worker. Highlight by
+  `viewSessionKey` is the link; navigation goes through the inbox.
+- Do NOT pull in d3 / dagre / react-flow for the lineage SVG. The data
+  is tiny (≤ a few dozen nodes per session), the layout is static, and
+  a hand-drawn SVG keeps the bundle slim and the layout
+  snapshot-testable. If the visualisation outgrows this, the right move
+  is a paginated / collapsible per-session subtree, not a layout lib.
 - Do NOT drop completed / failed workers from `WorkerInbox`. The
   surface is an observation deck — historical workers stay visible so
   operators can inspect what ran. If inbox length becomes a UX problem,

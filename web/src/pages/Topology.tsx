@@ -18,6 +18,7 @@ import { ArrowLeft, Network } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
+import { TapeLineageView } from '@/components/topology/TapeLineageView';
 import { TimelineView } from '@/components/topology/TimelineView';
 import { WorkerInbox } from '@/components/topology/WorkerInbox';
 import { Badge } from '@/components/ui/badge';
@@ -104,6 +105,10 @@ export default function Topology() {
                 </span>
               </div>
             )}
+            <TapeLineageView
+              events={subscription.events}
+              activeSessionKey={viewChild ?? rootSessionKey}
+            />
             <TimelineView
               viewSessionKey={viewChild ?? rootSessionKey}
               events={subscription.events}
