@@ -15,7 +15,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Bell, Settings } from 'lucide-react';
+import { Activity, Bell, Network, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 
@@ -134,6 +134,15 @@ export default function DashboardLayout() {
           >
             <Activity className="h-3.5 w-3.5" />
             Kernel
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => navigate('/topology')}
+          >
+            <Network className="h-3.5 w-3.5" />
+            Topology
           </Button>
           <Button
             variant="ghost"
