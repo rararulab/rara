@@ -64,9 +64,19 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
     let cursor = turn.createdAt ?? 0;
 
     if (turn.reasoning.trim().length > 0) {
+      // When the turn has reasoning but no final text and no tool calls,
+      // emit the reasoning as `type: 'intermediate'` instead of
+      // `type: 'thinking'`. The vendor's `hasNoMeaningfulWork` gate
+      // (TurnCard.tsx ~line 2884) treats `thinking` as no-meaningful-work
+      // and suppresses the entire card via `return null`, swallowing the
+      // reasoning trace silently. `intermediate` with non-empty content
+      // is counted as meaningful, so the card renders. See
+      // `specs/issue-2031-thinking-only-turn-render.spec.md` for the
+      // failure mode this rerouting fixes.
+      const thinkingOnly = turn.text.length === 0 && turn.toolCalls.length === 0;
       items.push({
         id: `${turn.id}:thinking`,
-        type: 'thinking',
+        type: thinkingOnly ? 'intermediate' : 'thinking',
         status: turn.inFlight ? 'running' : 'completed',
         content: turn.reasoning,
         timestamp: cursor++,
@@ -93,7 +103,7 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
     }
 
     return items;
-  }, [turn.id, turn.createdAt, turn.reasoning, turn.toolCalls, turn.inFlight]);
+  }, [turn.id, turn.createdAt, turn.reasoning, turn.toolCalls, turn.inFlight, turn.text]);
 
   const response = useMemo<ResponseContent | undefined>(() => {
     if (turn.text.length === 0) return undefined;
@@ -122,8 +132,20 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
       }
     : {};
 
+  // Mirror the vendor's suppression rules so the `data-turn-id` wrapper
+  // is absent for turns the vendor would render as `null`. The vendor
+  // returns null when (activities.length === 0 && !response && isComplete)
+  // OR when every activity is non-meaningful work (TurnCard.tsx
+  // ~line 2873-2898). For the adapter we only need the no-content case —
+  // the meaningful-work check is satisfied by the `intermediate` reroute
+  // above whenever reasoning is non-empty.
+  const hasContent = activities.length > 0 || response !== undefined;
+  if (!hasContent) {
+    return null;
+  }
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-turn-id={turn.id}>
       <VendorTurnCard
         turnId={turn.id}
         activities={activities}
