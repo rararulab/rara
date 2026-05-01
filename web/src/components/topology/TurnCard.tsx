@@ -49,6 +49,13 @@ export interface TurnCardData {
    *  (`TopologyEventEntry` carries no per-frame `created_at`) so they are
    *  emitted with `null` and sort to the tail of the unified list. */
   createdAt: number | null;
+  /** Persisted seq used as the lookup key for the trace / cascade endpoints
+   *  (`GET /api/v1/chat/sessions/{key}/execution-trace?seq=<n>` and the
+   *  cascade sibling). `null` means the seq is not yet known — either the
+   *  turn is still streaming or it came from a source that does not surface
+   *  a seq, in which case the inspect affordances stay hidden (per
+   *  `specs/issue-2023-topology-trace-cascade-buttons.spec.md`). */
+  finalSeq: number | null;
 }
 
 export interface TurnToolCall {
@@ -106,6 +113,7 @@ export function buildTurnsFromEvents(
       usage: null,
       inFlight: true,
       createdAt: null,
+      finalSeq: null,
     };
     return current;
   };
@@ -200,6 +208,9 @@ export function buildTurnsFromEvents(
         const turn = current as TurnCardData | null;
         if (turn) {
           turn.inFlight = false;
+          // The kernel-assigned seq on the `done` frame is the per-turn
+          // identifier the trace / cascade endpoints accept.
+          turn.finalSeq = seq;
           turns.push(turn);
           current = null;
         }
@@ -290,6 +301,9 @@ export function buildTurnsFromHistory(messages: ChatMessageData[]): TurnCardData
       usage: null,
       inFlight: false,
       createdAt,
+      // Provisional — overwritten by every assistant row encountered so the
+      // last assistant row of the turn ends up as the lookup seq.
+      finalSeq: seedSeq,
     };
     return current;
   };
@@ -319,6 +333,9 @@ export function buildTurnsFromHistory(messages: ChatMessageData[]): TurnCardData
           break;
         }
         const turn = ensure(msg.seq, parseTs(msg.created_at));
+        // Last assistant row wins — the trace endpoint expects the seq of
+        // the final persisted assistant message in the turn.
+        turn.finalSeq = msg.seq;
         if (text) {
           // Backend may emit multiple assistant tape entries within one
           // logical turn (text + a separate tool_call entry). Concatenate

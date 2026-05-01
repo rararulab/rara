@@ -15,6 +15,7 @@
  */
 
 import { api } from './client';
+import type { CascadeTrace, ExecutionTrace } from './kernel-types';
 import type { ChatMessageData } from './types';
 
 /**
@@ -75,4 +76,41 @@ export async function listMessages(
   const params = new URLSearchParams({ limit: String(limit) });
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/messages?${params.toString()}`;
   return api.get<ChatMessageData[]>(path, options?.signal ? { signal: options.signal } : undefined);
+}
+
+/**
+ * Fetch the per-turn execution trace for a single assistant turn.
+ *
+ * Wraps `GET /api/v1/chat/sessions/{key}/execution-trace?seq={seq}`. The
+ * backend handler (`get_execution_trace` in
+ * `crates/extensions/backend-admin/src/chat/router.rs`) returns the
+ * iteration count, model, token usage, plan steps, and per-tool summary
+ * for the turn whose final assistant tape entry has the given seq.
+ */
+export async function fetchExecutionTrace(
+  sessionKey: string,
+  seq: number,
+  options?: { signal?: AbortSignal },
+): Promise<ExecutionTrace> {
+  const params = new URLSearchParams({ seq: String(seq) });
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/execution-trace?${params.toString()}`;
+  return api.get<ExecutionTrace>(path, options?.signal ? { signal: options.signal } : undefined);
+}
+
+/**
+ * Fetch the cascade (think → act → observe) trace for a single assistant turn.
+ *
+ * Wraps `GET /api/v1/chat/sessions/{key}/trace?seq={seq}`. The backend
+ * handler (`get_cascade_trace`) replays the tape between the spawning user
+ * input and the closing `done` frame and returns the structured tick /
+ * entry breakdown rendered by `<CascadeModal>`.
+ */
+export async function fetchCascadeTrace(
+  sessionKey: string,
+  seq: number,
+  options?: { signal?: AbortSignal },
+): Promise<CascadeTrace> {
+  const params = new URLSearchParams({ seq: String(seq) });
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/trace?${params.toString()}`;
+  return api.get<CascadeTrace>(path, options?.signal ? { signal: options.signal } : undefined);
 }

@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
+import { CascadeModal } from './CascadeModal';
+import { ExecutionTraceModal } from './ExecutionTraceModal';
 import { SpawnMarker } from './SpawnMarker';
 import type { TurnCardData } from './TurnCard';
 
@@ -31,17 +33,27 @@ import type { ActivityItem, ResponseContent } from '~vendor/components/chat/Turn
  * only place that bridges the two — keeping the rest of the topology tree
  * unaware of the vendor surface.
  *
- * Many vendor callbacks (`onAcceptPlan`, `onAddAnnotation`, `onBranch`,
- * `onOpenDetails`, …) are intentionally left undefined; rara doesn't yet
- * expose those surfaces. The vendor handles `undefined` gracefully — any
- * crash on a missing optional is a vendor bug to flag, not something to
- * silently work around.
+ * The trace + cascade affordances are wired through the vendor's
+ * `onOpenDetails` (three-dot actions menu → "view turn details") and
+ * `onOpenActivityDetails` (clicking a completed tool row) slots. Both
+ * slots are left undefined when `turn.finalSeq === null` or
+ * `turn.inFlight === true`, which causes the vendor to suppress the
+ * three-dot trigger entirely (see `TurnCardActionsMenu.tsx` lines 39-42)
+ * and the activity row's hover-affordance (see `TurnCard.tsx` ~line 1030).
+ * That's the structural mitigation for #1672 — affordances cannot leak
+ * onto live or seq-less turns because the props they depend on are not
+ * passed.
  */
 export interface RaraTurnCardProps {
   turn: TurnCardData;
+  /** Session key whose trace endpoints back the modals. */
+  sessionKey: string;
 }
 
-export function RaraTurnCard({ turn }: RaraTurnCardProps) {
+export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [cascadeOpen, setCascadeOpen] = useState(false);
+
   const activities = useMemo<ActivityItem[]>(() => {
     const items: ActivityItem[] = [];
     // Vendor sorts activities by `timestamp` — only relative ordering
@@ -97,6 +109,19 @@ export function RaraTurnCard({ turn }: RaraTurnCardProps) {
   // forbids passing `undefined` explicitly.
   const responseProps = response ? { response } : {};
 
+  // Affordance gate: the trace / cascade endpoints are keyed on a
+  // persisted seq, so leave the slots undefined for live turns and for
+  // any turn whose seq we have not yet observed.
+  const inspectable = turn.finalSeq !== null && !turn.inFlight;
+  const inspectProps = inspectable
+    ? {
+        onOpenDetails: () => setTraceOpen(true),
+        // Cascade is per-turn, so any activity row opens the same modal.
+        // The vendor passes the activity to the callback; we ignore it.
+        onOpenActivityDetails: () => setCascadeOpen(true),
+      }
+    : {};
+
   return (
     <div className="space-y-2">
       <VendorTurnCard
@@ -105,6 +130,7 @@ export function RaraTurnCard({ turn }: RaraTurnCardProps) {
         {...responseProps}
         isStreaming={turn.inFlight}
         isComplete={!turn.inFlight}
+        {...inspectProps}
       />
       {turn.markers.length > 0 && (
         <div className="space-y-1.5">
@@ -112,6 +138,22 @@ export function RaraTurnCard({ turn }: RaraTurnCardProps) {
             <SpawnMarker key={`${turn.id}-marker-${String(idx)}`} marker={marker} />
           ))}
         </div>
+      )}
+      {inspectable && (
+        <>
+          <ExecutionTraceModal
+            sessionKey={sessionKey}
+            seq={turn.finalSeq}
+            open={traceOpen}
+            onOpenChange={setTraceOpen}
+          />
+          <CascadeModal
+            sessionKey={sessionKey}
+            seq={turn.finalSeq}
+            open={cascadeOpen}
+            onOpenChange={setCascadeOpen}
+          />
+        </>
       )}
     </div>
   );
