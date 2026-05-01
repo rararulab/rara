@@ -285,7 +285,6 @@ describe('RaraTurnCard — trace + cascade affordances', () => {
     expect(document.querySelector('[data-turn-id="turn-42"]')).toBeNull();
   });
 
-
   // BDD: actions_menu_renders_in_dom
   // Falsifier: revert RaraTurnCardActionsMenu wiring; assertion goes
   // back to failing because vendor SimpleDropdown bails on mount.
