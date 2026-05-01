@@ -56,7 +56,12 @@ export function WorkerCard({ worker, active, onSelect }: WorkerCardProps) {
       onClick={() => onSelect(worker.childSession)}
       title={worker.childSession}
       className={cn(
-        'flex w-full flex-col gap-1 rounded border px-2 py-1.5 text-left text-[11px] transition-colors',
+        // `rounded-lg` (8px) + `px-2 py-1.5` padding aligns concentrically
+        // with the inner `rounded` (4px) status badge — principle #1.
+        // Explicit transition list avoids `transition: all` (#14); press
+        // scale per #12.
+        'flex w-full flex-col gap-1 rounded-lg border px-2 py-1.5 text-left text-[11px]',
+        'transition-[colors,transform] active:scale-[0.98]',
         active
           ? 'border-accent bg-accent/10 text-foreground'
           : 'border-border bg-card text-foreground hover:bg-muted/40',
@@ -69,7 +74,9 @@ export function WorkerCard({ worker, active, onSelect }: WorkerCardProps) {
       <span className="truncate font-mono text-[10px] text-muted-foreground">
         {shortenSessionKey(worker.childSession)}
       </span>
-      <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+      {/* `tabular-nums` (#9) on the live counters so the seq + event
+          count don't reflow as digits roll over. */}
+      <div className="flex items-center justify-between gap-2 text-[10px] tabular-nums text-muted-foreground">
         <span>{worker.eventCount} events</span>
         <span>
           {worker.lastActivitySeq > 0 ? `last @ #${worker.lastActivitySeq}` : 'no events yet'}

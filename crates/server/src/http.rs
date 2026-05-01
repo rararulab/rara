@@ -153,10 +153,13 @@ pub struct RestServerConfig {
     pub web_port:             Option<u16>,
     /// Explicit CORS allow-list for the admin HTTP surface.
     ///
-    /// Each entry is an origin string (scheme + host + port) permitted to
-    /// call `/api/v1/*` from a browser, e.g. `http://localhost:5173`. An
-    /// empty list is a hard boot-time error — no hardcoded default, no
-    /// silent fallback (see `docs/guides/anti-patterns.md`).
+    /// Each entry is an origin string permitted to call `/api/v1/*` from a
+    /// browser, e.g. `http://localhost:5173`. Loopback development hosts may
+    /// use `:*` (`http://localhost:*`, `http://127.0.0.1:*`,
+    /// `http://[::1]:*`) so Vite fallback ports keep working; LAN IPs and
+    /// public hosts must list exact ports. An empty list is a hard boot-time
+    /// error — no hardcoded default, no silent fallback (see
+    /// `docs/guides/anti-patterns.md`).
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
 }

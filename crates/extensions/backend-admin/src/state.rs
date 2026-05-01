@@ -21,8 +21,9 @@ use std::sync::Arc;
 
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use snafu::Whatever;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::info;
+use url::Url;
 
 use crate::data_feeds::DataFeedRouterState;
 
@@ -187,27 +188,31 @@ impl BackendState {
 /// `Authorization` header) is answered here, before any auth middleware can
 /// reject it with 401.
 ///
-/// Panics when the allow-list is empty or contains an origin that is not a
-/// valid HTTP header value. CORS misconfiguration is a boot-time error: the
-/// frontend cannot reach the API without it, and silent fallback would delay
-/// the failure to first browser request.
+/// Each entry is either an exact origin (`http://localhost:5173`) or a
+/// loopback-only port wildcard (`http://localhost:*`,
+/// `http://127.0.0.1:*`, `http://[::1]:*`). Wildcards are intentionally
+/// restricted to loopback hosts: admin endpoints carry bearer tokens, so LAN
+/// IPs and public domains must keep explicit ports.
+///
+/// Panics when the allow-list is empty, contains an origin that is not a valid
+/// HTTP header value, or uses an unsafe wildcard. CORS misconfiguration is a
+/// boot-time error: the frontend cannot reach the API without it, and silent
+/// fallback would delay the failure to first browser request.
 pub fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
     assert!(
         !allowed_origins.is_empty(),
         "http.cors_allowed_origins must list at least one origin — see config.example.yaml",
     );
 
-    let origins: Vec<HeaderValue> = allowed_origins
+    let origins = allowed_origins
         .iter()
-        .map(|origin| {
-            HeaderValue::from_str(origin).unwrap_or_else(|err| {
-                panic!("invalid http.cors_allowed_origins entry {origin:?}: {err}")
-            })
-        })
-        .collect();
+        .map(|origin| parse_cors_origin_config(origin))
+        .collect::<Vec<_>>();
 
     CorsLayer::new()
-        .allow_origin(origins)
+        .allow_origin(AllowOrigin::predicate(move |origin, _parts| {
+            origins.iter().any(|allowed| allowed.matches(origin))
+        }))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -226,6 +231,110 @@ pub fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
             HeaderName::from_static("x-request-id"),
             HeaderName::from_static("traceparent"),
         ])
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CorsOriginConfig {
+    Exact(HeaderValue),
+    LoopbackPortWildcard { scheme: String, host: String },
+}
+
+impl CorsOriginConfig {
+    fn matches(&self, origin: &HeaderValue) -> bool {
+        match self {
+            Self::Exact(expected) => origin == expected,
+            Self::LoopbackPortWildcard { scheme, host } => {
+                origin_matches_loopback_port_wildcard(origin, scheme, host)
+            }
+        }
+    }
+}
+
+fn parse_cors_origin_config(origin: &str) -> CorsOriginConfig {
+    if let Some(pattern) = origin.strip_suffix(":*") {
+        return parse_loopback_port_wildcard(origin, pattern);
+    }
+
+    CorsOriginConfig::Exact(
+        HeaderValue::from_str(origin).unwrap_or_else(|err| {
+            panic!("invalid http.cors_allowed_origins entry {origin:?}: {err}")
+        }),
+    )
+}
+
+fn parse_loopback_port_wildcard(origin: &str, pattern: &str) -> CorsOriginConfig {
+    let url = Url::parse(pattern).unwrap_or_else(|err| {
+        panic!("invalid http.cors_allowed_origins port wildcard {origin:?}: {err}")
+    });
+    assert_origin_url_has_no_path(origin, &url);
+    assert!(
+        matches!(url.scheme(), "http" | "https"),
+        "invalid http.cors_allowed_origins port wildcard {origin:?}: scheme must be http or https",
+    );
+    assert!(
+        url.port().is_none(),
+        "invalid http.cors_allowed_origins port wildcard {origin:?}: wildcard must replace the \
+         port",
+    );
+
+    let host = url.host_str().unwrap_or_else(|| {
+        panic!("invalid http.cors_allowed_origins port wildcard {origin:?}: missing host")
+    });
+    assert!(
+        is_loopback_host(host),
+        "invalid http.cors_allowed_origins port wildcard {origin:?}: only localhost, 127.0.0.1, \
+         and [::1] may use :*",
+    );
+
+    CorsOriginConfig::LoopbackPortWildcard {
+        scheme: url.scheme().to_string(),
+        host:   normalize_loopback_host(host),
+    }
+}
+
+fn origin_matches_loopback_port_wildcard(
+    origin: &HeaderValue,
+    expected_scheme: &str,
+    expected_host: &str,
+) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    if !origin_url_has_no_path(&url) || url.scheme() != expected_scheme || url.port().is_none() {
+        return false;
+    }
+
+    url.host_str()
+        .map(normalize_loopback_host)
+        .is_some_and(|host| host == expected_host)
+}
+
+fn assert_origin_url_has_no_path(origin: &str, url: &Url) {
+    assert!(
+        origin_url_has_no_path(url),
+        "invalid http.cors_allowed_origins entry {origin:?}: origin must not include path, query, \
+         or fragment",
+    );
+}
+
+fn origin_url_has_no_path(url: &Url) -> bool {
+    url.path() == "/" && url.query().is_none() && url.fragment().is_none()
+}
+
+fn normalize_loopback_host(host: &str) -> String {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase()
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(
+        normalize_loopback_host(host).as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
 }
 
 fn merge_openapi_router(
@@ -293,5 +402,88 @@ mod tests {
             vec!["x-request-id".to_string(), "traceparent".to_string()],
             "expose_headers must list exactly x-request-id and traceparent"
         );
+    }
+
+    #[tokio::test]
+    async fn cors_loopback_port_wildcard_allows_dev_server_ports() {
+        let layer = build_cors_layer(&[
+            "http://localhost:*".to_string(),
+            "http://127.0.0.1:*".to_string(),
+            "http://[::1]:*".to_string(),
+        ]);
+        let app = Router::new()
+            .route("/probe", get(|| async { StatusCode::OK }))
+            .layer(layer);
+
+        for origin in [
+            "http://localhost:5173",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175",
+            "http://[::1]:5175",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/probe")
+                        .header(header::ORIGIN, origin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .and_then(|header| header.to_str().ok()),
+                Some(origin),
+                "loopback wildcard must mirror allowed origin {origin}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cors_loopback_port_wildcard_rejects_other_origins() {
+        let layer = build_cors_layer(&["http://localhost:*".to_string()]);
+        let app = Router::new()
+            .route("/probe", get(|| async { StatusCode::OK }))
+            .layer(layer);
+
+        for origin in [
+            "https://localhost:5175",
+            "http://127.0.0.1:5175",
+            "http://10.0.0.183:5175",
+            "http://localhost",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/probe")
+                        .header(header::ORIGIN, origin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .is_none(),
+                "origin {origin} must not match http://localhost:*",
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "only localhost, 127.0.0.1, and [::1] may use :*")]
+    fn cors_port_wildcard_rejects_non_loopback_hosts() {
+        let _ = build_cors_layer(&["http://10.0.0.183:*".to_string()]);
     }
 }

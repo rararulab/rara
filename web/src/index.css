@@ -114,6 +114,15 @@
    * the threshold.
    */
   --muted-foreground: oklch(45% 0 0);
+  /*
+   * Crisper text on macOS Retina (issue #2042 polish pass). The Tailwind
+   * preflight applies `antialiased` to `body`, but stating it on `:root`
+   * makes the intent explicit and survives any future preflight tweak —
+   * this is the load-bearing rule the checklist calls out, not a
+   * cosmetic duplicate.
+   */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .dark {

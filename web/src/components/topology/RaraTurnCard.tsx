@@ -164,6 +164,7 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
         {...responseProps}
         isStreaming={turn.inFlight}
         isComplete={!turn.inFlight}
+        responseOverflowMode="page"
         {...inspectProps}
       />
       {/* Spawn markers render as siblings, not inside VendorTurnCard:

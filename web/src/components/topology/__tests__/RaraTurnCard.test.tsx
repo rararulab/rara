@@ -121,6 +121,20 @@ describe('RaraTurnCard — trace + cascade affordances', () => {
     expect(screen.queryByText(/view turn details/i)).toBeNull();
   });
 
+  it('RaraTurnCard__assistant_response_uses_timeline_scroll_not_inner_scrollbar', () => {
+    const { container } = renderCard(
+      makeTurn({
+        text: Array.from({ length: 80 }, (_, idx) => `response line ${String(idx + 1)}`).join('\n'),
+      }),
+    );
+
+    const response = container.querySelector('[data-search-root="response"]');
+    expect(response).not.toBeNull();
+    expect(response).not.toHaveClass('overflow-y-auto');
+    expect(response).not.toHaveClass('scrollbar-hover');
+    expect((response as HTMLElement).style.maxHeight).toBe('');
+  });
+
   it('RaraTurnCard__trace_modal_opens_with_fetched_content', async () => {
     fetchExecutionTraceMock.mockResolvedValue({
       duration_secs: 1.23,

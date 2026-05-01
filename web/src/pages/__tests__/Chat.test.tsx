@@ -21,7 +21,13 @@
  * `agent-spec verify` can resolve scenarios to real test functions.
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitForElementToBeRemoved,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Node 25's experimental built-in `localStorage` shim is enabled by
@@ -134,7 +140,7 @@ afterEach(() => {
 });
 
 describe('Chat — collapsible sidebar (issue-2022)', () => {
-  it('toggle_hides_session_picker', () => {
+  it('toggle_hides_session_picker', async () => {
     render(<Chat />);
 
     // Default expanded: picker is in the DOM.
@@ -142,10 +148,11 @@ describe('Chat — collapsible sidebar (issue-2022)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }));
 
-    // After toggle: SessionPicker is not present in the DOM (the `<aside>`
-    // wrapper is conditionally rendered, so the centre column owns the
-    // freed flex width).
-    expect(screen.queryByTestId('session-picker')).not.toBeInTheDocument();
+    // After toggle: SessionPicker is removed from the DOM. The
+    // `<aside>` wrapper is wrapped in `AnimatePresence` (issue-2042
+    // polish), so use `waitForElementToBeRemoved` to give the exit
+    // animation a tick to complete before asserting absence.
+    await waitForElementToBeRemoved(() => screen.queryByTestId('session-picker'));
     // Toggle button now reflects the collapsed state.
     expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
   });
