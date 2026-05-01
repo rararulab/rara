@@ -38,6 +38,29 @@ use urlencoding::{decode, encode};
 
 use super::{TAPE_FILE_SUFFIX, TapEntry, TapEntryKind, TapError, TapResult};
 
+/// Per-append result returned by [`FileTapeStore::append`].
+///
+/// Issue #2025: the session-index update path needs the byte offset of
+/// the JSONL line just written (to record `AnchorRef.byte_offset`) and
+/// the post-append entry count (so it can mirror `TapeInfo.entries`
+/// without a follow-up O(N) `info()` call). Both values are computed
+/// inside the tape I/O worker for free, so we surface them rather than
+/// having every caller pay an extra round trip.
+#[derive(Debug, Clone)]
+pub struct AppendOutcome {
+    /// The persisted entry, with its assigned id.
+    pub entry:               TapEntry,
+    /// Byte offset where this entry's JSONL line begins in the tape file.
+    pub byte_offset:         u64,
+    /// Total number of entries on the tape after this append.
+    pub total_entries_after: i64,
+}
+
+impl AppendOutcome {
+    /// Convenience accessor for the assigned entry id.
+    pub fn entry_id(&self) -> u64 { self.entry.id }
+}
+
 // Pluggable JSONL codec (issue #2007). Declared from `store.rs` rather
 // than `mod.rs` so the PoC scope stays inside the boundaries listed in
 // the spec. When `feature = "zig-codec"` is on, `encode_entry` round-
@@ -322,13 +345,18 @@ impl TapeFile {
     }
 
     /// Append one entry, assigning its persisted ID first.
-    fn append(&mut self, entry: TapEntry) -> TapResult<TapEntry> {
-        let mut entries = self.append_many(vec![entry])?;
-        Ok(entries.remove(0))
+    fn append(&mut self, entry: TapEntry) -> TapResult<AppendOutcome> {
+        let mut outcomes = self.append_many(vec![entry])?;
+        Ok(outcomes.remove(0))
     }
 
     /// Append multiple entries in order, assigning new IDs during persistence.
-    fn append_many(&mut self, entries: Vec<TapEntry>) -> TapResult<Vec<TapEntry>> {
+    ///
+    /// Each returned [`AppendOutcome`] carries the per-entry byte offset
+    /// at which that entry's JSONL line begins in the tape file. Callers
+    /// (notably the session-index update path in `TapeService`) rely on
+    /// this for `AnchorRef.byte_offset`.
+    fn append_many(&mut self, entries: Vec<TapEntry>) -> TapResult<Vec<AppendOutcome>> {
         if entries.is_empty() {
             return Ok(Vec::new());
         }
@@ -337,10 +365,16 @@ impl TapeFile {
         let mut next_id = self.next_id();
         let mut offset = self.read_offset;
         let mut stored = Vec::with_capacity(entries.len());
+        let mut byte_offsets = Vec::with_capacity(entries.len());
         let mut encoded_batch = Vec::new();
 
         for mut entry in entries {
             entry.id = next_id;
+            // Record the start offset of *this* entry's JSONL line before
+            // we extend the batch buffer. `byte_offset` is therefore the
+            // file position at which `entry`'s line will live once
+            // `pwrite` flushes the batch.
+            byte_offsets.push(offset.saturating_add(encoded_batch.len() as u64));
             let mut encoded = codec::encode_entry(&entry)?;
             encoded.push(b'\n');
             encoded_batch.extend_from_slice(&encoded);
@@ -355,7 +389,27 @@ impl TapeFile {
             self.push_entry(entry.clone());
         }
         self.read_offset = offset;
-        Ok(stored)
+
+        // `read_entries.len()` is the rolling total — see Decision 3 in
+        // specs/issue-2025-session-index-tape-derived-state.spec.md and
+        // the parent's "TotalEntries source" directive. Maintained
+        // consistently across every lifecycle path (`copy_to`, `copy_from`,
+        // `reset_cache`) by funnelling all mutations through `push_entry`
+        // / `read_entries.clear()`.
+        let total_after_full = self.read_entries.len() as i64;
+        let new_count = stored.len() as i64;
+        Ok(stored
+            .into_iter()
+            .zip(byte_offsets)
+            .enumerate()
+            .map(|(idx, (entry, byte_offset))| AppendOutcome {
+                entry,
+                byte_offset,
+                // The Nth entry in the batch has a `total_entries_after`
+                // of `total_after_full - (batch_len - 1 - idx)`.
+                total_entries_after: total_after_full - new_count + 1 + idx as i64,
+            })
+            .collect())
     }
 
     /// Move the active tape file into a timestamped `.bak` archive file.
@@ -625,7 +679,7 @@ impl WorkerState {
         kind: super::TapEntryKind,
         payload: serde_json::Value,
         metadata: Option<serde_json::Value>,
-    ) -> TapResult<TapEntry> {
+    ) -> TapResult<AppendOutcome> {
         let path = self.tape_path(tape);
         self.tape_files
             .entry(tape.to_owned())
@@ -836,13 +890,18 @@ impl FileTapeStore {
     }
 
     /// Append one entry to a tape, creating the tape file if needed.
+    ///
+    /// The returned [`AppendOutcome`] carries the assigned entry id, the
+    /// byte offset where this entry's JSONL line starts on disk, and the
+    /// total entry count after the append. See `AppendOutcome` for the
+    /// motivation (issue #2025 — synchronous session-index update).
     pub async fn append(
         &self,
         tape: &str,
         kind: super::TapEntryKind,
         payload: serde_json::Value,
         metadata: Option<serde_json::Value>,
-    ) -> TapResult<TapEntry> {
+    ) -> TapResult<AppendOutcome> {
         let tape = tape.to_owned();
         self.worker
             .call(move |state| state.append(&tape, kind, payload, metadata))

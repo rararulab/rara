@@ -152,7 +152,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use service::{TapeInfo, TapeSearchHit, TapeService, current_tape, read_turn_id};
-pub use store::FileTapeStore;
+pub use store::{AppendOutcome, FileTapeStore};
 pub use tree::{AnchorNode, AnchorTree, ForkEdge, SessionBranch};
 
 pub(crate) const TAPE_FILE_SUFFIX: &str = ".jsonl";

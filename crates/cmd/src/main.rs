@@ -19,6 +19,7 @@ mod build_info;
 mod chat;
 mod debug;
 mod login;
+mod session_index;
 mod setup;
 mod top;
 mod wechat;
@@ -48,6 +49,10 @@ enum Commands {
     Setup(setup::SetupCmd),
     Wechat(wechat::WechatCmd),
     Debug(debug::DebugCmd),
+    /// Maintenance commands for the SQLite-backed session index
+    /// (issue #2025). Today only `rebuild` is implemented; future
+    /// subcommands (e.g. `dump`, `verify`) will land here.
+    SessionIndex(session_index::SessionIndexCmd),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -438,6 +443,7 @@ fn main() -> Result<(), Whatever> {
         Commands::Setup(cmd) => build_runtime()?.block_on(cmd.run()),
         Commands::Wechat(cmd) => build_runtime()?.block_on(cmd.run()),
         Commands::Debug(cmd) => build_runtime()?.block_on(cmd.run()),
+        Commands::SessionIndex(cmd) => build_runtime()?.block_on(cmd.run()),
     }
 }
 

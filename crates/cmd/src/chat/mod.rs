@@ -560,17 +560,21 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
     let session_index = kernel_handle.session_index();
     let now = Utc::now();
     let new_entry = SessionEntry {
-        key:            SessionKey::new(),
-        title:          None,
-        model:          None,
+        key: SessionKey::new(),
+        title: None,
+        model: None,
         model_provider: None,
         thinking_level: None,
-        system_prompt:  None,
-        message_count:  0,
-        preview:        None,
-        metadata:       None,
-        created_at:     now,
-        updated_at:     now,
+        system_prompt: None,
+        total_entries: 0,
+        preview: None,
+        last_token_usage: None,
+        estimated_context_tokens: 0,
+        entries_since_last_anchor: 0,
+        anchors: Vec::new(),
+        metadata: None,
+        created_at: now,
+        updated_at: now,
     };
 
     let created = match session_index.create_session(&new_entry).await {
@@ -650,7 +654,7 @@ async fn handle_list_sessions(
                 i + 1,
                 short_key,
                 title,
-                entry.message_count,
+                entry.total_entries,
                 marker,
             )
         })
@@ -881,17 +885,21 @@ async fn get_or_create_cli_session(
 
     let now = Utc::now();
     let entry = SessionEntry {
-        key:            SessionKey::new(),
-        title:          Some(chat_id.to_owned()),
-        model:          None,
+        key: SessionKey::new(),
+        title: Some(chat_id.to_owned()),
+        model: None,
         model_provider: None,
         thinking_level: None,
-        system_prompt:  None,
-        message_count:  0,
-        preview:        None,
-        metadata:       None,
-        created_at:     now,
-        updated_at:     now,
+        system_prompt: None,
+        total_entries: 0,
+        preview: None,
+        last_token_usage: None,
+        estimated_context_tokens: 0,
+        entries_since_last_anchor: 0,
+        anchors: Vec::new(),
+        metadata: None,
+        created_at: now,
+        updated_at: now,
     };
     let created = session_index
         .create_session(&entry)

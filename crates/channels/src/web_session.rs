@@ -671,17 +671,21 @@ async fn apply_model_override(
         Ok(None) => {
             let now = chrono::Utc::now();
             let entry = rara_kernel::session::SessionEntry {
-                key:            *key,
-                title:          None,
-                model:          Some(model.to_owned()),
+                key: *key,
+                title: None,
+                model: Some(model.to_owned()),
                 model_provider: None,
                 thinking_level: None,
-                system_prompt:  None,
-                message_count:  0,
-                preview:        None,
-                metadata:       None,
-                created_at:     now,
-                updated_at:     now,
+                system_prompt: None,
+                total_entries: 0,
+                preview: None,
+                last_token_usage: None,
+                estimated_context_tokens: 0,
+                entries_since_last_anchor: 0,
+                anchors: Vec::new(),
+                metadata: None,
+                created_at: now,
+                updated_at: now,
             };
             if let Err(e) = session_index.create_session(&entry).await {
                 warn!(

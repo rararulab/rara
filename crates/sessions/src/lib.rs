@@ -23,4 +23,5 @@
 
 pub mod error;
 pub mod file_index;
+pub mod sqlite_index;
 pub mod types;

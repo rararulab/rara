@@ -85,6 +85,156 @@ pub struct PlatformBindingConfig {
 }
 
 // =========================================================================
+// TapeReconciler — adapter for `SqliteSessionIndex::reconcile_all`
+// =========================================================================
+
+/// Adapter wiring the kernel's `TapeService` into the
+/// [`ReconcileTape`](rara_sessions::sqlite_index::ReconcileTape) trait.
+/// Lives here (not in `rara-sessions`) to keep the sessions crate from
+/// depending on `TapeService`. Re-used by `crates/cmd` for the
+/// `rara session-index rebuild` rescue command.
+pub struct TapeReconciler {
+    pub tape: rara_kernel::memory::TapeService,
+}
+
+#[async_trait]
+impl rara_sessions::sqlite_index::ReconcileTape for TapeReconciler {
+    async fn read_tape(
+        &self,
+        key: &rara_kernel::session::SessionKey,
+    ) -> Option<rara_sessions::sqlite_index::TapeReport> {
+        let tape_name = key.to_string();
+        let info = self.tape.info(&tape_name).await.ok()?;
+        let entries = self.tape.entries(&tape_name).await.ok()?;
+        let preview = entries.iter().find_map(|e| {
+            if e.kind != rara_kernel::memory::TapEntryKind::Message {
+                return None;
+            }
+            if e.payload.get("role").and_then(|v| v.as_str()) != Some("user") {
+                return None;
+            }
+            extract_preview(&e.payload)
+        });
+
+        // Re-derive AnchorRef[] by streaming the JSONL on disk so each
+        // anchor's `byte_offset` is recovered. Use `rara_paths` to
+        // resolve the tape file path.
+        let anchors = derive_anchors_from_disk(&tape_name)
+            .await
+            .unwrap_or_default();
+
+        let updated_at = entries
+            .last()
+            .map(|e| {
+                let secs = e.timestamp.as_second();
+                let ns = e.timestamp.subsec_nanosecond();
+                let (s, n) = if ns < 0 {
+                    (secs.saturating_sub(1), ns.saturating_add(1_000_000_000))
+                } else {
+                    (secs, ns)
+                };
+                chrono::DateTime::<chrono::Utc>::from_timestamp(s, n as u32)
+                    .unwrap_or_else(chrono::Utc::now)
+            })
+            .unwrap_or_else(chrono::Utc::now);
+
+        Some(rara_sessions::sqlite_index::TapeReport {
+            total_entries: info.entries as i64,
+            updated_at,
+            last_token_usage: info.last_token_usage.map(|x| x as i64),
+            estimated_context_tokens: info.estimated_context_tokens as i64,
+            entries_since_last_anchor: info.entries_since_last_anchor as i64,
+            anchors,
+            preview,
+        })
+    }
+}
+
+fn extract_preview(payload: &serde_json::Value) -> Option<String> {
+    const MAX: usize = 200;
+    let s = payload
+        .get("content")
+        .and_then(|c| match c {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .find_map(|seg| seg.get("text").and_then(|v| v.as_str()).map(str::to_owned)),
+            _ => None,
+        })
+        .or_else(|| {
+            payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(MAX).collect())
+}
+
+/// Re-derive `AnchorRef[]` by scanning the on-disk JSONL line-by-line so
+/// each anchor's `byte_offset` reflects the actual file position.
+async fn derive_anchors_from_disk(tape_name: &str) -> Option<Vec<rara_kernel::session::AnchorRef>> {
+    use tokio::io::AsyncBufReadExt;
+    let path = rara_kernel::memory::find_tape_file(rara_paths::memory_dir(), tape_name)?;
+    let file = tokio::fs::File::open(&path).await.ok()?;
+    let mut reader = tokio::io::BufReader::new(file);
+    let mut anchors = Vec::new();
+    let mut offset: u64 = 0;
+    let mut line = String::new();
+    let mut entries_in_segment: i64 = 0;
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line).await.ok()?;
+        if read == 0 {
+            break;
+        }
+        let line_start = offset;
+        offset = offset.saturating_add(read as u64);
+
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry: rara_kernel::memory::TapEntry = match serde_json::from_str(trimmed) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if entry.kind == rara_kernel::memory::TapEntryKind::Anchor {
+            entries_in_segment += 1;
+            let name = entry
+                .payload
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .to_owned();
+            let secs = entry.timestamp.as_second();
+            let ns = entry.timestamp.subsec_nanosecond();
+            let (s, n) = if ns < 0 {
+                (secs.saturating_sub(1), ns.saturating_add(1_000_000_000))
+            } else {
+                (secs, ns)
+            };
+            let ts = chrono::DateTime::<chrono::Utc>::from_timestamp(s, n as u32)
+                .unwrap_or_else(chrono::Utc::now);
+            anchors.push(rara_kernel::session::AnchorRef {
+                anchor_id: entry.id,
+                byte_offset: line_start,
+                name,
+                timestamp: ts,
+                entry_count_in_segment: entries_in_segment,
+            });
+            entries_in_segment = 0;
+        } else {
+            entries_in_segment += 1;
+        }
+    }
+    Some(anchors)
+}
+
+// =========================================================================
 // boot() — main entry point
 // =========================================================================
 
@@ -130,14 +280,17 @@ pub(crate) async fn boot(
         });
     }
 
-    // -- session index (tape-centric) --------------------------------------
+    // -- session index (SQLite-backed, issue #2025) ------------------------
 
-    let session_index: Arc<dyn rara_kernel::session::SessionIndex> = Arc::new(
-        rara_sessions::file_index::FileSessionIndex::new(rara_paths::sessions_dir().join("index"))
-            .await
-            .whatever_context("Failed to initialize file session index")?,
-    );
-    info!("FileSessionIndex initialized");
+    let json_index_dir = rara_paths::sessions_dir().join("index");
+    let sqlite_index = std::sync::Arc::new(rara_sessions::sqlite_index::SqliteSessionIndex::new(
+        diesel_pools.clone(),
+    ));
+    if let Err(e) = sqlite_index.ensure_migrated_from(&json_index_dir).await {
+        tracing::warn!(?json_index_dir, %e, "session index legacy migration failed");
+    }
+    let session_index: Arc<dyn rara_kernel::session::SessionIndex> = sqlite_index.clone();
+    info!("SqliteSessionIndex initialized");
 
     // -- tape store --------------------------------------------------------
 
@@ -147,8 +300,32 @@ pub(crate) async fn boot(
             .await
             .whatever_context("Failed to initialize FileTapeStore")?,
         diesel_pools.clone(),
-    );
-    info!("TapeService initialized (FTS5 enabled)");
+    )
+    .with_session_index(session_index.clone());
+    info!("TapeService initialized (FTS5 + SessionIndex wired)");
+
+    // Reconcile derived-state rows against on-disk tape contents
+    // (Decision 10). Spawned in the background so a large tape (or a
+    // slow disk) cannot stall boot — append-time correctness is
+    // independent of reconciler timing, so a delayed repair is
+    // strictly better than a delayed boot.
+    {
+        let reconciler = TapeReconciler {
+            tape: tape_service.clone(),
+        };
+        let sqlite_index_for_recon = sqlite_index.clone();
+        tokio::spawn(async move {
+            match sqlite_index_for_recon.reconcile_all(reconciler).await {
+                Ok(repaired) if repaired > 0 => {
+                    info!(repaired, "session index reconciled in background");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(%e, "session index reconciliation failed");
+                }
+            }
+        });
+    }
 
     // -- skills registry ---------------------------------------------------
 

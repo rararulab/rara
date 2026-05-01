@@ -62,7 +62,7 @@ async fn lane1_no_llm_tape_write_persists_without_agent_turn() {
         )
         .await
         .expect("append note");
-    assert_eq!(written.kind, TapEntryKind::Note);
+    assert_eq!(written.entry.kind, TapEntryKind::Note);
 
     // Tape contains exactly the one short-circuit entry we wrote.
     let entries = tk

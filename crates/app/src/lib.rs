@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod boot;
+pub use boot::TapeReconciler;
 pub mod config_sync;
 pub mod flatten;
 pub mod gateway;
@@ -1463,6 +1464,21 @@ async fn init_infra(config: &AppConfig) -> Result<DBStore, Whatever> {
 
     info!("Database initialized");
     Ok(db_store)
+}
+
+/// Open the SQLite reader/writer pools for an out-of-process CLI tool
+/// (e.g. `rara session-index rebuild`). Runs the same `init_infra`
+/// migration step as boot so the binary can be invoked against a
+/// freshly-checked-out repo without first starting the server.
+///
+/// The returned `DieselSqlitePools` is suitable for handing to
+/// [`rara_sessions::sqlite_index::SqliteSessionIndex::new`] or any other
+/// store that takes the shared pool.
+pub async fn open_pools_for_cli(
+    config: &AppConfig,
+) -> Result<yunara_store::diesel_pool::DieselSqlitePools, Whatever> {
+    let store = init_infra(config).await?;
+    Ok(store.pools().clone())
 }
 
 // ---------------------------------------------------------------------------

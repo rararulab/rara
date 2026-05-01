@@ -75,6 +75,13 @@ pub enum SessionError {
     /// A JSON serialization/deserialization error occurred.
     #[snafu(display("json error: {source}"))]
     Json { source: serde_json::Error },
+
+    /// A database error from the session-index backend (diesel/SQLite,
+    /// connection pool, constraint violation, etc.). Distinct from
+    /// `FileIo` so ops can tell a runtime DB failure apart from a JSONL
+    /// write error in `crates/kernel/src/memory/`.
+    #[snafu(display("session index database error: {message}"))]
+    Database { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -136,17 +143,20 @@ pub enum ThinkingLevel {
 /// A persisted chat session with metadata.
 ///
 /// Each session is uniquely identified by its [`SessionKey`] and tracks
-/// message count, model configuration, and a short preview of the
-/// conversation for UI display.
+/// model configuration plus a set of tape-derived fields that mirror
+/// [`crate::memory::TapeInfo`]. The derived fields are updated
+/// synchronously by `TapeService::append` on every entry written to the
+/// session's tape (see issue #2025); reads of `SessionEntry` therefore
+/// see numbers that match the on-disk JSONL without re-parsing it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     /// Unique session key (serves as primary key in the database).
-    pub key:            SessionKey,
+    pub key: SessionKey,
     /// Human-readable title / label shown in session lists.
-    pub title:          Option<String>,
+    pub title: Option<String>,
     /// LLM model name used for this session (e.g. `"gpt-4o"`,
     /// `"claude-sonnet-4-5-20250929"`).
-    pub model:          Option<String>,
+    pub model: Option<String>,
     /// Provider identifier paired with [`model`](Self::model) (e.g.
     /// `"anthropic"`, `"openai"`). Lets the UI reconstruct a full
     /// `Model<any>` via `getModel(provider, id)` when a session is
@@ -159,19 +169,99 @@ pub struct SessionEntry {
     pub thinking_level: Option<ThinkingLevel>,
     /// Optional system prompt override. When `None`, the service-level
     /// default system prompt is used.
-    pub system_prompt:  Option<String>,
-    /// Running total of messages in this session.
-    pub message_count:  i64,
+    pub system_prompt: Option<String>,
+    /// Total number of `TapEntry` records for this session's tape (mirrors
+    /// `TapeInfo.entries`). Replaced the legacy `message_count` field in
+    /// issue #2025: that field counted only `Message`-kind entries and was
+    /// never updated post-creation, which produced a permanent `0` on the
+    /// HTTP `GET /api/v1/chat/sessions` response.
+    ///
+    /// Wire compat: serializes/deserializes as JSON `message_count` so the
+    /// existing web UI (`web/src/api/types.ts`) and Telegram DTO keep
+    /// working unchanged. `total_entries` is also accepted on read for
+    /// forward-compat with future renames.
+    #[serde(rename = "message_count", alias = "total_entries", default)]
+    pub total_entries: i64,
     /// Short preview text (typically the first user message, truncated)
     /// for display in session listings.
-    pub preview:        Option<String>,
+    pub preview: Option<String>,
+    /// Last observed `total_tokens` value from an `llm.run` event in the
+    /// session's tape. `None` until the first LLM call lands.
+    #[serde(default)]
+    pub last_token_usage: Option<i64>,
+    /// Estimated current context-window token count (mirrors
+    /// `TapeInfo.estimated_context_tokens`).
+    #[serde(default)]
+    pub estimated_context_tokens: i64,
+    /// Number of entries appended after the most recent `Anchor`-kind
+    /// entry (mirrors `TapeInfo.entries_since_last_anchor`). Resets to
+    /// `0` when a new anchor lands.
+    #[serde(default)]
+    pub entries_since_last_anchor: i64,
+    /// Anchors written to this session's tape, oldest first. Each entry
+    /// carries the byte offset where the anchor's JSONL line starts so
+    /// cold-start "seek to last anchor" can avoid re-parsing the tape.
+    #[serde(default)]
+    pub anchors: Vec<AnchorRef>,
     /// Arbitrary JSON metadata for client-specific extensions.
-    pub metadata:       Option<serde_json::Value>,
+    pub metadata: Option<serde_json::Value>,
     /// When the session was first created.
-    pub created_at:     DateTime<Utc>,
-    /// When the session was last modified (message appended, metadata
-    /// changed, etc.).
-    pub updated_at:     DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    /// When the session was last modified — meaning, since issue #2025,
+    /// "the timestamp of the most recent tape append for this session".
+    /// Updated in-band with derived-state writes, NOT a stale create-time
+    /// snapshot.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One anchor entry stored in [`SessionEntry::anchors`].
+///
+/// `byte_offset` is captured at append time as the JSONL file position
+/// where the anchor's line begins (i.e. equal to the tape file's write
+/// cursor immediately before the `pwrite` for that line). Persisting it
+/// here lets cold-start consumers seek to the last anchor and parse only
+/// the trailing `tail_size_in_bytes`, rather than the whole tape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnchorRef {
+    /// Tape entry id of the `Anchor`-kind entry.
+    pub anchor_id:              u64,
+    /// Byte offset of the anchor's JSONL line in the tape file.
+    pub byte_offset:            u64,
+    /// Anchor name from the `payload.name` field.
+    pub name:                   String,
+    /// Timestamp the anchor was persisted.
+    pub timestamp:              DateTime<Utc>,
+    /// Number of entries in `(prev_anchor_id, anchor_id]`. Lets the UI
+    /// render chapter sizes without a follow-up tape query.
+    pub entry_count_in_segment: i64,
+}
+
+/// Update payload carrying the tape-derived state fields that
+/// `TapeService::append` recomputes on every append. Splitting this from
+/// the "config fields" half of [`SessionEntry`] (`title`,
+/// `system_prompt`, `model`, `thinking_level`, `metadata`) prevents the
+/// hot append path from racing user-driven PATCH requests for those
+/// fields.
+#[derive(Debug, Clone, bon::Builder)]
+pub struct SessionDerivedState {
+    /// New value for `total_entries`.
+    pub total_entries:             i64,
+    /// Append timestamp — assigned to `updated_at`.
+    pub updated_at:                DateTime<Utc>,
+    /// New value for `last_token_usage` (typically only changes when an
+    /// `llm.run` event lands; carry the latest known value otherwise).
+    pub last_token_usage:          Option<i64>,
+    /// New value for `estimated_context_tokens`.
+    pub estimated_context_tokens:  i64,
+    /// New value for `entries_since_last_anchor`.
+    pub entries_since_last_anchor: i64,
+    /// Full anchor list in append order. Pass the existing list with the
+    /// new anchor appended when the just-written entry is an `Anchor`;
+    /// pass the unchanged list otherwise.
+    pub anchors:                   Vec<AnchorRef>,
+    /// Optional preview to set if the session does not already have one.
+    /// `None` means "leave preview alone".
+    pub preview:                   Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +326,26 @@ pub trait SessionIndex: Send + Sync + 'static {
 
     /// Update mutable session fields.
     async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError>;
+
+    /// Update only the tape-derived state fields of a session.
+    ///
+    /// Called by `TapeService::append` after every successful tape write
+    /// for sessions whose tape name matches a [`SessionKey`]. The default
+    /// implementation is a no-op so in-memory test indices and adapters
+    /// that do not persist derived state keep compiling — only the real
+    /// SQLite-backed index needs to honour the call.
+    ///
+    /// Implementations MUST treat a missing session as a silent no-op
+    /// (rather than `NotFound`): the spawn path may write the first tape
+    /// entry before `create_session` lands for back-compat code paths,
+    /// and the boot reconciler is the safety net.
+    async fn update_session_derived(
+        &self,
+        _key: &SessionKey,
+        _derived: &SessionDerivedState,
+    ) -> Result<(), SessionError> {
+        Ok(())
+    }
 
     /// Delete a session.
     async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError>;
@@ -1286,5 +1396,73 @@ mod state_transition_tests {
         // Not inserted — walk_to_root returns the input key as a safe fallback.
         let orphan = SessionKey::new();
         assert_eq!(crate::agent::walk_to_root(&table, orphan), orphan);
+    }
+}
+
+#[cfg(test)]
+mod wire_compat_tests {
+    //! Issue #2025 — `SessionEntry.total_entries` must serialize as JSON
+    //! `message_count` so the existing web UI (`web/src/api/types.ts`)
+    //! and Telegram DTO keep round-tripping unchanged.
+    use chrono::Utc;
+
+    use super::*;
+
+    fn sample_entry() -> SessionEntry {
+        SessionEntry {
+            key: SessionKey::new(),
+            title: Some("t".into()),
+            model: None,
+            model_provider: None,
+            thinking_level: None,
+            system_prompt: None,
+            total_entries: 7,
+            preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: vec![],
+            metadata: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn total_entries_serializes_as_message_count() {
+        let entry = sample_entry();
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(
+            json.contains("\"message_count\":7"),
+            "expected wire field `message_count`, got: {json}"
+        );
+        assert!(
+            !json.contains("\"total_entries\""),
+            "wire field `total_entries` must not appear (would break existing UI), got: {json}"
+        );
+    }
+
+    #[test]
+    fn message_count_deserializes_into_total_entries() {
+        let entry = sample_entry();
+        let mut json = serde_json::to_value(&entry).expect("to_value");
+        json.as_object_mut()
+            .unwrap()
+            .insert("message_count".to_owned(), serde_json::Value::from(42_i64));
+        let parsed: SessionEntry = serde_json::from_value(json).expect("from_value");
+        assert_eq!(parsed.total_entries, 42);
+    }
+
+    #[test]
+    fn total_entries_alias_also_deserializes() {
+        // Forward-compat: a producer that emits the Rust field name
+        // (e.g. a future client) must still parse on read.
+        let entry = sample_entry();
+        let mut json = serde_json::to_value(&entry).expect("to_value");
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("message_count");
+        obj.insert("total_entries".to_owned(), serde_json::Value::from(99_i64));
+        let parsed: SessionEntry = serde_json::from_value(json).expect("from_value");
+        assert_eq!(parsed.total_entries, 99);
     }
 }

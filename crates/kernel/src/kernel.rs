@@ -1475,17 +1475,21 @@ impl Kernel {
             None => {
                 let now = chrono::Utc::now();
                 let entry = crate::session::SessionEntry {
-                    key:            SessionKey::new(),
-                    title:          None,
-                    model:          None,
+                    key: SessionKey::new(),
+                    title: None,
+                    model: None,
                     model_provider: None,
                     thinking_level: None,
-                    system_prompt:  None,
-                    message_count:  0,
-                    preview:        None,
-                    metadata:       None,
-                    created_at:     now,
-                    updated_at:     now,
+                    system_prompt: None,
+                    total_entries: 0,
+                    preview: None,
+                    last_token_usage: None,
+                    estimated_context_tokens: 0,
+                    entries_since_last_anchor: 0,
+                    anchors: Vec::new(),
+                    metadata: None,
+                    created_at: now,
+                    updated_at: now,
                 };
                 let session = match self.io.session_index().create_session(&entry).await {
                     Ok(s) => s,
@@ -1715,17 +1719,21 @@ impl Kernel {
             None => {
                 let now = chrono::Utc::now();
                 let entry = crate::session::SessionEntry {
-                    key:            SessionKey::new(),
-                    title:          None,
-                    model:          None,
+                    key: SessionKey::new(),
+                    title: None,
+                    model: None,
                     model_provider: None,
                     thinking_level: None,
-                    system_prompt:  None,
-                    message_count:  0,
-                    preview:        None,
-                    metadata:       None,
-                    created_at:     now,
-                    updated_at:     now,
+                    system_prompt: None,
+                    total_entries: 0,
+                    preview: None,
+                    last_token_usage: None,
+                    estimated_context_tokens: 0,
+                    entries_since_last_anchor: 0,
+                    anchors: Vec::new(),
+                    metadata: None,
+                    created_at: now,
+                    updated_at: now,
                 };
                 let session = match self.io.session_index().create_session(&entry).await {
                     Ok(s) => s,

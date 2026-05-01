@@ -44,7 +44,7 @@ async fn tape_store_uses_serde_codec_by_default() {
         )
         .await
         .expect("append");
-    assert_eq!(appended.kind, TapEntryKind::Message);
+    assert_eq!(appended.entry.kind, TapEntryKind::Message);
 
     let read = store
         .read("test-tape")

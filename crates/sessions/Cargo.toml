@@ -13,12 +13,18 @@ description = "Session metadata persistence — file-based session index"
 
 [dependencies]
 async-trait.workspace = true
+bb8 = "0.9"
+chrono = { workspace = true }
+diesel = { workspace = true }
+diesel-async = { workspace = true }
 rara-kernel = { workspace = true }
+rara-model = { workspace = true }
 snafu = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
+yunara-store = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
