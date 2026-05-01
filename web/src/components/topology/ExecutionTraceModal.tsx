@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { ApiError } from '@/api/client';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,21 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useExecutionTrace } from '@/hooks/use-trace-fetch';
+
+/**
+ * Detect the seq-divergence 404 emitted by `get_execution_trace` when
+ * the backend's two seq counters drift apart on a multi-tool turn (see
+ * spec issue 2032 Decisions). The backend payload is the literal string
+ * `"user message at seq <n> has no rara_turn_id metadata"`. Until the
+ * backend is fixed, surface a friendly explanation rather than the raw
+ * error body — every assistant turn with parallel tool results would
+ * otherwise show a confusing internal error.
+ */
+function isSeqDivergence404(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  if (err.status !== 404) return false;
+  return /rara_turn_id metadata/i.test(err.message);
+}
 
 export interface ExecutionTraceModalProps {
   /** Session key whose trace endpoint we hit. */
@@ -61,11 +77,16 @@ export function ExecutionTraceModal({
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto text-sm">
           {isLoading && <div className="text-muted-foreground">Loading…</div>}
-          {isError && (
-            <div role="alert" className="text-destructive">
-              Failed to load trace: {error instanceof Error ? error.message : String(error)}
-            </div>
-          )}
+          {isError &&
+            (isSeqDivergence404(error) ? (
+              <div role="alert" className="text-muted-foreground">
+                Trace data is not available for this turn yet.
+              </div>
+            ) : (
+              <div role="alert" className="text-destructive">
+                Failed to load trace: {error instanceof Error ? error.message : String(error)}
+              </div>
+            ))}
           {data && (
             <div className="space-y-3">
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1">

@@ -18,6 +18,7 @@ import { useMemo, useState } from 'react';
 
 import { CascadeModal } from './CascadeModal';
 import { ExecutionTraceModal } from './ExecutionTraceModal';
+import { RaraTurnCardActionsMenu } from './RaraTurnCardActionsMenu';
 import { SpawnMarker } from './SpawnMarker';
 import type { TurnCardData } from './TurnCard';
 
@@ -123,12 +124,23 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
   // persisted seq, so leave the slots undefined for live turns and for
   // any turn whose seq we have not yet observed.
   const inspectable = turn.finalSeq !== null && !turn.inFlight;
+  // Replace the vendor's `TurnCardActionsMenu` with our own dropdown.
+  // The vendor menu wraps the trigger in `SimpleDropdown`, whose
+  // `setItemRef` callback runs `setHighlightedId` during a child item's
+  // mount render — that's a vendor bug (issue 2032). `renderActionsMenu`
+  // lets us bypass `SimpleDropdown` without touching vendor code.
   const inspectProps = inspectable
     ? {
         onOpenDetails: () => setTraceOpen(true),
-        // Cascade is per-turn, so any activity row opens the same modal.
-        // The vendor passes the activity to the callback; we ignore it.
-        onOpenActivityDetails: () => setCascadeOpen(true),
+        // Cascade only makes sense on rows backed by a real tool call.
+        // Vendor passes the activity for both `tool` and `intermediate`
+        // rows, so we filter here. `thinking` rows have no cascade.
+        onOpenActivityDetails: (activity: ActivityItem) => {
+          if (activity.type === 'tool') setCascadeOpen(true);
+        },
+        renderActionsMenu: () => (
+          <RaraTurnCardActionsMenu onOpenDetails={() => setTraceOpen(true)} />
+        ),
       }
     : {};
 
