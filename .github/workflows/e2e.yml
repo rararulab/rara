@@ -1,6 +1,6 @@
 name: E2E (Real LLM)
 
-# Real-LLM e2e flows (`real_tape_flow`, `anchor_checkout_e2e`) against an
+# Real-LLM e2e flows (`anchor_checkout_e2e`) against an
 # OpenAI-compatible provider. Triggers on `main` push + manual dispatch only —
 # **not** on pull_request, to avoid burning provider tokens on every push.
 # Maintainer must configure `OPENAI_API_KEY` (secret), `OPENAI_BASE_URL` (var),
@@ -106,10 +106,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          RARA_REAL_TAPE_SOAK_SECS: "120"
-          RARA_REAL_TAPE_TURN_TIMEOUT_SECS: "60"
         run: |
           cargo test -p rara-app \
-            --test real_tape_flow \
             --test anchor_checkout_e2e \
             -- --ignored

@@ -61,7 +61,7 @@ async fn wait_for_turn_count(
 #[ignore = "uses the real LLM provider — run with: cargo test -p rara-app --test \
             anchor_checkout_e2e -- --ignored --nocapture"]
 async fn anchor_checkout_roundtrip() {
-    // 1. Setup — same pattern as real_tape_flow.rs
+    // 1. Setup — load workspace config + start the kernel under test.
     common_telemetry::logging::init_default_ut_logging();
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::env::set_current_dir(&workspace_root).expect("should switch to workspace root");
