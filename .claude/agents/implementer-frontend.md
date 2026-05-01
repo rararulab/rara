@@ -34,9 +34,10 @@ each runs only its own gate.)
 
 ## Required reads (in addition to the base)
 
-- `docs/guides/debug.md` — the remote-backend + local-frontend topology,
-  the `VITE_API_URL=http://10.0.0.183:25555 bun run dev` dev loop, and
-  log locations for reproducing API issues end-to-end.
+- `docs/guides/debug.md` — local-first dev model: `just run` + `cd web
+  && bun run dev` on your own machine is the default. Remote
+  (`raratekiAir`, `10.0.0.183`) is **production**, not a dev backend —
+  only point `VITE_API_URL` there to reproduce a production-only bug.
 - `web/AGENT.md` if it exists. UI architecture invariants live here.
 - `docs/guides/code-comments.md` — English-only, applies to TS/TSX too.
 
@@ -85,17 +86,26 @@ Intermediate commits during exploration do not need to pass; the **final**
 commit must pass all of the above. Do not use `--no-verify` to bypass
 hooks — fix the underlying issue.
 
-## Local dev loop
+## Local dev loop (the default)
+
+Two processes, both on your machine:
 
 ```bash
-cd web
-VITE_API_URL=http://10.0.0.183:25555 bun run dev
+# terminal 1 — backend (gateway supervises rara server)
+just run
+
+# terminal 2 — frontend (vite proxies /api to localhost:25555)
+cd web && bun run dev
 ```
 
-Open `http://localhost:5173`. The vite proxy forwards `/api` (REST + WS)
-to the remote backend on `raratekiAir` — no CORS needed, no local rara
-server required. See `docs/guides/debug.md` for backend reachability
-checks, log tailing, and websocket debugging.
+Open `http://localhost:5173`. Click through the affected path before
+declaring the change done — "open the dev server before claiming a UI
+change is done" is non-negotiable.
+
+**Only** point at production (`VITE_API_URL=http://10.0.0.183:25555 bun
+run dev`) when you are reproducing a bug that does not repro locally —
+production is not the dev backend. See `docs/guides/debug.md` for the
+full local-vs-production split, log locations, and websocket debugging.
 
 ## Sibling-file regression scan
 
@@ -120,8 +130,8 @@ visual change.** Paste:
    and `bun run lint`, verbatim.
 2. **Before/after screenshots.** Use the `gstack`, `browse`, or
    `plugin:playwright` skill (your choice — whichever is already
-   configured) against the local vite dev server pointed at the remote
-   backend. Capture:
+   configured) against the **local** vite dev server (`just run` +
+   `bun run dev`, both on your machine). Capture:
    - The page or component **before** your change (from a checkout of
      `origin/main`, or from the pre-change commit).
    - The same page / component **after** your change.
