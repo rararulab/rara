@@ -17,10 +17,12 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { TurnCard, buildTurnsFromEvents } from './TurnCard';
+import { TurnCard, buildTurnsFromEvents, buildTurnsFromHistory } from './TurnCard';
 
+import type { ChatMessageData } from '@/api/types';
 import { useChatModels } from '@/hooks/use-chat-models';
 import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
+import { useSessionHistory } from '@/hooks/use-session-history';
 import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 import { UserMessageBubble } from '~vendor/components/chat/UserMessageBubble';
 import { InputContainer } from '~vendor/components/input/InputContainer';
@@ -31,6 +33,19 @@ import { EscapeInterruptProvider } from '~vendor/context/EscapeInterruptContext'
  *  rara only ever resolves one default provider server-side today; the
  *  picker just needs *a* connection to attach the model list to. */
 const RARA_CONNECTION_SLUG = 'rara';
+
+/**
+ * Extract a plain-text user prompt from a persisted `ChatMessage`. The
+ * backend may serialise content as either a bare string or a list of
+ * multimodal blocks; the topology timeline shows text only.
+ */
+function extractUserText(msg: ChatMessageData): string {
+  if (typeof msg.content === 'string') return msg.content;
+  return msg.content
+    .map((block) => (block.type === 'text' ? block.text : ''))
+    .filter((s) => s.length > 0)
+    .join('');
+}
 
 export interface TimelineViewProps {
   /** Session key whose events should be rendered. Workers (children) flip
@@ -118,14 +133,64 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
   const currentModel = pickedModel ?? defaultModelIdString ?? '';
 
+  const history = useSessionHistory(viewSessionKey);
+  const historyMessages = history.data;
+
+  // Boundary seq for live/history dedupe. `ChatMessage.seq` (per-tape
+  // counter, assigned in
+  // `crates/extensions/backend-admin/src/chat/service.rs::tap_entries_to_chat_messages`)
+  // and `TopologyEventEntry.seq` (per-WS-connection frame counter, see
+  // `use-topology-subscription`) are NOT the same axis. They are both
+  // monotonic per session, so seq-based filtering is at worst
+  // conservative — it may drop a live frame that was not in history,
+  // which then re-renders on the next WS push. Under-dropping (a
+  // duplicate rendering at the boundary) is the bug we are preventing,
+  // so conservative is the safe direction until the two seq spaces are
+  // unified.
+  // TODO: seq-unification — see issue #2013 decisions section.
+  const lastHistorySeq = useMemo(() => {
+    if (!historyMessages || historyMessages.length === 0) return 0;
+    return historyMessages.reduce((max, m) => (m.seq > max ? m.seq : max), 0);
+  }, [historyMessages]);
+
+  const historyTurns = useMemo(
+    () => (historyMessages ? buildTurnsFromHistory(historyMessages) : []),
+    [historyMessages],
+  );
+
   const agentTurns = useMemo(() => {
     const sessionEvents = events
       .filter((e) => e.sessionKey === viewSessionKey)
+      .filter((e) => e.seq > lastHistorySeq)
       .map((e) => ({ seq: e.seq, event: e.event }));
     return buildTurnsFromEvents(sessionEvents);
-  }, [events, viewSessionKey]);
+  }, [events, viewSessionKey, lastHistorySeq]);
 
-  const userTurns = userTurnsBySession[viewSessionKey] ?? [];
+  // Historical user prompts merged with the optimistic local prompts the
+  // editor pushes on submit. Historical entries come first in seq order;
+  // optimistic entries follow because they were typed after the page
+  // loaded.
+  const historyUserBubbles = useMemo<{ id: string; text: string; t: number }[]>(() => {
+    if (!historyMessages) return [];
+    return historyMessages
+      .filter((m) => m.role === 'user')
+      .map((m) => ({
+        id: `history-user-${String(m.seq)}`,
+        text: extractUserText(m),
+        t: 0,
+      }))
+      .filter((u) => u.text.length > 0);
+  }, [historyMessages]);
+
+  const userTurns = useMemo(
+    () => [...historyUserBubbles, ...(userTurnsBySession[viewSessionKey] ?? [])],
+    [historyUserBubbles, userTurnsBySession, viewSessionKey],
+  );
+
+  // Combine persisted assistant turns (from `/messages`) with live agent
+  // turns (from the topology WS). History always appears first because
+  // it is, by definition, the past — live frames extend the tail.
+  const allAgentTurns = useMemo(() => [...historyTurns, ...agentTurns], [historyTurns, agentTurns]);
 
   // Interleaving by wall-clock arrival time would require timestamps on
   // agent turns, which the current TurnCard reducer doesn't track. Until
@@ -134,13 +199,13 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   // conversation. Subsequent prompts will appear after the latest agent
   // turn in practice because agent turns auto-scroll on append.
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const lastAgentTurnId = agentTurns.at(-1)?.id;
+  const lastAgentTurnId = allAgentTurns.at(-1)?.id;
   const userCount = userTurns.length;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [agentTurns.length, lastAgentTurnId, userCount]);
+  }, [allAgentTurns.length, lastAgentTurnId, userCount]);
 
   const handleSubmit = useCallback(
     (message: string) => {
@@ -170,7 +235,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
-        {agentTurns.length === 0 && userTurns.length === 0 ? (
+        {allAgentTurns.length === 0 && userTurns.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Waiting for the next turn on <span className="ml-1 font-mono">{viewSessionKey}</span>…
           </div>
@@ -181,12 +246,20 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
                 <UserMessageBubble content={u.text} />
               </div>
             ))}
-            {agentTurns.map((turn) => (
+            {allAgentTurns.map((turn) => (
               <TurnCard key={turn.id} turn={turn} />
             ))}
           </>
         )}
       </div>
+      {history.isError && (
+        <div
+          role="alert"
+          className="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300"
+        >
+          Failed to load conversation history. Live chat still works — refresh to retry.
+        </div>
+      )}
       <div className="pt-2">
         {/* Vendor InputContainer reaches for an EscapeInterruptProvider
          *  (double-Esc interrupt UX) and a radix TooltipProvider (toolbar

@@ -35,8 +35,15 @@ the old free-text "root session key" input with a clickable list.
   user did not pick. User-message rendering is **optimistic**: the typed
   text is added to local state on submit so it appears before the
   backend round-trip; the kernel does not echo user prompts back as
-  topology events today, and history-on-reload is deferred (no
-  `GET /messages` endpoint yet).
+  topology events today. History-on-reload fetches
+  `GET /api/v1/chat/sessions/{key}/messages` via `useSessionHistory` and
+  reduces persisted assistant turns through `buildTurnsFromHistory`,
+  while persisted user messages render as `UserMessageBubble`s ahead of
+  any optimistic prompts. Live events with `seq <= max(history.seq)` are
+  filtered out before the live reducer runs to avoid double-rendering at
+  the boundary — this is conservative because `ChatMessage.seq` (per-tape)
+  and `TopologyEventEntry.seq` (per-WS-connection) are distinct monotonic
+  counters; full unification is tracked in issue #2013.
 - `TurnCard.tsx` — one turn = one card. Owns the reducer
   `buildTurnsFromEvents` that folds a flat `WebFrame` stream into
   `TurnCardData[]` (text, reasoning, tool calls, markers, metrics,
