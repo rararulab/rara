@@ -7,6 +7,12 @@ name: zig-codec-smoke
 # required CI checks. The job exists so that a future maintainer can
 # look at recent runs and answer "does Zig still build on Linux?"
 # without spinning up a runner manually.
+#
+# The linux job runs on `arc-runner-set` so it inherits the clang + mold
+# baseline from `rust.yml`'s runner image. `.cargo/config.toml` forces
+# `linker = "clang"` + `-fuse-ld=mold` for `x86_64-unknown-linux-gnu`
+# (see #2010), and GitHub-hosted `ubuntu-latest` lacks mold, so this job
+# was failing on every PR until switched to the self-hosted runner (#2047).
 
 on:
   pull_request:
@@ -27,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, arc-runner-set]
     steps:
       - uses: actions/checkout@v4
 
