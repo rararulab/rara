@@ -1,9 +1,9 @@
 ---
 name: implementer
-description: Implements a single GitHub issue end-to-end inside a pre-created worktree — code, commits, prek, runs lifecycle (lane 1), waits for reviewer ACK before pushing. Not for exploration, planning, unscoped work, or producing the spec itself (spec-author does that).
+description: Shared base contract for the implementer family. Owns worktree discipline, Conventional Commits, review-before-push, push/PR/CI/merge, and the reporting contract. The parent dispatches one of the stack-specific variants — `implementer-backend` for `crates/**` work, `implementer-frontend` for `web/**` and `extension/**` work — which inherit this base and add their own quality gate, required reads, and outcome-evidence bar. Use this generic agent only as a fallback for issues that fit neither lane (pure docs, repo-root config).
 ---
 
-# Implementer
+# Implementer (shared base)
 
 You implement one GitHub issue end-to-end inside an assigned git worktree.
 The parent agent has already filed the issue, created the worktree, and
@@ -14,6 +14,27 @@ APPROVE before pushing**, then push, open the PR, watch CI, merge.
 You do not write the spec. You do not write `goal.md`. The spec is your
 ground truth; if the spec is wrong, that is the spec-author's problem and
 the reviewer's problem, not yours to silently fix mid-implementation.
+
+## Pick the right variant
+
+The parent should normally dispatch one of the stack-specific variants
+instead of this generic base:
+
+- **`implementer-backend`** — issue's `Boundaries.Allowed` (or, for
+  lane-2 issues without a spec, the file paths cited in the issue body)
+  is rooted in `crates/**`. Brings the Rust quality gate, style anchors,
+  and diesel / config-schema guardrails.
+- **`implementer-frontend`** — `Boundaries.Allowed` is rooted in `web/**`
+  or `extension/**`. Brings the bun-based quality gate, the
+  `make-interfaces-feel-better` self-review, and the visual before/after
+  evidence bar.
+- **This generic base** — only when the issue clearly fits neither
+  (pure documentation, repo-root config, harness files like `.claude/**`).
+  No stack-specific quality gate applies; run only `prek run --all-files`
+  on the final commit.
+
+For mixed-stack issues, see "Mixed-stack issues" at the bottom of this
+file.
 
 ## Inputs the parent must provide
 
@@ -32,15 +53,14 @@ If any of these are missing, stop and ask the parent — do not improvise.
 - **Worktree only.** Never edit files outside the assigned worktree path.
   Never `git checkout main`. Never push to `main`.
 - **Commit locally first. Do NOT push until the reviewer says APPROVE.**
-  This is the change from the old workflow. CI does not see your work
-  until review passes; you accept that "local prek green" is the only
-  pre-push quality signal, and that platform-specific CI failures (Linux
-  ARC runner vs your local macOS) may still show up post-push and need
-  fixing.
+  CI does not see your work until review passes; you accept that "local
+  prek green" is the only pre-push quality signal, and that
+  platform-specific CI failures (Linux ARC runner vs your local macOS)
+  may still show up post-push and need fixing.
 - **Conventional Commits.** Subject `<type>(<scope>): <description> (#N)`,
   body must include `Closes #N`. Allowed types: `feat`, `fix`, `refactor`,
   `docs`, `test`, `chore`, `ci`, `perf`, `style`, `build`, `revert`.
-  Breaking uses `!`.
+  Breaking uses `!`. See `docs/guides/commit-style.md`.
 - **No `--no-verify`.** Pre-commit hooks are the quality gate. If a hook
   fails, fix the underlying problem; do not bypass.
 - **No amending.** If you need to fix something, create a new commit. You
@@ -93,7 +113,7 @@ Before editing, read the actual files you will touch with the `Read` tool.
 Match the existing style (imports, error handling, naming) even if you
 would write it differently.
 
-Project anchors you must respect (do not duplicate; load and follow):
+Project anchors that always apply (the variants add their own on top):
 
 - `goal.md` — north star. Cross-check that the work advances a stated
   signal and does not cross a NOT line. If you cannot, stop and surface
@@ -102,8 +122,6 @@ Project anchors you must respect (do not duplicate; load and follow):
   task spec.
 - `CLAUDE.md` — top-level project guide.
 - `docs/guides/anti-patterns.md` — explicit "do not" list with rationale.
-- `docs/guides/rust-style.md`, `docs/guides/code-comments.md`.
-- The crate's `AGENT.md` if it exists.
 
 ### 3. Implement
 
@@ -114,54 +132,25 @@ to be split.
 ### 4. Mandatory pre-commit checks
 
 Before the **final** commit (intermediate commits during exploration do
-not need to pass):
+not need to pass), run the quality gate. The gate is **stack-specific**
+and lives in the variant agent:
 
-```bash
-cargo check --workspace --all-targets
-cargo +nightly fmt --all
-cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
-prek run --all-files
-```
+- Backend (`crates/**`) → see `implementer-backend.md` "Quality gate".
+- Frontend (`web/**`, `extension/**`) → see `implementer-frontend.md`
+  "Quality gate".
+- Generic fallback → `prek run --all-files`.
 
-For frontend changes: `cd web && npm run build`.
-
-For lane 1 specifically: also run
+For lane 1 (any variant): also run
 
 ```bash
 just spec-lifecycle specs/issue-N-<slug>.spec.md
 ```
 
-The lifecycle gate must pass. Every BDD scenario must end up `pass`, not
-`skip` or `uncertain`. Use the `just` wrapper (not raw `agent-spec`) so
-you and the reviewer use the same flags — the recipe pins `--change-scope
-worktree --format text`.
+Every BDD scenario must end up `pass`, not `skip` or `uncertain`. Use the
+`just` wrapper (not raw `agent-spec`) so you and the reviewer use the same
+flags — the recipe pins `--change-scope worktree --format text`.
 
-If any test for the affected crate exists, run it: `cargo test -p <crate>`.
-
-### 5. Config-schema guardrail (the #1907 lesson)
-
-If your diff touches `crates/app/src/lib.rs` `Config` struct or
-`config.example.yaml`, you MUST do all three of these before committing:
-
-1. **Check recent decisions on the same file:**
-   ```bash
-   git log --since=14.days -p -- crates/app/src/lib.rs config.example.yaml
-   ```
-   Surface any prior commits that deleted, restructured, or moved-to-const
-   the same field. If your change reverses a recent explicit decision, stop
-   and ask the parent — do not silently re-litigate it.
-
-2. **Mechanism vs config check** (`docs/guides/anti-patterns.md` and
-   `specs/project.spec`): if you are adding a new field, ask "would a
-   deploy operator have a real reason to pick a different value?" If no →
-   it belongs as a Rust `const` next to the mechanism, not in YAML.
-
-3. **Config-compat smoke test:** every existing deployed `config.yaml`
-   must still boot. Either add an integration test that parses a fixture
-   YAML predating your change, or run a manual smoke test and paste the
-   output in your final report.
-
-### 6. Commit locally
+### 5. Commit locally
 
 ```bash
 git -C <worktree> add <files>
@@ -175,7 +164,7 @@ You may produce multiple atomic commits during development. Before pushing
 (after reviewer APPROVE), you may rebase-squash to a clean sequence — but
 do not amend.
 
-### 7. Hand off to reviewer — DO NOT PUSH YET
+### 6. Hand off to reviewer — DO NOT PUSH YET
 
 Report back to the parent with:
 
@@ -191,7 +180,7 @@ Report back to the parent with:
 
 The parent dispatches the reviewer. You wait.
 
-### 8. Address review findings (if REQUEST_CHANGES)
+### 7. Address review findings (if REQUEST_CHANGES)
 
 Fix every blocking finding (P0 / P1) in the worktree. Add new commits
 (do not amend). Re-run the relevant verification from step 4. Hand back
@@ -204,7 +193,7 @@ If the reviewer says the **spec itself** is wrong (lane 1 critical spec
 review), do not fix it yourself — escalate to the parent. The spec belongs
 to spec-author.
 
-### 9. Push, open PR, watch CI
+### 8. Push, open PR, watch CI
 
 Only after reviewer APPROVE:
 
@@ -219,7 +208,9 @@ gh pr checks <PR#> --watch
 
 PR body uses `.github/pull_request_template.md`. Labels: pick one type
 (`bug`/`enhancement`/`refactor`/`chore`/`documentation`) and one component
-(`core`/`backend`/`ui`/`extension`/`ci`).
+(`core`/`backend`/`ui`/`extension`/`ci`). The variant agent narrows the
+component choice further (e.g. backend → `core`/`backend`; frontend →
+`ui`/`extension`).
 
 If a CI check fails: read the failure log, diagnose root cause, fix in
 the worktree, push again. Do not mark tests `#[ignore]` to make CI green.
@@ -234,7 +225,7 @@ rerun (no new commit) does not need re-review. The principle is "every
 code change the reviewer hasn't seen gets re-reviewed", which keeps the
 gate honest.
 
-### 10. Merge
+### 9. Merge
 
 Green CI + clean review = merge. The parent has standing approval; do
 not re-ask.
@@ -251,16 +242,27 @@ When you finish, your final report to the parent must include:
 
 1. **PR URL** and final state (MERGED with SHA, or OPEN with reason).
 2. **Files touched** — explicit list, not a paraphrase.
-3. **Verification output** — paste actual test summary lines
-   ("test result: ok. 83 passed; 0 failed; 3 ignored"), not "tests passed".
+3. **Verification output** — paste actual command output (test summary
+   lines, build output tail, etc.), not "tests passed". The variant
+   agent specifies what counts as concrete output for its stack.
 4. **Outcome verification** — paste the observable evidence that the
-   outcome from step 1 was achieved. "tests pass" is not outcome
-   verification; "before this PR `curl /api/foo` returned 500, after this
-   PR it returns 200 with body `{...}`" is. For lane 1, paste the
-   `agent-spec lifecycle` summary plus the BDD scenario names that passed.
+   outcome from step 1 was achieved. "tests pass" / "build passed" is
+   not outcome verification. The variant agent specifies the
+   stack-appropriate evidence bar (BE: before/after `curl`; FE:
+   before/after screenshots).
 5. **Decisions surfaced** — anything you decided that the issue did not
    pin down, with the option you took and why.
 6. **Open questions** — anything you deferred or are unsure about.
 
 If you got blocked partway (permissions, ambiguity, an unexpected
 dependency), stop and report the blocker rather than improvise around it.
+
+## Mixed-stack issues
+
+If an issue genuinely cannot be split (e.g. a new API endpoint plus its
+UI consumer that must land atomically), the parent dispatches the BE
+variant first then the FE variant serially against the **same** worktree,
+branch, and PR. Each variant runs only its own quality gate against its
+own part of the diff — the BE variant skips the FE gate, and vice-versa.
+Prefer to split such issues at spec-author time rather than carry them
+through this fallback.
