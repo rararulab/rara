@@ -124,13 +124,40 @@ re-asking; they are the rule, not exceptions:
 git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
 ```
 
-The parent agent creates the worktree and then dispatches the `implementer`
-subagent. The main agent never edits in-place on `main` and never edits
-inside the main checkout — every edit is in a worktree.
+The parent agent creates the worktree and then dispatches the right
+**implementer variant** (see Step 2). The main agent never edits in-place
+on `main` and never edits inside the main checkout — every edit is in a
+worktree.
 
 ## Step 2: Implement (lane 1 and 2)
 
-The `implementer` subagent works inside the worktree. It:
+The implementer subagent comes in two stack-specific variants plus a
+generic fallback. The parent picks based on the issue's allowed paths:
+
+- **`implementer-backend`** — when the issue's `Boundaries.Allowed`
+  (lane 1) or the file paths cited in the issue body (lane 2) are
+  rooted in `crates/**`. Brings the Rust quality gate (`cargo check` /
+  `cargo +nightly fmt` / clippy / `prek run --all-files` / `cargo test
+  -p <crate>`), the snafu / bon / async-trait style anchors, the diesel
+  migration discipline, and the #1907 config-schema guardrail. PR
+  component label is one of `core` / `backend`.
+- **`implementer-frontend`** — when the allowed paths are rooted in
+  `web/**` or `extension/**`. Brings the bun-based gate (`bun run build`
+  + ESLint), the `make-interfaces-feel-better` self-review, and the
+  before/after screenshot evidence bar. Explicitly does NOT run cargo
+  for FE-only diffs. PR component label is one of `ui` / `extension`.
+- **`implementer`** (generic base) — fallback for issues that fit
+  neither lane (pure docs, repo-root config, harness files like
+  `.claude/**`). Runs only `prek run --all-files`.
+
+For **mixed-stack issues** (touching both `crates/**` and `web/**`):
+prefer to split at spec-author time into one BE issue + one FE issue.
+If genuinely unsplittable (e.g. a new API endpoint plus its UI consumer
+that must land atomically), the parent dispatches BE first then FE
+serially against the **same** worktree, branch, and PR — each variant
+runs only its own gate against its own part of the diff.
+
+Whichever variant is dispatched, it:
 
 1. Reads `gh issue view <N>`. For lane 1, also reads
    `specs/issue-N-<slug>.spec.md`.
@@ -139,8 +166,7 @@ The `implementer` subagent works inside the worktree. It:
    misalignment for the cost of a round-trip.)
 3. Reads the actual code it will touch.
 4. Implements the smallest change that satisfies the spec / issue.
-5. Runs `cargo check` / `cargo +nightly fmt` / `clippy` / `prek run --all-files`.
-   For frontend: `cd web && npm run build`.
+5. Runs the **stack-specific quality gate** (see the variant's contract).
 6. **Lane 1 only**: runs `just spec-lifecycle specs/issue-N-<slug>.spec.md`.
    Every BDD scenario must pass — no `skip`, no `uncertain`.
 7. Commits locally. Conventional Commits subject + `Closes #N` in body.
@@ -148,14 +174,16 @@ The `implementer` subagent works inside the worktree. It:
    commit SHAs, outcome verification (concrete evidence), and any
    decisions surfaced.
 
-If the diff touches `crates/{app,kernel,channels,acp,sandbox}/src/`, add
-or extend a Rust e2e test in the corresponding `tests/` directory
-following `docs/guides/e2e-style.md` (lane 1 = no LLM, lane 2 = scripted
-LLM via `ScriptedLlmDriver`, lane 3 = real LLM in `e2e.yml`). If
-PR-time e2e coverage is infeasible, state in the PR body which lane
-applies and why.
+If the diff touches `crates/{app,kernel,channels,acp,sandbox}/src/`, the
+backend variant adds or extends a Rust e2e test in the corresponding
+`tests/` directory following `docs/guides/e2e-style.md` (lane 1 = no LLM,
+lane 2 = scripted LLM via `ScriptedLlmDriver`, lane 3 = real LLM in
+`e2e.yml`). If PR-time e2e coverage is infeasible, state in the PR body
+which lane applies and why.
 
-See `.claude/agents/implementer.md` for the full contract.
+See `.claude/agents/implementer.md` for the shared base contract,
+`.claude/agents/implementer-backend.md` for the Rust gate, and
+`.claude/agents/implementer-frontend.md` for the FE gate.
 
 ### Pre-commit checks (prek)
 
