@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { ArrowLeft, Network } from 'lucide-react';
+import { ArrowLeft, Network, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
@@ -43,6 +43,22 @@ import { useTopologySubscription, type TopologyStatus } from '@/hooks/use-topolo
  * so users never have to paste a session UUID — the UX complaint
  * `#1999` task #9 fixes.
  */
+/** localStorage key for the per-user collapsed-sidebar preference. */
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'rara.topology.sidebarCollapsed';
+
+/**
+ * Read the persisted collapsed-sidebar preference, swallowing access
+ * errors (private browsing, disabled storage). The default is `false`
+ * so first-time visitors still see the picker.
+ */
+function readSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export default function Topology() {
   const { rootSessionKey } = useParams<{ rootSessionKey?: string }>();
   const navigate = useNavigate();
@@ -50,6 +66,21 @@ export default function Topology() {
   // session key focuses on that worker. Reset whenever the root changes
   // so a new connection always lands on the root view.
   const [viewChild, setViewChild] = useState<string | null>(null);
+  // Lazy initializer reads localStorage exactly once on mount; the
+  // useEffect below mirrors the React state back to storage on change.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_COLLAPSED_STORAGE_KEY,
+        sidebarCollapsed ? 'true' : 'false',
+      );
+    } catch {
+      // Storage may be unavailable (private browsing, quota); the toggle
+      // still works in-memory for the rest of the session.
+    }
+  }, [sidebarCollapsed]);
 
   const subscription = useTopologySubscription(rootSessionKey ?? null);
 
@@ -67,6 +98,20 @@ export default function Topology() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-3 border-b border-border px-3 py-2">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          onClick={() => setSidebarCollapsed((v) => !v)}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeft className="h-4 w-4" />
+          ) : (
+            <PanelLeftClose className="h-4 w-4" />
+          )}
+        </Button>
         <Network className="h-4 w-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">Topology</h1>
         <div className="ml-auto">
@@ -81,13 +126,15 @@ export default function Topology() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        <aside className="hidden w-[280px] shrink-0 border-r border-border md:block">
-          <SessionPicker
-            activeSessionKey={rootSessionKey ?? null}
-            onSelect={selectSession}
-            onAutoSelect={selectSession}
-          />
-        </aside>
+        {!sidebarCollapsed && (
+          <aside className="hidden w-[280px] shrink-0 border-r border-border md:block">
+            <SessionPicker
+              activeSessionKey={rootSessionKey ?? null}
+              onSelect={selectSession}
+              onAutoSelect={selectSession}
+            />
+          </aside>
+        )}
 
         <main className="flex flex-1 min-w-0 min-h-0 flex-col p-3">
           {rootSessionKey ? (

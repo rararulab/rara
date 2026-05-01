@@ -16,6 +16,16 @@ the most-recent session on first load so users never have to paste a
 session UUID — task #9 of #1999 fixed that UX complaint by replacing
 the old free-text "root session key" input with a clickable list.
 
+The topology header carries a `PanelLeft` / `PanelLeftClose` icon button
+(issue #2022) that toggles the left rail by conditionally rendering the
+`<aside>` wrapper around `SessionPicker`. When collapsed the picker is
+removed from the DOM, the centre column reclaims the freed flex width,
+and the preference is mirrored to `localStorage` under
+`rara.topology.sidebarCollapsed` so it survives reloads. The toggle lives
+in `Topology.tsx` rather than threading through `AppShellContext` because
+the topology page does not consume the AppShell — adopting it for one
+button would be overreach.
+
 - `SessionPicker.tsx` — left rail. Lists the most-recently updated
   sessions via `useQuery(['topology', 'chat-sessions'])` against
   `GET /api/v1/chat/sessions?limit=50`, polls every 30s, and exposes
