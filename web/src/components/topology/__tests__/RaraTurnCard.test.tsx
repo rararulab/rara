@@ -135,6 +135,17 @@ describe('RaraTurnCard — trace + cascade affordances', () => {
     expect((response as HTMLElement).style.maxHeight).toBe('');
   });
 
+  it('RaraTurnCard__assistant_response_renders_as_page_flow_not_message_bubble', () => {
+    const { container } = renderCard(makeTurn({ text: 'final assistant text' }));
+
+    const response = container.querySelector('[data-search-root="response"]');
+    expect(response).not.toBeNull();
+    expect(response).toHaveClass('px-0');
+    expect(response).toHaveClass('py-1');
+    expect(response?.closest('.shadow-minimal')).toBeNull();
+    expect(response?.closest('.rounded-\\[8px\\]')).toBeNull();
+  });
+
   it('RaraTurnCard__trace_modal_opens_with_fetched_content', async () => {
     fetchExecutionTraceMock.mockResolvedValue({
       duration_secs: 1.23,
