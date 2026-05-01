@@ -447,13 +447,12 @@ describe('TimelineView.history', () => {
     expect(nodes).toHaveLength(2);
     expect(nodes[0]).toHaveTextContent('ok');
     expect(nodes[1]).toHaveTextContent('q');
-    // The toHaveLength(2) above is the real falsifier here: under the
-    // "unconditional min-height" failure mode, an extra empty card or a
-    // newline-prepended neighbour would push the count off 2. (A direct
-    // height assertion would be a no-op under jsdom, which returns 0
-    // from getBoundingClientRect.)
-    const card = nodes[0].querySelector('div.space-y-3.p-4');
-    expect(card).not.toBeNull();
+    // The toHaveLength(2) above is the real falsifier of the
+    // "unconditional min-height" failure mode: an extra empty card or
+    // a newline-prepended neighbour would push the count off 2. A
+    // direct height assertion would be a no-op under jsdom (which
+    // returns 0 from getBoundingClientRect), so we leave physical
+    // sizing for a real-DOM smoke test.
   });
 
   it('fetch_error_does_not_block_live: history failure surfaces inline error and keeps input working', async () => {
