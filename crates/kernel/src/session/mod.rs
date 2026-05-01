@@ -75,6 +75,13 @@ pub enum SessionError {
     /// A JSON serialization/deserialization error occurred.
     #[snafu(display("json error: {source}"))]
     Json { source: serde_json::Error },
+
+    /// A database error from the session-index backend (diesel/SQLite,
+    /// connection pool, constraint violation, etc.). Distinct from
+    /// `FileIo` so ops can tell a runtime DB failure apart from a JSONL
+    /// write error in `crates/kernel/src/memory/`.
+    #[snafu(display("session index database error: {message}"))]
+    Database { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +175,12 @@ pub struct SessionEntry {
     /// issue #2025: that field counted only `Message`-kind entries and was
     /// never updated post-creation, which produced a permanent `0` on the
     /// HTTP `GET /api/v1/chat/sessions` response.
-    #[serde(default, alias = "message_count")]
+    ///
+    /// Wire compat: serializes/deserializes as JSON `message_count` so the
+    /// existing web UI (`web/src/api/types.ts`) and Telegram DTO keep
+    /// working unchanged. `total_entries` is also accepted on read for
+    /// forward-compat with future renames.
+    #[serde(rename = "message_count", alias = "total_entries", default)]
     pub total_entries: i64,
     /// Short preview text (typically the first user message, truncated)
     /// for display in session listings.
@@ -1384,5 +1396,73 @@ mod state_transition_tests {
         // Not inserted — walk_to_root returns the input key as a safe fallback.
         let orphan = SessionKey::new();
         assert_eq!(crate::agent::walk_to_root(&table, orphan), orphan);
+    }
+}
+
+#[cfg(test)]
+mod wire_compat_tests {
+    //! Issue #2025 — `SessionEntry.total_entries` must serialize as JSON
+    //! `message_count` so the existing web UI (`web/src/api/types.ts`)
+    //! and Telegram DTO keep round-tripping unchanged.
+    use chrono::Utc;
+
+    use super::*;
+
+    fn sample_entry() -> SessionEntry {
+        SessionEntry {
+            key: SessionKey::new(),
+            title: Some("t".into()),
+            model: None,
+            model_provider: None,
+            thinking_level: None,
+            system_prompt: None,
+            total_entries: 7,
+            preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: vec![],
+            metadata: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn total_entries_serializes_as_message_count() {
+        let entry = sample_entry();
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(
+            json.contains("\"message_count\":7"),
+            "expected wire field `message_count`, got: {json}"
+        );
+        assert!(
+            !json.contains("\"total_entries\""),
+            "wire field `total_entries` must not appear (would break existing UI), got: {json}"
+        );
+    }
+
+    #[test]
+    fn message_count_deserializes_into_total_entries() {
+        let entry = sample_entry();
+        let mut json = serde_json::to_value(&entry).expect("to_value");
+        json.as_object_mut()
+            .unwrap()
+            .insert("message_count".to_owned(), serde_json::Value::from(42_i64));
+        let parsed: SessionEntry = serde_json::from_value(json).expect("from_value");
+        assert_eq!(parsed.total_entries, 42);
+    }
+
+    #[test]
+    fn total_entries_alias_also_deserializes() {
+        // Forward-compat: a producer that emits the Rust field name
+        // (e.g. a future client) must still parse on read.
+        let entry = sample_entry();
+        let mut json = serde_json::to_value(&entry).expect("to_value");
+        let obj = json.as_object_mut().unwrap();
+        obj.remove("message_count");
+        obj.insert("total_entries".to_owned(), serde_json::Value::from(99_i64));
+        let parsed: SessionEntry = serde_json::from_value(json).expect("from_value");
+        assert_eq!(parsed.total_entries, 99);
     }
 }

@@ -328,10 +328,13 @@ explicit supersession of #43's choice, not amnesia about it.
 - **/crates/sessions/src/sqlite_index.rs
 - **/crates/sessions/src/file_index.rs
 - **/crates/sessions/src/lib.rs
+- **/crates/sessions/src/error.rs
 - **/crates/sessions/Cargo.toml
+- **/crates/sessions/AGENT.md
 - **/crates/rara-model/migrations/**
 - **/crates/rara-model/src/schema.rs
 - **/crates/app/src/boot.rs
+- **/crates/app/src/lib.rs
 - **/crates/boot/src/state.rs
 - **/crates/boot/src/kernel.rs
 - **/crates/extensions/backend-admin/src/chat/service.rs
@@ -339,6 +342,7 @@ explicit supersession of #43's choice, not amnesia about it.
 - **/crates/extensions/backend-admin/src/state.rs
 - **/crates/cmd/src/chat/mod.rs
 - **/crates/cmd/src/main.rs
+- **/crates/cmd/src/session_index.rs
 - **/crates/channels/src/telegram/commands/kernel_client.rs
 - **/crates/kernel/src/session/test_utils.rs
 - **/crates/kernel/src/testing.rs
@@ -432,8 +436,8 @@ Scenario: crash-recovery rebuild repairs an out-of-sync row
   Then the row's `total_entries` becomes 10, `anchors` matches the
     on-disk anchor sequence with correct byte offsets, and the JSONL
     file on disk is byte-for-byte unchanged
-  Test: `crates/sessions/tests/sqlite_index_migration.rs` /
-    `boot_reconciliation_repairs_stale_index`
+  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
+    `crash_recovery_rebuild_repairs_out_of_sync_row`
 
 Scenario: list_sessions read uses a SQL ORDER BY rather than scanning all rows in memory
   Given a SQLite `sessions` table containing 1000 rows
@@ -454,7 +458,7 @@ Scenario: rescue command rebuilds a single session from the tape
   Then the row for K is replaced with derived state matching the
     tape (5 anchors, correct byte offsets, correct
     `total_entries`), and rows for other sessions are not touched
-  Test: `crates/sessions/tests/sqlite_index_migration.rs` /
+  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
     `rebuild_single_session_leaves_others_alone`
 
 ## Constraints

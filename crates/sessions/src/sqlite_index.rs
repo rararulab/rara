@@ -288,40 +288,55 @@ impl SessionIndex for SqliteSessionIndex {
         key: &SessionKey,
         derived: &SessionDerivedState,
     ) -> Result<(), SessionError> {
+        use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
+
         let anchors_json = serde_json::to_string(&derived.anchors).context(JsonSnafu)?;
         let updated_at = derived.updated_at.to_rfc3339();
+        let key_str = key.to_string();
+        let preview = derived.preview.clone();
+        let total_entries = derived.total_entries;
+        let last_token_usage = derived.last_token_usage;
+        let estimated_context_tokens = derived.estimated_context_tokens;
+        let entries_since_last_anchor = derived.entries_since_last_anchor;
 
         let mut conn = self.pools.writer.get().await.map_err(map_pool_err)?;
-        // Issue the conditional preview-set as a separate statement when
-        // requested; the main UPDATE always rewrites the derived fields.
-        let _ = diesel::update(sessions::table.filter(sessions::key.eq(key.to_string())))
-            .set((
-                sessions::total_entries.eq(derived.total_entries),
-                sessions::last_token_usage.eq(derived.last_token_usage),
-                sessions::estimated_context_tokens.eq(derived.estimated_context_tokens),
-                sessions::entries_since_last_anchor.eq(derived.entries_since_last_anchor),
-                sessions::anchors_json.eq(&anchors_json),
-                sessions::updated_at.eq(&updated_at),
-            ))
-            .execute(&mut *conn)
-            .await
-            .map_err(map_diesel_err)?;
+        // Wrap both UPDATEs in a single transaction so a concurrent
+        // `update_session` (PATCH /sessions) cannot slip a write between
+        // the derived-state UPDATE and the conditional preview UPDATE.
+        conn.transaction::<_, diesel::result::Error, _>(|tx| {
+            async move {
+                diesel::update(sessions::table.filter(sessions::key.eq(&key_str)))
+                    .set((
+                        sessions::total_entries.eq(total_entries),
+                        sessions::last_token_usage.eq(last_token_usage),
+                        sessions::estimated_context_tokens.eq(estimated_context_tokens),
+                        sessions::entries_since_last_anchor.eq(entries_since_last_anchor),
+                        sessions::anchors_json.eq(&anchors_json),
+                        sessions::updated_at.eq(&updated_at),
+                    ))
+                    .execute(tx)
+                    .await?;
 
-        // Preview is "what this conversation started as" — only set it
-        // when the row currently has none. A second UPDATE keeps the
-        // contract simple at the cost of one extra round-trip on the
-        // (very rare) preview-write path.
-        if let Some(preview) = &derived.preview {
-            let _ = diesel::update(
-                sessions::table
-                    .filter(sessions::key.eq(key.to_string()))
-                    .filter(sessions::preview.is_null()),
-            )
-            .set(sessions::preview.eq(preview))
-            .execute(&mut *conn)
-            .await
-            .map_err(map_diesel_err)?;
-        }
+                // Preview is "what this conversation started as" — only
+                // set it when the row currently has none. A second
+                // UPDATE keeps the contract simple at the cost of one
+                // extra statement on the (very rare) preview-write path.
+                if let Some(preview) = &preview {
+                    diesel::update(
+                        sessions::table
+                            .filter(sessions::key.eq(&key_str))
+                            .filter(sessions::preview.is_null()),
+                    )
+                    .set(sessions::preview.eq(preview))
+                    .execute(tx)
+                    .await?;
+                }
+                Ok(())
+            }
+            .scope_boxed()
+        })
+        .await
+        .map_err(map_diesel_err)?;
         Ok(())
     }
 
@@ -591,14 +606,14 @@ fn parse_dt(s: &str) -> Result<DateTime<Utc>, SessionError> {
 }
 
 fn map_diesel_err(e: diesel::result::Error) -> SessionError {
-    SessionError::FileIo {
-        source: std::io::Error::other(format!("diesel: {e}")),
+    SessionError::Database {
+        message: format!("diesel: {e}"),
     }
 }
 
-fn map_pool_err<E: std::fmt::Display>(e: E) -> SessionError {
-    SessionError::FileIo {
-        source: std::io::Error::other(format!("pool: {e}")),
+fn map_pool_err(e: bb8::RunError<diesel_async::pooled_connection::PoolError>) -> SessionError {
+    SessionError::Database {
+        message: format!("pool: {e}"),
     }
 }
 

@@ -66,6 +66,12 @@ const MIN_QUERY_TERM_COVERAGE: f64 = 0.60;
 /// Exact full-query substring matches outrank all partial and fuzzy hits.
 const EXACT_MATCH_BONUS: f64 = 1.0;
 
+/// Placeholder name used when an `Anchor`-kind entry's `payload.name`
+/// is missing or non-string. Surfaced in `SessionEntry::anchors[].name`
+/// — chosen as `"-"` so UI can render "unnamed checkpoint" without a
+/// special-case sentinel check.
+const ANCHOR_NAME_FALLBACK: &str = "-";
+
 #[derive(Debug)]
 struct SearchMatch {
     score:     f64,
@@ -448,33 +454,43 @@ impl TapeService {
         // Hydrate the cache from the index on first encounter so we can
         // drive the per-session derived state forward without scanning
         // the tape on every append.
-        {
-            let entry = self.derived_cache.entry(session_key);
-            let mut slot = entry.or_default();
+        //
+        // Lock discipline: the SQL load happens with NO DashMap guard
+        // held — diesel-async work must not run while holding a
+        // DashMap write lock (would block other sessions' appends and
+        // can deadlock with future read paths). Two callers both
+        // observing `!hydrated` is fine: they both load the same row
+        // and the second's write idempotently overwrites the first.
+        let needs_hydrate = self
+            .derived_cache
+            .get(&session_key)
+            .map(|s| !s.hydrated)
+            .unwrap_or(true);
+        if needs_hydrate {
+            let loaded = match index.get_session(&session_key).await {
+                Ok(row) => row,
+                Err(e) => {
+                    tracing::warn!(
+                        %e, %session_key,
+                        "session-index hydrate failed on append; deferring"
+                    );
+                    return;
+                }
+            };
+            // Row may legitimately be `None` — `record_append` can race
+            // a not-yet-committed `create_session`; the next append
+            // after creation re-runs hydration via the same `!hydrated`
+            // probe.
+            let mut slot = self.derived_cache.entry(session_key).or_default();
             if !slot.hydrated {
-                match index.get_session(&session_key).await {
-                    Ok(Some(row)) => {
-                        slot.total_entries = row.total_entries;
-                        slot.entries_since_last_anchor = row.entries_since_last_anchor;
-                        slot.last_token_usage = row.last_token_usage;
-                        slot.estimated_context_tokens = row.estimated_context_tokens;
-                        slot.anchors = row.anchors;
-                        slot.has_preview = row.preview.is_some();
-                        slot.chars_since_last_usage = 0;
-                    }
-                    Ok(None) => {
-                        // Row not in the index yet — `record_append` may
-                        // race a not-yet-committed `create_session`. The
-                        // cache stays at default; the next append after
-                        // creation will pick it up via the hydrate path.
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            %e, %session_key,
-                            "session-index hydrate failed on append; deferring"
-                        );
-                        return;
-                    }
+                if let Some(row) = loaded {
+                    slot.total_entries = row.total_entries;
+                    slot.entries_since_last_anchor = row.entries_since_last_anchor;
+                    slot.last_token_usage = row.last_token_usage;
+                    slot.estimated_context_tokens = row.estimated_context_tokens;
+                    slot.anchors = row.anchors;
+                    slot.has_preview = row.preview.is_some();
+                    slot.chars_since_last_usage = 0;
                 }
                 slot.hydrated = true;
             }
@@ -482,7 +498,7 @@ impl TapeService {
 
         // Compute the post-append derived state and the preview to set.
         // Cloned out so the DashMap slot is released before the await.
-        let (derived, preview_to_set) = {
+        let (derived, _preview_to_set) = {
             let mut slot = self
                 .derived_cache
                 .get_mut(&session_key)
@@ -500,7 +516,7 @@ impl TapeService {
                         .payload
                         .get("name")
                         .and_then(Value::as_str)
-                        .unwrap_or("-")
+                        .unwrap_or(ANCHOR_NAME_FALLBACK)
                         .to_owned();
                     slot.anchors.push(AnchorRef {
                         anchor_id: outcome.entry.id,
@@ -607,7 +623,6 @@ impl TapeService {
                  boot reconciler will repair on next start"
             );
         }
-        let _ = preview_to_set;
     }
 
     /// Build LLM-ready messages from tape entries since the last anchor.

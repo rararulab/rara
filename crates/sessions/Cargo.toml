@@ -13,6 +13,7 @@ description = "Session metadata persistence — file-based session index"
 
 [dependencies]
 async-trait.workspace = true
+bb8 = "0.9"
 chrono = { workspace = true }
 diesel = { workspace = true }
 diesel-async = { workspace = true }

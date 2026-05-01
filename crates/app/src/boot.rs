@@ -91,9 +91,10 @@ pub struct PlatformBindingConfig {
 /// Adapter wiring the kernel's `TapeService` into the
 /// [`ReconcileTape`](rara_sessions::sqlite_index::ReconcileTape) trait.
 /// Lives here (not in `rara-sessions`) to keep the sessions crate from
-/// depending on `TapeService`.
-struct TapeReconciler {
-    tape: rara_kernel::memory::TapeService,
+/// depending on `TapeService`. Re-used by `crates/cmd` for the
+/// `rara session-index rebuild` rescue command.
+pub struct TapeReconciler {
+    pub tape: rara_kernel::memory::TapeService,
 }
 
 #[async_trait]
@@ -304,21 +305,26 @@ pub(crate) async fn boot(
     info!("TapeService initialized (FTS5 + SessionIndex wired)");
 
     // Reconcile derived-state rows against on-disk tape contents
-    // (Decision 10). Best-effort: failures here are logged but do not
-    // block boot — every subsequent tape append fixes its row in band.
+    // (Decision 10). Spawned in the background so a large tape (or a
+    // slow disk) cannot stall boot — append-time correctness is
+    // independent of reconciler timing, so a delayed repair is
+    // strictly better than a delayed boot.
     {
         let reconciler = TapeReconciler {
             tape: tape_service.clone(),
         };
-        match sqlite_index.reconcile_all(reconciler).await {
-            Ok(repaired) if repaired > 0 => {
-                info!(repaired, "session index reconciled at boot");
+        let sqlite_index_for_recon = sqlite_index.clone();
+        tokio::spawn(async move {
+            match sqlite_index_for_recon.reconcile_all(reconciler).await {
+                Ok(repaired) if repaired > 0 => {
+                    info!(repaired, "session index reconciled in background");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(%e, "session index reconciliation failed");
+                }
             }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(%e, "session index reconciliation failed");
-            }
-        }
+        });
     }
 
     // -- skills registry ---------------------------------------------------
