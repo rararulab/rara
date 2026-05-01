@@ -38,3 +38,46 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function scrollIntoViewShim(): void {};
 }
+
+// jsdom does not implement `DOMMatrix`, which `motion/react` (used by the
+// vendor `TurnCard` for expand/collapse animations) reads at module load
+// time. A no-op shim is enough — none of our assertions inspect the
+// matrix output, and the component falls back to identity geometry.
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  class DOMMatrixShim {
+    a = 1;
+    b = 0;
+    c = 0;
+    d = 1;
+    e = 0;
+    f = 0;
+    m11 = 1;
+    m12 = 0;
+    m13 = 0;
+    m14 = 0;
+    m21 = 0;
+    m22 = 1;
+    m23 = 0;
+    m24 = 0;
+    m31 = 0;
+    m32 = 0;
+    m33 = 1;
+    m34 = 0;
+    m41 = 0;
+    m42 = 0;
+    m43 = 0;
+    m44 = 1;
+    is2D = true;
+    isIdentity = true;
+    multiply(): DOMMatrixShim {
+      return new DOMMatrixShim();
+    }
+    translate(): DOMMatrixShim {
+      return new DOMMatrixShim();
+    }
+    scale(): DOMMatrixShim {
+      return new DOMMatrixShim();
+    }
+  }
+  (globalThis as unknown as { DOMMatrix: typeof DOMMatrixShim }).DOMMatrix = DOMMatrixShim;
+}

@@ -235,7 +235,9 @@ parent-agent browser smoke test against PR 2018) extend this Intent:
 ### Allowed Changes
 - **/web/src/components/topology/TimelineView.tsx
 - **/web/src/components/topology/TurnCard.tsx
+- **/web/src/components/topology/RaraTurnCard.tsx
 - **/web/src/components/topology/AGENT.md
+- **/web/src/test-setup.ts
 - **/web/src/hooks/use-session-history.ts
 - **/web/src/api/sessions.ts
 - **/web/src/api/types.ts
@@ -336,6 +338,16 @@ Scenario: Assistant turn with short text content renders without an over-tall em
   Then the rendered TurnCard for that message contains the text "ok"
     And the rendered TurnCard's bounding height is at most 96 pixels (single short markdown line plus padding)
     And the rendered TurnCard contains no descendant element with computed style min-height greater than 0 other than the content row itself
+
+Scenario: Assistant message body is rendered as markdown by the vendor TurnCard surface
+  Test:
+    Package: web
+    Filter: TimelineView.history.markdown_renders_inline_formatting
+  Given a session whose history payload returns one assistant message with content "Here is **bold** and `code`"
+  When TimelineView mounts with that viewSessionKey
+  Then the rendered DOM contains a <strong> element whose text is "bold"
+    And the rendered DOM contains a <code> element whose text is "code"
+    And no literal "**" or backtick characters appear adjacent to those tokens (proving the markdown was parsed, not displayed verbatim)
 
 Scenario: History fetch failure still allows live chat to function
   Test:

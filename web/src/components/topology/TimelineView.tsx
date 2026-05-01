@@ -17,8 +17,8 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { RaraTurnCard } from './RaraTurnCard';
 import {
-  TurnCard,
   type TurnCardData,
   buildTurnsFromEvents,
   buildTurnsFromHistory,
@@ -342,43 +342,44 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const inputDisabled = ws.status === 'idle' || ws.status === 'closed';
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
-      <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
-        {isEmpty ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Waiting for the next turn on <span className="ml-1 font-mono">{viewSessionKey}</span>…
-          </div>
-        ) : (
-          orderedItems.map((item) =>
-            item.kind === 'bubble' ? (
-              <div key={item.key} data-testid="turn-or-bubble" className="flex justify-end">
-                <UserMessageBubble content={item.text} />
+    // Vendor `TurnCard` (chat) and vendor `InputContainer` (toolbar) both
+    // mount radix Tooltips, so a single TooltipProvider wraps the whole
+    // view rather than being scoped to the input. EscapeInterruptProvider
+    // and AppShellProvider only feed `InputContainer`, but co-locating
+    // them here keeps all vendor-context lifetimes on the same level.
+    <AppShellProvider value={appShellValue}>
+      <EscapeInterruptProvider>
+        <TooltipPrimitive.Provider delayDuration={300}>
+          <div className="flex flex-1 min-h-0 flex-col">
+            <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
+              {isEmpty ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Waiting for the next turn on{' '}
+                  <span className="ml-1 font-mono">{viewSessionKey}</span>…
+                </div>
+              ) : (
+                orderedItems.map((item) =>
+                  item.kind === 'bubble' ? (
+                    <div key={item.key} data-testid="turn-or-bubble" className="flex justify-end">
+                      <UserMessageBubble content={item.text} />
+                    </div>
+                  ) : (
+                    <div key={item.key} data-testid="turn-or-bubble">
+                      <RaraTurnCard turn={item.turn} />
+                    </div>
+                  ),
+                )
+              )}
+            </div>
+            {history.isError && (
+              <div
+                role="alert"
+                className="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300"
+              >
+                Failed to load conversation history. Live chat still works — refresh to retry.
               </div>
-            ) : (
-              <div key={item.key} data-testid="turn-or-bubble">
-                <TurnCard turn={item.turn} />
-              </div>
-            ),
-          )
-        )}
-      </div>
-      {history.isError && (
-        <div
-          role="alert"
-          className="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300"
-        >
-          Failed to load conversation history. Live chat still works — refresh to retry.
-        </div>
-      )}
-      <div className="pt-2">
-        {/* Vendor InputContainer reaches for an EscapeInterruptProvider
-         *  (double-Esc interrupt UX) and a radix TooltipProvider (toolbar
-         *  hover hints). Wrap locally rather than at the App root so the
-         *  provider lifetime tracks the timeline view, and rara's other
-         *  pages stay free of vendor-side context noise. */}
-        <AppShellProvider value={appShellValue}>
-          <EscapeInterruptProvider>
-            <TooltipPrimitive.Provider delayDuration={300}>
+            )}
+            <div className="pt-2">
               <InputContainer
                 onSubmit={handleSubmit}
                 onStop={handleStop}
@@ -389,10 +390,10 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
                 currentConnection={RARA_CONNECTION_SLUG}
                 placeholder="Send a message…"
               />
-            </TooltipPrimitive.Provider>
-          </EscapeInterruptProvider>
-        </AppShellProvider>
-      </div>
-    </div>
+            </div>
+          </div>
+        </TooltipPrimitive.Provider>
+      </EscapeInterruptProvider>
+    </AppShellProvider>
   );
 }

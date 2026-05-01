@@ -455,6 +455,30 @@ describe('TimelineView.history', () => {
     // sizing for a real-DOM smoke test.
   });
 
+  it('markdown_renders_inline_formatting: assistant text rendered through vendor TurnCard produces semantic markdown elements', async () => {
+    // Falsifies the regression where rara's hand-rolled TurnCard rendered
+    // assistant text as raw `whitespace-pre-wrap` plaintext, so `**bold**`
+    // and `` `inline code` `` showed as literal asterisks/backticks. The
+    // vendor TurnCard pipes response text through its `Markdown`
+    // component, which emits `<strong>` / `<code>` for those constructs.
+    listMessagesMock.mockResolvedValueOnce([
+      makeMessage({
+        seq: 1,
+        role: 'assistant',
+        content: 'Here is **bold** and `code`',
+      }),
+    ]);
+
+    renderTimeline({ viewSessionKey: 'sess-A' });
+
+    // The semantic elements are the falsifier: any plaintext renderer
+    // would not emit a <strong> / <code> for these markdown tokens.
+    const strong = await screen.findByText('bold', { selector: 'strong' });
+    expect(strong).toBeInTheDocument();
+    const code = await screen.findByText('code', { selector: 'code' });
+    expect(code).toBeInTheDocument();
+  });
+
   it('fetch_error_does_not_block_live: history failure surfaces inline error and keeps input working', async () => {
     listMessagesMock.mockRejectedValueOnce(new Error('HTTP 500'));
 

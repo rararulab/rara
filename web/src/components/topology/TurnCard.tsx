@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-import { Activity, Clock, Hammer, Loader2 } from 'lucide-react';
-
-import { SpawnMarker, type SpawnMarkerKind } from './SpawnMarker';
+import type { SpawnMarkerKind } from './SpawnMarker';
 
 import type { ChatMessageData } from '@/api/types';
-import { Card } from '@/components/ui/card';
 import type { TopologyWebFrame } from '@/hooks/use-topology-subscription';
 
 /**
@@ -73,111 +70,6 @@ export interface TurnUsage {
   output: number;
   totalTokens: number;
   cost: number;
-}
-
-export interface TurnCardProps {
-  turn: TurnCardData;
-}
-
-export function TurnCard({ turn }: TurnCardProps) {
-  return (
-    <Card className="space-y-3 p-4">
-      {turn.reasoning && (
-        <div className="rounded border-l-2 border-muted bg-muted/30 px-3 py-2 text-xs italic text-muted-foreground">
-          {turn.reasoning}
-        </div>
-      )}
-
-      {turn.text && (
-        <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-          {turn.text}
-        </div>
-      )}
-
-      {turn.toolCalls.length > 0 && (
-        <div className="space-y-1.5">
-          {turn.toolCalls.map((call) => (
-            <ToolCallRow key={call.id} call={call} />
-          ))}
-        </div>
-      )}
-
-      {turn.markers.length > 0 && (
-        <div className="space-y-1.5">
-          {turn.markers.map((marker, idx) => (
-            <SpawnMarker key={`${turn.id}-marker-${String(idx)}`} marker={marker} />
-          ))}
-        </div>
-      )}
-
-      <TurnFooter turn={turn} />
-    </Card>
-  );
-}
-
-function ToolCallRow({ call }: { call: TurnToolCall }) {
-  const pending = call.result === null;
-  const failed = call.result !== null && !call.result.success;
-  return (
-    <div className="flex items-start gap-2 rounded border bg-muted/20 px-2.5 py-1.5 text-xs">
-      <Hammer className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-medium text-foreground">{call.name}</span>
-          {pending && (
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              running
-            </span>
-          )}
-          {failed && <span className="text-red-600 dark:text-red-400">failed</span>}
-        </div>
-        {call.result && (
-          <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-            {call.result.error ?? call.result.preview}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TurnFooter({ turn }: { turn: TurnCardData }) {
-  if (turn.inFlight) {
-    return (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        <span>thinking…</span>
-      </div>
-    );
-  }
-
-  if (!turn.metrics && !turn.usage) {
-    return null;
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-2 text-[11px] text-muted-foreground">
-      {turn.metrics && (
-        <>
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {(turn.metrics.durationMs / 1000).toFixed(1)}s
-          </span>
-          <span className="flex items-center gap-1">
-            <Activity className="h-3 w-3" />
-            {turn.metrics.iterations} iter · {turn.metrics.toolCalls} tools
-          </span>
-          <span className="font-mono">{turn.metrics.model}</span>
-        </>
-      )}
-      {turn.usage && (
-        <span className="ml-auto font-mono">
-          {turn.usage.totalTokens.toLocaleString()} tok · ${turn.usage.cost.toFixed(4)}
-        </span>
-      )}
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
