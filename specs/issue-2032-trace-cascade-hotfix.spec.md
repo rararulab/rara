@@ -115,19 +115,20 @@ endpoints. Crosses no `What rara is NOT` line.
 
 ### Allowed Changes
 
-- `web/src/components/topology/RaraTurnCard.tsx`
-- `web/src/components/topology/RaraTurnCardActionsMenu.tsx`
-- `web/src/components/topology/ExecutionTraceModal.tsx`
-- `web/src/components/topology/CascadeModal.tsx`
-- `web/src/components/topology/__tests__/RaraTurnCard.test.tsx`
-- `web/src/hooks/use-trace-fetch.ts`
-- `web/src/api/sessions.ts`
+- **/web/src/components/topology/RaraTurnCard.tsx
+- **/web/src/components/topology/RaraTurnCardActionsMenu.tsx
+- **/web/src/components/topology/ExecutionTraceModal.tsx
+- **/web/src/components/topology/CascadeModal.tsx
+- **/web/src/components/topology/__tests__/**
+- **/web/src/hooks/use-trace-fetch.ts
+- **/web/src/api/sessions.ts
+- **/specs/issue-2032-trace-cascade-hotfix.spec.md
 
 ### Forbidden
 
-- `web/src/vendor/**`
-- `crates/**`
-- `web/src/components/topology/TurnCard.tsx`
+- **/web/src/vendor/**
+- **/crates/**
+- **/web/src/components/topology/TurnCard.tsx
 
 ## Completion Criteria
 

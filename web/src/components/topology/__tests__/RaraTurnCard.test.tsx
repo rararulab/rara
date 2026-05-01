@@ -29,6 +29,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RaraTurnCard } from '../RaraTurnCard';
 import type { TurnCardData } from '../TurnCard';
 
+import { ApiError } from '@/api/client';
+
 import '@/i18n';
 
 // Mock the fetch wrappers so the tests exercise the wiring, not the network.
@@ -281,6 +283,110 @@ describe('RaraTurnCard — trace + cascade affordances', () => {
       }),
     );
     expect(document.querySelector('[data-turn-id="turn-42"]')).toBeNull();
+  });
+
+
+  // BDD: actions_menu_renders_in_dom
+  // Falsifier: revert RaraTurnCardActionsMenu wiring; assertion goes
+  // back to failing because vendor SimpleDropdown bails on mount.
+  it('RaraTurnCard__actions_menu_renders_in_dom', () => {
+    renderCard(makeTurn({ finalSeq: 22, inFlight: false }));
+    const icons = document.querySelectorAll('svg.lucide-more-horizontal, svg.lucide-ellipsis');
+    expect(icons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // BDD: cascade_modal_only_on_tool_rows
+  // Falsifier: drop the `activity.type === 'tool'` guard; clicking the
+  // thinking row opens the cascade modal and the first assertion fails.
+  it('RaraTurnCard__cascade_modal_only_on_tool_rows', async () => {
+    fetchCascadeTraceMock.mockResolvedValue({
+      message_id: 'sess-abc-22',
+      ticks: [],
+      summary: { tick_count: 0, tool_call_count: 0, total_entries: 0 },
+    });
+
+    const turn = makeTurn({
+      finalSeq: 22,
+      inFlight: false,
+      reasoning: 'thinking out loud',
+      toolCalls: [
+        {
+          id: 'tool-bash-1',
+          name: 'bash',
+          result: { success: true, preview: 'ok', error: null },
+        },
+      ],
+    });
+    renderCard(turn);
+
+    const chevron = document.querySelector('.lucide-chevron-right');
+    const toggleBtn = chevron?.closest('button');
+    expect(toggleBtn).not.toBeNull();
+    fireEvent.click(toggleBtn as HTMLElement);
+
+    // Click the thinking row — cascade modal must NOT open. The vendor
+    // renders our synthetic `type: 'thinking'` activity through its
+    // fallback row with the i18n label "Processing" (no toolName, no
+    // displayName → `formatToolDisplay` returns the i18n
+    // `turnCard.processing` string). The label is incidental; the
+    // load-bearing assertion is that clicking it does not open the
+    // cascade modal.
+    const thinkingSpan = Array.from(document.querySelectorAll('span')).find(
+      (s) => s.textContent?.trim() === 'Processing',
+    );
+    expect(thinkingSpan).toBeTruthy();
+    fireEvent.click(thinkingSpan as HTMLElement);
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Click the tool row — cascade modal must open.
+    const toolNode = await screen.findByText('bash');
+    fireEvent.click(toolNode);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  // BDD: trace_modal_friendly_404
+  // Falsifier: drop the isSeqDivergence404 branch; the modal renders
+  // the raw "Failed to load trace: …" string and the friendly-copy
+  // assertion fails.
+  it('RaraTurnCard__trace_modal_friendly_404', async () => {
+    fetchExecutionTraceMock.mockRejectedValue(
+      new ApiError(404, 'user message at seq 22 has no rara_turn_id metadata'),
+    );
+
+    renderCard(makeTurn({ finalSeq: 22, inFlight: false }));
+    const trigger = findActionsTrigger();
+    expect(trigger).not.toBeNull();
+    fireEvent.click(trigger as HTMLElement);
+    fireEvent.click(screen.getByText(/view turn details/i));
+
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert')).toBeInTheDocument();
+    });
+    expect(
+      within(dialog).getByText(/Trace data is not available for this turn yet/i),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/rara_turn_id metadata/i)).toBeNull();
+  });
+
+  // BDD: trace_modal_non_404_error_distinct
+  // Falsifier: route every error through the friendly-404 branch; the
+  // distinct-copy assertion below fails because the raw "internal error"
+  // is no longer rendered.
+  it('RaraTurnCard__trace_modal_non_404_error_distinct', async () => {
+    fetchExecutionTraceMock.mockRejectedValue(new ApiError(500, 'internal error'));
+
+    renderCard(makeTurn({ finalSeq: 22, inFlight: false }));
+    const trigger = findActionsTrigger();
+    fireEvent.click(trigger as HTMLElement);
+    fireEvent.click(screen.getByText(/view turn details/i));
+
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert')).toBeInTheDocument();
+    });
+    expect(within(dialog).getByText(/internal error/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Trace data is not available for this turn yet/i)).toBeNull();
   });
 
   it('RaraTurnCard__trace_modal_shows_error_on_fetch_failure', async () => {
