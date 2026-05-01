@@ -80,7 +80,13 @@ fn entry_to_list_item(e: &ks::SessionEntry) -> SessionListItem {
         key:           e.key.to_string(),
         title:         e.title.clone(),
         preview:       e.preview.clone(),
-        message_count: e.message_count,
+        // Wire-compat: the telegram `SessionListItem` / `SessionDetail`
+        // DTOs still expose this field as `message_count`. Issue #2025
+        // renamed the kernel-side field to `total_entries` (semantic
+        // shift: counts every TapEntry, not only Message-kind), but the
+        // field name on the wire stayed put to avoid forcing a breaking
+        // change on every external client.
+        message_count: e.total_entries,
         updated_at:    e.updated_at.to_rfc3339(),
     }
 }
@@ -90,7 +96,13 @@ fn entry_to_detail(e: &ks::SessionEntry) -> SessionDetail {
         key:           e.key.to_string(),
         title:         e.title.clone(),
         model:         e.model.clone(),
-        message_count: e.message_count,
+        // Wire-compat: the telegram `SessionListItem` / `SessionDetail`
+        // DTOs still expose this field as `message_count`. Issue #2025
+        // renamed the kernel-side field to `total_entries` (semantic
+        // shift: counts every TapEntry, not only Message-kind), but the
+        // field name on the wire stayed put to avoid forcing a breaking
+        // change on every external client.
+        message_count: e.total_entries,
         preview:       e.preview.clone(),
         created_at:    e.created_at.to_rfc3339(),
         updated_at:    e.updated_at.to_rfc3339(),
@@ -159,17 +171,21 @@ impl BotServiceClient for KernelBotServiceClient {
     async fn create_session(&self, title: Option<&str>) -> Result<String, BotServiceError> {
         let now = Utc::now();
         let entry = ks::SessionEntry {
-            key:            SessionKey::new(),
-            title:          title.map(String::from),
-            model:          None,
+            key: SessionKey::new(),
+            title: title.map(String::from),
+            model: None,
             model_provider: None,
             thinking_level: None,
-            system_prompt:  None,
-            message_count:  0,
-            preview:        None,
-            metadata:       None,
-            created_at:     now,
-            updated_at:     now,
+            system_prompt: None,
+            total_entries: 0,
+            preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: Vec::new(),
+            metadata: None,
+            created_at: now,
+            updated_at: now,
         };
         let created = self
             .sessions
@@ -299,8 +315,12 @@ impl BotServiceClient for KernelBotServiceClient {
             model_provider: None,
             thinking_level: None,
             system_prompt: None,
-            message_count: 0,
+            total_entries: 0,
             preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: Vec::new(),
             metadata,
             created_at: now,
             updated_at: now,
@@ -701,17 +721,21 @@ mod tests {
         let now = Utc::now();
         index
             .create_session(&SessionEntry {
-                key:            key.clone(),
-                title:          None,
-                model:          None,
+                key: key.clone(),
+                title: None,
+                model: None,
                 model_provider: None,
                 thinking_level: None,
-                system_prompt:  None,
-                message_count:  0,
-                preview:        None,
-                metadata:       None,
-                created_at:     now,
-                updated_at:     now,
+                system_prompt: None,
+                total_entries: 0,
+                preview: None,
+                last_token_usage: None,
+                estimated_context_tokens: 0,
+                entries_since_last_anchor: 0,
+                anchors: Vec::new(),
+                metadata: None,
+                created_at: now,
+                updated_at: now,
             })
             .await
             .unwrap();

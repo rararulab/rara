@@ -89,6 +89,7 @@ diesel_migrations.workspace = true
 rara-domain-shared = { workspace = true, features = ["testing"] }
 rara-kernel = { path = ".", features = ["testing"] }
 rara-model.workspace = true
+rara-sessions.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 test-case = "^3"

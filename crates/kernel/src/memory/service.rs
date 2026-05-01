@@ -18,20 +18,22 @@
 //! handles bootstrap anchors, fork/merge convenience flows, anchor-relative
 //! queries, and search over persisted message entries.
 
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
+use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use rapidfuzz::fuzz::RatioBatchComparator;
 use serde_json::{Map, Value, json};
 use snafu::ResultExt;
 use unicode_normalization::UnicodeNormalization;
 
 use super::{
-    AnchorNode, AnchorSummary, AnchorTree, FileTapeStore, ForkEdge, HandoffState, SessionBranch,
-    TapEntry, TapEntryKind, TapResult, get_fork_metadata,
+    AnchorNode, AnchorSummary, AnchorTree, AppendOutcome, FileTapeStore, ForkEdge, HandoffState,
+    SessionBranch, TapEntry, TapEntryKind, TapResult, get_fork_metadata,
 };
 use crate::{
     notification::{KernelNotification, NotificationBusRef},
-    session::{SessionIndex, SessionKey},
+    session::{AnchorRef, SessionDerivedState, SessionIndex, SessionIndexRef, SessionKey},
 };
 
 thread_local! {
@@ -115,6 +117,31 @@ pub fn current_tape() -> String {
     TAPE_CONTEXT.with(|current| current.borrow().clone().unwrap_or_else(|| "-".to_owned()))
 }
 
+/// In-memory per-session derived-state cache used by [`TapeService`] to
+/// maintain `SessionEntry` derived fields without rescanning the tape on
+/// every append (issue #2025 — Decision 1 forbids `info()` calls on the
+/// hot append path). Lazily populated on the first append per session
+/// from the session-index row, then mutated incrementally and pushed
+/// back to the index after every append.
+#[derive(Debug, Clone, Default)]
+struct DerivedCache {
+    total_entries:             i64,
+    entries_since_last_anchor: i64,
+    last_token_usage:          Option<i64>,
+    estimated_context_tokens:  i64,
+    /// Sum of payload-string chars accumulated since the last LLM-usage
+    /// entry, used by the `chars/4` estimator path (mirrors the
+    /// `additional_chars` computation in [`TapeService::info`]).
+    chars_since_last_usage:    u64,
+    anchors:                   Vec<AnchorRef>,
+    /// Whether this session already has a `preview` set in the index.
+    /// `false` means the next user-role message should populate it.
+    has_preview:               bool,
+    /// Whether the cache has been hydrated from the index. `false`
+    /// triggers a `get_session` on the next append.
+    hydrated:                  bool,
+}
+
 /// Tape helper with app-specific operations.
 ///
 /// Unlike the low-level [`FileTapeStore`], `TapeService` provides higher-level
@@ -123,14 +150,22 @@ pub fn current_tape() -> String {
 /// single instance can serve all sessions.
 #[derive(Clone)]
 pub struct TapeService {
-    store:        FileTapeStore,
-    fts:          Option<super::fts::TapeFts>,
+    store:         FileTapeStore,
+    fts:           Option<super::fts::TapeFts>,
     /// Optional notification bus for publishing tape mutation events.
     ///
     /// Wired in by `Kernel::new` after the bus is constructed, so external
     /// adapters can react to writes that happen outside a live user turn
     /// (background-task summaries, scheduled re-entries).
-    notification: Option<NotificationBusRef>,
+    notification:  Option<NotificationBusRef>,
+    /// Optional session index — when wired, every successful append on a
+    /// tape whose name parses as a [`SessionKey`] triggers a synchronous
+    /// derived-state update. Issue #2025: the previous design left
+    /// `SessionEntry::message_count` / `updated_at` as a stale snapshot
+    /// from session-create time.
+    session_index: Option<SessionIndexRef>,
+    /// Per-session derived-state cache (see [`DerivedCache`]).
+    derived_cache: Arc<DashMap<SessionKey, DerivedCache>>,
 }
 
 impl std::fmt::Debug for TapeService {
@@ -139,6 +174,8 @@ impl std::fmt::Debug for TapeService {
             .field("store", &self.store)
             .field("fts", &self.fts.is_some())
             .field("notification", &self.notification.is_some())
+            .field("session_index", &self.session_index.is_some())
+            .field("derived_cache_len", &self.derived_cache.len())
             .finish()
     }
 }
@@ -150,6 +187,8 @@ impl TapeService {
             store,
             fts: None,
             notification: None,
+            session_index: None,
+            derived_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -165,6 +204,8 @@ impl TapeService {
             store,
             fts: Some(super::fts::TapeFts::new(pools)),
             notification: None,
+            session_index: None,
+            derived_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -173,6 +214,15 @@ impl TapeService {
     #[must_use]
     pub fn with_notifications(mut self, bus: NotificationBusRef) -> Self {
         self.notification = Some(bus);
+        self
+    }
+
+    /// Attach a [`SessionIndex`] so every append updates the owning
+    /// session's derived-state row in band. Sessions whose tape name is
+    /// not a [`SessionKey`] (user tapes, internal tapes) skip silently.
+    #[must_use]
+    pub fn with_session_index(mut self, index: SessionIndexRef) -> Self {
+        self.session_index = Some(index);
         self
     }
 
@@ -254,7 +304,8 @@ impl TapeService {
         name: &str,
         state: HandoffState,
     ) -> TapResult<Vec<TapEntry>> {
-        self.store
+        let outcome = self
+            .store
             .append(
                 tape_name,
                 TapEntryKind::Anchor,
@@ -265,12 +316,14 @@ impl TapeService {
                 None,
             )
             .await?;
+        self.record_append(tape_name, &outcome).await;
         self.from_last_anchor(tape_name, None).await
     }
 
     /// Append an event entry.
     pub async fn append_event(&self, tape_name: &str, name: &str, data: Value) -> TapResult<()> {
-        self.store
+        let outcome = self
+            .store
             .append(
                 tape_name,
                 TapEntryKind::Event,
@@ -278,12 +331,14 @@ impl TapeService {
                 None,
             )
             .await?;
+        self.record_append(tape_name, &outcome).await;
         Ok(())
     }
 
     /// Append a system entry.
     pub async fn append_system(&self, tape_name: &str, content: &str) -> TapResult<()> {
-        self.store
+        let outcome = self
+            .store
             .append(
                 tape_name,
                 TapEntryKind::System,
@@ -291,6 +346,7 @@ impl TapeService {
                 None,
             )
             .await?;
+        self.record_append(tape_name, &outcome).await;
         Ok(())
     }
 
@@ -301,10 +357,12 @@ impl TapeService {
         payload: Value,
         metadata: Option<Value>,
     ) -> TapResult<TapEntry> {
-        let entry = self
+        let outcome = self
             .store
             .append(tape_name, TapEntryKind::Message, payload, metadata)
             .await?;
+        let entry = outcome.entry.clone();
+        self.record_append(tape_name, &outcome).await;
 
         // Best-effort FTS indexing — errors are logged, never propagated.
         if let Some(fts) = &self.fts {
@@ -347,9 +405,13 @@ impl TapeService {
         payload: Value,
         metadata: Option<Value>,
     ) -> TapResult<TapEntry> {
-        self.store
+        let outcome = self
+            .store
             .append(tape_name, TapEntryKind::ToolCall, payload, metadata)
-            .await
+            .await?;
+        let entry = outcome.entry.clone();
+        self.record_append(tape_name, &outcome).await;
+        Ok(entry)
     }
 
     /// Append a tool-result entry.
@@ -359,9 +421,193 @@ impl TapeService {
         payload: Value,
         metadata: Option<Value>,
     ) -> TapResult<TapEntry> {
-        self.store
+        let outcome = self
+            .store
             .append(tape_name, TapEntryKind::ToolResult, payload, metadata)
-            .await
+            .await?;
+        let entry = outcome.entry.clone();
+        self.record_append(tape_name, &outcome).await;
+        Ok(entry)
+    }
+
+    /// Update the session-index row's tape-derived state after one append.
+    ///
+    /// Sessions whose tape name does not parse as a [`SessionKey`] (user
+    /// tape, internal tape) skip silently. Errors loading the session row
+    /// or writing the update are logged at warn level but never propagate
+    /// — the tape JSONL is the source of truth and the boot reconciler
+    /// (Decision 10) closes any drift.
+    async fn record_append(&self, tape_name: &str, outcome: &AppendOutcome) {
+        let Some(index) = &self.session_index else {
+            return;
+        };
+        let Ok(session_key) = SessionKey::try_from_raw(tape_name) else {
+            return;
+        };
+
+        // Hydrate the cache from the index on first encounter so we can
+        // drive the per-session derived state forward without scanning
+        // the tape on every append.
+        {
+            let entry = self.derived_cache.entry(session_key);
+            let mut slot = entry.or_default();
+            if !slot.hydrated {
+                match index.get_session(&session_key).await {
+                    Ok(Some(row)) => {
+                        slot.total_entries = row.total_entries;
+                        slot.entries_since_last_anchor = row.entries_since_last_anchor;
+                        slot.last_token_usage = row.last_token_usage;
+                        slot.estimated_context_tokens = row.estimated_context_tokens;
+                        slot.anchors = row.anchors;
+                        slot.has_preview = row.preview.is_some();
+                        slot.chars_since_last_usage = 0;
+                    }
+                    Ok(None) => {
+                        // Row not in the index yet — `record_append` may
+                        // race a not-yet-committed `create_session`. The
+                        // cache stays at default; the next append after
+                        // creation will pick it up via the hydrate path.
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            %e, %session_key,
+                            "session-index hydrate failed on append; deferring"
+                        );
+                        return;
+                    }
+                }
+                slot.hydrated = true;
+            }
+        }
+
+        // Compute the post-append derived state and the preview to set.
+        // Cloned out so the DashMap slot is released before the await.
+        let (derived, preview_to_set) = {
+            let mut slot = self
+                .derived_cache
+                .get_mut(&session_key)
+                .expect("cache entry created above");
+
+            slot.total_entries = outcome.total_entries_after;
+            let entry_ts: DateTime<Utc> = jiff_to_chrono(outcome.entry.timestamp);
+
+            // -- per-kind incremental updates -----------------------------
+            match outcome.entry.kind {
+                TapEntryKind::Anchor => {
+                    let segment = slot.entries_since_last_anchor + 1;
+                    let name = outcome
+                        .entry
+                        .payload
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("-")
+                        .to_owned();
+                    slot.anchors.push(AnchorRef {
+                        anchor_id: outcome.entry.id,
+                        byte_offset: outcome.byte_offset,
+                        name,
+                        timestamp: entry_ts,
+                        entry_count_in_segment: segment,
+                    });
+                    slot.entries_since_last_anchor = 0;
+                    slot.estimated_context_tokens = 0;
+                    slot.chars_since_last_usage = 0;
+                }
+                _ => {
+                    slot.entries_since_last_anchor += 1;
+                }
+            }
+
+            // Track usage from `llm.run` events and from
+            // `usage.prompt_tokens` carried on assistant message metadata.
+            if outcome.entry.kind == TapEntryKind::Event {
+                let event_name = outcome.entry.payload.get("name").and_then(Value::as_str);
+                if matches!(event_name, Some("run" | "llm.run")) {
+                    if let Some(total) = outcome
+                        .entry
+                        .payload
+                        .get("data")
+                        .and_then(Value::as_object)
+                        .and_then(|d| d.get("usage"))
+                        .and_then(Value::as_object)
+                        .and_then(|u| u.get("total_tokens"))
+                        .and_then(Value::as_u64)
+                    {
+                        slot.last_token_usage = Some(total as i64);
+                    }
+                }
+            }
+            if let Some(meta) = outcome.entry.metadata.as_ref() {
+                if let Some(prompt) = meta
+                    .get("usage")
+                    .and_then(|u| u.get("prompt_tokens"))
+                    .and_then(Value::as_u64)
+                {
+                    let completion = meta
+                        .get("usage")
+                        .and_then(|u| u.get("completion_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    slot.estimated_context_tokens = (prompt + completion) as i64;
+                    slot.chars_since_last_usage = 0;
+                }
+            }
+            // For conversational entries that don't carry usage, fall back
+            // to the `chars/4` estimator (mirrors `TapeService::info`).
+            if matches!(
+                outcome.entry.kind,
+                TapEntryKind::Message | TapEntryKind::ToolCall | TapEntryKind::ToolResult
+            ) && outcome
+                .entry
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("usage"))
+                .is_none()
+            {
+                slot.chars_since_last_usage = slot
+                    .chars_since_last_usage
+                    .saturating_add(outcome.entry.payload.to_string().len() as u64);
+                slot.estimated_context_tokens = slot
+                    .estimated_context_tokens
+                    .saturating_add((slot.chars_since_last_usage as i64) / 4);
+            }
+
+            // First user-role message becomes the preview.
+            let preview = if !slot.has_preview
+                && outcome.entry.kind == TapEntryKind::Message
+                && outcome.entry.payload.get("role").and_then(Value::as_str) == Some("user")
+            {
+                let text = extract_message_preview_text(&outcome.entry.payload);
+                if let Some(p) = text {
+                    slot.has_preview = true;
+                    Some(p)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let derived = SessionDerivedState::builder()
+                .total_entries(slot.total_entries)
+                .updated_at(entry_ts)
+                .maybe_last_token_usage(slot.last_token_usage)
+                .estimated_context_tokens(slot.estimated_context_tokens)
+                .entries_since_last_anchor(slot.entries_since_last_anchor)
+                .anchors(slot.anchors.clone())
+                .maybe_preview(preview.clone())
+                .build();
+            (derived, preview)
+        };
+
+        if let Err(e) = index.update_session_derived(&session_key, &derived).await {
+            tracing::warn!(
+                %e, %session_key,
+                "session-index derived-state update failed; \
+                 boot reconciler will repair on next start"
+            );
+        }
+        let _ = preview_to_set;
     }
 
     /// Build LLM-ready messages from tape entries since the last anchor.
@@ -480,7 +726,8 @@ impl TapeService {
         content: &str,
     ) -> TapResult<TapEntry> {
         let user_tape = super::user_tape_name(user_id);
-        self.store
+        let outcome = self
+            .store
             .append(
                 &user_tape,
                 TapEntryKind::Note,
@@ -490,7 +737,12 @@ impl TapeService {
                 }),
                 None,
             )
-            .await
+            .await?;
+        // User tapes have no SessionEntry to update — `record_append`
+        // will short-circuit on the SessionKey parse — but we still call
+        // it for symmetry / future-proofing.
+        self.record_append(&user_tape, &outcome).await;
+        Ok(outcome.entry)
     }
 
     /// Read all note entries from a user tape.
@@ -1351,6 +1603,53 @@ fn build_session_branch(
 /// Apply an optional kind filter to one entry.
 fn kind_matches(entry: &TapEntry, kinds: Option<&[TapEntryKind]>) -> bool {
     kinds.is_none_or(|kinds| kinds.iter().any(|kind| kind == &entry.kind))
+}
+
+/// Convert a `jiff::Timestamp` to `chrono::DateTime<Utc>`.
+///
+/// Falls back to the current wall clock if conversion fails (only
+/// possible for timestamps outside the chrono representable range,
+/// which is not reachable for any real tape entry).
+fn jiff_to_chrono(ts: jiff::Timestamp) -> chrono::DateTime<chrono::Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
+    }
+    chrono::DateTime::<chrono::Utc>::from_timestamp(second, nanosecond as u32)
+        .unwrap_or_else(chrono::Utc::now)
+}
+
+/// Extract a short preview string from a Message-kind tape entry's
+/// payload. Returns `None` when no usable text is found (e.g. multimodal
+/// payloads with no text segment).
+fn extract_message_preview_text(payload: &Value) -> Option<String> {
+    const MAX_PREVIEW_CHARS: usize = 200;
+
+    let raw = payload
+        .get("content")
+        .and_then(|c| match c {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(arr) => {
+                // Multimodal: pick the first text segment.
+                arr.iter()
+                    .find_map(|seg| seg.get("text").and_then(Value::as_str).map(str::to_owned))
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            payload
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })?;
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(MAX_PREVIEW_CHARS).collect())
 }
 
 fn score_search_candidate(

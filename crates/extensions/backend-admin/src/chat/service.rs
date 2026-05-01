@@ -498,8 +498,12 @@ impl SessionService {
             model_provider,
             thinking_level,
             system_prompt,
-            message_count: 0,
+            total_entries: 0,
             preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: Vec::new(),
             metadata: None,
             created_at: now,
             updated_at: now,
@@ -611,17 +615,21 @@ impl SessionService {
             None => {
                 let now = Utc::now();
                 let entry = SessionEntry {
-                    key:            *key,
-                    title:          title.map(ToOwned::to_owned),
-                    model:          model.map(ToOwned::to_owned),
+                    key: *key,
+                    title: title.map(ToOwned::to_owned),
+                    model: model.map(ToOwned::to_owned),
                     model_provider: None,
                     thinking_level: None,
-                    system_prompt:  system_prompt.map(ToOwned::to_owned),
-                    message_count:  0,
-                    preview:        None,
-                    metadata:       None,
-                    created_at:     now,
-                    updated_at:     now,
+                    system_prompt: system_prompt.map(ToOwned::to_owned),
+                    total_entries: 0,
+                    preview: None,
+                    last_token_usage: None,
+                    estimated_context_tokens: 0,
+                    entries_since_last_anchor: 0,
+                    anchors: Vec::new(),
+                    metadata: None,
+                    created_at: now,
+                    updated_at: now,
                 };
                 Ok(self.session_index.create_session(&entry).await?)
             }
@@ -1144,17 +1152,21 @@ mod session_patch_tests {
     fn sample_session() -> SessionEntry {
         let now = Utc::now();
         SessionEntry {
-            key:            SessionKey::new(),
-            title:          Some("existing title".to_owned()),
-            model:          Some("kimi-k2.5".to_owned()),
+            key: SessionKey::new(),
+            title: Some("existing title".to_owned()),
+            model: Some("kimi-k2.5".to_owned()),
             model_provider: Some("kimi".to_owned()),
             thinking_level: Some(ThinkingLevel::Medium),
-            system_prompt:  Some("hello".to_owned()),
-            message_count:  0,
-            preview:        None,
-            metadata:       None,
-            created_at:     now,
-            updated_at:     now,
+            system_prompt: Some("hello".to_owned()),
+            total_entries: 0,
+            preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: Vec::new(),
+            metadata: None,
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -1450,17 +1462,21 @@ mod search_sessions_tests {
     async fn register_session(index: &InMemorySessionIndex, key: &SessionKey, title: &str) {
         let now = Utc::now();
         let entry = SessionEntry {
-            key:            key.clone(),
-            title:          Some(title.to_owned()),
-            model:          None,
+            key: key.clone(),
+            title: Some(title.to_owned()),
+            model: None,
             model_provider: None,
             thinking_level: None,
-            system_prompt:  None,
-            message_count:  0,
-            preview:        None,
-            metadata:       None,
-            created_at:     now,
-            updated_at:     now,
+            system_prompt: None,
+            total_entries: 0,
+            preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: Vec::new(),
+            metadata: None,
+            created_at: now,
+            updated_at: now,
         };
         index.create_session(&entry).await.expect("create session");
     }

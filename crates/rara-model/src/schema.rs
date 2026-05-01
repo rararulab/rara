@@ -177,6 +177,37 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    sessions (key) {
+        key -> Text,
+        title -> Nullable<Text>,
+        model -> Nullable<Text>,
+        model_provider -> Nullable<Text>,
+        thinking_level -> Nullable<Text>,
+        system_prompt -> Nullable<Text>,
+        total_entries -> BigInt,
+        preview -> Nullable<Text>,
+        last_token_usage -> Nullable<BigInt>,
+        estimated_context_tokens -> BigInt,
+        entries_since_last_anchor -> BigInt,
+        anchors_json -> Text,
+        metadata -> Nullable<Text>,
+        created_at -> Text,
+        updated_at -> Text,
+    }
+}
+
+diesel::table! {
+    session_channel_bindings (channel_type, chat_id, thread_id) {
+        channel_type -> Text,
+        chat_id -> Text,
+        thread_id -> Nullable<Text>,
+        session_key -> Text,
+        created_at -> Text,
+        updated_at -> Text,
+    }
+}
+
 diesel::joinable!(channel_binding -> chat_session (session_key));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -192,6 +223,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     kernel_users,
     kv_table,
     memory_items,
+    session_channel_bindings,
+    sessions,
     skill_cache,
     tape_fts_meta,
 );
