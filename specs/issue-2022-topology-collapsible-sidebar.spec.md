@@ -6,7 +6,7 @@ tags: []
 
 ## Intent
 
-The topology page (`web/src/pages/Topology.tsx`) renders a fixed
+The topology page (`web/src/pages/Chat.tsx`) renders a fixed
 3-pane shell: `SessionPicker` (left, 280px) | `TimelineView` (centre,
 flex) | `WorkerInbox` + `TapeLineageView` (right, 320px). The left rail
 has no toggle — once `md:` breakpoint is hit, the 280px column is
@@ -95,8 +95,8 @@ Prior art reviewed:
 
 ### Allowed Changes
 
-- **/web/src/pages/Topology.tsx
-- **/web/src/pages/__tests__/Topology.test.tsx
+- **/web/src/pages/Chat.tsx
+- **/web/src/pages/__tests__/Chat.test.tsx
 - **/web/src/components/topology/AGENT.md
 - **/specs/issue-2022-topology-collapsible-sidebar.spec.md
 
@@ -121,13 +121,13 @@ Feature: Collapsible left sidebar on the topology page
     When the user clicks the sidebar toggle button in the topology header
     Then the SessionPicker is no longer present in the DOM
       And the centre timeline column expands to fill the freed width
-    Test: web/src/pages/__tests__/Topology.test.tsx::toggle_hides_session_picker
+    Test: web/src/pages/__tests__/Chat.test.tsx::toggle_hides_session_picker
 
   Scenario: Toggle restores the SessionPicker
     Given the topology page is rendered with the sidebar collapsed
     When the user clicks the sidebar toggle button
     Then the SessionPicker is mounted and visible again
-    Test: web/src/pages/__tests__/Topology.test.tsx::toggle_restores_session_picker
+    Test: web/src/pages/__tests__/Chat.test.tsx::toggle_restores_session_picker
 
   Scenario: Collapsed state persists across reloads
     Given the user has collapsed the sidebar
@@ -135,20 +135,20 @@ Feature: Collapsible left sidebar on the topology page
        (simulating a full page reload backed by the same localStorage)
     Then the SessionPicker is not rendered on the next mount
       And the toggle button reflects the collapsed state
-    Test: web/src/pages/__tests__/Topology.test.tsx::collapsed_state_persists
+    Test: web/src/pages/__tests__/Chat.test.tsx::collapsed_state_persists
 
   Scenario: Default state for a first-time visitor is expanded
     Given localStorage has no entry for the sidebar collapse key
     When the topology page mounts
     Then the SessionPicker is rendered
-    Test: web/src/pages/__tests__/Topology.test.tsx::default_state_is_expanded
+    Test: web/src/pages/__tests__/Chat.test.tsx::default_state_is_expanded
 
   Scenario: localStorage access failure falls back to default
     Given localStorage throws on read (private browsing or disabled storage)
     When the topology page mounts
     Then the SessionPicker is rendered (default expanded state)
       And the page does not crash or surface the error to the user
-    Test: web/src/pages/__tests__/Topology.test.tsx::localstorage_failure_falls_back
+    Test: web/src/pages/__tests__/Chat.test.tsx::localstorage_failure_falls_back
 ```
 
 ## Constraints
