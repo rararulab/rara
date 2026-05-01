@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 
+import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Network, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
+import { api } from '@/api/client';
+import { fetchSessionMessagesBetweenAnchors } from '@/api/sessions';
+import type { ChatMessageData, ChatSession, SessionAnchor } from '@/api/types';
 import { SessionPicker } from '@/components/topology/SessionPicker';
 import { TapeLineageView } from '@/components/topology/TapeLineageView';
+import { TimelineChapterStrip } from '@/components/topology/TimelineChapterStrip';
 import { TimelineView } from '@/components/topology/TimelineView';
 import { WorkerInbox } from '@/components/topology/WorkerInbox';
 import { Badge } from '@/components/ui/badge';
@@ -90,6 +95,51 @@ export default function Chat() {
   }, [sidebarCollapsed]);
 
   const subscription = useTopologySubscription(rootSessionKey ?? null);
+
+  // Currently-selected anchor segment (issue #2040). `null` means "no
+  // chapter selected" → `TimelineView` falls back to its own
+  // `useSessionHistory` fetch (the legacy "last 200" path).
+  const [segmentMessages, setSegmentMessages] = useState<ChatMessageData[] | null>(null);
+
+  // Reset the chapter selection whenever the rendered session changes —
+  // a chapter is meaningful only against the tape it was clicked on, and
+  // showing stale messages after a session swap would be a worse bug
+  // than the extra round-trip on the new session.
+  const renderedSessionKey = viewChild ?? rootSessionKey ?? null;
+  useEffect(() => {
+    setSegmentMessages(null);
+  }, [renderedSessionKey]);
+
+  // Fetch the session row to get `anchors[]` for the chapter strip.
+  // This is a separate query from the picker's list so the strip can
+  // mount independently and the cache stays scoped per-session.
+  const sessionQuery = useQuery<ChatSession | null>({
+    queryKey: ['topology', 'session', renderedSessionKey] as const,
+    queryFn: ({ signal }) => {
+      if (!renderedSessionKey) return Promise.resolve(null);
+      return api.get<ChatSession>(
+        `/api/v1/chat/sessions/${encodeURIComponent(renderedSessionKey)}`,
+        signal ? { signal } : undefined,
+      );
+    },
+    enabled: renderedSessionKey !== null,
+    staleTime: 30_000,
+  });
+  const anchors: SessionAnchor[] = sessionQuery.data?.anchors ?? [];
+
+  const handleSelectAnchor = useCallback(
+    (from: SessionAnchor, to: SessionAnchor | null) => {
+      if (!renderedSessionKey) return;
+      void fetchSessionMessagesBetweenAnchors(
+        renderedSessionKey,
+        from.anchor_id,
+        to?.anchor_id ?? null,
+      ).then((messages) => {
+        setSegmentMessages(messages);
+      });
+    },
+    [renderedSessionKey],
+  );
 
   useEffect(() => {
     setViewChild(null);
@@ -162,6 +212,7 @@ export default function Chat() {
                   </span>
                 </div>
               )}
+              <TimelineChapterStrip anchors={anchors} onSelectAnchor={handleSelectAnchor} />
               <TimelineView
                 viewSessionKey={viewChild ?? rootSessionKey}
                 events={subscription.events}
@@ -170,6 +221,7 @@ export default function Chat() {
                 // the user did not pick. Browsing a child via the worker
                 // inbox is observation-only; replies still go to root.
                 promptSessionKey={rootSessionKey}
+                segmentMessages={segmentMessages}
               />
             </div>
           ) : (

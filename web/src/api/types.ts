@@ -106,6 +106,21 @@ export interface ProviderInfo {
  *  lossy mapping. */
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+/** One persisted anchor (kernel-emitted checkpoint) on a session's tape.
+ *
+ *  Mirrors `crates/kernel/src/session/mod.rs::AnchorRef`. `byte_offset`
+ *  is the file position where the anchor's JSONL line starts and is what
+ *  the segment-fetch endpoint resolves anchor ids against — see the
+ *  `from_anchor` / `to_anchor` query params on
+ *  `GET /api/v1/chat/sessions/{key}/messages`. */
+export interface SessionAnchor {
+  anchor_id: number;
+  byte_offset: number;
+  name: string;
+  timestamp: string;
+  entry_count_in_segment: number;
+}
+
 export interface ChatSession {
   key: string;
   title: string | null;
@@ -115,6 +130,10 @@ export interface ChatSession {
   system_prompt: string | null;
   message_count: number;
   preview: string | null;
+  /** Anchors persisted on this session's tape, oldest first. Empty when
+   *  the session has not yet emitted any. Optional on the wire so older
+   *  backends still parse — see `#[serde(default)]` on the Rust side. */
+  anchors?: SessionAnchor[];
   metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;

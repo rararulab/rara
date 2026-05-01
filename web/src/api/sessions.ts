@@ -79,6 +79,38 @@ export async function listMessages(
 }
 
 /**
+ * Fetch the chat-message slice between two anchors on a session.
+ *
+ * Wraps `GET /api/v1/chat/sessions/{key}/messages?from_anchor=&to_anchor=`.
+ * The backend resolves anchor ids against the session row's persisted
+ * `anchors[]` to a half-open `[from.byte_offset, to.byte_offset)` byte
+ * range and reads only that segment via a seek-based store primitive
+ * (issue #2040). Either bound is independently optional:
+ *
+ * - `to_anchor` omitted → reads to EOF (most-recent anchor case).
+ * - `from_anchor` omitted → reads from the start of the tape.
+ *
+ * Both omitted is supported by the route but pointless via this helper —
+ * use `listMessages` instead, which preserves the legacy `?limit` path.
+ *
+ * Returns the same `ChatMessageData[]` envelope as `listMessages` so the
+ * caller can swap the message list in place without per-mode shape
+ * branching.
+ */
+export async function fetchSessionMessagesBetweenAnchors(
+  sessionKey: string,
+  fromAnchorId: number | null,
+  toAnchorId: number | null,
+  options?: { signal?: AbortSignal },
+): Promise<ChatMessageData[]> {
+  const params = new URLSearchParams();
+  if (fromAnchorId !== null) params.set('from_anchor', String(fromAnchorId));
+  if (toAnchorId !== null) params.set('to_anchor', String(toAnchorId));
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/messages?${params.toString()}`;
+  return api.get<ChatMessageData[]>(path, options?.signal ? { signal: options.signal } : undefined);
+}
+
+/**
  * Fetch the per-turn execution trace for a single assistant turn.
  *
  * Wraps `GET /api/v1/chat/sessions/{key}/execution-trace?seq={seq}`. The

@@ -664,6 +664,72 @@ impl SessionService {
         Ok(messages[start..].to_vec())
     }
 
+    /// List conversational messages bounded by anchor byte offsets.
+    ///
+    /// Resolves `from_anchor` / `to_anchor` ids against the session
+    /// row's persisted `anchors[]` (already loaded by [`Self::get_session`]
+    /// — no extra DB round-trip), then asks the tape store for the
+    /// half-open `[from.byte_offset, to.byte_offset)` byte segment via
+    /// [`TapeService::entries_in_byte_range`]. Returns the same
+    /// [`ChatMessage`] envelope as [`Self::list_messages`] so the web
+    /// client can replace its message list without per-mode shape
+    /// branching.
+    ///
+    /// Errors:
+    /// - Unknown anchor id → [`ChatError::NotFound`] naming both the anchor id
+    ///   and the session key.
+    /// - `from_anchor` ordered after `to_anchor` (i.e. `from.byte_offset >
+    ///   to.byte_offset`) → [`ChatError::InvalidRequest`].
+    #[instrument(skip(self))]
+    pub async fn list_messages_between_anchors(
+        &self,
+        key: &SessionKey,
+        from_anchor: Option<u64>,
+        to_anchor: Option<u64>,
+    ) -> Result<Vec<ChatMessage>, ChatError> {
+        let session = self.get_session(key).await?;
+
+        // Resolve anchor ids → byte offsets via the in-row anchors[].
+        // Unknown ids are a 404 — they mean the client referenced an
+        // anchor that does not (or no longer) exists on this session,
+        // not a malformed request.
+        let resolve = |id: u64| -> Result<u64, ChatError> {
+            session
+                .anchors
+                .iter()
+                .find(|a| a.anchor_id == id)
+                .map(|a| a.byte_offset)
+                .ok_or_else(|| ChatError::NotFound {
+                    message: format!("anchor {id} not found in session {key}"),
+                })
+        };
+        let start = match from_anchor {
+            Some(id) => resolve(id)?,
+            None => 0,
+        };
+        let end = match to_anchor {
+            Some(id) => Some(resolve(id)?),
+            None => None,
+        };
+        if let Some(end_offset) = end
+            && start > end_offset
+        {
+            return Err(ChatError::InvalidRequest {
+                message: "from_anchor must precede to_anchor".to_string(),
+            });
+        }
+
+        let tape_name = key.to_string();
+        let entries = self
+            .tape_service
+            .entries_in_byte_range(&tape_name, start, end)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to read tape segment: {e}"),
+            })?;
+        Ok(tap_entries_to_chat_messages(&entries))
+    }
+
     /// Clear all tape entries for a session (reset the tape).
     #[instrument(skip(self))]
     pub async fn clear_messages(&self, key: &SessionKey) -> Result<(), ChatError> {

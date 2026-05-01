@@ -83,6 +83,29 @@ vi.mock('@/components/topology/TapeLineageView', () => ({
   TapeLineageView: () => <div data-testid="tape-lineage">lineage</div>,
 }));
 
+// Issue #2040 added a chapter strip + a `useQuery` for the session row so
+// the strip can read `anchors[]`. The sidebar tests don't care about the
+// chapter UI, so stub the strip and the query+helper to keep this test
+// focused on the layout/persistence behaviour it was written for.
+vi.mock('@/components/topology/TimelineChapterStrip', () => ({
+  TimelineChapterStrip: () => <div data-testid="chapter-strip" />,
+}));
+vi.mock('@/api/sessions', async () => {
+  const actual = await vi.importActual<typeof import('@/api/sessions')>('@/api/sessions');
+  return {
+    ...actual,
+    fetchSessionMessagesBetweenAnchors: vi.fn(async () => []),
+  };
+});
+vi.mock('@tanstack/react-query', async () => {
+  const actual =
+    await vi.importActual<typeof import('@tanstack/react-query')>('@tanstack/react-query');
+  return {
+    ...actual,
+    useQuery: () => ({ data: null, isLoading: false, isError: false, isSuccess: true }),
+  };
+});
+
 vi.mock('@/hooks/use-topology-subscription', () => ({
   useTopologySubscription: () => ({
     status: { kind: 'idle' as const },
