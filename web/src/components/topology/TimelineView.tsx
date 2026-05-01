@@ -350,8 +350,11 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
     <AppShellProvider value={appShellValue}>
       <EscapeInterruptProvider>
         <TooltipPrimitive.Provider delayDuration={300}>
-          <div className="flex flex-1 min-h-0 flex-col">
-            <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
+          <div className="group flex flex-1 min-h-0 flex-col">
+            <div
+              ref={scrollRef}
+              className="scrollbar-hover flex-1 min-h-0 space-y-3 overflow-y-auto pr-1"
+            >
               {isEmpty ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   Waiting for the next turn on{' '}

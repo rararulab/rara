@@ -91,7 +91,7 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
   }, [activeSessionKey, firstKey, onAutoSelect]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="group flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">Sessions</span>
         <div className="flex items-center gap-1">
@@ -118,7 +118,7 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="scrollbar-hover flex-1 overflow-y-auto">
         {sessionsQuery.isLoading ? (
           <SessionPickerEmpty label="Loading sessions…" />
         ) : sessionsQuery.isError ? (

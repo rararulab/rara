@@ -69,7 +69,7 @@ export function TapeLineageView({ events, activeSessionKey }: TapeLineageViewPro
       </button>
 
       {open && (
-        <div className="border-t border-border p-2">
+        <div className="group border-t border-border p-2">
           {layout.nodes.length === 0 ? (
             <div className="px-1 py-2 text-[11px] text-muted-foreground">
               No forks yet — this session has not anchored a child tape.
@@ -101,7 +101,7 @@ function TapeForestSvg({ layout, activeSessionKey }: TapeForestSvgProps) {
   );
 
   return (
-    <div className="overflow-auto">
+    <div className="scrollbar-hover overflow-auto">
       <svg
         width={layout.width}
         height={layout.height}
