@@ -151,5 +151,37 @@ export default defineConfig(({ mode }) => {
       port: 4173,
       strictPort: true,
     },
+    build: {
+      rollupOptions: {
+        output: {
+          // Split heavy vendor families into stable chunks so a topology-only
+          // edit doesn't invalidate the React chunk in browser caches, and so
+          // the entry chunk doesn't ship libraries used only by Topology.
+          // See issue #2033.
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return undefined;
+            if (
+              /node_modules\/(react|react-dom|react-router|scheduler|@tanstack\/react-query)\//.test(
+                id,
+              )
+            ) {
+              return 'react-vendor';
+            }
+            if (id.includes('node_modules/@tiptap/')) return 'tiptap';
+            if (id.includes('node_modules/react-pdf/') || id.includes('node_modules/pdfjs-dist/')) {
+              return 'pdf';
+            }
+            if (
+              id.includes('node_modules/@uiw/react-json-view') ||
+              id.includes('node_modules/@pierre/diffs')
+            ) {
+              return 'inspector';
+            }
+            if (id.includes('node_modules/mermaid')) return 'mermaid';
+            return undefined;
+          },
+        },
+      },
+    },
   };
 });
