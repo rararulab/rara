@@ -45,7 +45,10 @@ use std::{
 
 use snafu::OptionExt;
 
-use super::{catalog::OpenRouterCatalog, driver::LlmDriverRef};
+use super::{
+    catalog::OpenRouterCatalog,
+    driver::{LlmDriverRef, LlmEmbedderRef, LlmModelListerRef},
+};
 use crate::{agent::AgentManifest, error};
 
 /// Shared reference to the [`DriverRegistry`].
@@ -63,6 +66,18 @@ pub struct ProviderModelConfig {
 #[derive(Clone)]
 struct DriverRegistryState {
     drivers:         HashMap<String, LlmDriverRef>,
+    /// Per-provider `LlmModelLister` instances. Populated alongside
+    /// `drivers` for providers that expose a `/models` endpoint
+    /// (currently every `OpenAiDriver`-backed provider). Looked up by
+    /// `runtime_lister` at call time so a settings-driven swap of
+    /// `default_driver` immediately routes the next chat-model fetch to
+    /// the new provider.
+    listers:         HashMap<String, LlmModelListerRef>,
+    /// Per-provider `LlmEmbedder` instances. Same lifecycle as
+    /// `listers` — registered when the driver is registered and read
+    /// dynamically by `runtime_embedder` so swaps take effect without a
+    /// restart.
+    embedders:       HashMap<String, LlmEmbedderRef>,
     default_driver:  String,
     provider_models: HashMap<String, ProviderModelConfig>,
     agent_overrides: HashMap<String, AgentDriverConfig>,
@@ -129,6 +144,8 @@ impl DriverRegistry {
         Self {
             state: RwLock::new(DriverRegistryState {
                 drivers:         HashMap::new(),
+                listers:         HashMap::new(),
+                embedders:       HashMap::new(),
                 default_driver:  default_driver.into(),
                 provider_models: HashMap::new(),
                 agent_overrides: HashMap::new(),
@@ -145,6 +162,64 @@ impl DriverRegistry {
     pub fn register_driver(&self, name: impl Into<String>, driver: LlmDriverRef) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         state.drivers.insert(name.into(), driver);
+    }
+
+    /// Register or replace a named [`LlmModelLister`](super::LlmModelLister).
+    ///
+    /// Boot wires this for every provider whose driver implements
+    /// `LlmModelLister` (today: every `OpenAiDriver`-backed provider).
+    /// `RuntimeModelLister` looks up the entry at call time using
+    /// [`Self::default_driver`], so a settings-driven swap of the
+    /// default provider routes the next `list_models` call to the new
+    /// provider's catalog with no restart and no boot-time `Arc` capture
+    /// to invalidate.
+    pub fn register_lister(&self, name: impl Into<String>, lister: LlmModelListerRef) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.listers.insert(name.into(), lister);
+    }
+
+    /// Register or replace a named [`LlmEmbedder`](super::LlmEmbedder).
+    ///
+    /// Same lifecycle as [`Self::register_lister`] — `RuntimeEmbedder`
+    /// resolves the active embedder per call so the knowledge layer
+    /// follows the active provider without re-instantiation.
+    pub fn register_embedder(&self, name: impl Into<String>, embedder: LlmEmbedderRef) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.embedders.insert(name.into(), embedder);
+    }
+
+    /// Look up the lister for a registered provider, if any.
+    pub fn get_lister(&self, name: &str) -> Option<LlmModelListerRef> {
+        self.state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .listers
+            .get(name)
+            .cloned()
+    }
+
+    /// Look up the embedder for a registered provider, if any.
+    pub fn get_embedder(&self, name: &str) -> Option<LlmEmbedderRef> {
+        self.state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .embedders
+            .get(name)
+            .cloned()
+    }
+
+    /// Update the active default driver name.
+    ///
+    /// Called from the `PATCH /api/v1/settings` handler when
+    /// `llm.default_provider` changes so the next call into
+    /// `RuntimeModelLister` / `RuntimeEmbedder` resolves through the
+    /// new provider. Setting the default driver to a name that has not
+    /// been registered is allowed (mirrors the `register_driver`
+    /// out-of-order policy) — resolution will surface
+    /// `ProviderNotConfigured` until a matching driver is registered.
+    pub fn set_default_driver(&self, name: impl Into<String>) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.default_driver = name.into();
     }
 
     /// Set model configuration for a provider.

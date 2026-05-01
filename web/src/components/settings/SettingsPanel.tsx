@@ -768,6 +768,12 @@ export default function SettingsPanel({
     },
     onSuccess: (group) => {
       void queryClient.invalidateQueries({ queryKey: ['settings'] });
+      // The chat-model picker is downstream of `llm.default_provider`;
+      // a save in this panel may have flipped it. Invalidating the
+      // query is cheap (the next mount triggers one fetch) and avoids
+      // showing stale models for up to 5 min after a provider switch
+      // (issue #2014).
+      void queryClient.invalidateQueries({ queryKey: ['topology', 'chat-models'] });
       setGroupToasts((prev) => ({
         ...prev,
         [group]: { kind: 'success', message: 'Settings saved.' },
@@ -1114,6 +1120,12 @@ export default function SettingsPanel({
                                   [KEYS.LLM_DEFAULT_PROVIDER]: provider.id,
                                 });
                                 await queryClient.invalidateQueries({ queryKey: ['settings'] });
+                                // #2014: provider just changed — drop the
+                                // chat-model query so the picker refetches
+                                // against the new default.
+                                await queryClient.invalidateQueries({
+                                  queryKey: ['topology', 'chat-models'],
+                                });
                               }}
                             >
                               Set as default
@@ -1136,6 +1148,15 @@ export default function SettingsPanel({
                                 }
                                 await settingsApi.batchUpdate(keysToDelete);
                                 await queryClient.invalidateQueries({ queryKey: ['settings'] });
+                                if (isDefault) {
+                                  // The deleted provider was the default —
+                                  // drop the chat-model cache so the picker
+                                  // re-resolves against whatever provider
+                                  // becomes default next (#2014).
+                                  await queryClient.invalidateQueries({
+                                    queryKey: ['topology', 'chat-models'],
+                                  });
+                                }
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
