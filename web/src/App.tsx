@@ -15,7 +15,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router';
 
 import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
@@ -31,7 +31,20 @@ import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
 import Login from '@/pages/Login';
 import Subscriptions from '@/pages/Subscriptions';
-import Topology from '@/pages/Topology';
+
+// Topology owns the heavy vendor surface (`src/vendor/craft-ui` + tiptap,
+// react-pdf, mermaid, @uiw/react-json-view). Lazy-loading it keeps
+// `/login`, `/kernel-top`, `/subscriptions`, `/docs` off that ~4.7 MB
+// chunk on first paint — see issue #2033.
+const Topology = lazy(() => import('@/pages/Topology'));
+
+function RouteFallback() {
+  return (
+    <div className="flex h-full w-full items-center justify-center p-8 text-sm text-muted-foreground">
+      Loading…
+    </div>
+  );
+}
 
 const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
@@ -105,12 +118,33 @@ export default function App() {
                   </RequireAuth>
                 }
               >
-                <Route index element={<Topology />} />
+                <Route
+                  index
+                  element={
+                    <Suspense fallback={<RouteFallback />}>
+                      <Topology />
+                    </Suspense>
+                  }
+                />
                 <Route path="docs" element={<Docs />} />
                 <Route path="kernel-top" element={<KernelTop />} />
                 <Route path="subscriptions" element={<Subscriptions />} />
-                <Route path="topology" element={<Topology />} />
-                <Route path="topology/:rootSessionKey" element={<Topology />} />
+                <Route
+                  path="topology"
+                  element={
+                    <Suspense fallback={<RouteFallback />}>
+                      <Topology />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="topology/:rootSessionKey"
+                  element={
+                    <Suspense fallback={<RouteFallback />}>
+                      <Topology />
+                    </Suspense>
+                  }
+                />
               </Route>
             </Routes>
           </SettingsModalProvider>
