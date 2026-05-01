@@ -29,7 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // `setItem` / `getItem` / `removeItem` are missing. Install a minimal
 // in-memory `Storage`-shaped stand-in before importing the component so
 // `readSidebarCollapsed()` and the persistence effect see a working
-// surface. Running Topology tests under jsdom is fine; the shim only
+// surface. Running these tests under jsdom is fine; the shim only
 // needs to support the methods this page calls.
 class MemoryStorage {
   private store = new Map<string, string>();
@@ -57,11 +57,11 @@ Object.defineProperty(window, 'localStorage', {
   value: new MemoryStorage(),
 });
 
-import Topology from '../Topology';
+import Chat from '../Chat';
 
 // --- Module mocks --------------------------------------------------------
 //
-// `Topology` mounts `SessionPicker`, `TimelineView`, `WorkerInbox`,
+// `Chat` mounts `SessionPicker`, `TimelineView`, `WorkerInbox`,
 // `TapeLineageView`, and the topology WS subscription. The toggle test
 // exercises the layout/grid level only — children are stubbed to thin
 // markers so the assertions can target the picker's presence in the DOM
@@ -110,9 +110,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Topology — collapsible sidebar (issue-2022)', () => {
+describe('Chat — collapsible sidebar (issue-2022)', () => {
   it('toggle_hides_session_picker', () => {
-    render(<Topology />);
+    render(<Chat />);
 
     // Default expanded: picker is in the DOM.
     expect(screen.getByTestId('session-picker')).toBeInTheDocument();
@@ -130,7 +130,7 @@ describe('Topology — collapsible sidebar (issue-2022)', () => {
   it('toggle_restores_session_picker', () => {
     window.localStorage.setItem(STORAGE_KEY, 'true');
 
-    render(<Topology />);
+    render(<Chat />);
 
     expect(screen.queryByTestId('session-picker')).not.toBeInTheDocument();
 
@@ -141,7 +141,7 @@ describe('Topology — collapsible sidebar (issue-2022)', () => {
   });
 
   it('collapsed_state_persists', () => {
-    const { unmount } = render(<Topology />);
+    const { unmount } = render(<Chat />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }));
 
@@ -151,7 +151,7 @@ describe('Topology — collapsible sidebar (issue-2022)', () => {
     cleanup();
 
     // Simulate a page reload backed by the same localStorage.
-    render(<Topology />);
+    render(<Chat />);
 
     expect(screen.queryByTestId('session-picker')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe('Topology — collapsible sidebar (issue-2022)', () => {
   it('default_state_is_expanded', () => {
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
 
-    render(<Topology />);
+    render(<Chat />);
 
     expect(screen.getByTestId('session-picker')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('Topology — collapsible sidebar (issue-2022)', () => {
       throw new Error('storage disabled');
     });
 
-    expect(() => render(<Topology />)).not.toThrow();
+    expect(() => render(<Chat />)).not.toThrow();
 
     expect(screen.getByTestId('session-picker')).toBeInTheDocument();
 

@@ -7,13 +7,14 @@ single route under `DashboardLayout`.
 
 ## Architecture
 
-- `Topology.tsx` — default landing route (`/`) and `/topology[/:rootSessionKey]`.
+- `Chat.tsx` — default landing route (`/`) and `/chat[/:rootSessionKey]`.
   Renders the multi-agent observability view: timeline, worker inbox, and
-  fork lineage panels driven by `useTopologySubscription`.
-- `KernelTop.tsx` — kernel sessions overview; mounts `SessionList` +
-  `SessionDetail` and the approvals drawer.
-- `Subscriptions.tsx`, `Docs.tsx`, `Login.tsx` — single-purpose admin
-  pages.
+  fork lineage panels driven by `useTopologySubscription`. The product
+  surface is "Chat"; the underlying WS subscription / data model is still
+  named "topology" because it carries the parent-child session tree
+  (see `web/src/components/topology/`). Old `/topology[/:rootSessionKey]`
+  links 302-redirect to the corresponding `/chat` route — see #2041.
+- `Docs.tsx`, `Login.tsx` — single-purpose admin pages.
 - `Agents.tsx`, `CodingTasks.tsx`, `McpServers.tsx`, `Scheduler.tsx`,
   `Skills.tsx` — settings-adjacent pages not currently wired into the
   router; consult before deleting.
@@ -29,16 +30,18 @@ single route under `DashboardLayout`.
 ## What NOT To Do
 
 - Do NOT re-introduce a chat-style fullscreen page that bypasses
-  `DashboardLayout` — the multi-agent observability view (Topology) is
-  the chat replacement (#1999). A second fullscreen route would split
+  `DashboardLayout` — `Chat.tsx` is the multi-agent observability view
+  (#1999) and the chat replacement. A second fullscreen route would split
   the navigation surface again.
 - Do NOT add page-local data fetching for resources already exposed by a
   shared hook in `@/hooks` — the hook is the cache key boundary.
+- Do NOT re-introduce `KernelTop.tsx` or `Subscriptions.tsx` admin pages
+  (removed in #2041) without surfacing the IA decision first — they were
+  leftovers from #1476 / #1743 that no current flow depends on.
 
 ## Dependencies
 
 - `@/api/*` — backend client per resource.
 - `@/hooks/use-topology-subscription` — WebSocket-backed event stream
-  consumed by `Topology.tsx`.
-- `@/components/topology/*` — view modules used only by `Topology.tsx`.
-- `@/components/kernel/*` — view modules used only by `KernelTop.tsx`.
+  consumed by `Chat.tsx`.
+- `@/components/topology/*` — view modules used only by `Chat.tsx`.
