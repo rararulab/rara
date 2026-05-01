@@ -302,6 +302,47 @@ impl TapeFile {
         Ok(self.read_entries.clone())
     }
 
+    /// Read every entry whose JSONL line begins in `[start, end)` by
+    /// seeking the tape file directly. Bypasses `ensure_cached` — we
+    /// must NOT read the rest of the tape only to drop it. When `end`
+    /// is `None`, the upper bound is EOF.
+    ///
+    /// The line at `end` itself is excluded (half-open). A line whose
+    /// start offset is `>= end` is not even decoded.
+    fn read_byte_range(&mut self, start: u64, end: Option<u64>) -> TapResult<Vec<TapEntry>> {
+        let file_size = self.file_len()?;
+        let upper = end.unwrap_or(file_size).min(file_size);
+        if start >= upper {
+            return Ok(Vec::new());
+        }
+
+        // Read the segment in one positional read. JSONL lines are
+        // small (kilobytes) and the segment between two anchors is
+        // bounded; reading it whole avoids a per-line `pread` syscall.
+        let span = (upper - start) as usize;
+        let mut buffer = vec![0_u8; span];
+        let bytes_read = self.read_at(&mut buffer, start)?;
+        buffer.truncate(bytes_read);
+
+        let mut entries = Vec::new();
+        let mut cursor: u64 = 0; // offset within `buffer`, not file-absolute
+        for line in buffer.split_inclusive(|byte| *byte == b'\n') {
+            // The half-open contract is enforced on the *line's start
+            // offset* (file-absolute = start + cursor), not on its end.
+            // A line that begins at exactly `end` is excluded.
+            let line_start_abs = start + cursor;
+            if line_start_abs >= upper {
+                break;
+            }
+            let trimmed = trim_ascii(line);
+            if !trimmed.is_empty() {
+                entries.push(codec::decode_entry(trimmed)?);
+            }
+            cursor += line.len() as u64;
+        }
+        Ok(entries)
+    }
+
     /// Return the entry ID of the most recent `Anchor` entry, if any.
     /// O(1) via the secondary index instead of an O(n) reverse linear scan.
     fn last_anchor_id(&mut self) -> TapResult<Option<u64>> {
@@ -629,6 +670,25 @@ impl WorkerState {
             .map(Some)
     }
 
+    /// Read entries whose JSONL line starts in `[start, end)`. The
+    /// implementation is per-`TapeFile` so the worker dispatch only
+    /// needs to take the tape file by `&mut` once.
+    fn read_byte_range(
+        &mut self,
+        tape: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> TapResult<Vec<TapEntry>> {
+        let path = self.tape_path(tape);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        self.tape_files
+            .entry(tape.to_owned())
+            .or_insert_with(|| TapeFile::new(path))
+            .read_byte_range(start, end)
+    }
+
     /// O(1) lookup for the most recent anchor ID on `tape`, or `None` if the
     /// tape has no anchors (or does not yet exist).
     fn last_anchor_id(&mut self, tape: &str) -> TapResult<Option<u64>> {
@@ -845,6 +905,32 @@ impl FileTapeStore {
         self.worker.call(move |state| state.read(&tape)).await
     }
 
+    /// Read every entry on `tape` whose JSONL line begins in the byte
+    /// range `[start, end)`. When `end` is `None`, the upper bound is
+    /// EOF.
+    ///
+    /// The read seeks directly to `start` via `pread` and parses lines
+    /// only until the next line's starting offset reaches `end` — it
+    /// does **not** read or decode entries outside the range. Cost is
+    /// O(segment size on disk), independent of the total tape length.
+    ///
+    /// `start` is intended to be a value previously captured by an
+    /// [`AppendOutcome::byte_offset`] (i.e. the start of an existing
+    /// JSONL line). Passing an offset mid-line will skip that line.
+    /// Callers that resolve `start`/`end` from `AnchorRef.byte_offset`
+    /// always satisfy this invariant.
+    pub async fn read_byte_range(
+        &self,
+        tape: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> TapResult<Vec<TapEntry>> {
+        let tape = tape.to_owned();
+        self.worker
+            .call(move |state| state.read_byte_range(&tape, start, end))
+            .await
+    }
+
     /// Return the entry ID of the most recent anchor on `tape`, if any.
     ///
     /// Backed by an in-memory secondary index, so this is O(1) once the tape
@@ -952,4 +1038,96 @@ fn unique_suffix() -> u64 {
 fn md5_hex(path: &Path) -> String {
     let digest = md5::compute(path.to_string_lossy().as_bytes());
     format!("{digest:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    /// Append `count` `Message`-kind entries to `tape` and return the
+    /// per-entry byte offsets in append order.
+    async fn append_messages(store: &FileTapeStore, tape: &str, count: usize) -> Vec<u64> {
+        let mut offsets = Vec::with_capacity(count);
+        for i in 0..count {
+            let outcome = store
+                .append(
+                    tape,
+                    TapEntryKind::Message,
+                    json!({"role": "user", "content": format!("entry-{i}")}),
+                    None,
+                )
+                .await
+                .expect("append");
+            offsets.push(outcome.byte_offset);
+        }
+        offsets
+    }
+
+    /// Pinned by spec scenario 7
+    /// (`Store-layer byte-range read does not parse outside the range`):
+    /// `read_byte_range` MUST seek to `start`, MUST stop at `end`, and
+    /// MUST NOT include any entry whose JSONL line begins at or after
+    /// `end`.
+    #[tokio::test]
+    async fn read_byte_range_seeks_and_stops_at_end() {
+        let dir = tempdir().expect("tempdir");
+        let store = FileTapeStore::new(dir.path(), dir.path())
+            .await
+            .expect("store");
+        let tape = "session-x";
+
+        // Eight entries → seven well-defined byte offsets the test can
+        // pivot on. Entry 0 sits at offset 0, entry 7's line lives at
+        // offsets[7] and ends at EOF.
+        let offsets = append_messages(&store, tape, 8).await;
+        assert_eq!(offsets[0], 0, "first entry must start at offset 0");
+
+        // Half-open [offsets[2], offsets[5]) — entries 2,3,4 should be
+        // returned; entry 5 (whose line begins exactly at `end`) MUST
+        // NOT be returned even though its start offset equals `end`.
+        let mid = store
+            .read_byte_range(tape, offsets[2], Some(offsets[5]))
+            .await
+            .expect("read_byte_range");
+        let ids: Vec<u64> = mid.iter().map(|e| e.id).collect();
+        // Tape-entry IDs are 1-based, so entry-index 2..5 → ids 3..6.
+        assert_eq!(ids, vec![3, 4, 5], "must return entries 3,4,5 (half-open)");
+
+        // `end = None` extends to EOF: starting at offsets[6] yields
+        // entries 6 and 7 (ids 7 and 8).
+        let tail = store
+            .read_byte_range(tape, offsets[6], None)
+            .await
+            .expect("read_byte_range tail");
+        let tail_ids: Vec<u64> = tail.iter().map(|e| e.id).collect();
+        assert_eq!(tail_ids, vec![7, 8], "tail to EOF returns entries 6 and 7");
+
+        // `start == end` and `start > end` both yield empty without
+        // touching the file.
+        let empty = store
+            .read_byte_range(tape, offsets[3], Some(offsets[3]))
+            .await
+            .expect("read_byte_range empty");
+        assert!(empty.is_empty(), "start == end → empty");
+        let reversed = store
+            .read_byte_range(tape, offsets[5], Some(offsets[3]))
+            .await
+            .expect("read_byte_range reversed");
+        assert!(
+            reversed.is_empty(),
+            "start > end → empty (caller validates)"
+        );
+
+        // Reading the full range from 0 returns every entry, matching
+        // a non-segmented `read()` so future callers can rely on this
+        // primitive when the segment happens to span the whole tape.
+        let full = store
+            .read_byte_range(tape, 0, None)
+            .await
+            .expect("read_byte_range full");
+        assert_eq!(full.len(), 8);
+    }
 }

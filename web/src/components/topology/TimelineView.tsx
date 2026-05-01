@@ -25,6 +25,7 @@ import {
   contentToText,
 } from './TurnCard';
 
+import type { ChatMessageData } from '@/api/types';
 import { useChatModels } from '@/hooks/use-chat-models';
 import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
 import { useSessionHistory } from '@/hooks/use-session-history';
@@ -47,6 +48,12 @@ export interface TimelineViewProps {
   events: TopologyEventEntry[];
   /** Session key the prompt editor sends into. */
   promptSessionKey?: string | null;
+  /** When set, REPLACES the live-history message list with this anchor
+   *  segment (issue #2040). Live WS turns continue to render at the tail
+   *  so a streaming response is still visible while the user is browsing
+   *  a chapter. Pass `null` to fall back to the standard "last N
+   *  messages" history fetch. */
+  segmentMessages?: ChatMessageData[] | null;
 }
 
 /**
@@ -62,7 +69,12 @@ export interface TimelineViewProps {
  * see their text vanish into the input box and only an assistant
  * response appear later.
  */
-export function TimelineView({ viewSessionKey, events, promptSessionKey }: TimelineViewProps) {
+export function TimelineView({
+  viewSessionKey,
+  events,
+  promptSessionKey,
+  segmentMessages,
+}: TimelineViewProps) {
   // Per-session ordered user turns. Cleared when the viewed session
   // changes so a new conversation does not inherit a stale prompt list.
   const [userTurnsBySession, setUserTurnsBySession] = useState<
@@ -126,7 +138,11 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const currentModel = pickedModel ?? defaultModelIdString ?? '';
 
   const history = useSessionHistory(viewSessionKey);
-  const historyMessages = history.data;
+  // When `segmentMessages` is provided by the parent (chapter-strip
+  // navigation), it REPLACES the standard history payload. This is the
+  // sentinel the spec calls for — live WS turns still render at the
+  // tail; only the historical block flips.
+  const historyMessages = segmentMessages ?? history.data;
   const historyIsSuccess = history.isSuccess;
   // `dataUpdatedAt` increments on every successful resolution regardless
   // of structural sharing — `historyMessages` would keep the same object
@@ -307,11 +323,21 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const itemCount = orderedItems.length;
   const lastItemKey = orderedItems.at(-1)?.key;
+  const firstItemKey = orderedItems[0]?.key;
+  // Segment-mode scroll target: when `segmentMessages` is set, scroll to
+  // the FIRST item (the chapter the user clicked) rather than the tail.
+  // Re-keying on `segmentMessages` (reference identity) means a fresh
+  // chapter click — even one whose first message has the same DOM key
+  // as the previous selection — still re-scrolls.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [itemCount, lastItemKey]);
+    if (segmentMessages && firstItemKey) {
+      el.scrollTop = 0;
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [itemCount, lastItemKey, segmentMessages, firstItemKey]);
 
   const handleSubmit = useCallback(
     (message: string) => {

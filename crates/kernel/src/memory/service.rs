@@ -241,6 +241,25 @@ impl TapeService {
         Ok(self.store.read(tape_name).await?.unwrap_or_default())
     }
 
+    /// Read entries whose JSONL line begins in `[start, end)` on
+    /// `tape_name` via a seek-based store read.
+    ///
+    /// `end = None` reads to EOF. Cost is bounded by the segment length
+    /// on disk, not by the total tape length — issue #2040's whole
+    /// point: anchor-segment fetches must not pay O(full tape) on read.
+    /// The half-open boundary mirrors the chat read endpoint so the
+    /// JSONL line at `end` (typically the next anchor's own line) is
+    /// not double-rendered when the caller iterates contiguous
+    /// segments.
+    pub async fn entries_in_byte_range(
+        &self,
+        tape_name: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> TapResult<Vec<TapEntry>> {
+        self.store.read_byte_range(tape_name, start, end).await
+    }
+
     /// Load a specific entry by ID from a tape.
     pub async fn entry_by_id(&self, tape_name: &str, entry_id: u64) -> TapResult<Option<TapEntry>> {
         let entries = self.entries(tape_name).await?;

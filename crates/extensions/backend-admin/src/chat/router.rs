@@ -239,10 +239,26 @@ pub struct SearchSessionsQuery {
 }
 
 /// Query parameters for `GET /sessions/{key}/messages`.
+///
+/// `from_anchor` and `to_anchor` are optional anchor-id selectors that
+/// resolve against the session's persisted `anchors[]` to a
+/// half-open `[from.byte_offset, to.byte_offset)` byte range on the
+/// tape file. When at least one is present, `limit` is ignored — the
+/// segment is bounded by the anchors. When both are absent, the
+/// existing "last `limit` messages" path runs unchanged.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ListMessagesQuery {
-    /// Maximum number of messages to return (default: 200).
-    pub limit: Option<usize>,
+    /// Maximum number of messages to return (default: 200). Ignored
+    /// when `from_anchor` or `to_anchor` is present.
+    pub limit:       Option<usize>,
+    /// Lower bound — anchor id whose `byte_offset` is the inclusive
+    /// segment start. When absent and `to_anchor` is present, reads
+    /// from byte offset 0.
+    pub from_anchor: Option<u64>,
+    /// Upper bound — anchor id whose `byte_offset` is the exclusive
+    /// segment end. When absent and `from_anchor` is present, reads
+    /// to EOF.
+    pub to_anchor:   Option<u64>,
 }
 
 /// Query parameters for `GET /sessions/{key}/trace`.
@@ -528,13 +544,24 @@ async fn regenerate_session_title(
 }
 
 /// `GET /api/v1/chat/sessions/{key}/messages` — list conversation messages.
+///
+/// Three modes (mutually exclusive on the wire):
+///
+/// - **No anchor params** → existing "last `limit` messages" path (default
+///   `limit=200`). Byte-identical to the pre-#2040 response.
+/// - **`from_anchor` and/or `to_anchor` present** → segment read bounded by
+///   `[from.byte_offset, to.byte_offset)` (half-open). Each bound is
+///   independently optional; absent `from` = start-of-tape, absent `to` = EOF.
+///   `limit` is ignored in this mode.
 #[utoipa::path(
     get,
     path = "/api/v1/chat/sessions/{key}/messages",
     tag = "chat",
     params(
         ("key" = String, Path, description = "Session key"),
-        ("limit" = Option<usize>, Query, description = "Maximum messages to return (default 200)"),
+        ("limit" = Option<usize>, Query, description = "Maximum messages to return (default 200, ignored when anchor params are present)"),
+        ("from_anchor" = Option<u64>, Query, description = "Lower-bound anchor id; segment starts at its byte_offset"),
+        ("to_anchor" = Option<u64>, Query, description = "Upper-bound anchor id; segment ends one byte before its byte_offset"),
     ),
     responses(
         (status = 200, description = "List of chat messages", body = Vec<serde_json::Value>),
@@ -546,9 +573,19 @@ async fn list_messages(
     Path(key): Path<String>,
     Query(q): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<ChatMessage>>, ChatError> {
-    let messages = service
-        .list_messages(&parse_session_key(&key)?, q.limit.unwrap_or(200))
-        .await?;
+    let session_key = parse_session_key(&key)?;
+    let messages = match (q.from_anchor, q.to_anchor) {
+        (None, None) => {
+            service
+                .list_messages(&session_key, q.limit.unwrap_or(200))
+                .await?
+        }
+        (from_anchor, to_anchor) => {
+            service
+                .list_messages_between_anchors(&session_key, from_anchor, to_anchor)
+                .await?
+        }
+    };
     Ok(Json(messages))
 }
 
