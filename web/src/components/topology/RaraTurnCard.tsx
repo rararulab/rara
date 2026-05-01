@@ -132,6 +132,10 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
         isComplete={!turn.inFlight}
         {...inspectProps}
       />
+      {/* Spawn markers render as siblings, not inside VendorTurnCard:
+          the vendor's `activities[]` is a discriminated union of
+          thinking | tool, and there is no `children` / footer slot.
+          Sibling layout is the only non-fork option. */}
       {turn.markers.length > 0 && (
         <div className="space-y-1.5">
           {turn.markers.map((marker, idx) => (
