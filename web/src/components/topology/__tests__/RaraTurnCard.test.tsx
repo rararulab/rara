@@ -204,6 +204,85 @@ describe('RaraTurnCard — trace + cascade affordances', () => {
     );
   });
 
+  // BDD bindings for `specs/issue-2031-thinking-only-turn-render.spec.md`.
+  // The vendor `TurnCard` suppresses turns whose only activity is
+  // `type: 'thinking'` (`hasNoMeaningfulWork` gate); the adapter reroutes
+  // thinking-only turns to `type: 'intermediate'` so the card renders.
+
+  it('thinking_only_turn_renders_card', async () => {
+    renderCard(
+      makeTurn({
+        text: '',
+        reasoning: 'let me think about this',
+        toolCalls: [],
+        inFlight: false,
+      }),
+    );
+    const wrapper = document.querySelector('[data-turn-id="turn-42"]');
+    expect(wrapper).not.toBeNull();
+    // Activities are collapsed by default; expand to expose the reasoning
+    // row so the test can assert the reasoning content reached the DOM.
+    const chevron = document.querySelector('.lucide-chevron-right');
+    expect(chevron).not.toBeNull();
+    fireEvent.click((chevron as Element).closest('button') as HTMLElement);
+    await waitFor(() => {
+      expect(screen.getByText(/let me think about this/)).toBeInTheDocument();
+    });
+  });
+
+  it('thinking_only_live_turn_renders_card', () => {
+    renderCard(
+      makeTurn({
+        text: '',
+        reasoning: 'working it out',
+        toolCalls: [],
+        inFlight: true,
+        finalSeq: null,
+      }),
+    );
+    const wrapper = document.querySelector('[data-turn-id="turn-42"]');
+    expect(wrapper).not.toBeNull();
+  });
+
+  it('turn_with_reasoning_and_text_renders_both', async () => {
+    renderCard(
+      makeTurn({
+        text: 'here is the answer',
+        reasoning: 'step 1: ...',
+        toolCalls: [],
+        inFlight: false,
+      }),
+    );
+    const wrapper = document.querySelector('[data-turn-id="turn-42"]');
+    expect(wrapper).not.toBeNull();
+    // Final assistant text is the response slot — visible without expansion.
+    expect(screen.getByText('here is the answer')).toBeInTheDocument();
+    // The reasoning trace surfaces as an activity row in the expanded
+    // section. Reasoning + text keeps the distinct `thinking` visual
+    // treatment per spec Decision 2; the activity row label
+    // ("Thinking" or "Processing") proves the reasoning trace was not
+    // dropped on the floor.
+    const chevron = document.querySelector('.lucide-chevron-right');
+    expect(chevron).not.toBeNull();
+    fireEvent.click((chevron as Element).closest('button') as HTMLElement);
+    await waitFor(() => {
+      const expanded = document.querySelector('[data-search-exclude="true"]');
+      expect(expanded?.textContent).toMatch(/Thinking|Processing/);
+    });
+  });
+
+  it('empty_turn_remains_suppressed', () => {
+    renderCard(
+      makeTurn({
+        text: '',
+        reasoning: '',
+        toolCalls: [],
+        inFlight: false,
+      }),
+    );
+    expect(document.querySelector('[data-turn-id="turn-42"]')).toBeNull();
+  });
+
   it('RaraTurnCard__trace_modal_shows_error_on_fetch_failure', async () => {
     fetchExecutionTraceMock.mockRejectedValue(new Error('network is down'));
 
