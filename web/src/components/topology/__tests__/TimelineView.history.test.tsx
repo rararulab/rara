@@ -205,6 +205,100 @@ describe('TimelineView.history', () => {
     });
   });
 
+  it('reconnect_resnapshots_barrier: WS reconnect re-snapshots the barrier even when history payload is structurally unchanged', async () => {
+    // After a WS reconnect, `use-topology-subscription` rebuilds its
+    // events buffer from `[]` on the `hello` frame. `TimelineView`
+    // detects this via the session-filtered buffer length going
+    // backwards, drops the stale barrier, and calls
+    // `history.refetch()`. If the persisted history hasn't changed, the
+    // refetched payload is structurally identical and react-query's
+    // default `structuralSharing` returns the same array reference.
+    // The barrier-snapshot effect must still re-run — otherwise live
+    // events that arrived before the reconnect (and are now mirrored in
+    // the rebuilt buffer) would render again on top of history.
+    const persistedHistory: ChatMessageData[] = [
+      makeMessage({ seq: 1, role: 'assistant', content: 'X' }),
+    ];
+    // Both calls (initial + post-reconnect refetch) return arrays with
+    // identical contents — react-query's structural sharing will hand
+    // out the same reference for both.
+    listMessagesMock.mockResolvedValue(persistedHistory.map((m) => ({ ...m })));
+
+    // Initial render: empty events buffer so the barrier snapshots at
+    // length 0; history's "X" renders via the history path. Then push
+    // a live `text_delta` carrying "Y" — index 0 is >= barrier so it
+    // renders live.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey="S" events={[]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('X');
+    expect(screen.getAllByText('X')).toHaveLength(1);
+
+    const liveY: TopologyEventEntry = {
+      seq: 1,
+      sessionKey: 'S',
+      event: { type: 'text_delta', text: 'Y' },
+    };
+    const liveYDone: TopologyEventEntry = {
+      seq: 2,
+      sessionKey: 'S',
+      event: { type: 'done' },
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey="S" events={[liveY, liveYDone]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Y');
+
+    // Simulate WS reconnect: the topology subscription rebuilds its
+    // buffer from `[]`, so the session-filtered length goes 2 → 0. The
+    // reset effect fires, drops the stale barrier, and calls
+    // `history.refetch()`. Because the persisted history is unchanged,
+    // react-query's default `structuralSharing` returns the same array
+    // reference. With the buggy dep array `[..., historyMessages, ...]`
+    // the barrier-snapshot effect does not re-run, leaving the barrier
+    // permanently deleted; `agentTurns` then falls back to the
+    // `barrier === undefined` branch (render every sessionEvent), so a
+    // post-reconnect live frame whose content matches an already-
+    // persisted message renders on top of history.
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey="S" events={[]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+
+    const reLiveX: TopologyEventEntry = {
+      seq: 1,
+      sessionKey: 'S',
+      event: { type: 'text_delta', text: 'X' },
+    };
+    const reLiveXDone: TopologyEventEntry = {
+      seq: 2,
+      sessionKey: 'S',
+      event: { type: 'done' },
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey="S" events={[reLiveX, reLiveXDone]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+
+    // Without the `dataUpdatedAt` dep fix, the barrier-snapshot effect
+    // would not re-run after refetch (history reference unchanged), the
+    // barrier would stay deleted, and the live path would render
+    // `reLiveX` as a fresh "X" — duplicating history.
+    await waitFor(() => {
+      expect(screen.getAllByText('X')).toHaveLength(1);
+    });
+  });
+
   it('fetch_error_does_not_block_live: history failure surfaces inline error and keeps input working', async () => {
     listMessagesMock.mockRejectedValueOnce(new Error('HTTP 500'));
 

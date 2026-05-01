@@ -226,6 +226,19 @@ Scenario: Live events that arrived before history resolved are not re-rendered a
   Then the rendered DOM contains "boundary-text" exactly once
     And the assistant content is sourced from the history payload (rendered through the history TurnCard path), not duplicated by the pre-history live event
 
+Scenario: WS reconnect re-snapshots the barrier even when history payload is structurally unchanged
+  Test:
+    Package: web
+    Filter: TimelineView.history.reconnect_resnapshots_barrier
+  Given TimelineView is mounted with viewSessionKey "S" and a history fetch that resolves with one assistant message "X"
+    And the rendered DOM contains "X" exactly once
+    And a live text_delta event for "Y" has rendered post-barrier
+  When the topology subscription rebuilds its events buffer from [] (mimicking a WS reconnect)
+    And the history refetch resolves with a payload structurally identical to the previous one (same array reference under react-query structural sharing)
+    And a fresh live text_delta event for "X" arrives (kernel re-streaming the in-progress turn after reconnect)
+  Then the rendered DOM contains "X" exactly once
+    And the post-reconnect live frame is gated by a freshly-snapshotted arrival barrier rather than rendering on top of history
+
 Scenario: History fetch failure still allows live chat to function
   Test:
     Package: web

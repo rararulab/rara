@@ -122,6 +122,11 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const history = useSessionHistory(viewSessionKey);
   const historyMessages = history.data;
   const historyIsSuccess = history.isSuccess;
+  // `dataUpdatedAt` increments on every successful resolution regardless
+  // of structural sharing — `historyMessages` would keep the same object
+  // reference when react-query refetches identical data, which would
+  // silently skip the barrier-snapshot effect after a WS reconnect.
+  const historyDataUpdatedAt = history.dataUpdatedAt;
 
   // Session-filtered slice of the topology subscription buffer. The
   // arrival barrier indexes into THIS array (not the full cross-session
@@ -180,8 +185,15 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   }, [sessionEvents.length, viewSessionKey, history]);
 
   // Snapshot the barrier the first time the history query resolves for
-  // this session. The data identity (`historyMessages`) plus the success
-  // flag together cover both the initial fetch and refetch-after-reset.
+  // this session. We key off `dataUpdatedAt` (a numeric timestamp react-
+  // query bumps on every successful resolution) rather than
+  // `historyMessages` because react-query's default `structuralSharing`
+  // returns a referentially-identical array when a refetch yields the
+  // same payload. After a WS reconnect-then-refetch where the persisted
+  // history is unchanged, the data reference would not move, the effect
+  // would not re-run, the barrier would stay deleted, and the live path
+  // would re-render every pre-reconnect event — duplicating with
+  // history.
   useEffect(() => {
     if (!historyIsSuccess) return;
     setBarrierBySession((prev) => {
@@ -192,7 +204,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
     // only — we don't want subsequent length changes to move the
     // barrier.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyIsSuccess, historyMessages, viewSessionKey]);
+  }, [historyIsSuccess, historyDataUpdatedAt, viewSessionKey]);
 
   const historyTurns = useMemo(
     () => (historyMessages ? buildTurnsFromHistory(historyMessages) : []),
