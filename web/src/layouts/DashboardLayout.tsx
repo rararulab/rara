@@ -129,7 +129,7 @@ export default function DashboardLayout() {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1.5 text-xs text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]"
             onClick={() => navigate('/chat')}
           >
             <MessageSquare className="h-3.5 w-3.5" />
@@ -138,7 +138,7 @@ export default function DashboardLayout() {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1.5 text-xs text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]"
             onClick={() => openSettings()}
           >
             <Settings className="h-3.5 w-3.5" />

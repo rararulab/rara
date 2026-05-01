@@ -15,6 +15,7 @@
  */
 
 import { ArrowUpRight, MoreHorizontal } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
 /**
@@ -69,14 +70,20 @@ export function RaraTurnCardActionsMenu({ onOpenDetails }: RaraTurnCardActionsMe
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative shrink-0">
+    // 40x40 hit area (#16): the visible chip stays small, but the
+    // surrounding flex catches the click. `-m-2` reclaims layout space so
+    // the wrapper does not push the turn header.
+    <div ref={containerRef} className="relative -m-2 shrink-0">
       <div
         role="button"
         tabIndex={0}
         aria-haspopup="menu"
         aria-expanded={open}
         className={
-          'p-1 rounded-[6px] transition-opacity bg-background shadow-minimal ' +
+          // Explicit transition list (no `transition: all`, #14) and
+          // press-scale (#12, capped at 0.96).
+          'flex h-10 w-10 items-center justify-center rounded-md ' +
+          'transition-[opacity,transform] active:scale-[0.96] ' +
           'text-muted-foreground/50 hover:text-foreground ' +
           'opacity-0 group-hover:opacity-100 ' +
           'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:opacity-100 ' +
@@ -94,54 +101,73 @@ export function RaraTurnCardActionsMenu({ onOpenDetails }: RaraTurnCardActionsMe
           }
         }}
       >
-        <MoreHorizontal className="w-3 h-3" />
+        {/*
+         * Inner chip: `rounded-md` (6px) inside the surrounding 40px hit
+         * region keeps the visible affordance compact while the click
+         * target is generous. Shadow over border (#3) for depth.
+         */}
+        <span className="flex items-center justify-center rounded-md bg-background p-1 shadow-minimal">
+          <MoreHorizontal className="w-3 h-3" />
+        </span>
       </div>
-      {open && (
-        <div
-          role="menu"
-          tabIndex={-1}
-          className={
-            'absolute right-0 top-full mt-1 z-50 min-w-[12rem] ' +
-            'rounded-md border border-border bg-popover text-popover-foreground shadow-md py-1'
-          }
-          // Stop the parent vendor `<button>` (which wraps the header) from
-          // toggling its expanded state when the user clicks an item.
-          onClick={(event) => event.stopPropagation()}
-        >
-          {/*
-           * Use `<div role="menuitem">` rather than `<button>` here:
-           * vendor wraps the entire turn header in its own `<button>`
-           * (TurnCard.tsx ~line 2940), so a nested `<button>` would
-           * trip React's hydration warning on "button cannot be a
-           * descendant of button". `tabIndex={0}` keeps it keyboard-
-           * focusable; `Enter`/`Space` invoke the same action.
-           */}
-          <div
-            role="menuitem"
-            tabIndex={0}
+      {/*
+       * Animated open/close — spring (bounce 0) on opacity + a small
+       * translateY for a subtle exit per principle #6. `initial={false}`
+       * is fine here because the menu only ever animates after a user
+       * click (it is never present on first paint).
+       */}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            role="menu"
+            tabIndex={-1}
+            initial={{ opacity: 0, y: -2 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -2 }}
+            transition={{ type: 'spring', duration: 0.3, bounce: 0 }}
             className={
-              'w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer ' +
-              'hover:bg-accent hover:text-accent-foreground'
+              'absolute right-0 top-full mt-1 z-50 min-w-[12rem] ' +
+              'rounded-md border border-border bg-popover text-popover-foreground shadow-md py-1'
             }
-            onClick={(event) => {
-              event.stopPropagation();
-              setOpen(false);
-              onOpenDetails();
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
+            // Stop the parent vendor `<button>` (which wraps the header) from
+            // toggling its expanded state when the user clicks an item.
+            onClick={(event) => event.stopPropagation()}
+          >
+            {/*
+             * Use `<div role="menuitem">` rather than `<button>` here:
+             * vendor wraps the entire turn header in its own `<button>`
+             * (TurnCard.tsx ~line 2940), so a nested `<button>` would
+             * trip React's hydration warning on "button cannot be a
+             * descendant of button". `tabIndex={0}` keeps it keyboard-
+             * focusable; `Enter`/`Space` invoke the same action.
+             */}
+            <div
+              role="menuitem"
+              tabIndex={0}
+              className={
+                'w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer ' +
+                'hover:bg-accent hover:text-accent-foreground'
+              }
+              onClick={(event) => {
                 event.stopPropagation();
                 setOpen(false);
                 onOpenDetails();
-              }
-            }}
-          >
-            <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>View turn details</span>
-          </div>
-        </div>
-      )}
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setOpen(false);
+                  onOpenDetails();
+                }
+              }}
+            >
+              <ArrowUpRight className="w-3.5 h-3.5" />
+              <span>View turn details</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

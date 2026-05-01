@@ -384,7 +384,7 @@ export function TimelineView({
               {isEmpty ? (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                   Waiting for the next turn on{' '}
-                  <span className="ml-1 font-mono">{viewSessionKey}</span>…
+                  <span className="ml-1 font-mono tabular-nums">{viewSessionKey}</span>…
                 </div>
               ) : (
                 orderedItems.map((item) =>

@@ -292,6 +292,8 @@ export type OpenAnnotationRequest = {
   nonce: number
 }
 
+export type ResponseOverflowMode = 'contained' | 'page'
+
 export interface TurnCardProps {
   /** Session ID for state persistence (optional in shared context) */
   sessionId?: string
@@ -349,6 +351,8 @@ export interface TurnCardProps {
   animateResponse?: boolean
   /** Hide footers for compact embedding (EditPopover) */
   compactMode?: boolean
+  /** Whether response markdown owns an internal scrollbar or expands into the page scroller. */
+  responseOverflowMode?: ResponseOverflowMode
   /** Callback to branch the session from a specific message */
   onBranch?: (messageId: string, options?: { newPanel?: boolean }) => void
   /** Callback to add an annotation to a response message */
@@ -1412,6 +1416,8 @@ export interface ResponseCardProps {
   showAcceptPlan?: boolean
   /** Hide footer for compact embedding (EditPopover) */
   compactMode?: boolean
+  /** Whether response markdown owns an internal scrollbar or expands into the page scroller. */
+  responseOverflowMode?: ResponseOverflowMode
   /** Callback to branch the session from this response */
   onBranch?: (options?: { newPanel?: boolean }) => void
   /** Callback to add annotation from selected text */
@@ -1661,6 +1667,7 @@ export function ResponseCard({
   isLastResponse = true,
   showAcceptPlan = true,
   compactMode = false,
+  responseOverflowMode = 'contained',
   onBranch,
   onAddAnnotation,
   onRemoveAnnotation,
@@ -2410,13 +2417,26 @@ export function ResponseCard({
 
   const isCompleted = !isStreaming
   const isBuffering = isStreaming && !bufferDecision.shouldShow
+  const responseContentStyle = responseOverflowMode === 'contained'
+    ? {
+        maxHeight: MAX_HEIGHT,
+        // Subtle fade at top and bottom edges (16px) - only in dark mode for better contrast
+        ...(isDarkMode && {
+          maskImage: 'linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%)',
+        }),
+      }
+    : undefined
+  const responseContentOverflowClass = responseOverflowMode === 'contained'
+    ? 'overflow-y-auto scrollbar-hover'
+    : 'overflow-visible'
 
   // While buffering, return null - TurnCard will show a subtle indicator instead
   if (isBuffering) {
     return null
   }
 
-  // Completed response or plan - show with max height and footer
+  // Completed response or plan - show with footer; overflow behavior is caller-owned.
   if (isCompleted || variant === 'plan') {
     const isPlan = variant === 'plan'
 
@@ -2453,21 +2473,14 @@ export function ResponseCard({
             </div>
           )}
 
-          {/* Scrollable content area with subtle fade at edges (dark mode only) */}
+          {/* Content area: internal scroll by default, page-flow when requested by host UI. */}
           <div
             ref={contentRef}
             data-search-root="response"
             onMouseDown={handleSelectionPointerDown}
             onMouseUp={handleTextSelection}
-            className="pl-[22px] pr-[16px] py-3 text-sm overflow-y-auto scrollbar-hover"
-            style={{
-              maxHeight: MAX_HEIGHT,
-              // Subtle fade at top and bottom edges (16px) - only in dark mode for better contrast
-              ...(isDarkMode && {
-                maskImage: 'linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%)',
-                WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%)',
-              }),
-            }}
+            className={cn("pl-[22px] pr-[16px] py-3 text-sm", responseContentOverflowClass)}
+            style={responseContentStyle}
           >
             <div ref={contentLayerRef} className="relative">
               <Markdown
@@ -2578,21 +2591,14 @@ export function ResponseCard({
     <>
       <div className="bg-background shadow-minimal rounded-[8px] overflow-hidden group">
         {/* Content area - uses displayedText (throttled) for performance */}
-        {/* Subtle fade at top and bottom edges (dark mode only) */}
+        {/* Content area: internal scroll by default, page-flow when requested by host UI. */}
         <div
           ref={contentRef}
           data-search-root="response"
           onMouseDown={handleSelectionPointerDown}
           onMouseUp={handleTextSelection}
-          className="pl-[22px] pr-4 py-3 text-sm overflow-y-auto scrollbar-hover"
-          style={{
-            maxHeight: MAX_HEIGHT,
-            // Subtle fade at top and bottom edges (16px) - only in dark mode for better contrast
-            ...(isDarkMode && {
-              maskImage: 'linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%)',
-              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 16px, black calc(100% - 16px), transparent 100%)',
-            }),
-          }}
+          className={cn("pl-[22px] pr-4 py-3 text-sm", responseContentOverflowClass)}
+          style={responseContentStyle}
         >
           <div ref={contentLayerRef} className="relative">
             <Markdown
@@ -2740,6 +2746,7 @@ export const TurnCard = React.memo(function TurnCard({
   displayMode = 'detailed',
   animateResponse = false,
   compactMode = false,
+  responseOverflowMode = 'contained',
   onBranch,
   onAddAnnotation,
   onRemoveAnnotation,
@@ -3106,6 +3113,7 @@ export const TurnCard = React.memo(function TurnCard({
             onAcceptWithCompact={onAcceptPlanWithCompact}
             isLastResponse={isLastResponse && index === planActivities.length - 1}
             compactMode={compactMode}
+            responseOverflowMode={responseOverflowMode}
             onBranch={onBranch ? (options?: { newPanel?: boolean }) => onBranch(planActivity.messageId ?? planActivity.id, options) : undefined}
             sendMessageKey={sendMessageKey}
             hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
@@ -3145,6 +3153,7 @@ export const TurnCard = React.memo(function TurnCard({
                 onAcceptWithCompact={onAcceptPlanWithCompact}
                 isLastResponse={isLastResponse}
                 compactMode={compactMode}
+                responseOverflowMode={responseOverflowMode}
                 onBranch={onBranch && response.messageId ? (options?: { newPanel?: boolean }) => onBranch(response.messageId!, options) : undefined}
                 sendMessageKey={sendMessageKey}
                 hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
@@ -3177,6 +3186,7 @@ export const TurnCard = React.memo(function TurnCard({
             onAcceptWithCompact={onAcceptPlanWithCompact}
             isLastResponse={isLastResponse}
             compactMode={compactMode}
+            responseOverflowMode={responseOverflowMode}
             onBranch={onBranch && response.messageId ? (options?: { newPanel?: boolean }) => onBranch(response.messageId!, options) : undefined}
             sendMessageKey={sendMessageKey}
             hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
@@ -3206,6 +3216,9 @@ export const TurnCard = React.memo(function TurnCard({
 
   // Re-render if displayMode changed
   if (prev.displayMode !== next.displayMode) return false
+
+  // Re-render if response overflow ownership changed
+  if (prev.responseOverflowMode !== next.responseOverflowMode) return false
 
   // Re-render if annotation interaction mode changed (interactive vs tooltip-only)
   if (prev.annotationInteractionMode !== next.annotationInteractionMode) return false

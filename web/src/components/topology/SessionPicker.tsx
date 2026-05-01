@@ -98,7 +98,7 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6"
+            className="h-6 w-6 transition-transform active:scale-[0.96]"
             title="Refresh"
             onClick={() => void sessionsQuery.refetch()}
             disabled={sessionsQuery.isFetching}
@@ -108,7 +108,7 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6"
+            className="h-6 w-6 transition-transform active:scale-[0.96]"
             title="New session"
             onClick={() => createMutation.mutate()}
             disabled={createMutation.isPending}
@@ -168,14 +168,21 @@ function SessionPickerItem({ session, active, onSelect }: SessionPickerItemProps
         type="button"
         onClick={() => onSelect(session.key)}
         className={cn(
-          'flex w-full flex-col items-start gap-0.5 rounded-md border px-2.5 py-2 text-left transition-colors',
+          // `rounded-lg` on the row + `px-2.5 py-2` padding lands inside
+          // a `rounded-xl` parent container at the standard 4px concentric
+          // delta (principle #1). Press-scale per #12, transition list
+          // explicit per #14 (no `transition: all`).
+          'flex w-full flex-col items-start gap-0.5 rounded-lg border px-2.5 py-2 text-left',
+          'transition-[colors,transform] active:scale-[0.98]',
           active
             ? 'border-accent bg-accent/10 text-foreground'
             : 'border-transparent text-foreground hover:bg-accent/5',
         )}
       >
         <span className="line-clamp-1 text-sm font-medium leading-tight">{title}</span>
-        <span className="text-[11px] text-muted-foreground">{meta}</span>
+        {/* `tabular-nums` (#9) — the message count ticks during a live
+            session and would otherwise reflow the row width. */}
+        <span className="text-[11px] tabular-nums text-muted-foreground">{meta}</span>
       </button>
     </li>
   );

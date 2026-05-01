@@ -16,6 +16,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Network, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
@@ -57,6 +58,13 @@ import { useTopologySubscription, type TopologyStatus } from '@/hooks/use-topolo
  * existing user's sidebar state on first load after upgrade.
  */
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'rara.topology.sidebarCollapsed';
+
+/**
+ * Shared spring transition tuned per the polish checklist (#2042) — the
+ * `bounce: 0` constraint is load-bearing: anything above 0 reads as a
+ * cartoon overshoot on a UI surface this dense.
+ */
+const SPRING = { type: 'spring', duration: 0.3, bounce: 0 } as const;
 
 /**
  * Read the persisted collapsed-sidebar preference, swallowing access
@@ -155,22 +163,61 @@ export default function Chat() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-3 border-b border-border px-3 py-2">
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-7 w-7"
-          aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          onClick={() => setSidebarCollapsed((v) => !v)}
-        >
-          {sidebarCollapsed ? (
-            <PanelLeft className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
-        </Button>
+        {/*
+         * Wrap the chevron in a 40x40 hit-area target (principle #16).
+         * The inner Button stays visually 28x28 so the header doesn't
+         * grow; the surrounding flex centers it inside the larger click
+         * region.
+         */}
+        <span className="-my-1.5 -ml-1 flex h-10 w-10 items-center justify-center">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 transition-transform active:scale-[0.96]"
+            aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+            title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+            onClick={() => setSidebarCollapsed((v) => !v)}
+          >
+            {/*
+             * Cross-fade the panel-left / panel-left-close glyph instead
+             * of hard-swapping (principle #7). `mode="wait"` keeps a
+             * single icon mounted at a time so the absolute-position
+             * trick is unnecessary, and `initial={false}` skips the
+             * first-render animation per principle #13.
+             */}
+            <AnimatePresence initial={false} mode="wait">
+              {sidebarCollapsed ? (
+                <motion.span
+                  key="open"
+                  initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
+                  transition={SPRING}
+                  className="flex"
+                >
+                  <PanelLeft className="h-4 w-4" />
+                </motion.span>
+              ) : (
+                <motion.span
+                  key="close"
+                  initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
+                  animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
+                  transition={SPRING}
+                  className="flex"
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </Button>
+        </span>
         <Network className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-sm font-medium">Chat</h1>
+        {/*
+         * `text-wrap: balance` per principle #10 — even on a one-word
+         * title it costs nothing and keeps any future i18n balanced.
+         */}
+        <h1 className="text-sm font-medium [text-wrap:balance]">Chat</h1>
         <div className="ml-auto">
           {rootSessionKey ? (
             <StatusPill status={subscription.status} />
@@ -183,17 +230,42 @@ export default function Chat() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {!sidebarCollapsed && (
-          <aside className="hidden w-[280px] shrink-0 border-r border-border md:block">
-            <SessionPicker
-              activeSessionKey={rootSessionKey ?? null}
-              onSelect={selectSession}
-              onAutoSelect={selectSession}
-            />
-          </aside>
-        )}
+        {/*
+         * Sidebar collapse uses a spring on `width` (interruptible per
+         * principle #4). `AnimatePresence initial={false}` keeps the
+         * first render quiet — only later toggles animate.
+         */}
+        <AnimatePresence initial={false}>
+          {!sidebarCollapsed && (
+            <motion.aside
+              key="sidebar"
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 280, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={SPRING}
+              className="hidden shrink-0 overflow-hidden border-r border-border md:block"
+            >
+              <div className="w-[280px]">
+                <SessionPicker
+                  activeSessionKey={rootSessionKey ?? null}
+                  onSelect={selectSession}
+                  onAutoSelect={selectSession}
+                />
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
 
-        <main className="flex flex-1 min-w-0 min-h-0 flex-col p-3">
+        {/*
+         * Stagger entrance per principle #5 — main lands ~100ms after
+         * the sidebar so the eye reaches the timeline second.
+         */}
+        <motion.main
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ ...SPRING, delay: 0.1 }}
+          className="flex flex-1 min-w-0 min-h-0 flex-col p-3"
+        >
           {rootSessionKey ? (
             <div className="flex flex-1 min-h-0 flex-col gap-2">
               {viewChild && (
@@ -201,13 +273,13 @@ export default function Chat() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 px-2 text-xs"
+                    className="h-7 px-2 text-xs transition-transform active:scale-[0.96]"
                     onClick={() => setViewChild(null)}
                   >
                     <ArrowLeft className="mr-1 h-3 w-3" />
                     back to root
                   </Button>
-                  <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  <span className="truncate font-mono text-[11px] tabular-nums text-muted-foreground">
                     viewing {viewChild}
                   </span>
                 </div>
@@ -229,10 +301,17 @@ export default function Chat() {
               Select a session from the left, or create a new one to start observing.
             </div>
           )}
-        </main>
+        </motion.main>
 
         {rootSessionKey && (
-          <aside className="hidden w-[320px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border p-3 lg:flex">
+          <motion.aside
+            // Right rail enters last (~200ms delay) — staggered with
+            // sidebar + main per principle #5.
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ...SPRING, delay: 0.2 }}
+            className="hidden w-[320px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border p-3 lg:flex"
+          >
             <div>
               <div className="mb-1.5 text-xs font-medium text-muted-foreground">Workers</div>
               <WorkerInbox
@@ -249,7 +328,7 @@ export default function Chat() {
                 activeSessionKey={viewChild ?? rootSessionKey}
               />
             </div>
-          </aside>
+          </motion.aside>
         )}
       </div>
     </div>
@@ -280,8 +359,10 @@ function StatusPill({ status }: { status: TopologyStatus }) {
         </Badge>
       );
     case 'reconnecting':
+      // Tabular-nums on the attempt counter + delay (#9) so the badge
+      // doesn't shimmy as the numerals tick up.
       return (
-        <Badge variant="outline" className="text-[10px]">
+        <Badge variant="outline" className="text-[10px] tabular-nums">
           reconnect #{status.attempt} ({Math.round(status.delayMs / 1000)}s)
         </Badge>
       );
