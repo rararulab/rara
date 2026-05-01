@@ -383,8 +383,9 @@ Scenario: list_sessions returns tape-derived state matching the underlying tape
     `entries_since_last_anchor` equal to the number of entries appended
     after the last `Anchor`, and `updated_at` within 1 second of the
     last append timestamp
-  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
-    `list_sessions_reflects_tape_state`
+  Test:
+    Package: rara-kernel
+    Filter: list_sessions_reflects_tape_state
 
 Scenario: appending a message updates the index in-band
   Given a session whose `SessionEntry.total_entries == N` and
@@ -393,8 +394,9 @@ Scenario: appending a message updates the index in-band
   Then a subsequent `SessionIndex::get_session(session_key)` returns
     `total_entries == N + 1` and `updated_at >= T0` (monotonically
     advanced to the append timestamp, within clock resolution)
-  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
-    `append_message_updates_index_in_band`
+  Test:
+    Package: rara-kernel
+    Filter: append_message_updates_index_in_band
 
 Scenario: appending an anchor records its byte offset and resets the since-anchor counter
   Given a session whose tape file currently has size F bytes and
@@ -408,8 +410,9 @@ Scenario: appending an anchor records its byte offset and resets the since-ancho
   And seeking the JSONL file to that `byte_offset` and decoding one
     line yields a `TapEntry` with `kind == Anchor` and the matching
     `anchor_id`
-  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
-    `anchor_append_records_byte_offset_and_resets_segment`
+  Test:
+    Package: rara-kernel
+    Filter: anchor_append_records_byte_offset_and_resets_segment
 
 Scenario: boot migration moves JSON sessions into SQLite once
   Given an `index_dir` containing N valid `*.json` session files and
@@ -424,8 +427,9 @@ Scenario: boot migration moves JSON sessions into SQLite once
   And restarting the process triggers no re-migration: the second
     pass observes a non-empty `sessions` table and the JSON files
     are absent from `index_dir/`
-  Test: `crates/sessions/tests/sqlite_index_migration.rs` /
-    `boot_migration_is_idempotent`
+  Test:
+    Package: rara-sessions
+    Filter: boot_migration_is_idempotent
 
 Scenario: crash-recovery rebuild repairs an out-of-sync row
   Given a session whose tape has 10 entries on disk but whose
@@ -436,8 +440,9 @@ Scenario: crash-recovery rebuild repairs an out-of-sync row
   Then the row's `total_entries` becomes 10, `anchors` matches the
     on-disk anchor sequence with correct byte offsets, and the JSONL
     file on disk is byte-for-byte unchanged
-  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
-    `crash_recovery_rebuild_repairs_out_of_sync_row`
+  Test:
+    Package: rara-kernel
+    Filter: crash_recovery_rebuild_repairs_out_of_sync_row
 
 Scenario: list_sessions read uses a SQL ORDER BY rather than scanning all rows in memory
   Given a SQLite `sessions` table containing 1000 rows
@@ -448,8 +453,9 @@ Scenario: list_sessions read uses a SQL ORDER BY rather than scanning all rows i
     index on `updated_at` (the migration creates `CREATE INDEX
     idx_sessions_updated_at ON sessions(updated_at DESC)`), not a
     full-table sort
-  Test: `crates/sessions/tests/sqlite_index_migration.rs` /
-    `list_sessions_uses_updated_at_index`
+  Test:
+    Package: rara-sessions
+    Filter: list_sessions_uses_updated_at_index
 
 Scenario: rescue command rebuilds a single session from the tape
   Given a corrupt SQLite row for `session_key = K` (zero counts,
@@ -458,8 +464,9 @@ Scenario: rescue command rebuilds a single session from the tape
   Then the row for K is replaced with derived state matching the
     tape (5 anchors, correct byte offsets, correct
     `total_entries`), and rows for other sessions are not touched
-  Test: `crates/kernel/tests/session_index_tape_derived_e2e.rs` /
-    `rebuild_single_session_leaves_others_alone`
+  Test:
+    Package: rara-kernel
+    Filter: rebuild_single_session_leaves_others_alone
 
 ## Constraints
 
