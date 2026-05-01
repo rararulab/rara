@@ -2417,6 +2417,7 @@ export function ResponseCard({
 
   const isCompleted = !isStreaming
   const isBuffering = isStreaming && !bufferDecision.shouldShow
+  const isPageFlowResponse = variant === 'response' && responseOverflowMode === 'page'
   const responseContentStyle = responseOverflowMode === 'contained'
     ? {
         maxHeight: MAX_HEIGHT,
@@ -2430,6 +2431,12 @@ export function ResponseCard({
   const responseContentOverflowClass = responseOverflowMode === 'contained'
     ? 'overflow-y-auto scrollbar-hover'
     : 'overflow-visible'
+  const responseContentClass = isPageFlowResponse
+    ? 'px-0 py-1 text-sm'
+    : 'pl-[22px] pr-[16px] py-3 text-sm'
+  const streamingResponseContentClass = isPageFlowResponse
+    ? 'px-0 py-1 text-sm'
+    : 'pl-[22px] pr-4 py-3 text-sm'
 
   // While buffering, return null - TurnCard will show a subtle indicator instead
   if (isBuffering) {
@@ -2442,9 +2449,12 @@ export function ResponseCard({
 
     return (
       <>
-        <div className="bg-background shadow-minimal rounded-[8px] overflow-hidden relative group">
+        <div className={cn(
+          "relative group",
+          !isPageFlowResponse && "bg-background shadow-minimal rounded-[8px] overflow-hidden"
+        )}>
           {/* Fullscreen button - desktop only; compact mode keeps message chrome minimal */}
-          {!compactMode && (
+          {!isPageFlowResponse && !compactMode && (
           <button
             onClick={() => setIsFullscreen(true)}
             className={cn(
@@ -2479,7 +2489,7 @@ export function ResponseCard({
             data-search-root="response"
             onMouseDown={handleSelectionPointerDown}
             onMouseUp={handleTextSelection}
-            className={cn("pl-[22px] pr-[16px] py-3 text-sm", responseContentOverflowClass)}
+            className={cn(responseContentClass, responseContentOverflowClass)}
             style={responseContentStyle}
           >
             <div ref={contentLayerRef} className="relative">
@@ -2495,7 +2505,7 @@ export function ResponseCard({
           </div>
 
           {/* Footer with actions - hidden in compact mode */}
-          {!compactMode && (
+          {!isPageFlowResponse && !compactMode && (
             <div className={cn(
               "pl-4 pr-2.5 py-2 border-t border-border/30 flex items-center justify-between bg-muted/20",
               SIZE_CONFIG.fontSize
@@ -2589,7 +2599,10 @@ export function ResponseCard({
   // Streaming response - show throttled content with spinner
   return (
     <>
-      <div className="bg-background shadow-minimal rounded-[8px] overflow-hidden group">
+      <div className={cn(
+        "group",
+        !isPageFlowResponse && "bg-background shadow-minimal rounded-[8px] overflow-hidden"
+      )}>
         {/* Content area - uses displayedText (throttled) for performance */}
         {/* Content area: internal scroll by default, page-flow when requested by host UI. */}
         <div
@@ -2597,7 +2610,7 @@ export function ResponseCard({
           data-search-root="response"
           onMouseDown={handleSelectionPointerDown}
           onMouseUp={handleTextSelection}
-          className={cn("pl-[22px] pr-4 py-3 text-sm", responseContentOverflowClass)}
+          className={cn(streamingResponseContentClass, responseContentOverflowClass)}
           style={responseContentStyle}
         >
           <div ref={contentLayerRef} className="relative">
@@ -2613,7 +2626,7 @@ export function ResponseCard({
         </div>
 
         {/* Footer - hidden in compact mode */}
-        {!compactMode && (
+        {!isPageFlowResponse && !compactMode && (
           <div className={cn("px-4 py-2 border-t border-border/30 flex items-center bg-muted/20", SIZE_CONFIG.fontSize)}>
             <div className="flex items-center gap-2 text-muted-foreground">
               <Spinner className={SIZE_CONFIG.spinnerSize} />
