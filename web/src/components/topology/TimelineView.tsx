@@ -17,10 +17,17 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { TurnCard, buildTurnsFromEvents } from './TurnCard';
+import { RaraTurnCard } from './RaraTurnCard';
+import {
+  type TurnCardData,
+  buildTurnsFromEvents,
+  buildTurnsFromHistory,
+  contentToText,
+} from './TurnCard';
 
 import { useChatModels } from '@/hooks/use-chat-models';
 import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
+import { useSessionHistory } from '@/hooks/use-session-history';
 import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 import { UserMessageBubble } from '~vendor/components/chat/UserMessageBubble';
 import { InputContainer } from '~vendor/components/input/InputContainer';
@@ -59,7 +66,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   // Per-session ordered user turns. Cleared when the viewed session
   // changes so a new conversation does not inherit a stale prompt list.
   const [userTurnsBySession, setUserTurnsBySession] = useState<
-    Record<string, { id: string; text: string; t: number }[]>
+    Record<string, { id: string; text: string; t: number; createdAt: number | null }[]>
   >({});
 
   const sessionForPrompt = promptSessionKey ?? viewSessionKey;
@@ -118,29 +125,193 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
   const currentModel = pickedModel ?? defaultModelIdString ?? '';
 
+  const history = useSessionHistory(viewSessionKey);
+  const historyMessages = history.data;
+  const historyIsSuccess = history.isSuccess;
+  // `dataUpdatedAt` increments on every successful resolution regardless
+  // of structural sharing — `historyMessages` would keep the same object
+  // reference when react-query refetches identical data, which would
+  // silently skip the barrier-snapshot effect after a WS reconnect.
+  const historyDataUpdatedAt = history.dataUpdatedAt;
+
+  // Session-filtered slice of the topology subscription buffer. The
+  // arrival barrier indexes into THIS array (not the full cross-session
+  // buffer) because each `TimelineView` only ever folds events for one
+  // session.
+  const sessionEvents = useMemo(
+    () => events.filter((e) => e.sessionKey === viewSessionKey),
+    [events, viewSessionKey],
+  );
+
+  // Arrival-time barrier for live/history dedupe.
+  //
+  // `ChatMessage.seq` (per-tape counter persisted by
+  // `tap_entries_to_chat_messages` in
+  // `crates/extensions/backend-admin/src/chat/service.rs`) and
+  // `TopologyEventEntry.seq` (per-WS-connection frame counter assigned in
+  // `use-topology-subscription`) are NOT comparable axes — the WS counter
+  // resets to 0 on every reconnect, so any cross-counter filter
+  // (`seq > lastHistorySeq`) silently drops live frames after a
+  // reconnect. Instead, snapshot the *length* of the session-filtered
+  // live buffer at the moment the history fetch resolves: live entries
+  // whose buffer index is `< barrier` arrived before history settled and
+  // are treated as already represented in the history payload; entries
+  // at index `>= barrier` are strictly post-history and rendered live.
+  // See `specs/issue-2013-topology-timeline-history.spec.md` Decisions
+  // (Live + history dedupe — arrival-barrier, not seq).
+  //
+  // Reset triggers (per session):
+  //   - `viewSessionKey` change — handled implicitly because the map is
+  //     keyed by session.
+  //   - WS reconnect — detected by the session-filtered buffer length
+  //     going backwards (the `events` buffer is rebuilt from `[]` on
+  //     `hello`, see `use-topology-subscription`'s `handleFrame`). On
+  //     reset we drop the stale barrier; the next successful history
+  //     refetch re-snapshots.
+  const [barrierBySession, setBarrierBySession] = useState<Record<string, number>>({});
+  const lastSessionLengthRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    const prevLen = lastSessionLengthRef.current[viewSessionKey] ?? 0;
+    const curLen = sessionEvents.length;
+    if (curLen < prevLen) {
+      // Buffer shrunk → WS reconnect (or session-buffer truncation).
+      // Drop the stale barrier so the next successful history fetch
+      // re-snapshots, and invalidate the history query so it actually
+      // refetches against the new connection.
+      setBarrierBySession((prev) => {
+        if (!(viewSessionKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[viewSessionKey];
+        return next;
+      });
+      void history.refetch();
+    }
+    lastSessionLengthRef.current[viewSessionKey] = curLen;
+  }, [sessionEvents.length, viewSessionKey, history]);
+
+  // Snapshot the barrier the first time the history query resolves for
+  // this session. We key off `dataUpdatedAt` (a numeric timestamp react-
+  // query bumps on every successful resolution) rather than
+  // `historyMessages` because react-query's default `structuralSharing`
+  // returns a referentially-identical array when a refetch yields the
+  // same payload. After a WS reconnect-then-refetch where the persisted
+  // history is unchanged, the data reference would not move, the effect
+  // would not re-run, the barrier would stay deleted, and the live path
+  // would re-render every pre-reconnect event — duplicating with
+  // history.
+  useEffect(() => {
+    if (!historyIsSuccess) return;
+    setBarrierBySession((prev) => {
+      if (viewSessionKey in prev) return prev;
+      return { ...prev, [viewSessionKey]: sessionEvents.length };
+    });
+    // `sessionEvents.length` intentionally captured at resolution time
+    // only — we don't want subsequent length changes to move the
+    // barrier.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyIsSuccess, historyDataUpdatedAt, viewSessionKey]);
+
+  const historyTurns = useMemo(
+    () => (historyMessages ? buildTurnsFromHistory(historyMessages) : []),
+    [historyMessages],
+  );
+
   const agentTurns = useMemo(() => {
-    const sessionEvents = events
-      .filter((e) => e.sessionKey === viewSessionKey)
-      .map((e) => ({ seq: e.seq, event: e.event }));
-    return buildTurnsFromEvents(sessionEvents);
-  }, [events, viewSessionKey]);
+    // Before the barrier is set (history still pending or errored), the
+    // live path is the only source — render every session event so the
+    // user sees streaming output immediately.
+    const barrier = barrierBySession[viewSessionKey];
+    const sliced = barrier === undefined ? sessionEvents : sessionEvents.slice(barrier);
+    return buildTurnsFromEvents(sliced.map((e) => ({ seq: e.seq, event: e.event })));
+  }, [sessionEvents, viewSessionKey, barrierBySession]);
 
-  const userTurns = userTurnsBySession[viewSessionKey] ?? [];
+  // Historical user prompts merged with the optimistic local prompts the
+  // editor pushes on submit. Historical entries come first in seq order;
+  // optimistic entries follow because they were typed after the page
+  // loaded.
+  const historyUserBubbles = useMemo<
+    { id: string; text: string; t: number; createdAt: number | null }[]
+  >(() => {
+    if (!historyMessages) return [];
+    return historyMessages
+      .filter((m) => m.role === 'user')
+      .map((m) => {
+        const ts = Date.parse(m.created_at);
+        return {
+          id: `history-user-${String(m.seq)}`,
+          text: contentToText(m.content),
+          t: 0,
+          createdAt: Number.isNaN(ts) ? null : ts,
+        };
+      })
+      .filter((u) => u.text.length > 0);
+  }, [historyMessages]);
 
-  // Interleaving by wall-clock arrival time would require timestamps on
-  // agent turns, which the current TurnCard reducer doesn't track. Until
-  // that lands, we put all user prompts above the agent turns for the
-  // session — which matches the craft layout when you first open a new
-  // conversation. Subsequent prompts will appear after the latest agent
-  // turn in practice because agent turns auto-scroll on append.
+  // Build a single ordered list of bubbles + turns. History items sort by
+  // `createdAt` ascending; items without a timestamp (live agent turns and
+  // optimistic local user prompts) trail the history block in arrival
+  // order. Each rendered node carries `data-testid="turn-or-bubble"` so
+  // the chronological-ordering scenarios can query in document order.
+  type Item =
+    | { kind: 'bubble'; key: string; createdAt: number | null; text: string }
+    | { kind: 'turn'; key: string; createdAt: number | null; turn: TurnCardData };
+
+  const orderedItems = useMemo<Item[]>(() => {
+    const optimistic = userTurnsBySession[viewSessionKey] ?? [];
+    const items: Item[] = [
+      ...historyUserBubbles.map<Item>((u) => ({
+        kind: 'bubble',
+        key: u.id,
+        createdAt: u.createdAt,
+        text: u.text,
+      })),
+      ...historyTurns.map<Item>((t) => ({
+        kind: 'turn',
+        key: t.id,
+        createdAt: t.createdAt,
+        turn: t,
+      })),
+      ...agentTurns.map<Item>((t) => ({
+        kind: 'turn',
+        key: t.id,
+        createdAt: null,
+        turn: t,
+      })),
+      ...optimistic.map<Item>((u) => ({
+        kind: 'bubble',
+        key: u.id,
+        createdAt: null,
+        text: u.text,
+      })),
+    ];
+    // Stable sort: items with a `createdAt` come first in ascending order;
+    // items without one preserve their input order at the tail. The input
+    // order itself already reflects "history then live", so untimed items
+    // stay in the right relative order.
+    const indexed = items.map((it, idx) => ({ it, idx }));
+    indexed.sort((a, b) => {
+      const ax = a.it.createdAt;
+      const bx = b.it.createdAt;
+      if (ax === null && bx === null) return a.idx - b.idx;
+      if (ax === null) return 1;
+      if (bx === null) return -1;
+      if (ax !== bx) return ax - bx;
+      return a.idx - b.idx;
+    });
+    return indexed.map(({ it }) => it);
+  }, [historyUserBubbles, historyTurns, agentTurns, userTurnsBySession, viewSessionKey]);
+
+  const isEmpty = orderedItems.length === 0;
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const lastAgentTurnId = agentTurns.at(-1)?.id;
-  const userCount = userTurns.length;
+  const itemCount = orderedItems.length;
+  const lastItemKey = orderedItems.at(-1)?.key;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [agentTurns.length, lastAgentTurnId, userCount]);
+  }, [itemCount, lastItemKey]);
 
   const handleSubmit = useCallback(
     (message: string) => {
@@ -154,7 +325,10 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
       const id = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setUserTurnsBySession((prev) => {
         const list = prev[viewSessionKey] ?? [];
-        return { ...prev, [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now() }] };
+        return {
+          ...prev,
+          [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now(), createdAt: null }],
+        };
       });
     },
     [ws, viewSessionKey, currentModel],
@@ -168,34 +342,44 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   const inputDisabled = ws.status === 'idle' || ws.status === 'closed';
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
-      <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
-        {agentTurns.length === 0 && userTurns.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Waiting for the next turn on <span className="ml-1 font-mono">{viewSessionKey}</span>…
-          </div>
-        ) : (
-          <>
-            {userTurns.map((u) => (
-              <div key={u.id} className="flex justify-end">
-                <UserMessageBubble content={u.text} />
+    // Vendor `TurnCard` (chat) and vendor `InputContainer` (toolbar) both
+    // mount radix Tooltips, so a single TooltipProvider wraps the whole
+    // view rather than being scoped to the input. EscapeInterruptProvider
+    // and AppShellProvider only feed `InputContainer`, but co-locating
+    // them here keeps all vendor-context lifetimes on the same level.
+    <AppShellProvider value={appShellValue}>
+      <EscapeInterruptProvider>
+        <TooltipPrimitive.Provider delayDuration={300}>
+          <div className="flex flex-1 min-h-0 flex-col">
+            <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
+              {isEmpty ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Waiting for the next turn on{' '}
+                  <span className="ml-1 font-mono">{viewSessionKey}</span>…
+                </div>
+              ) : (
+                orderedItems.map((item) =>
+                  item.kind === 'bubble' ? (
+                    <div key={item.key} data-testid="turn-or-bubble" className="flex justify-end">
+                      <UserMessageBubble content={item.text} />
+                    </div>
+                  ) : (
+                    <div key={item.key} data-testid="turn-or-bubble">
+                      <RaraTurnCard turn={item.turn} />
+                    </div>
+                  ),
+                )
+              )}
+            </div>
+            {history.isError && (
+              <div
+                role="alert"
+                className="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300"
+              >
+                Failed to load conversation history. Live chat still works — refresh to retry.
               </div>
-            ))}
-            {agentTurns.map((turn) => (
-              <TurnCard key={turn.id} turn={turn} />
-            ))}
-          </>
-        )}
-      </div>
-      <div className="pt-2">
-        {/* Vendor InputContainer reaches for an EscapeInterruptProvider
-         *  (double-Esc interrupt UX) and a radix TooltipProvider (toolbar
-         *  hover hints). Wrap locally rather than at the App root so the
-         *  provider lifetime tracks the timeline view, and rara's other
-         *  pages stay free of vendor-side context noise. */}
-        <AppShellProvider value={appShellValue}>
-          <EscapeInterruptProvider>
-            <TooltipPrimitive.Provider delayDuration={300}>
+            )}
+            <div className="pt-2">
               <InputContainer
                 onSubmit={handleSubmit}
                 onStop={handleStop}
@@ -206,10 +390,10 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
                 currentConnection={RARA_CONNECTION_SLUG}
                 placeholder="Send a message…"
               />
-            </TooltipPrimitive.Provider>
-          </EscapeInterruptProvider>
-        </AppShellProvider>
-      </div>
-    </div>
+            </div>
+          </div>
+        </TooltipPrimitive.Provider>
+      </EscapeInterruptProvider>
+    </AppShellProvider>
   );
 }

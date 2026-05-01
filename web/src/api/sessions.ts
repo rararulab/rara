@@ -15,6 +15,7 @@
  */
 
 import { api } from './client';
+import type { ChatMessageData } from './types';
 
 /**
  * One hit returned by `GET /api/v1/chat/sessions/search`.
@@ -56,4 +57,22 @@ export async function searchSessions(
     options?.signal ? { signal: options.signal } : undefined,
   );
   return res.hits;
+}
+
+/**
+ * Fetch persisted chat messages for a session via
+ * `GET /api/v1/chat/sessions/{key}/messages`.
+ *
+ * The backend reduces the session's tape into a flat `ChatMessage[]` with
+ * monotonic `seq`. Default `limit` of 200 mirrors the backend default —
+ * see `crates/extensions/backend-admin/src/chat/router.rs`.
+ */
+export async function listMessages(
+  sessionKey: string,
+  limit = 200,
+  options?: { signal?: AbortSignal },
+): Promise<ChatMessageData[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/messages?${params.toString()}`;
+  return api.get<ChatMessageData[]>(path, options?.signal ? { signal: options.signal } : undefined);
 }

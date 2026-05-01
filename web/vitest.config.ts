@@ -23,6 +23,11 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      // `~vendor` must come before `@` so vendor-internal imports resolve
+      // before the broader `@/...` rule. Mirrors `vite.config.ts`.
+      '~vendor': path.resolve(__dirname, './src/vendor/craft-ui'),
+      '@craft-agent': path.resolve(__dirname, './src/vendor/craft-ui/_stubs/craft-agent'),
+      '@config': path.resolve(__dirname, './src/vendor/craft-ui/_stubs/config'),
       '@': path.resolve(__dirname, './src'),
     },
   },
