@@ -28,6 +28,8 @@ pub mod image;
 pub mod kimi;
 pub mod openai;
 pub mod registry;
+pub mod runtime_embedder;
+pub mod runtime_lister;
 pub mod scripted;
 pub mod stream;
 mod think_tag;
@@ -43,6 +45,8 @@ pub use openai::{OpenAiDriver, is_local_url};
 pub use registry::{
     AgentLlmConfig, DriverRegistry, DriverRegistryRef, ProviderModelConfig, ResolvedAgent,
 };
+pub use runtime_embedder::RuntimeEmbedder;
+pub use runtime_lister::RuntimeModelLister;
 pub use scripted::ScriptedLlmDriver;
 pub use stream::{StreamDelta, StreamFailure};
 pub use types::*;

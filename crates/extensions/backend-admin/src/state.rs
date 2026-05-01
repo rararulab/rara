@@ -35,6 +35,10 @@ pub struct BackendState {
     pub settings_svc:      crate::settings::SettingsSvc,
     /// Data feed router state with both persistence and registry.
     pub feed_router_state: DataFeedRouterState,
+    /// Kernel driver registry, threaded into the settings router so a
+    /// `PATCH /api/v1/settings { llm.default_provider }` can swap the
+    /// active driver at runtime (#2014).
+    pub driver_registry:   rara_kernel::llm::DriverRegistryRef,
 }
 
 impl BackendState {
@@ -50,6 +54,7 @@ impl BackendState {
         settings_svc: crate::settings::SettingsSvc,
         model_lister: rara_kernel::llm::LlmModelListerRef,
         feed_router_state: DataFeedRouterState,
+        driver_registry: rara_kernel::llm::DriverRegistryRef,
     ) -> Result<Self, Whatever> {
         // -- domain services -------------------------------------------------
 
@@ -68,6 +73,7 @@ impl BackendState {
             session_service,
             settings_svc,
             feed_router_state,
+            driver_registry,
         })
     }
 
@@ -91,7 +97,11 @@ impl BackendState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            crate::settings::routes(self.settings_svc.clone()),
+            crate::settings::routes(
+                self.settings_svc.clone(),
+                self.driver_registry.clone(),
+                self.session_service.model_catalog().clone(),
+            ),
         );
         merge_openapi_router(
             &mut router,

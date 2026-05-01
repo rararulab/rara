@@ -437,6 +437,14 @@ impl SessionService {
 
     // -- model catalog ------------------------------------------------------
 
+    /// Borrow the underlying [`ModelCatalog`].
+    ///
+    /// Exposed so the settings router can call
+    /// [`ModelCatalog::invalidate`] when `llm.default_provider`
+    /// changes — colocating mutation + cache drop in one handler is
+    /// simpler than wiring a settings-watch task (#2014).
+    pub fn model_catalog(&self) -> &ModelCatalog { &self.model_catalog }
+
     /// List available models from the configured provider. Favorites are
     /// marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {

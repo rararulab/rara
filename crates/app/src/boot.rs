@@ -266,45 +266,21 @@ pub(crate) async fn boot(
 
     let agent_registry = Arc::new(load_default_registry(title_gen_max_output_chars));
 
-    // -- default provider model lister / embedder ----------------------------
+    // -- runtime model lister / embedder -------------------------------------
     //
-    // OAuth-based providers (kimi-code, codex) don't have base_url/api_key in
-    // settings — they resolve credentials dynamically.  Build the appropriate
-    // OpenAiDriver variant so model listing and embedding work end-to-end.
+    // Both refs route through `DriverRegistry` so a settings-driven switch
+    // of `llm.default_provider` (PATCH /api/v1/settings) takes effect on
+    // the next call without a process restart. The registry already owns
+    // a per-provider `OpenAiDriver` for every configured provider (see
+    // `build_driver_registry`), and that builder also registers each one
+    // as the lister + embedder for its provider name. Issue #2014.
 
-    let default_provider = {
-        use rara_domain_shared::settings::keys;
-        settings_provider
-            .get_first(&[keys::LLM_DEFAULT_PROVIDER, keys::LLM_PROVIDER])
-            .await
-            .unwrap_or_else(|| "openrouter".to_owned())
-    };
-    let default_driver: Arc<rara_kernel::llm::OpenAiDriver> = match default_provider.as_str() {
-        "kimi-code" => Arc::new(rara_kernel::llm::OpenAiDriver::with_credential_resolver(
-            Arc::new(rara_kimi_oauth::KimiCredentialResolver),
-            rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-        )),
-        "codex" => Arc::new(rara_kernel::llm::OpenAiDriver::with_credential_resolver(
-            Arc::new(rara_codex_oauth::CodexCredentialResolver),
-            rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-        )),
-        _ => {
-            let base_url_key = format!("llm.providers.{default_provider}.base_url");
-            let no_proxy = settings_provider
-                .get(&base_url_key)
-                .await
-                .as_deref()
-                .map_or(false, rara_kernel::llm::is_local_url);
-            Arc::new(rara_kernel::llm::OpenAiDriver::from_settings(
-                settings_provider.clone(),
-                &default_provider,
-                rara_kernel::llm::OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-                no_proxy,
-            ))
-        }
-    };
-    let model_lister: rara_kernel::llm::LlmModelListerRef = default_driver.clone();
-    let embedder: rara_kernel::llm::LlmEmbedderRef = default_driver;
+    let model_lister: rara_kernel::llm::LlmModelListerRef = Arc::new(
+        rara_kernel::llm::RuntimeModelLister::new(driver_registry.clone()),
+    );
+    let embedder: rara_kernel::llm::LlmEmbedderRef = Arc::new(
+        rara_kernel::llm::RuntimeEmbedder::new(driver_registry.clone()),
+    );
 
     // -- knowledge layer ------------------------------------------------------
 
@@ -378,15 +354,20 @@ async fn build_driver_registry(
             let no_proxy = all_settings
                 .get(&base_url_key)
                 .map_or(false, |url| rara_kernel::llm::is_local_url(url));
-            registry.register_driver(
+            let oa = Arc::new(OpenAiDriver::from_settings(
+                settings.clone(),
                 name,
-                Arc::new(OpenAiDriver::from_settings(
-                    settings.clone(),
-                    name,
-                    OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
-                    no_proxy,
-                )),
-            );
+                OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+                no_proxy,
+            ));
+            registry.register_driver(name, oa.clone());
+            // The same `OpenAiDriver` instance services the chat-model
+            // catalog and the knowledge-layer embedder; registering it
+            // under the provider name lets `RuntimeModelLister` /
+            // `RuntimeEmbedder` swap providers in lock-step with
+            // `default_driver` (issue #2014).
+            registry.register_lister(name, oa.clone());
+            registry.register_embedder(name, oa);
         }
 
         // Model config applies to ALL providers including kimi-code.
@@ -525,6 +506,16 @@ async fn build_driver_registry(
                     rara_codex_oauth::CodexCredentialResolver,
                 ))),
             );
+            // CodexDriver does not implement `LlmModelLister`/`LlmEmbedder`,
+            // so register a sibling OpenAiDriver with the same credential
+            // resolver to service `/models` and `/embeddings` whenever
+            // `codex` is the active provider (#2014).
+            let codex_oa = Arc::new(OpenAiDriver::with_credential_resolver(
+                Arc::new(rara_codex_oauth::CodexCredentialResolver),
+                OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+            ));
+            registry.register_lister("codex", codex_oa.clone());
+            registry.register_embedder("codex", codex_oa);
         }
         Ok(None) => {} // No tokens configured — skip
         Err(e) => tracing::warn!("failed to load codex OAuth tokens: {e}"),
@@ -540,6 +531,16 @@ async fn build_driver_registry(
                     rara_kimi_oauth::KimiCredentialResolver,
                 ))),
             );
+            // KimiCodeDriver does not implement `LlmModelLister`/`LlmEmbedder`;
+            // register an OpenAiDriver sibling with the OAuth resolver so
+            // the chat-model catalog and embeddings keep working when
+            // `kimi-code` is the active provider (#2014).
+            let kimi_oa = Arc::new(OpenAiDriver::with_credential_resolver(
+                Arc::new(rara_kimi_oauth::KimiCredentialResolver),
+                OpenAiDriver::DEFAULT_SSE_IDLE_TIMEOUT,
+            ));
+            registry.register_lister("kimi-code", kimi_oa.clone());
+            registry.register_embedder("kimi-code", kimi_oa);
             info!("kimi-code driver registered (OAuth tokens found)");
         }
         Ok(None) => {

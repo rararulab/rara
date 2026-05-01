@@ -722,6 +722,7 @@ pub async fn start_with_options(
         settings_svc.clone(),
         rara.model_lister.clone(),
         feed_router_state,
+        rara.driver_registry.clone(),
     )
     .await
     .whatever_context("Failed to initialize BackendState")?;

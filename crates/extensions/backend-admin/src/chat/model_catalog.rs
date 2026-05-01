@@ -173,6 +173,24 @@ impl ModelCatalog {
         }
     }
 
+    /// Drop the cached model list so the next [`Self::list_models`]
+    /// performs a fresh fetch.
+    ///
+    /// Called from the `PATCH /api/v1/settings` handler when
+    /// `llm.default_provider` changes. Without this, the 5-minute
+    /// `CACHE_TTL` would keep serving the previous provider's catalog
+    /// even after the runtime lister has switched (issue #2014). The
+    /// TTL is preserved verbatim for the no-change case so the upstream
+    /// provider's `/models` endpoint is still spared per-request hits.
+    pub async fn invalidate(&self) {
+        let mut guard = self.cache.lock().await;
+        *guard = None;
+    }
+
+    /// Test helper: report whether the cache currently holds an entry.
+    #[cfg(test)]
+    pub(crate) async fn has_cached_entry(&self) -> bool { self.cache.lock().await.is_some() }
+
     /// Look up a model's context length from the curated list.
     ///
     /// Returns `None` if the model is not in the curated list. Callers
@@ -278,4 +296,133 @@ fn apply_favorite_sort(models: &mut [ChatModel]) {
             .cmp(&a.is_favorite)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
+    use rara_kernel::llm::{
+        DriverRegistry, LlmModelLister, LlmModelListerRef, ModelInfo, OpenRouterCatalog,
+        RuntimeModelLister,
+    };
+
+    use super::ModelCatalog;
+
+    /// Test lister that returns a configurable list and counts calls.
+    struct CountingLister {
+        models: Vec<&'static str>,
+        calls:  AtomicUsize,
+    }
+
+    impl CountingLister {
+        fn new(models: Vec<&'static str>) -> Self {
+            Self {
+                models,
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn call_count(&self) -> usize { self.calls.load(Ordering::SeqCst) }
+    }
+
+    #[async_trait]
+    impl LlmModelLister for CountingLister {
+        async fn list_models(&self) -> rara_kernel::error::Result<Vec<ModelInfo>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .models
+                .iter()
+                .map(|id| ModelInfo {
+                    id:       (*id).to_owned(),
+                    owned_by: String::new(),
+                    created:  None,
+                })
+                .collect())
+        }
+    }
+
+    fn registry_with(default: &str) -> Arc<DriverRegistry> {
+        Arc::new(DriverRegistry::new(
+            default,
+            Arc::new(OpenRouterCatalog::new()),
+        ))
+    }
+
+    /// Spec: `switching_default_provider_returns_new_catalog` — after a
+    /// `set_default_driver` + `invalidate` the next `list_models` reflects
+    /// the new provider's catalog.
+    #[tokio::test]
+    async fn switching_default_provider_returns_new_catalog() {
+        let registry = registry_with("provider_a");
+
+        let lister_a: Arc<CountingLister> = Arc::new(CountingLister::new(vec!["model-a-1"]));
+        let lister_b: Arc<CountingLister> = Arc::new(CountingLister::new(vec!["model-b-1"]));
+        registry.register_lister("provider_a", lister_a.clone() as LlmModelListerRef);
+        registry.register_lister("provider_b", lister_b.clone() as LlmModelListerRef);
+
+        let runtime_lister: LlmModelListerRef = Arc::new(RuntimeModelLister::new(registry.clone()));
+        let catalog = ModelCatalog::new(runtime_lister);
+
+        // First fetch — default is provider_a.
+        let first = catalog.list_models(&[]).await;
+        let first_ids: Vec<String> = first.into_iter().map(|m| m.id).collect();
+        assert!(
+            first_ids.contains(&"model-a-1".to_string()),
+            "first fetch must contain provider_a's model, got: {first_ids:?}"
+        );
+        assert!(
+            !first_ids.contains(&"model-b-1".to_string()),
+            "first fetch must not contain provider_b's model"
+        );
+
+        // Switch the default and invalidate the catalog cache to mirror
+        // what the settings PATCH path will do.
+        registry.set_default_driver("provider_b");
+        catalog.invalidate().await;
+
+        let second = catalog.list_models(&[]).await;
+        let second_ids: Vec<String> = second.into_iter().map(|m| m.id).collect();
+        assert!(
+            second_ids.contains(&"model-b-1".to_string()),
+            "after switch, fetch must contain provider_b's model, got: {second_ids:?}"
+        );
+        assert!(
+            !second_ids.contains(&"model-a-1".to_string()),
+            "after switch, fetch must NOT contain provider_a's model (stale cache regression), \
+             got: {second_ids:?}"
+        );
+        assert_eq!(lister_a.call_count(), 1, "provider_a fetched once");
+        assert_eq!(lister_b.call_count(), 1, "provider_b fetched once");
+    }
+
+    /// Spec: `ttl_still_caches_when_provider_unchanged` — the cache TTL
+    /// is preserved for the no-change path so we don't hammer the
+    /// provider's `/models` endpoint per request.
+    #[tokio::test]
+    async fn ttl_still_caches_when_provider_unchanged() {
+        let registry = registry_with("provider_a");
+        let lister: Arc<CountingLister> = Arc::new(CountingLister::new(vec!["model-a-1"]));
+        registry.register_lister("provider_a", lister.clone() as LlmModelListerRef);
+
+        let runtime_lister: LlmModelListerRef = Arc::new(RuntimeModelLister::new(registry.clone()));
+        let catalog = ModelCatalog::new(runtime_lister);
+
+        let _ = catalog.list_models(&[]).await;
+        let _ = catalog.list_models(&[]).await;
+
+        assert_eq!(
+            lister.call_count(),
+            1,
+            "with default unchanged within TTL, the lister must be invoked exactly once"
+        );
+    }
 }
