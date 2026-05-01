@@ -323,13 +323,14 @@ export function buildTurnsFromEvents(
 // ---------------------------------------------------------------------------
 
 /**
- * Extract a flat assistant text string from a `ChatMessageData.content`,
- * which the backend serialises as either a plain string or a list of
- * multimodal blocks. The timeline only renders text today, so non-text
- * blocks are dropped — matches what `buildTurnsFromEvents` does for live
- * `text_delta` frames.
+ * Extract a flat text string from a `ChatMessageData.content`, which the
+ * backend serialises as either a plain string or a list of multimodal
+ * blocks. The timeline only renders text today, so non-text blocks are
+ * dropped — matches what `buildTurnsFromEvents` does for live `text_delta`
+ * frames. Exported so `TimelineView` can reuse the same flattening for
+ * persisted user-message bubbles instead of duplicating it.
  */
-function contentToText(content: ChatMessageData['content']): string {
+export function contentToText(content: ChatMessageData['content']): string {
   if (typeof content === 'string') return content;
   return content
     .map((block) => (block.type === 'text' ? block.text : ''))

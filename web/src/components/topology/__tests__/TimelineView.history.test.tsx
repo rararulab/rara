@@ -162,30 +162,47 @@ describe('TimelineView.history', () => {
     });
   });
 
-  it('boundary_dedupe: live events with seq <= last history seq render exactly once', async () => {
-    listMessagesMock.mockResolvedValueOnce([
-      makeMessage({ seq: 5, role: 'assistant', content: 'boundary-text' }),
-    ]);
+  it('arrival_barrier_dedupe: live events that arrived before history resolved are not re-rendered after history loads', async () => {
+    // Defer the history fetch so we can prove the live path renders
+    // "boundary-text" BEFORE history settles, then resolve with a
+    // ChatMessage that already covers the same delta. Spec scenario
+    // `TimelineView.history.arrival_barrier_dedupe`.
+    let resolveHistory: (value: ChatMessageData[]) => void = () => {};
+    listMessagesMock.mockReturnValueOnce(
+      new Promise<ChatMessageData[]>((resolve) => {
+        resolveHistory = resolve;
+      }),
+    );
 
-    const dupEvent: TopologyEventEntry = {
-      seq: 5,
+    // A real `text_delta` + `done` pair through the topology subscription
+    // — drives the live reducer rather than a synthetic seq value.
+    const liveDelta: TopologyEventEntry = {
+      seq: 1,
       sessionKey: 'sess-A',
       event: { type: 'text_delta', text: 'boundary-text' },
     };
-    const doneEvent: TopologyEventEntry = {
-      seq: 5,
+    const liveDone: TopologyEventEntry = {
+      seq: 2,
       sessionKey: 'sess-A',
       event: { type: 'done' },
     };
 
-    renderTimeline({ viewSessionKey: 'sess-A', events: [dupEvent, doneEvent] });
+    renderTimeline({ viewSessionKey: 'sess-A', events: [liveDelta, liveDone] });
 
+    // Pre-history: live path is the only source of "boundary-text".
     await screen.findByText('boundary-text');
+    expect(screen.getAllByText('boundary-text')).toHaveLength(1);
 
-    // Exactly one DOM node carries the boundary text — the live duplicate
-    // is filtered before the reducer ever sees it.
-    const matches = screen.getAllByText('boundary-text');
-    expect(matches).toHaveLength(1);
+    // Resolve history with one assistant message whose content matches.
+    // The arrival barrier should snapshot at `sessionEvents.length === 2`
+    // and drop both pre-history live entries from the live reducer; the
+    // history reducer then becomes the sole renderer.
+    resolveHistory([makeMessage({ seq: 1, role: 'assistant', content: 'boundary-text' })]);
+
+    await waitFor(() => {
+      // Still exactly one — not duplicated by the live reducer.
+      expect(screen.getAllByText('boundary-text')).toHaveLength(1);
+    });
   });
 
   it('fetch_error_does_not_block_live: history failure surfaces inline error and keeps input working', async () => {

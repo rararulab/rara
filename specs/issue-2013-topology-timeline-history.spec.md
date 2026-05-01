@@ -113,22 +113,37 @@ the user-bubble text and the assistant text rendered through
   from `assistant.tool_calls` paired with the corresponding
   `tool_result` content, and sets `inFlight: false`, `metrics: null`,
   `usage: null` (history does not carry the live metrics frame).
-- **Live + history dedupe.** History returns messages with monotonic
-  `seq`. Compute `lastHistorySeq = max(history.seq)` (or 0 if history
-  is empty). When folding live `events` from the topology subscription
-  for `viewSessionKey`, drop entries whose `seq <= lastHistorySeq`
-  before passing them to `buildTurnsFromEvents`. This prevents
-  double-rendering at the boundary if a frame the backend persisted
-  was also delivered live before the fetch resolved.
-  Note: `ChatMessage.seq` and `TopologyEventEntry.seq` come from
-  different counters today (the former is per-tape, the latter is the
-  topology hub's monotonic frame seq). The dedupe relies on both being
-  monotonic and aligned by `created_at`/arrival on the same session.
-  If the implementer finds the two seq spaces are not directly
-  comparable, fall back to filtering live events with
-  `created_at` strictly greater than the latest history `created_at`,
-  and add a fixme comment naming the seq-unification work as a
-  follow-up. Either way the boundary must not double-render.
+- **Live + history dedupe — arrival-barrier, not seq.** `ChatMessage.seq`
+  (per-tape, persistent) and `TopologyEventEntry.seq`
+  (`web/src/hooks/use-topology-subscription.ts:179,196`, per-WS-connection,
+  resets to 0 on every reconnect) are NOT comparable counters. A
+  `seq <= lastHistorySeq` filter is wrong-by-construction: after a
+  reconnect with 50 persisted entries, the first live frame arrives with
+  `seq=1` and would be incorrectly dropped, freezing chat until the WS
+  frame counter eventually exceeds 50. Inspecting the wire types
+  (`TopologyEventEntry` in the hook + `WebFrame` variants like
+  `text_delta`) shows there is also no shared id and no per-event
+  timestamp on the WS side — there is no field at parity that can serve
+  as a content-level dedupe key.
+  Use an **arrival-time barrier** instead: at the moment the history
+  fetch for `viewSessionKey` resolves, snapshot
+  `historyBarrierSeq = events.length` (the current length of the
+  topology subscription's events buffer for this session). When folding
+  live events for `viewSessionKey`, only consider entries whose buffer
+  index is `>= historyBarrierSeq`; entries that arrived before the
+  history fetch resolved are treated as already represented by the
+  history payload and dropped. Re-snapshot the barrier on every
+  successful refetch (including session switch and WS reconnect), keyed
+  by `viewSessionKey`. This avoids any cross-counter comparison entirely
+  and uses only a quantity each side actually has: history's "this is
+  the truth as of the moment I resolved" and the live buffer's local
+  index.
+- **`agent-spec lifecycle` does not currently support `Package: web`
+  selectors** (no vitest adapter). The lifecycle gate on this spec
+  therefore fails by tooling, not by verification — implementer and
+  reviewer verify the scenarios by running vitest directly. Tracked as
+  a lane-2 chore in issue 2015 ("agent-spec: add vitest adapter for
+  web specs").
 - **Session switch reset.** Already handled correctly: `userTurnsBySession`
   keys by session, and `agentTurns` filters `events` by session. The
   new history hook keys on `viewSessionKey` so react-query swaps the
@@ -200,14 +215,16 @@ Scenario: Switching viewSessionKey refetches history and resets the rendered tim
   Then the rendered DOM contains "from-B"
     And the rendered DOM does not contain "from-A"
 
-Scenario: Live events with seq at or below the last history seq are not re-rendered
+Scenario: Live events that arrived before history resolved are not re-rendered after history loads
   Test:
     Package: web
-    Filter: TimelineView.history.boundary_dedupe
-  Given history returns one assistant message with seq 5 and text "boundary-text"
-    And the topology events buffer also contains a text_delta event for the same session with seq 5 and text "boundary-text"
-  When TimelineView mounts and folds both sources
-  Then the assistant text "boundary-text" is rendered exactly once
+    Filter: TimelineView.history.arrival_barrier_dedupe
+  Given TimelineView is mounted with viewSessionKey "S" and a pending GET /api/v1/chat/sessions/S/messages
+    And the topology subscription delivers a text_delta event for session "S" with delta "boundary-text" while the history fetch is still pending
+    And the rendered DOM (pre-history) contains "boundary-text" exactly once via the live path
+  When the history fetch resolves with one assistant message whose content is "boundary-text"
+  Then the rendered DOM contains "boundary-text" exactly once
+    And the assistant content is sourced from the history payload (rendered through the history TurnCard path), not duplicated by the pre-history live event
 
 Scenario: History fetch failure still allows live chat to function
   Test:
@@ -223,8 +240,12 @@ Scenario: History fetch failure still allows live chat to function
 - Adding `parent_id` (or any other field) to `SessionEntry`.
 - Building the cross-session fork-tree sidebar (deferred per user).
 - Unifying `ChatMessage.seq` (per-tape counter) with
-  `TopologyEventEntry.seq` (topology hub counter). The dedupe rule
-  above tolerates the gap; full unification is a separate concern.
+  `TopologyEventEntry.seq` (per-WS-connection counter). The
+  arrival-barrier dedupe above sidesteps the gap entirely; any
+  cross-counter unification work is a separate concern and not needed
+  for this spec to pass.
+- Building the vitest adapter for `agent-spec lifecycle`. Tracked
+  separately in issue 2015.
 - Pagination of history beyond `limit=200`. The backend already
   supports `?limit=N`; UI-side scroll-to-load-more is a follow-up.
 - Touching the legacy `pages/Chat.tsx` surface — it has its own

@@ -17,9 +17,8 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { TurnCard, buildTurnsFromEvents, buildTurnsFromHistory } from './TurnCard';
+import { TurnCard, buildTurnsFromEvents, buildTurnsFromHistory, contentToText } from './TurnCard';
 
-import type { ChatMessageData } from '@/api/types';
 import { useChatModels } from '@/hooks/use-chat-models';
 import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
 import { useSessionHistory } from '@/hooks/use-session-history';
@@ -33,19 +32,6 @@ import { EscapeInterruptProvider } from '~vendor/context/EscapeInterruptContext'
  *  rara only ever resolves one default provider server-side today; the
  *  picker just needs *a* connection to attach the model list to. */
 const RARA_CONNECTION_SLUG = 'rara';
-
-/**
- * Extract a plain-text user prompt from a persisted `ChatMessage`. The
- * backend may serialise content as either a bare string or a list of
- * multimodal blocks; the topology timeline shows text only.
- */
-function extractUserText(msg: ChatMessageData): string {
-  if (typeof msg.content === 'string') return msg.content;
-  return msg.content
-    .map((block) => (block.type === 'text' ? block.text : ''))
-    .filter((s) => s.length > 0)
-    .join('');
-}
 
 export interface TimelineViewProps {
   /** Session key whose events should be rendered. Workers (children) flip
@@ -135,23 +121,78 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
 
   const history = useSessionHistory(viewSessionKey);
   const historyMessages = history.data;
+  const historyIsSuccess = history.isSuccess;
 
-  // Boundary seq for live/history dedupe. `ChatMessage.seq` (per-tape
-  // counter, assigned in
-  // `crates/extensions/backend-admin/src/chat/service.rs::tap_entries_to_chat_messages`)
-  // and `TopologyEventEntry.seq` (per-WS-connection frame counter, see
-  // `use-topology-subscription`) are NOT the same axis. They are both
-  // monotonic per session, so seq-based filtering is at worst
-  // conservative — it may drop a live frame that was not in history,
-  // which then re-renders on the next WS push. Under-dropping (a
-  // duplicate rendering at the boundary) is the bug we are preventing,
-  // so conservative is the safe direction until the two seq spaces are
-  // unified.
-  // TODO: seq-unification — see issue #2013 decisions section.
-  const lastHistorySeq = useMemo(() => {
-    if (!historyMessages || historyMessages.length === 0) return 0;
-    return historyMessages.reduce((max, m) => (m.seq > max ? m.seq : max), 0);
-  }, [historyMessages]);
+  // Session-filtered slice of the topology subscription buffer. The
+  // arrival barrier indexes into THIS array (not the full cross-session
+  // buffer) because each `TimelineView` only ever folds events for one
+  // session.
+  const sessionEvents = useMemo(
+    () => events.filter((e) => e.sessionKey === viewSessionKey),
+    [events, viewSessionKey],
+  );
+
+  // Arrival-time barrier for live/history dedupe.
+  //
+  // `ChatMessage.seq` (per-tape counter persisted by
+  // `tap_entries_to_chat_messages` in
+  // `crates/extensions/backend-admin/src/chat/service.rs`) and
+  // `TopologyEventEntry.seq` (per-WS-connection frame counter assigned in
+  // `use-topology-subscription`) are NOT comparable axes — the WS counter
+  // resets to 0 on every reconnect, so any cross-counter filter
+  // (`seq > lastHistorySeq`) silently drops live frames after a
+  // reconnect. Instead, snapshot the *length* of the session-filtered
+  // live buffer at the moment the history fetch resolves: live entries
+  // whose buffer index is `< barrier` arrived before history settled and
+  // are treated as already represented in the history payload; entries
+  // at index `>= barrier` are strictly post-history and rendered live.
+  // See `specs/issue-2013-topology-timeline-history.spec.md` Decisions
+  // (Live + history dedupe — arrival-barrier, not seq).
+  //
+  // Reset triggers (per session):
+  //   - `viewSessionKey` change — handled implicitly because the map is
+  //     keyed by session.
+  //   - WS reconnect — detected by the session-filtered buffer length
+  //     going backwards (the `events` buffer is rebuilt from `[]` on
+  //     `hello`, see `use-topology-subscription`'s `handleFrame`). On
+  //     reset we drop the stale barrier; the next successful history
+  //     refetch re-snapshots.
+  const [barrierBySession, setBarrierBySession] = useState<Record<string, number>>({});
+  const lastSessionLengthRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    const prevLen = lastSessionLengthRef.current[viewSessionKey] ?? 0;
+    const curLen = sessionEvents.length;
+    if (curLen < prevLen) {
+      // Buffer shrunk → WS reconnect (or session-buffer truncation).
+      // Drop the stale barrier so the next successful history fetch
+      // re-snapshots, and invalidate the history query so it actually
+      // refetches against the new connection.
+      setBarrierBySession((prev) => {
+        if (!(viewSessionKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[viewSessionKey];
+        return next;
+      });
+      void history.refetch();
+    }
+    lastSessionLengthRef.current[viewSessionKey] = curLen;
+  }, [sessionEvents.length, viewSessionKey, history]);
+
+  // Snapshot the barrier the first time the history query resolves for
+  // this session. The data identity (`historyMessages`) plus the success
+  // flag together cover both the initial fetch and refetch-after-reset.
+  useEffect(() => {
+    if (!historyIsSuccess) return;
+    setBarrierBySession((prev) => {
+      if (viewSessionKey in prev) return prev;
+      return { ...prev, [viewSessionKey]: sessionEvents.length };
+    });
+    // `sessionEvents.length` intentionally captured at resolution time
+    // only — we don't want subsequent length changes to move the
+    // barrier.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyIsSuccess, historyMessages, viewSessionKey]);
 
   const historyTurns = useMemo(
     () => (historyMessages ? buildTurnsFromHistory(historyMessages) : []),
@@ -159,12 +200,13 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   );
 
   const agentTurns = useMemo(() => {
-    const sessionEvents = events
-      .filter((e) => e.sessionKey === viewSessionKey)
-      .filter((e) => e.seq > lastHistorySeq)
-      .map((e) => ({ seq: e.seq, event: e.event }));
-    return buildTurnsFromEvents(sessionEvents);
-  }, [events, viewSessionKey, lastHistorySeq]);
+    // Before the barrier is set (history still pending or errored), the
+    // live path is the only source — render every session event so the
+    // user sees streaming output immediately.
+    const barrier = barrierBySession[viewSessionKey];
+    const sliced = barrier === undefined ? sessionEvents : sessionEvents.slice(barrier);
+    return buildTurnsFromEvents(sliced.map((e) => ({ seq: e.seq, event: e.event })));
+  }, [sessionEvents, viewSessionKey, barrierBySession]);
 
   // Historical user prompts merged with the optimistic local prompts the
   // editor pushes on submit. Historical entries come first in seq order;
@@ -176,7 +218,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
       .filter((m) => m.role === 'user')
       .map((m) => ({
         id: `history-user-${String(m.seq)}`,
-        text: extractUserText(m),
+        text: contentToText(m.content),
         t: 0,
       }))
       .filter((u) => u.text.length > 0);
