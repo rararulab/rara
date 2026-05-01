@@ -365,7 +365,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
                     </div>
                   ) : (
                     <div key={item.key} data-testid="turn-or-bubble">
-                      <RaraTurnCard turn={item.turn} />
+                      <RaraTurnCard turn={item.turn} sessionKey={viewSessionKey} />
                     </div>
                   ),
                 )
