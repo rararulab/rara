@@ -16,7 +16,7 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, useNavigate } from 'react-router';
+import { BrowserRouter, Navigate, Routes, Route, useNavigate, useParams } from 'react-router';
 
 import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
 import { RequireAuth } from '@/components/RequireAuth';
@@ -28,15 +28,28 @@ import {
 import type { SettingsPage } from '@/components/settings/SettingsPanel';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import Docs from '@/pages/Docs';
-import KernelTop from '@/pages/KernelTop';
 import Login from '@/pages/Login';
-import Subscriptions from '@/pages/Subscriptions';
 
-// Topology owns the heavy vendor surface (`src/vendor/craft-ui` + tiptap,
+// Chat owns the heavy vendor surface (`src/vendor/craft-ui` + tiptap,
 // react-pdf, mermaid, @uiw/react-json-view). Lazy-loading it keeps
-// `/login`, `/kernel-top`, `/subscriptions`, `/docs` off that ~4.7 MB
-// chunk on first paint — see issue #2033.
-const Topology = lazy(() => import('@/pages/Topology'));
+// `/login` and `/docs` off that ~4.7 MB chunk on first paint —
+// see issue #2033.
+const Chat = lazy(() => import('@/pages/Chat'));
+
+/**
+ * Backwards-compat redirect for the old `/topology/:rootSessionKey`
+ * deep-links from `#1999`. Preserves the param so bookmarks survive
+ * the rename in `#2041`.
+ */
+function TopologySessionRedirect() {
+  const { rootSessionKey } = useParams<{ rootSessionKey?: string }>();
+  return (
+    <Navigate
+      to={rootSessionKey ? `/chat/${encodeURIComponent(rootSessionKey)}` : '/chat'}
+      replace
+    />
+  );
+}
 
 function RouteFallback() {
   return (
@@ -109,7 +122,7 @@ export default function App() {
                 }
               />
 
-              {/* Admin pages with dashboard layout. The topology view is the
+              {/* Admin pages with dashboard layout. The chat view is the
                   default landing page after login — see issue #1999. */}
               <Route
                 element={
@@ -122,29 +135,32 @@ export default function App() {
                   index
                   element={
                     <Suspense fallback={<RouteFallback />}>
-                      <Topology />
+                      <Chat />
                     </Suspense>
                   }
                 />
                 <Route path="docs" element={<Docs />} />
-                <Route path="kernel-top" element={<KernelTop />} />
-                <Route path="subscriptions" element={<Subscriptions />} />
                 <Route
-                  path="topology"
+                  path="chat"
                   element={
                     <Suspense fallback={<RouteFallback />}>
-                      <Topology />
+                      <Chat />
                     </Suspense>
                   }
                 />
                 <Route
-                  path="topology/:rootSessionKey"
+                  path="chat/:rootSessionKey"
                   element={
                     <Suspense fallback={<RouteFallback />}>
-                      <Topology />
+                      <Chat />
                     </Suspense>
                   }
                 />
+                {/* `/topology[/:rootSessionKey]` → `/chat[/:rootSessionKey]`
+                    redirects keep `#1999` deep-links alive after the
+                    `#2041` rename. */}
+                <Route path="topology" element={<Navigate to="/chat" replace />} />
+                <Route path="topology/:rootSessionKey" element={<TopologySessionRedirect />} />
               </Route>
             </Routes>
           </SettingsModalProvider>

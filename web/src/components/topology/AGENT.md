@@ -187,9 +187,9 @@ backend StreamHub                       ▼
   `WebFrame` union (kept synced with `crates/channels/src/web.rs`).
 - `@/api/client` — REST helper for the session list / create calls
   the picker drives.
-- `@tanstack/react-query` — `SessionPicker` uses the same
-  `useQuery`/`useMutation` pattern as `Subscriptions.tsx` so the cache
-  key (`['topology', 'chat-sessions']`) is the single invalidation
-  point if a future surface needs to nudge the picker.
+- `@tanstack/react-query` — `SessionPicker` uses the standard
+  `useQuery`/`useMutation` pattern; the cache key
+  (`['topology', 'chat-sessions']`) is the single invalidation point if
+  a future surface needs to nudge the picker.
 - `@/components/ui/{card,badge,button,input}` — local shadcn-style
   primitives.

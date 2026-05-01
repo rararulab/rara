@@ -38,12 +38,19 @@ import { useTopologySubscription, type TopologyStatus } from '@/hooks/use-topolo
  * └──────────────┴────────────────────┴──────────────┘
  * ```
  *
- * URL: `/topology` (no session) or `/topology/:rootSessionKey`. The
+ * URL: `/chat` (no session) or `/chat/:rootSessionKey`. The
  * shell auto-selects the most recently updated session on first load
  * so users never have to paste a session UUID — the UX complaint
  * `#1999` task #9 fixes.
  */
-/** localStorage key for the per-user collapsed-sidebar preference. */
+/**
+ * localStorage key for the per-user collapsed-sidebar preference.
+ *
+ * The literal `rara.topology.*` namespace is preserved on purpose: the
+ * page was renamed from "Topology" to "Chat" in `#2041`, but the storage
+ * key is a user-data contract — flipping it would silently reset every
+ * existing user's sidebar state on first load after upgrade.
+ */
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'rara.topology.sidebarCollapsed';
 
 /**
@@ -59,7 +66,7 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
-export default function Topology() {
+export default function Chat() {
   const { rootSessionKey } = useParams<{ rootSessionKey?: string }>();
   const navigate = useNavigate();
   // Which session the main timeline shows. `null` = root view; a child
@@ -90,7 +97,7 @@ export default function Topology() {
 
   const selectSession = useCallback(
     (key: string) => {
-      void navigate(`/topology/${encodeURIComponent(key)}`);
+      void navigate(`/chat/${encodeURIComponent(key)}`);
     },
     [navigate],
   );
@@ -113,7 +120,7 @@ export default function Topology() {
           )}
         </Button>
         <Network className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-sm font-medium">Topology</h1>
+        <h1 className="text-sm font-medium">Chat</h1>
         <div className="ml-auto">
           {rootSessionKey ? (
             <StatusPill status={subscription.status} />

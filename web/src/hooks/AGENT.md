@@ -13,7 +13,7 @@ Real files in this directory (one line each):
 - `use-server-status.ts` — context hook exposing `{ isOnline, isChecking }` for the global server-status banner.
 - `use-session-timeline.ts` — react-query backed timeline state for a kernel session: turns → timeline items, live-state tracking, loading hints.
 - `use-theme.ts` — `useSyncExternalStore`-based theme hook (`light` / `dark` / `system`) with `localStorage` persistence and `prefers-color-scheme` subscription.
-- `use-topology-subscription.ts` — WebSocket subscription to the cross-session topology event stream backing the `/topology` page.
+- `use-topology-subscription.ts` — WebSocket subscription to the cross-session topology event stream backing the `/chat` page (old `/topology` route redirects here).
 
 ## Critical Invariants
 
