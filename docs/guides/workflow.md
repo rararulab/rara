@@ -71,17 +71,52 @@ See `.claude/agents/spec-author.md` for the full contract.
 
 Once the user has acknowledged the proposed plan, the parent agent chains
 through the workflow steps mechanically: spec-author → worktree + implementer
-→ reviewer → push → PR → merge. Do NOT insert a confirmation round-trip
-between steps. In particular, after spec-author returns an issue number,
-the parent dispatches the implementer **directly** — do not ask the user
-"要不要派 implementer 把它做掉？" / "should I dispatch implementer?". The
-plan was already approved; re-asking is sycophancy, not safety.
+→ reviewer → push → PR → merge. The rule is structured as a **whitelist**:
+the only times the agent stops to re-ask are the gates enumerated below.
+Anything not on the list runs without re-asking — including, explicitly,
+the cases that have historically tripped the agent into sycophantic
+re-confirmation.
 
-Confirmation IS still required for: (a) merging to `main` (the final
-gate), (b) destructive git operations (`reset --hard`, force-push,
-`branch -D` on shared branches), (c) `pkill` / restart on the remote
-backend. Everything between issue-filed and PR-green-and-reviewed runs
-without re-asking.
+### Confirmation gates (exhaustive)
+
+The parent agent stops and asks the user **only** in these cases:
+
+- **(a) Merging to `main`.** The final gate before code lands. Always ask,
+  even when CI is green and review is APPROVE'd.
+- **(b) Destructive git operations.** `git reset --hard`, force-push,
+  `branch -D` on shared branches, and any other operation that rewrites
+  or discards committed history.
+- **(c) Remote backend restart.** `pkill` or any other action that kills
+  / restarts the rara backend on the shared remote (`raratekiAir`),
+  because other people may be using the instance.
+
+This list is closed. Adding a new gate is a separate user decision — do
+not infer one from a single failure mode.
+
+### Default-continue (no re-ask)
+
+Everything else runs without a confirmation round-trip. The cases below
+are named explicitly because they have actually tripped the agent into
+re-asking; they are the rule, not exceptions:
+
+- **Status queries mid-flow** — "进度?" / "where are we?" / "现在到哪一
+  步了?". Answer the question; do not restate the plan and end with
+  "要继续吗?".
+- **Step transitions inside an already-approved plan** — spec-author →
+  worktree + implementer → reviewer → push → PR. After spec-author
+  returns an issue number, the parent dispatches the implementer
+  **directly** — do not ask "要不要派 implementer 把它做掉？" / "should
+  I dispatch implementer?". The plan was already approved; re-asking is
+  sycophancy, not safety.
+- **Re-dispatching a stalled subagent** — if a subagent stops mid-task,
+  the parent re-dispatches with the carried-over context. No fresh
+  approval needed.
+- **Routine worktree / git tool calls inside an approved change** —
+  `git add`, `git commit`, `git rebase origin/main` inside the worktree,
+  `gh pr create`, `gh pr checks --watch`, `gh pr merge` (subject to
+  gate (a)).
+- **PR label adjustments** — adding / removing type / component labels
+  on a PR the agent owns.
 
 ## Step 1: Worktree
 
