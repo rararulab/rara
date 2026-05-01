@@ -83,7 +83,7 @@ fn first_turn_with_tool_call() -> CompletionResponse {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_call_in_turn_one_is_recorded_and_visible_to_turn_two() {
+async fn tool_call_in_turn_one_is_recorded_and_surfaces_in_rebuilt_context() {
     ensure_test_paths_isolated();
     let tmp = tempfile::tempdir().expect("tempdir");
 
