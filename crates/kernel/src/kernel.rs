@@ -965,6 +965,16 @@ impl Kernel {
             "process spawned via event loop"
         );
 
+        // Write the `session/start` anchor before any tape entry so every
+        // session has a checkout-able boundary at creation time. Idempotent:
+        // re-spawn (e.g. Mita) skips if an anchor already exists. Logged but
+        // not fatal — losing the anchor degrades checkout, but a missing
+        // anchor must not abort the spawn itself.
+        let tape_name = session_key.to_string();
+        if let Err(e) = self.tape_service.ensure_bootstrap_anchor(&tape_name).await {
+            error!(error = %e, %session_key, "failed to write session/start anchor");
+        }
+
         // Deliver the initial input to the spawned process.
         // The synthetic UserMessage uses session_key so that
         // handle_user_message finds this process via direct table lookup.
@@ -1880,12 +1890,9 @@ impl Kernel {
         if !self.process_table.contains(&session_key) {
             info!("Mita session not found, bootstrapping");
 
-            // Ensure tape exists with a bootstrap anchor.
-            let tape_name = session_key.to_string();
-            if let Err(e) = self.tape_service.ensure_bootstrap_anchor(&tape_name).await {
-                error!(error = %e, "failed to bootstrap Mita tape");
-                return;
-            }
+            // Tape bootstrap (`session/start` anchor) now happens inside
+            // `handle_spawn_agent`, so the heartbeat path no longer needs
+            // to call `ensure_bootstrap_anchor` directly.
 
             let manifest = match self.agent_registry.get("mita") {
                 Some(m) => m,
