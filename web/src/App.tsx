@@ -30,8 +30,8 @@ import DashboardLayout from '@/layouts/DashboardLayout';
 import Docs from '@/pages/Docs';
 import KernelTop from '@/pages/KernelTop';
 import Login from '@/pages/Login';
-import PiChat from '@/pages/PiChat';
 import Subscriptions from '@/pages/Subscriptions';
+import Topology from '@/pages/Topology';
 
 const STORAGE_KEY = 'rara_backend_url';
 const queryClient = new QueryClient();
@@ -86,16 +86,6 @@ export default function App() {
               {/* Owner-token login — public route, must not be guarded. */}
               <Route path="login" element={<Login />} />
 
-              {/* Fullscreen pi-web-ui chat */}
-              <Route
-                index
-                element={
-                  <RequireAuth>
-                    <PiChat />
-                  </RequireAuth>
-                }
-              />
-
               {/* Deep-link redirect — see SettingsRoute */}
               <Route
                 path="settings"
@@ -106,7 +96,8 @@ export default function App() {
                 }
               />
 
-              {/* Admin pages with dashboard layout */}
+              {/* Admin pages with dashboard layout. The topology view is the
+                  default landing page after login — see issue #1999. */}
               <Route
                 element={
                   <RequireAuth>
@@ -114,9 +105,12 @@ export default function App() {
                   </RequireAuth>
                 }
               >
+                <Route index element={<Topology />} />
                 <Route path="docs" element={<Docs />} />
                 <Route path="kernel-top" element={<KernelTop />} />
                 <Route path="subscriptions" element={<Subscriptions />} />
+                <Route path="topology" element={<Topology />} />
+                <Route path="topology/:rootSessionKey" element={<Topology />} />
               </Route>
             </Routes>
           </SettingsModalProvider>

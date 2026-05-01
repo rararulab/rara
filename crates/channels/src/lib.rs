@@ -30,6 +30,7 @@ pub mod terminal;
 pub mod web;
 pub mod web_reply_buffer;
 pub mod web_session;
+pub mod web_topology;
 pub mod wechat;
 
 /// Tool display formatting helpers.

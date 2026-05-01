@@ -269,7 +269,10 @@ impl TraceBuilder {
             | StreamEvent::LoopBreakerTriggered { .. }
             | StreamEvent::TraceReady { .. }
             | StreamEvent::Attachment { .. }
-            | StreamEvent::StreamClosed { .. } => {}
+            | StreamEvent::StreamClosed { .. }
+            | StreamEvent::SubagentSpawned { .. }
+            | StreamEvent::SubagentDone { .. }
+            | StreamEvent::TapeForked { .. } => {}
         }
     }
 

@@ -148,6 +148,16 @@ export type PromptContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image_base64'; media_type: string; data: string }
   | {
+      // Server-side STT replaces `audio_base64` blocks with the
+      // transcribed `text` block before the kernel sees them — see
+      // `crates/channels/src/web.rs::transcribe_audio_blocks`. The
+      // client only base64-encodes the recorded blob; transcription
+      // never happens here.
+      type: 'audio_base64';
+      media_type: string;
+      data: string;
+    }
+  | {
       type: 'file_base64';
       media_type: string;
       data: string;
@@ -156,6 +166,17 @@ export type PromptContentBlock =
 
 /** Inbound `prompt` payload — plain string OR multimodal block array. */
 export type PromptContent = string | PromptContentBlock[];
+
+/** Optional per-prompt overrides forwarded as top-level fields on the
+ *  `prompt` frame. Currently just `model`, but kept as an options object
+ *  so future per-turn knobs (thinking level, sampling) don't churn the
+ *  signature. */
+export interface PromptOptions {
+  /** Pinned model id for this turn — mirrors the picker selection. The
+   *  backend treats this as a session-sticky pin, matching the Telegram
+   *  `/model` command path. */
+  model?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle events surfaced to RaraAgent
@@ -302,8 +323,12 @@ export class SessionWsClient {
    * queueing, since the WS lifecycle is short and any pending frame
    * would be ambiguous after a session switch.
    */
-  prompt(content: PromptContent): boolean {
-    return this.send({ type: 'prompt', content });
+  prompt(content: PromptContent, options: PromptOptions = {}): boolean {
+    const payload: Record<string, unknown> = { type: 'prompt', content };
+    if (options.model && options.model.length > 0) {
+      payload.model = options.model;
+    }
+    return this.send(payload);
   }
 
   /** Send an `abort` frame. Same drop-on-disconnected semantics as `prompt`. */

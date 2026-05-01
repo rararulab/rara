@@ -9,16 +9,15 @@ Custom React hooks shared across rara web pages.
 Real files in this directory (one line each):
 
 - `loading-hints.ts` — poetic placeholder strings + `randomLoadingHint()`, mirrors the Telegram channel's loading copy so both feel cohesive.
-- `use-live-card-height.ts` — `ResizeObserver`-driven publisher of the in-progress agent live-card height to a CSS custom property on `<main>`, so pi-web-ui's scroll viewport reserves padding for the floating overlay.
 - `use-local-storage.ts` — typed `useState`-style wrapper over `window.localStorage` with JSON serialization.
 - `use-server-status.ts` — context hook exposing `{ isOnline, isChecking }` for the global server-status banner.
-- `use-session-delete.ts` — wires the pure `decidePostDeleteAction` helper into the chat page's switch/create-new side effects so the dispatch is unit-testable.
-- `use-session-timeline.ts` — react-query backed timeline state for a chat session: turns → timeline items, live-state tracking, loading hints.
+- `use-session-timeline.ts` — react-query backed timeline state for a kernel session: turns → timeline items, live-state tracking, loading hints.
 - `use-theme.ts` — `useSyncExternalStore`-based theme hook (`light` / `dark` / `system`) with `localStorage` persistence and `prefers-color-scheme` subscription.
+- `use-topology-subscription.ts` — WebSocket subscription to the cross-session topology event stream backing the `/topology` page.
 
 ## Critical Invariants
 
-- Hooks that observe DOM elements which mount conditionally (e.g. behind a guard like `!isInitializing`) MUST take the element as a parameter (via `useState` + callback ref in the parent), not a `useRef`. `useRef` mutations don't re-run effects, so a ref-based observer attaches only on the lucky render where the element exists. `useLiveCardHeight` is the canonical example.
+- Hooks that observe DOM elements which mount conditionally (e.g. behind a guard like `!isInitializing`) MUST take the element as a parameter (via `useState` + callback ref in the parent), not a `useRef`. `useRef` mutations don't re-run effects, so a ref-based observer attaches only on the lucky render where the element exists.
 - Any hook that writes a CSS custom property MUST clear it on unmount, so removing the consumer doesn't leak the value into the next session.
 
 ## What NOT To Do

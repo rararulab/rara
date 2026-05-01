@@ -1319,6 +1319,23 @@ async fn execute_inline_step(
                         fork = %name,
                         "plan executor: forked tape for inline step"
                     );
+                    // Mirror the agent-turn fork-site emit in `kernel.rs`
+                    // (`StreamHub::emit_to_session_bus`). The plan executor
+                    // forks once per non-zero step to isolate context; the
+                    // topology UI needs to see every fork — not just the
+                    // turn-level one — to render lineage. The plan-step
+                    // anchor is an opaque entry id rather than a logical
+                    // `forks/<anchor>`, so `forked_at_anchor` stays `None`
+                    // (matching the kernel.rs site).
+                    handle.stream_hub().emit_to_session_bus(
+                        &session_key,
+                        StreamEvent::TapeForked {
+                            parent_session:   session_key,
+                            forked_from:      tape_name.to_owned(),
+                            child_tape:       name.clone(),
+                            forked_at_anchor: None,
+                        },
+                    );
                     (name.clone(), Some(name))
                 }
                 Err(e) => {

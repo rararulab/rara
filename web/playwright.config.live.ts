@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-// Playwright config for the live-backend e2e suite (chat.spec.ts,
-// data-feeds.spec.ts). Kept separate from the harness suite because
+// Playwright config for the live-backend e2e suite (data-feeds.spec.ts).
+// Kept separate from the harness suite because
 // these tests hit a real rara backend via `npm run dev` and are not
 // safe to run in CI without fixture coordination. Invoke with
 // `npm run test:e2e:live` locally when the backend is already up.

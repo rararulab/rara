@@ -18,6 +18,10 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './index.css';
+// Side-effect import: bootstraps i18next so vendor `useTranslation()` calls
+// (FreeFormInput, etc.) find an initialised instance instead of warning
+// "NO_I18NEXT_INSTANCE" and returning `undefined` for every key.
+import './i18n';
 import App from './App';
 
 createRoot(document.getElementById('root')!).render(

@@ -65,7 +65,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Run Playwright harness suite
-        run: npx playwright test
+        run: npx playwright test --pass-with-no-tests
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4

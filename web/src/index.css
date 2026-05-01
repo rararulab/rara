@@ -14,13 +14,18 @@
  * limitations under the License.
  */
 
-@import '@mariozechner/pi-web-ui/app.css';
 @import 'tailwindcss';
 @plugin "@tailwindcss/typography";
 @import 'highlight.js/styles/github.css' layer(base);
+/*
+ * Vendored craft-agents-oss design tokens — sole source of truth for
+ * `--accent` / `--success` / `--info` / `--destructive` after the
+ * pi-web-ui removal in issue #1999.
+ */
+@import './vendor/craft-ui/styles/index.css';
 
 @theme {
-  /* Re-export pi-web-ui / mini-lit color tokens so Tailwind utilities work */
+  /* Re-export craft color tokens so Tailwind utilities resolve. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -40,23 +45,21 @@
   --color-ring: var(--ring);
   --color-canvas: var(--canvas);
 
-  /* Semantic status colors — rara admin */
-  --color-ok: #7bc4a0;
-  --color-warn: #e8b86d;
-  --color-err: #d46a6a;
+  /*
+   * Semantic status colors. Resolve through the vendored craft tokens
+   * declared on `:root` (see `./vendor/craft-ui/styles/index.css`),
+   * so light/dark variants come from craft. `pop` / `pop-hover` /
+   * `subtle` keep their original rara-rose values — craft has no
+   * equivalent.
+   */
+  --color-ok: var(--success);
+  --color-warn: var(--info);
+  --color-err: var(--destructive);
+  --color-success: var(--success);
+  --color-info: var(--info);
   --color-pop: #e8788a;
   --color-pop-hover: #d4606f;
   --color-subtle: #b8a0a4;
-
-  /*
-   * Additional semantic aliases used by the agent-live card. `success`
-   * echoes the existing `ok` emerald so status badges don't invent a new
-   * hue; `info` is a restrained blue in the same tonal family as the
-   * multi-ca glass bubble (oklch-based) for neutral informational
-   * surfaces. Neither replaces `ok` — both are pure aliases.
-   */
-  --color-success: #7bc4a0;
-  --color-info: oklch(0.6 0.14 250);
 
   /* Motion */
   --motion-fast: 150ms;
@@ -72,13 +75,13 @@
     'Courier New', monospace;
 
   /*
-   * Brand accent — pink, balanced near Tailwind pink-500 (#EC4899). Intentionally
-   * separate from `--color-primary` so admin surfaces (rose) and accent marks
-   * (pink) can coexist on the same page without fighting. Use `bg-brand`,
-   * `text-brand`, `border-brand` in markup.
+   * Brand accent — aliased to craft's `--accent` (vendored purple) so the
+   * brand mark and the broader accent system stay in lockstep. Markup
+   * keeps using `bg-brand` / `text-brand` / `border-brand`; the swatch
+   * comes from `./vendor/craft-ui/styles/index.css`.
    */
-  --color-brand: oklch(0.68 0.22 0);
-  --color-brand-foreground: oklch(0.99 0 0);
+  --color-brand: var(--accent);
+  --color-brand-foreground: var(--accent-foreground);
 
   /* Radius scale — cards stay compact (0.75rem) to match hero admin. */
   --radius-card: 0.75rem;
@@ -89,10 +92,6 @@
   --shadow-hover: 0 4px 12px 0 rgb(0 0 0 / 0.06);
 }
 
-/*
- * Override mini-lit's plain :root --font-sans / --font-mono (imported via
- * pi-web-ui). Must be unlayered + after the import so it wins the cascade.
- */
 :root {
   --font-sans:
     'Geist', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB',
@@ -102,20 +101,17 @@
     'Courier New', monospace;
 
   /*
-   * App-shell canvas color. Slightly cooler and a tick darker than
-   * pi-web-ui's pure-white `--background`, matching the pattern multica
-   * uses: a subtle off-white so cards, inputs, and message bubbles
-   * (which stay on `--background`) read as lifted surfaces rather than
-   * floating in a flat sheet. Hue 250 keeps it in the same cool family
-   * as the tool-call glass bubble so the page reads as one palette.
+   * App-shell canvas color. A subtle off-white so cards, inputs, and
+   * surfaces (which stay on `--background`) read as lifted against the
+   * canvas. Hue 250 keeps it in the same cool family as the info-blue
+   * accent so the page reads as one palette.
    */
   --canvas: oklch(0.96 0.005 250);
 
   /*
-   * Darken pi-web-ui's stock `--muted-foreground` (oklch 55.6%) to clear
-   * WCAG AA 4.5:1 against the cooler `--canvas`. Pi's value barely
-   * passes against pure white (4.57:1) — the canvas is darker, so 11px
-   * timestamps and meta copy fall under without this override.
+   * Ensure muted-foreground clears WCAG AA 4.5:1 against the cooler
+   * canvas — meta copy and 11px timestamps would otherwise fall under
+   * the threshold.
    */
   --muted-foreground: oklch(45% 0 0);
 }
@@ -126,7 +122,6 @@
 
 /*
  * Rara admin palette — scoped to .rara-admin (DashboardLayout).
- * Chat page uses pi-web-ui's native theme untouched.
  */
 .rara-admin {
   --background: #fafafa;
@@ -169,17 +164,6 @@
 }
 
 @layer base {
-  /*
-   * pi-web-ui's ArtifactsPanel applies both "hidden" and "flex" classes.
-   * In Tailwind v4 "flex" overrides "hidden", leaving a visible full-screen
-   * overlay. Force hidden to win.
-   */
-  .hidden {
-    display: none !important;
-  }
-
-  /* ── pi-web-ui chat layout overrides (light DOM) ── */
-
   .dark pre code.hljs {
     background: transparent;
     color: var(--color-foreground);
@@ -216,13 +200,6 @@
     @apply border-border;
   }
   body {
-    /*
-     * Body sits on the canvas, not on `--background`. Pi-web-ui inputs,
-     * bubbles, and cards keep `--background` (pure white) as their own
-     * surface color so they read as "lifted" against the canvas — the
-     * multica aesthetic. `.rara-admin` overrides this with its rose
-     * radial gradient on admin pages.
-     */
     @apply bg-canvas text-foreground antialiased;
     font-family: var(--font-sans);
     min-height: 100vh;
@@ -232,21 +209,6 @@
   samp,
   pre {
     font-family: var(--font-mono);
-  }
-  /*
-   * Chat-shell background — neutral, matches the restraint ChatGPT and
-   * Claude.ai use. The canvas already provides a slight off-white tint
-   * (see `--canvas` above); we just clear any prior gradient on
-   * `.rara-chat` so the page reads as a single calm sheet. Atmosphere
-   * for the chat now comes from the bubbles and avatar ring, not from
-   * page-level color washes.
-   */
-  .rara-chat {
-    background-image: none;
-    background-color: var(--color-background);
-  }
-  .dark .rara-chat {
-    background-color: var(--color-background);
   }
 
   /* Rara admin gradient background — only on admin pages */
@@ -296,274 +258,6 @@
   .rara-admin :focus-visible {
     @apply ring-2 ring-ring/55 ring-offset-2 ring-offset-background;
   }
-}
-
-/*
- * Pi-web-ui ships `.user-message-container` with a warm orange gradient
- * and a heavy `blur(10px)` backdrop — too opaque and clashes with rara's
- * rose palette. Retint to match multica's tool-call glass pattern
- * (`border-info/20 + bg-info/5 + backdrop-blur-sm`), the canonical
- * "transparent frosted glass" treatment in that design language.
- *
- * `--info` values are taken verbatim from multica's `tokens.css`:
- *   light: oklch(0.55 0.18 250), dark: oklch(0.65 0.18 250).
- * Inlined because rara's chat page sits outside `.rara-admin` scope and
- * therefore can't read rara's own semantic tokens.
- *
- * Kept UNLAYERED on purpose: pi-web-ui's rule is unlayered too, and per
- * the CSS Cascade Layers spec any layered declaration — no matter its
- * specificity or source order — loses to an unlayered one. Wrapping this
- * in `@layer components {}` (as the first attempt did) made it invisible.
- */
-/*
- * Avatar for Rara's assistant messages. Pi-web-ui renders each reply as
- * a bare `<assistant-message>` custom element with no visual marker for
- * who is speaking; a small round portrait on the left gives the reply
- * an identity. Served from `web/public/rara.png` (see issue #1585) so
- * the URL stays stable across deploys. A thin info-blue ring echoes
- * the user-bubble glass palette so the two participants read as one
- * coherent design.
- *
- * Gating: `<assistant-message>` ALWAYS renders its wrapper, even when
- * pi-web-ui's `AssistantMessage.render()` produces no content (the
- * brief window between `message_start` and the first content delta, or
- * when `StreamingMessageContainer` holds a cleared/empty reference).
- * Without gating, users see a lone avatar floating at the bottom of
- * the transcript with nothing next to it (#1621). Paint the avatar
- * only when at least one of the content-bearing children exists:
- * `markdown-block`, `tool-message`, `thinking-block`, or a usage/stop
- * marker (usage stats reuse generic tailwind classes, so we key on
- * `.tabular-nums` which pi-web-ui uses for cost/token chips).
- */
-.rara-chat assistant-message {
-  display: block;
-  position: relative;
-  padding-left: 2.75rem;
-}
-.rara-chat assistant-message:has(markdown-block),
-.rara-chat assistant-message:has(tool-message),
-.rara-chat assistant-message:has(thinking-block),
-.rara-chat assistant-message:has(.tabular-nums) {
-  min-height: 2rem;
-}
-.rara-chat assistant-message:has(markdown-block)::before,
-.rara-chat assistant-message:has(tool-message)::before,
-.rara-chat assistant-message:has(thinking-block)::before,
-.rara-chat assistant-message:has(.tabular-nums)::before {
-  content: '';
-  position: absolute;
-  left: 0.75rem;
-  top: 0;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 9999px;
-  background: url('/rara.png') center / cover;
-  box-shadow: 0 0 0 2px color-mix(in oklab, oklch(0.62 0.18 250) 30%, transparent);
-}
-
-/*
- * Per-turn bubble grouping (#1727). pi-agent-core emits one AssistantMessage
- * per agentic-loop iteration (LLM → tool → LLM → tool → final text), and
- * pi-web-ui's MessageList renders one DOM row per message. Without this
- * rule the transcript shows the same avatar repeated 2-5 times stacked under
- * a single user question, which reads as fragmented replies.
- *
- * The React layer tags every non-first assistant frame of a turn with
- * `rara-assistant-continuation` (see `registerCascadeAssistantRenderer` in
- * `PiChat.tsx`). We suppress the `::before` avatar on those frames and
- * negate the parent's `gap-3` (0.75rem) so consecutive frames merge into
- * what visually reads as a single bubble column stacked under the first
- * avatar. Turn boundaries — a new user message, or the end of the list —
- * restore the avatar on the next assistant frame naturally.
- */
-.rara-chat .rara-assistant-continuation assistant-message::before {
-  content: none;
-}
-.rara-chat .rara-assistant-continuation {
-  margin-top: -0.75rem;
-}
-
-/*
- * Hide pi-web-ui's inline tool-call cards while a turn is streaming.
- * `StreamingMessageContainer.js` hardcodes `hideToolCalls=false`, so the
- * heavy `BashRenderer` / etc. cards stack under the assistant bubble during
- * streaming and then collapse into our compact `renderTurnChipCard` chips
- * once the turn settles — visually jarring and redundant since the
- * `AgentLiveCard` above already summarises in-flight tool activity.
- *
- * `!important` is required because pi-web-ui's `<tool-message>` sets
- * `this.style.display = "block"` in `connectedCallback`, and inline styles
- * beat any class-selector rule no matter how specific.
- *
- * Only the streaming variant is suppressed; the historical messageRenderer
- * already passes `hideToolCalls=true`, so this is a no-op there.
- */
-.rara-chat streaming-message-container tool-message {
-  display: none !important;
-}
-
-/*
- * Pi-web-ui left-aligns user messages (`class="flex justify-start"`
- * on the bubble's parent). Flip to the right side — the standard
- * chat convention of "my messages on the right". `:has()` gives us a
- * parent selector without patching pi-web-ui's templates, and the
- * rule is narrow enough that only the bubble's direct parent matches.
- */
-.rara-chat div:has(> .user-message-container) {
-  justify-content: flex-end;
-}
-
-/*
- * Pi-web-ui's `<agent-interface>` paints a full-height
- * `flex flex-col h-full bg-background` shell that covers any gradient
- * behind it. Unpaint that single shell so the `.rara-chat` canvas and
- * radial glow show through; individual bubbles, inputs, and cards keep
- * their own `bg-background` and read as lifted surfaces.
- *
- * Unlayered for the same reason as `.user-message-container` below:
- * Tailwind's `.bg-background` utility lives in the `utilities` layer,
- * which trumps any `@layer base` / `components` override regardless of
- * specificity — so this rule must sit outside the layer system.
- */
-.rara-chat agent-interface .flex-col.bg-background {
-  background-color: transparent;
-}
-
-/*
- * Composer position is identical between empty (Home) and populated
- * (Session) states — anchored to the bottom of `<main>` by pi-web-ui's
- * own flex layout. The Home empty-state panel (`ChatWelcome`) renders
- * in the scroll area above instead of lifting the composer, matching
- * ChatGPT/Claude.ai. No translate needed.
- */
-
-/*
- * Cap the composer width and centre it so a wide viewport doesn't
- * stretch the input into an uncomfortably long strip. `max-width` +
- * auto margins on the composer row; message list gets the same cap
- * so replies line up with the composer below rather than drifting
- * past its right edge.
- */
-.rara-chat agent-interface .flex-col.bg-background > *:last-child {
-  max-width: 48rem;
-  margin-left: auto;
-  margin-right: auto;
-  width: 100%;
-}
-/*
- * No cap on `user-message` / `assistant-message` themselves — pi-web-ui
- * already wraps the list in `.max-w-3xl mx-auto p-4 pb-0` (48rem
- * centred), and re-applying `max-width + margin: auto` here collapses
- * short user bubbles to content-width and recentres them, defeating
- * the right-alignment we want for "my messages".
- */
-
-/*
- * Voice button horizontal alignment. Paperclip sits at ~17px inside
- * the composer's left edge; when the composer is capped at 48rem and
- * centred, that edge is at `50% - 24rem`. `max()` clamps the voice
- * button to 17px on narrow viewports where the composer fills the
- * full width and the calc would go negative.
- */
-.rara-chat .voice-float {
-  /* 17px inside-composer padding + 32px paperclip width + 8px gap. */
-  left: max(57px, calc(50% - 24rem + 57px));
-}
-
-/*
- * Inline slot for the in-progress `AgentLiveCard` — aligns the card to
- * pi-web-ui's message column (48rem, centred) and anchors it just above
- * the composer. Matches the ChatGPT / Claude pattern: the card reads as
- * the last assistant message while a turn streams, then disappears when
- * the real assistant bubble lands in pi-web-ui's message list.
- *
- * Height of the composer region is ~10.5rem (editor + pill row + stats).
- * Using a fixed bottom offset is simpler and more reliable than
- * ResizeObserver wiring into pi-web-ui's internals; if the composer
- * grows (multi-line input), the card rides up with it naturally because
- * pi-web-ui's composer pushes from the bottom of `<main>`.
- */
-.rara-chat .rara-live-slot {
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100%;
-  max-width: 48rem;
-  bottom: 10.5rem;
-}
-
-/*
- * Reserve scroll space inside pi-web-ui's message column for the live
- * card overlay. `--rara-live-card-h` is published on `<main>` by
- * `useLiveCardHeight` (see `src/hooks/use-live-card-height.ts`) only
- * while a run is active; defaults to 0 so the chat reads identically
- * when no card is mounted.
- *
- * Padding the inner content (rather than the scroll viewport) makes
- * pi-web-ui's content-resize ResizeObserver fire — that observer
- * drives auto-scroll, which is exactly what lifts the user's just-sent
- * bubble above the floating card. `scroll-padding-bottom` on the
- * scroll viewport is the belt-and-braces companion: it ensures any
- * native scroll-into-view (e.g. focus restoration) also clears the
- * overlay region.
- *
- * Invariant: this selector targets pi-web-ui ≥0.63 light DOM. On any
- * pi-web-ui upgrade, verify that the `agent-interface > .overflow-y-auto > .max-w-3xl`
- * chain still exists in the rendered DOM — if pi-web-ui changes its
- * content-column class (e.g. `max-w-4xl`) or wraps the scroll viewport,
- * this rule silently no-ops and #1675 regresses.
- */
-.rara-chat agent-interface .overflow-y-auto > .max-w-3xl {
-  padding-bottom: var(--rara-live-card-h, 0);
-  /* Tighten pi-web-ui's default `p-4` (16px) on the inline axis — a
-     little less air around bubbles reads closer to ChatGPT/Claude
-     density. Vertical padding is left to pi-web-ui so its content
-     observer keeps scroll math correct. */
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
-}
-.rara-chat agent-interface .overflow-y-auto {
-  scroll-padding-bottom: var(--rara-live-card-h, 0);
-}
-
-.user-message-container {
-  /* Content-size the bubble so justify-end actually pushes it right.
-     In a flex container `display: block` resolves to "stretch" along
-     the main axis, which was making short user messages span the full
-     column width. */
-  width: fit-content;
-  max-width: 80%;
-  background: color-mix(in oklab, oklch(0.55 0.18 250) 5%, transparent);
-  border-color: color-mix(in oklab, oklch(0.55 0.18 250) 20%, transparent);
-  /* `sm` in tailwind ≈ 4px; overrides pi-web-ui's heavier blur(10px). */
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-}
-.dark .user-message-container {
-  background: color-mix(in oklab, oklch(0.65 0.18 250) 6%, transparent);
-  border-color: color-mix(in oklab, oklch(0.65 0.18 250) 24%, transparent);
-}
-
-/*
- * Flatten pi-web-ui's composer card. Upstream `<message-editor>` renders
- * with `bg-card rounded-xl border shadow-sm`, which reads as a heavy
- * floating card on top of the chat page. We neutralise the ring and
- * corner-rounding so the composer sits as a simple region with only a
- * top rule separating it from the messages above — matches the calm
- * page header landed in #1774.
- *
- * Scoped to `.rara-chat` so admin/surface usages of `message-editor`
- * (if any ever appear) keep their default look.
- *
- * Invariant: targets pi-web-ui ≥0.63 `<message-editor>` light DOM
- * structure (first child div carrying the card classes). If upstream
- * reworks this wrapper the rule silently no-ops and the card returns.
- */
-.rara-chat message-editor > div:first-child {
-  border-radius: 0;
-  border: 0;
-  border-top: 1px solid var(--color-border);
-  box-shadow: none;
-  background: transparent;
 }
 
 @layer components {
@@ -678,120 +372,6 @@
   .prose :not(pre) > code {
     @apply rounded-md border border-border/40 bg-muted/50 px-1.5 py-0.5 text-xs font-medium;
     font-family: var(--font-mono);
-  }
-
-  /* Chat message styles */
-  .msg-user {
-    @apply rounded-2xl rounded-br-md px-4 py-3 text-sm;
-    background: linear-gradient(135deg, var(--color-primary), var(--color-pop-hover));
-    color: var(--color-primary-foreground);
-    box-shadow: 0 2px 8px color-mix(in oklab, var(--color-primary) 25%, transparent);
-  }
-
-  .msg-assistant {
-    @apply rounded-2xl rounded-bl-md border border-border/40 px-4 py-3;
-    background: color-mix(in oklab, var(--color-card) 85%, transparent);
-    backdrop-filter: blur(8px);
-  }
-
-  .dark .msg-assistant {
-    background: color-mix(in oklab, var(--color-card) 70%, transparent);
-  }
-
-  .msg-avatar {
-    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs;
-    transition: transform var(--motion-fast) ease;
-  }
-  .msg-avatar:hover {
-    transform: scale(1.08);
-  }
-
-  /* Timestamp slide-up on hover */
-  .msg-timestamp {
-    @apply text-[10px] mt-1.5 transition-all duration-200;
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  .group:hover .msg-timestamp {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  .msg-user .msg-timestamp {
-    opacity: 0.7;
-    transform: translateY(0);
-  }
-
-  /* Chat composer */
-  .chat-composer {
-    @apply rounded-2xl border border-border/50 p-2;
-    background: color-mix(in oklab, var(--color-card) 80%, transparent);
-    backdrop-filter: blur(20px);
-    box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--color-border) 30%, transparent),
-      0 8px 32px rgba(0, 0, 0, 0.08),
-      0 2px 8px rgba(0, 0, 0, 0.04);
-    transition:
-      box-shadow var(--motion-fast) ease,
-      border-color var(--motion-fast) ease;
-  }
-  .chat-composer:focus-within {
-    border-color: color-mix(in oklab, var(--color-primary) 50%, transparent);
-    box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--color-primary) 20%, transparent),
-      0 8px 32px rgba(0, 0, 0, 0.1),
-      0 2px 8px color-mix(in oklab, var(--color-primary) 8%, transparent);
-  }
-  .dark .chat-composer {
-    box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--color-border) 40%, transparent),
-      0 8px 32px rgba(0, 0, 0, 0.3),
-      0 2px 8px rgba(0, 0, 0, 0.15);
-  }
-
-  /* Chat empty state */
-  .chat-empty-logo {
-    @apply flex h-16 w-16 items-center justify-center rounded-2xl;
-    background: linear-gradient(135deg, var(--color-primary), var(--color-pop-hover));
-    box-shadow: 0 8px 24px color-mix(in oklab, var(--color-primary) 30%, transparent);
-    animation: float 3s ease-in-out infinite;
-  }
-
-  @keyframes float {
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-6px);
-    }
-  }
-
-  .chat-empty-hint {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-muted/40 px-3 py-1 text-xs text-muted-foreground;
-  }
-
-  /* Thinking shimmer */
-  @keyframes shimmer {
-    0% {
-      background-position: -200% 0;
-    }
-    100% {
-      background-position: 200% 0;
-    }
-  }
-
-  .thinking-shimmer {
-    background: linear-gradient(
-      90deg,
-      var(--color-muted-foreground) 0%,
-      var(--color-foreground) 50%,
-      var(--color-muted-foreground) 100%
-    );
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: shimmer 2s ease-in-out infinite;
   }
 
   /* Dark mode shadow adjustments — stronger shadows on dark backgrounds */

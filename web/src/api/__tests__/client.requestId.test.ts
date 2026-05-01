@@ -67,7 +67,7 @@ describe('ApiError requestId propagation', () => {
           status: 500,
           headers: { 'x-request-id': fakeTraceId },
         }),
-    ) as unknown as typeof fetch;
+    );
 
     let caught: unknown;
     try {
@@ -83,9 +83,7 @@ describe('ApiError requestId propagation', () => {
   });
 
   it('leaves requestId undefined when the response has no header', async () => {
-    globalThis.fetch = vi.fn(
-      async () => new Response('nope', { status: 500 }),
-    ) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(async () => new Response('nope', { status: 500 }));
 
     let caught: unknown;
     try {

@@ -146,6 +146,14 @@ pub enum InboundFrame {
     /// `KernelHandle::submit_message`, mirroring the legacy chat WS path.
     Prompt {
         content: rara_kernel::channel::types::MessageContent,
+        /// Optional per-turn model override sent by the model picker.
+        /// When present, the field is treated as a session-sticky pin:
+        /// `SessionEntry.model` is updated so the agent loop's existing
+        /// precedence (`agent/mod.rs` `model_override`) picks it up. Same
+        /// shape as the Telegram `/model` callback path so both channels
+        /// stay aligned.
+        #[serde(default)]
+        model:   Option<String>,
     },
     /// User clicked stop. Dispatches `Signal::Interrupt` against the
     /// kernel session — replaces the deleted REST interrupt endpoint.
@@ -459,7 +467,7 @@ async fn handle_session_ws(
                 }
 
                 match serde_json::from_str::<InboundFrame>(&text) {
-                    Ok(InboundFrame::Prompt { content }) => {
+                    Ok(InboundFrame::Prompt { content, model }) => {
                         let content = transcribe_audio_blocks(content, &stt_service).await;
                         let raw = build_raw_platform_message(&session_key_str, &user_id, content);
 
@@ -485,6 +493,22 @@ async fn handle_session_ws(
                             &session_key,
                             WebEvent::Typing,
                         );
+
+                        // Apply the picker's per-turn model selection by
+                        // pinning it on the session entry — same mechanism
+                        // the Telegram `/model` callback uses, which
+                        // `agent/mod.rs` `model_override` reads on every
+                        // turn. Done before `submit_message` so the agent
+                        // task that picks up this turn already sees the
+                        // updated value. Best-effort: a missing session
+                        // entry (first contact before kernel auto-creates)
+                        // is logged and swallowed — the next turn will pin
+                        // it once the entry exists. Same model id sent by
+                        // two consecutive prompts is a cheap idempotent
+                        // write, so the round-trip cost stays bounded.
+                        if let Some(ref pinned) = model {
+                            apply_model_override(s, &session_key, pinned).await;
+                        }
 
                         // First-contact sessions arrive with no resolved
                         // session_key; patch with the URL-pinned key so
@@ -607,4 +631,80 @@ async fn handle_session_ws(
     )
     .await;
     info!(session_key = %session_key_str, "persistent session WS closed");
+}
+
+/// Pin `model` onto the session entry so the next agent turn picks it up
+/// via `agent/mod.rs` `model_override`. If the entry does not yet exist
+/// (first-contact session — the kernel would otherwise create it
+/// implicitly inside `submit_message`), seed a stub entry up front so the
+/// override applies on the very first turn instead of being silently
+/// dropped. Best-effort: any session-store error is logged but does not
+/// block the prompt — the agent loop will fall back to the manifest /
+/// provider default exactly as it would without an override.
+async fn apply_model_override(
+    handle: &rara_kernel::handle::KernelHandle,
+    key: &SessionKey,
+    model: &str,
+) {
+    let session_index = handle.session_index();
+    match session_index.get_session(key).await {
+        Ok(Some(mut entry)) => {
+            if entry.model.as_deref() == Some(model) {
+                return;
+            }
+            entry.model = Some(model.to_owned());
+            if let Err(e) = session_index.update_session(&entry).await {
+                warn!(
+                    session_key = %key,
+                    model = %model,
+                    error = %e,
+                    "failed to pin model override on session entry"
+                );
+            } else {
+                debug!(
+                    session_key = %key,
+                    model = %model,
+                    "pinned per-turn model override on session entry"
+                );
+            }
+        }
+        Ok(None) => {
+            let now = chrono::Utc::now();
+            let entry = rara_kernel::session::SessionEntry {
+                key:            *key,
+                title:          None,
+                model:          Some(model.to_owned()),
+                model_provider: None,
+                thinking_level: None,
+                system_prompt:  None,
+                message_count:  0,
+                preview:        None,
+                metadata:       None,
+                created_at:     now,
+                updated_at:     now,
+            };
+            if let Err(e) = session_index.create_session(&entry).await {
+                warn!(
+                    session_key = %key,
+                    model = %model,
+                    error = %e,
+                    "failed to seed session entry for model override"
+                );
+            } else {
+                debug!(
+                    session_key = %key,
+                    model = %model,
+                    "seeded session entry with model override on first contact"
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                session_key = %key,
+                model = %model,
+                error = %e,
+                "session lookup failed while applying model override"
+            );
+        }
+    }
 }

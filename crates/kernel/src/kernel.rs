@@ -978,6 +978,23 @@ impl Kernel {
             error!(%e, "failed to push initial UserMessage for spawned agent");
         }
 
+        // Emit topology event on the parent's session bus when this is a
+        // child spawn. Root user-initiated spawns (parent_id = None) carry
+        // no parent bus to emit on and are observable through the existing
+        // session-resolution path instead. Use `emit_to_session_bus` so the
+        // event reaches long-lived subscribers even when the parent has no
+        // active stream — topology transitions can fire between turns.
+        if let Some(parent_session) = parent_id {
+            self.io.stream_hub().emit_to_session_bus(
+                &parent_session,
+                crate::io::StreamEvent::SubagentSpawned {
+                    parent_session,
+                    child_session: session_key,
+                    manifest_name: manifest.name.clone(),
+                },
+            );
+        }
+
         Ok(session_key)
     }
 
@@ -1110,6 +1127,25 @@ impl Kernel {
                 output:         result.output.clone(),
             })
             .await;
+
+        // Emit topology completion event on the parent's session bus. We
+        // emit here rather than in `cleanup_process` because this is the
+        // canonical handler for `KernelEvent::ChildSessionDone` — the same
+        // seam used by background-task completion plumbing — and it sees
+        // the authoritative `AgentRunLoopResult.success` value. Fold-branch
+        // children get the event too (the topology view should see their
+        // completion regardless of `skip_tape_persist`). Use
+        // `emit_to_session_bus` because the parent often has no active
+        // stream at child-completion time (it's idle waiting for the
+        // child's result).
+        self.io.stream_hub().emit_to_session_bus(
+            &parent_id,
+            crate::io::StreamEvent::SubagentDone {
+                parent_session: parent_id,
+                child_session:  child_id,
+                success:        result.success,
+            },
+        );
 
         use crate::agent::CHILD_RESULT_SAFETY_LIMIT_BYTES;
         let output = &result.output;
@@ -2571,7 +2607,29 @@ impl Kernel {
                 // Forking creates a copy; on success we merge it back, on failure
                 // we discard it — the main tape stays clean either way.
                 let fork_name = match tape_service.store().fork(&tape_name, None).await {
-                    Ok(name) => Some(name),
+                    Ok(name) => {
+                        // Emit topology event directly on the session bus
+                        // so live subscribers can render fork lineage.
+                        // Done at the call site (not inside `TapeService`
+                        // / `TapeStore`) because the storage layer has no
+                        // `SessionKey` / `StreamHub` handle and threading
+                        // them in would contaminate it. The agent-turn
+                        // fork is unanchored — `forked_at_anchor` is
+                        // `None`. `emit_to_session_bus` (vs the per-stream
+                        // `emit_to_session`) keeps the event reachable for
+                        // long-lived subscribers regardless of stream
+                        // turnover.
+                        stream_hub_ref.emit_to_session_bus(
+                            &session_key,
+                            crate::io::StreamEvent::TapeForked {
+                                parent_session:   session_key,
+                                forked_from:      tape_name.clone(),
+                                child_tape:       name.clone(),
+                                forked_at_anchor: None,
+                            },
+                        );
+                        Some(name)
+                    }
                     Err(e) => {
                         tracing::warn!(tape = %tape_name, error = %e, "tape fork failed, writing directly to main tape");
                         None

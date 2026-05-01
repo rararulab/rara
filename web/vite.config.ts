@@ -102,7 +102,21 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss(), docsBookPlugin()],
     resolve: {
+      // Vendor (`craft-agents-oss`) and rara both pull in radix primitives.
+      // Without dedupe, vite's prebundle can produce two React copies, which
+      // causes radix's `useScope` hook to crash with "Cannot read properties
+      // of null (reading 'useMemo')" the moment a DropdownMenu mounts.
+      dedupe: ['react', 'react-dom'],
       alias: {
+        // Vendor alias must be matched before '@' so vendor-internal '~vendor/...'
+        // imports stay isolated from rara's own '@/...' tree.
+        '~vendor': path.resolve(__dirname, './src/vendor/craft-ui'),
+        // Vendor external stubs — the craft-agents-oss tree imports
+        // '@craft-agent/...' and '@config/...' from its own host packages
+        // that we don't ship. Redirect to in-tree stubs that expose the
+        // minimum surface needed for the BFS closure to compile.
+        '@craft-agent': path.resolve(__dirname, './src/vendor/craft-ui/_stubs/craft-agent'),
+        '@config': path.resolve(__dirname, './src/vendor/craft-ui/_stubs/config'),
         '@': path.resolve(__dirname, './src'),
       },
     },
