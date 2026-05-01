@@ -46,6 +46,12 @@ export interface TurnCardData {
   usage: TurnUsage | null;
   /** Whether the turn is still streaming (no terminal `done` yet). */
   inFlight: boolean;
+  /** Wall-clock anchor (ms since epoch) used to interleave history-sourced
+   *  turns with history-sourced user bubbles in chronological order. Live
+   *  turns from the topology stream have no timestamp axis available
+   *  (`TopologyEventEntry` carries no per-frame `created_at`) so they are
+   *  emitted with `null` and sort to the tail of the unified list. */
+  createdAt: number | null;
 }
 
 export interface TurnToolCall {
@@ -207,6 +213,7 @@ export function buildTurnsFromEvents(
       metrics: null,
       usage: null,
       inFlight: true,
+      createdAt: null,
     };
     return current;
   };
@@ -361,13 +368,26 @@ export function buildTurnsFromHistory(messages: ChatMessageData[]): TurnCardData
 
   const flush = () => {
     if (current) {
-      turns.push(current);
+      // Drop turns whose every channel is empty — the backend persists
+      // tool-call slot entries with `content: ""` (e.g. seq 26/28/29 on a
+      // typical assistant turn). Without this filter each empty entry
+      // would render as an over-tall blank `Card` frame.
+      const c = current;
+      const hasContent = c.text.length > 0 || c.reasoning.length > 0 || c.toolCalls.length > 0;
+      if (hasContent) turns.push(c);
       current = null;
     }
   };
 
-  const ensure = (seedSeq: number): TurnCardData => {
-    if (current) return current;
+  const ensure = (seedSeq: number, createdAt: number | null): TurnCardData => {
+    if (current) {
+      // First real timestamp wins — empty leading entries should not
+      // anchor the turn's chronological position.
+      if (current.createdAt === null && createdAt !== null) {
+        current.createdAt = createdAt;
+      }
+      return current;
+    }
     current = {
       id: `history-turn-${String(seedSeq)}`,
       text: '',
@@ -377,8 +397,15 @@ export function buildTurnsFromHistory(messages: ChatMessageData[]): TurnCardData
       metrics: null,
       usage: null,
       inFlight: false,
+      createdAt,
     };
     return current;
+  };
+
+  const parseTs = (s: string | undefined): number | null => {
+    if (!s) return null;
+    const n = Date.parse(s);
+    return Number.isNaN(n) ? null : n;
   };
 
   for (const msg of messages) {
@@ -390,15 +417,23 @@ export function buildTurnsFromHistory(messages: ChatMessageData[]): TurnCardData
         flush();
         break;
       case 'assistant': {
-        const turn = ensure(msg.seq);
         const text = contentToText(msg.content);
+        const toolCalls = msg.tool_calls ?? [];
+        // Whitespace-only entries with no tool_calls are tool-call slot
+        // remnants — they would otherwise prepend leading newlines to the
+        // next real content (or open a turn that flush() then drops),
+        // producing an empty `\n\n\n\n` band at the top of the card.
+        if (text.trim().length === 0 && toolCalls.length === 0) {
+          break;
+        }
+        const turn = ensure(msg.seq, parseTs(msg.created_at));
         if (text) {
           // Backend may emit multiple assistant tape entries within one
           // logical turn (text + a separate tool_call entry). Concatenate
           // text rather than overwriting so neither piece is lost.
           turn.text = turn.text ? `${turn.text}${text}` : text;
         }
-        for (const tc of msg.tool_calls ?? []) {
+        for (const tc of toolCalls) {
           turn.toolCalls.push({ id: tc.id, name: tc.name, result: null });
         }
         break;
@@ -409,7 +444,7 @@ export function buildTurnsFromHistory(messages: ChatMessageData[]): TurnCardData
         // If somehow a tool_result arrives before any assistant entry,
         // start a fresh turn anchored on its seq so the result is still
         // visible rather than dropped.
-        const turn = ensure(msg.seq);
+        const turn = ensure(msg.seq, parseTs(msg.created_at));
         const resultText = contentToText(msg.content);
         const matched = msg.tool_call_id
           ? turn.toolCalls.find((c) => c.id === msg.tool_call_id && c.result === null)

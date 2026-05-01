@@ -299,6 +299,161 @@ describe('TimelineView.history', () => {
     });
   });
 
+  it('chronological_ordering_history_only: interleaves user bubbles and assistant turns by created_at', async () => {
+    // Spec scenario `TimelineView.history.chronological_ordering_history_only`.
+    listMessagesMock.mockResolvedValueOnce([
+      makeMessage({
+        seq: 1,
+        role: 'user',
+        content: 'q1',
+        created_at: '2026-04-30T00:00:01Z',
+      }),
+      makeMessage({
+        seq: 2,
+        role: 'assistant',
+        content: 'a1',
+        created_at: '2026-04-30T00:00:02Z',
+      }),
+      makeMessage({
+        seq: 3,
+        role: 'user',
+        content: 'q2',
+        created_at: '2026-04-30T00:00:03Z',
+      }),
+      makeMessage({
+        seq: 4,
+        role: 'assistant',
+        content: 'a2',
+        created_at: '2026-04-30T00:00:04Z',
+      }),
+    ]);
+
+    renderTimeline({ viewSessionKey: 'sess-A' });
+
+    await screen.findByText('a2');
+    const nodes = screen.getAllByTestId('turn-or-bubble');
+    expect(nodes).toHaveLength(4);
+    expect(nodes[0]).toHaveTextContent('q1');
+    expect(nodes[1]).toHaveTextContent('a1');
+    expect(nodes[2]).toHaveTextContent('q2');
+    expect(nodes[3]).toHaveTextContent('a2');
+  });
+
+  it('chronological_ordering_history_then_live: live agent turn renders strictly after historical entries', async () => {
+    // Spec scenario `TimelineView.history.chronological_ordering_history_then_live`.
+    listMessagesMock.mockResolvedValueOnce([
+      makeMessage({
+        seq: 1,
+        role: 'user',
+        content: 'hist-q',
+        created_at: '2026-04-30T00:00:01Z',
+      }),
+      makeMessage({
+        seq: 2,
+        role: 'assistant',
+        content: 'hist-a',
+        created_at: '2026-04-30T00:00:02Z',
+      }),
+    ]);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey="sess-A" events={[]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('hist-a');
+
+    const liveDelta: TopologyEventEntry = {
+      seq: 1,
+      sessionKey: 'sess-A',
+      event: { type: 'text_delta', text: 'live-a' },
+    };
+    const liveDone: TopologyEventEntry = {
+      seq: 2,
+      sessionKey: 'sess-A',
+      event: { type: 'done' },
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView
+          viewSessionKey="sess-A"
+          events={[liveDelta, liveDone]}
+          promptSessionKey={null}
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('live-a');
+    const nodes = screen.getAllByTestId('turn-or-bubble');
+    expect(nodes).toHaveLength(3);
+    expect(nodes[0]).toHaveTextContent('hist-q');
+    expect(nodes[1]).toHaveTextContent('hist-a');
+    expect(nodes[2]).toHaveTextContent('live-a');
+  });
+
+  it('assistant_turn_height_matches_content: empty assistant tape entries do not produce blank turn cards', async () => {
+    // Spec scenario `TimelineView.history.assistant_turn_height_matches_content`.
+    // Reproduces the API-observed pattern: a real assistant message
+    // followed by tool-call slot entries with empty content. Without the
+    // fix, each empty entry would emit its own blank `Card`, producing
+    // over-tall empty boxes in the rendered DOM.
+    listMessagesMock.mockResolvedValueOnce([
+      makeMessage({
+        seq: 1,
+        role: 'assistant',
+        content: 'ok',
+        created_at: '2026-04-30T00:00:01Z',
+      }),
+      makeMessage({
+        seq: 2,
+        role: 'user',
+        content: 'q',
+        created_at: '2026-04-30T00:00:02Z',
+      }),
+      // Tool-call slot entries the backend emits with empty content.
+      // These must not produce blank turn cards.
+      makeMessage({
+        seq: 3,
+        role: 'assistant',
+        content: '',
+        created_at: '2026-04-30T00:00:03Z',
+      }),
+      makeMessage({
+        seq: 4,
+        role: 'assistant',
+        content: '\n',
+        created_at: '2026-04-30T00:00:04Z',
+      }),
+      makeMessage({
+        seq: 5,
+        role: 'assistant',
+        content: '',
+        created_at: '2026-04-30T00:00:05Z',
+      }),
+    ]);
+
+    renderTimeline({ viewSessionKey: 'sess-A' });
+
+    await screen.findByText('ok');
+    // 1 assistant turn ("ok") + 1 user bubble ("q"). The whitespace-only
+    // assistant entries (seq 3, 4, 5) — which the backend persists as
+    // tool-call slot remnants — must not contribute their own blank turn
+    // cards or prepend leading newlines to a neighbouring turn.
+    const nodes = screen.getAllByTestId('turn-or-bubble');
+    expect(nodes).toHaveLength(2);
+    expect(nodes[0]).toHaveTextContent('ok');
+    expect(nodes[1]).toHaveTextContent('q');
+    // Falsifies the "unconditional min-height" failure mode: the
+    // assistant card must be sized to its actual short content.
+    const card = nodes[0].querySelector('div.space-y-3.p-4');
+    expect(card).not.toBeNull();
+    expect((card as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(96);
+  });
+
   it('fetch_error_does_not_block_live: history failure surfaces inline error and keeps input working', async () => {
     listMessagesMock.mockRejectedValueOnce(new Error('HTTP 500'));
 

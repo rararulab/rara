@@ -83,6 +83,39 @@ the "Waiting for the next turn…" placeholder. After the fix, it sees
 the user-bubble text and the assistant text rendered through
 `TurnCard`. Fail before, pass after.
 
+Two visual regressions in the in-flight implementation (caught by
+parent-agent browser smoke test against PR 2018) extend this Intent:
+
+1. **Chronological ordering regression.** The current code in
+   `TimelineView.tsx:297–305` renders ALL user bubbles before ALL
+   agent turns. That was acceptable when "user bubbles" meant 1–2
+   optimistic live-session entries, but with history loaded it pulls
+   every historical user message to the top of the timeline, losing
+   conversation flow. Concrete repro: session
+   `d6e905d9-fd62-41ca-8918-97b37276f534` has 8 user / 17 assistant /
+   6 tool_result messages; in the rendered DOM all 8 user bubbles
+   stack at `top: -1372px` (above all assistant content), so a user
+   scrolled to the top sees only assistant content and asks "where
+   did the questions go". Fix: interleave user bubbles and agent
+   turns chronologically using the existing `created_at` field on
+   `ChatMessage` (already on the wire — see
+   `crates/extensions/backend-admin/src/chat/service.rs:996`,
+   `created_at: entry.timestamp` — and already serialized as i64
+   milliseconds via `#[serde(with = "ts_milliseconds")]` on the
+   shared `ChatMessage` type). Live agent turns produced from
+   topology events have no `created_at` but are by construction
+   strictly post-barrier, so they sort to the tail.
+
+2. **Assistant `TurnCard` height regression.** Assistant turns
+   render with substantially over-tall empty card frames in the
+   browser, inconsistent with the desired inline-markdown shape
+   (see `vendor/craft.png`). Either the historical render path
+   produces empty inner segments (e.g. an empty assistant text row
+   that still occupies a full segment height) or the `TurnCard`
+   container has unconditional padding / `min-height`. Implementer
+   investigates; the falsifying contract is the height-bound
+   scenario below.
+
 ## Decisions
 
 - **Where the fetch lives.** New hook `web/src/hooks/use-session-history.ts`
@@ -100,19 +133,54 @@ the user-bubble text and the assistant text rendered through
   match the backend default at `router.rs:550`.
 - **Mapping to existing render shapes.** Historical user messages
   (`role === "user"`) feed `userTurnsBySession[viewSessionKey]` as
-  `{id, text, t}` entries — the same shape `handleSubmit` already
-  produces — so the existing `UserMessageBubble` rendering path is
-  reused. Historical assistant messages (`role === "assistant"`) and
-  tool messages (`role === "tool"` / `"tool_result"`) build a new
-  `historyTurns: TurnCardData[]` array via a pure helper
-  `buildTurnsFromHistory(messages)` co-located with the other reducer
-  in `TurnCard.tsx`. The helper folds consecutive
+  `{id, text, t, createdAt}` entries — the same shape `handleSubmit`
+  already produces, plus a `createdAt` field threaded from
+  `ChatMessage.created_at` so that interleaved chronological ordering
+  (see next bullet) has a real key to sort on. Historical assistant
+  messages (`role === "assistant"`) and tool messages (`role === "tool"`
+  / `"tool_result"`) build a new `historyTurns: TurnCardData[]` array
+  via a pure helper `buildTurnsFromHistory(messages)` co-located with
+  the other reducer in `TurnCard.tsx`. The helper folds consecutive
   assistant + tool-result messages into one `TurnCardData` (one user
   prompt = one assistant turn, ending at the next user message or
   end-of-list), populates `text` from assistant content, `toolCalls`
   from `assistant.tool_calls` paired with the corresponding
-  `tool_result` content, and sets `inFlight: false`, `metrics: null`,
-  `usage: null` (history does not carry the live metrics frame).
+  `tool_result` content, sets `inFlight: false`, `metrics: null`,
+  `usage: null` (history does not carry the live metrics frame), and
+  carries `createdAt` from the assistant message that anchors the turn
+  so the chronological merge has a sort key for both bubbles and
+  turns.
+- **Chronological ordering of bubbles and turns.** Historical user
+  bubbles and historical+live agent turns render in a **single ordered
+  list** keyed on `createdAt` for history-sourced items. The earlier
+  "all user bubbles first, then all agent turns" design (current
+  `TimelineView.tsx:297–305`) is removed because it broke once history
+  loaded more than 1–2 user messages: with 8 historical user prompts
+  the entire prompt sequence floats above the agent replies, losing
+  conversation flow (concrete repro on session
+  `d6e905d9-fd62-41ca-8918-97b37276f534`: 8 user bubbles render at
+  `top: -1372px`, above all assistant content). Live agent turns
+  derived from topology events have no `createdAt`; they always sort
+  to the tail because they are by construction strictly post-barrier
+  (the arrival barrier ensures any live turn was produced after the
+  history fetch resolved). Implementation: build a unified array of
+  `{kind: "bubble" | "turn", createdAt: number | null, payload}` and
+  sort stably by `createdAt` ascending with `null` last; render in
+  order. Each rendered node carries `data-testid="turn-or-bubble"` for
+  the chronological-ordering scenarios.
+- **Assistant turn height matches content.** Visual regression
+  observed in the parent agent's browser smoke test: assistant
+  `TurnCard`s render with substantially over-tall empty boxes,
+  inconsistent with the desired inline-markdown rendering (compare
+  `vendor/craft.png`). Root cause is to be diagnosed by the
+  implementer; the contract is that an assistant turn whose only
+  content is a short plain-text body must not render a card frame
+  with empty internal segments or unconditional `min-height` padding.
+  Either (a) suppress empty inner segments in `TurnCard.tsx` so a
+  text-only history turn renders only the markdown row, or
+  (b) remove the unconditional `min-height` / over-large vertical
+  padding from the card container, whichever is the smaller change.
+  Falsified by the new height-bound scenario.
 - **Live + history dedupe — arrival-barrier, not seq.** `ChatMessage.seq`
   (per-tape, persistent) and `TopologyEventEntry.seq`
   (`web/src/hooks/use-topology-subscription.ts:179,196`, per-WS-connection,
@@ -239,6 +307,36 @@ Scenario: WS reconnect re-snapshots the barrier even when history payload is str
   Then the rendered DOM contains "X" exactly once
     And the post-reconnect live frame is gated by a freshly-snapshotted arrival barrier rather than rendering on top of history
 
+Scenario: Historical user bubbles and assistant turns render in chronological order
+  Test:
+    Package: web
+    Filter: TimelineView.history.chronological_ordering_history_only
+  Given a session whose history payload returns four messages in tape order: M1 role=user content="q1" created_at=t1, M2 role=assistant content="a1" created_at=t2, M3 role=user content="q2" created_at=t3, M4 role=assistant content="a2" created_at=t4 with t1<t2<t3<t4
+  When TimelineView mounts with that viewSessionKey and an empty topology events buffer
+  Then the rendered DOM contains exactly four nodes with attribute data-testid="turn-or-bubble"
+    And the document order of those nodes is: bubble("q1"), turn("a1"), bubble("q2"), turn("a2")
+    And no node containing "q2" appears in the DOM before any node containing "a1"
+
+Scenario: Live agent turn renders strictly after historical entries
+  Test:
+    Package: web
+    Filter: TimelineView.history.chronological_ordering_history_then_live
+  Given a session whose history payload returns two messages: M1 role=user content="hist-q" created_at=t1, M2 role=assistant content="hist-a" created_at=t2 with t1<t2
+    And TimelineView is mounted with that viewSessionKey and the rendered DOM contains bubble("hist-q") then turn("hist-a") in that order
+  When the topology subscription delivers a post-barrier text_delta event for the same session that produces an agent turn with text "live-a"
+  Then the document order of the data-testid="turn-or-bubble" nodes is: bubble("hist-q"), turn("hist-a"), turn("live-a")
+    And no node containing "live-a" appears in the DOM before any node containing "hist-a"
+
+Scenario: Assistant turn with short text content renders without an over-tall empty card
+  Test:
+    Package: web
+    Filter: TimelineView.history.assistant_turn_height_matches_content
+  Given a session whose history payload returns one assistant message of role=assistant content="ok" created_at=t1 with no tool_calls
+  When TimelineView mounts with that viewSessionKey
+  Then the rendered TurnCard for that message contains the text "ok"
+    And the rendered TurnCard's bounding height is at most 96 pixels (single short markdown line plus padding)
+    And the rendered TurnCard contains no descendant element with computed style min-height greater than 0 other than the content row itself
+
 Scenario: History fetch failure still allows live chat to function
   Test:
     Package: web
@@ -263,9 +361,10 @@ Scenario: History fetch failure still allows live chat to function
   supports `?limit=N`; UI-side scroll-to-load-more is a follow-up.
 - Touching the legacy `pages/Chat.tsx` surface — it has its own
   rendering strategy and is not what regressed.
-- Adding interleaved (timestamp-sorted) ordering between historical
-  user prompts and assistant turns — the existing `TimelineView`
-  already groups user turns above agent turns within a session, and
-  this spec preserves that ordering.
+- Sub-second tie-breaking between bubbles and turns that share the
+  same `created_at` timestamp. Backend timestamps are millisecond
+  resolution; if two messages collide on `created_at` the renderer
+  falls back to tape insertion order from the history payload, which
+  is already monotonic by `seq`. No additional contract is required.
 - Backend changes of any kind. Endpoint and service are already
   correct.

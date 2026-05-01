@@ -17,7 +17,13 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { TurnCard, buildTurnsFromEvents, buildTurnsFromHistory, contentToText } from './TurnCard';
+import {
+  TurnCard,
+  type TurnCardData,
+  buildTurnsFromEvents,
+  buildTurnsFromHistory,
+  contentToText,
+} from './TurnCard';
 
 import { useChatModels } from '@/hooks/use-chat-models';
 import { useChatSessionWs } from '@/hooks/use-chat-session-ws';
@@ -60,7 +66,7 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   // Per-session ordered user turns. Cleared when the viewed session
   // changes so a new conversation does not inherit a stale prompt list.
   const [userTurnsBySession, setUserTurnsBySession] = useState<
-    Record<string, { id: string; text: string; t: number }[]>
+    Record<string, { id: string; text: string; t: number; createdAt: number | null }[]>
   >({});
 
   const sessionForPrompt = promptSessionKey ?? viewSessionKey;
@@ -224,42 +230,88 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   // editor pushes on submit. Historical entries come first in seq order;
   // optimistic entries follow because they were typed after the page
   // loaded.
-  const historyUserBubbles = useMemo<{ id: string; text: string; t: number }[]>(() => {
+  const historyUserBubbles = useMemo<
+    { id: string; text: string; t: number; createdAt: number | null }[]
+  >(() => {
     if (!historyMessages) return [];
     return historyMessages
       .filter((m) => m.role === 'user')
-      .map((m) => ({
-        id: `history-user-${String(m.seq)}`,
-        text: contentToText(m.content),
-        t: 0,
-      }))
+      .map((m) => {
+        const ts = Date.parse(m.created_at);
+        return {
+          id: `history-user-${String(m.seq)}`,
+          text: contentToText(m.content),
+          t: 0,
+          createdAt: Number.isNaN(ts) ? null : ts,
+        };
+      })
       .filter((u) => u.text.length > 0);
   }, [historyMessages]);
 
-  const userTurns = useMemo(
-    () => [...historyUserBubbles, ...(userTurnsBySession[viewSessionKey] ?? [])],
-    [historyUserBubbles, userTurnsBySession, viewSessionKey],
-  );
+  // Build a single ordered list of bubbles + turns. History items sort by
+  // `createdAt` ascending; items without a timestamp (live agent turns and
+  // optimistic local user prompts) trail the history block in arrival
+  // order. Each rendered node carries `data-testid="turn-or-bubble"` so
+  // the chronological-ordering scenarios can query in document order.
+  type Item =
+    | { kind: 'bubble'; key: string; createdAt: number | null; text: string }
+    | { kind: 'turn'; key: string; createdAt: number | null; turn: TurnCardData };
 
-  // Combine persisted assistant turns (from `/messages`) with live agent
-  // turns (from the topology WS). History always appears first because
-  // it is, by definition, the past — live frames extend the tail.
-  const allAgentTurns = useMemo(() => [...historyTurns, ...agentTurns], [historyTurns, agentTurns]);
+  const orderedItems = useMemo<Item[]>(() => {
+    const optimistic = userTurnsBySession[viewSessionKey] ?? [];
+    const items: Item[] = [
+      ...historyUserBubbles.map<Item>((u) => ({
+        kind: 'bubble',
+        key: u.id,
+        createdAt: u.createdAt,
+        text: u.text,
+      })),
+      ...historyTurns.map<Item>((t) => ({
+        kind: 'turn',
+        key: t.id,
+        createdAt: t.createdAt,
+        turn: t,
+      })),
+      ...agentTurns.map<Item>((t) => ({
+        kind: 'turn',
+        key: t.id,
+        createdAt: null,
+        turn: t,
+      })),
+      ...optimistic.map<Item>((u) => ({
+        kind: 'bubble',
+        key: u.id,
+        createdAt: null,
+        text: u.text,
+      })),
+    ];
+    // Stable sort: items with a `createdAt` come first in ascending order;
+    // items without one preserve their input order at the tail. The input
+    // order itself already reflects "history then live", so untimed items
+    // stay in the right relative order.
+    const indexed = items.map((it, idx) => ({ it, idx }));
+    indexed.sort((a, b) => {
+      const ax = a.it.createdAt;
+      const bx = b.it.createdAt;
+      if (ax === null && bx === null) return a.idx - b.idx;
+      if (ax === null) return 1;
+      if (bx === null) return -1;
+      if (ax !== bx) return ax - bx;
+      return a.idx - b.idx;
+    });
+    return indexed.map(({ it }) => it);
+  }, [historyUserBubbles, historyTurns, agentTurns, userTurnsBySession, viewSessionKey]);
 
-  // Interleaving by wall-clock arrival time would require timestamps on
-  // agent turns, which the current TurnCard reducer doesn't track. Until
-  // that lands, we put all user prompts above the agent turns for the
-  // session — which matches the craft layout when you first open a new
-  // conversation. Subsequent prompts will appear after the latest agent
-  // turn in practice because agent turns auto-scroll on append.
+  const isEmpty = orderedItems.length === 0;
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const lastAgentTurnId = allAgentTurns.at(-1)?.id;
-  const userCount = userTurns.length;
+  const itemCount = orderedItems.length;
+  const lastItemKey = orderedItems.at(-1)?.key;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [allAgentTurns.length, lastAgentTurnId, userCount]);
+  }, [itemCount, lastItemKey]);
 
   const handleSubmit = useCallback(
     (message: string) => {
@@ -273,7 +325,10 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
       const id = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setUserTurnsBySession((prev) => {
         const list = prev[viewSessionKey] ?? [];
-        return { ...prev, [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now() }] };
+        return {
+          ...prev,
+          [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now(), createdAt: null }],
+        };
       });
     },
     [ws, viewSessionKey, currentModel],
@@ -289,21 +344,22 @@ export function TimelineView({ viewSessionKey, events, promptSessionKey }: Timel
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div ref={scrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
-        {allAgentTurns.length === 0 && userTurns.length === 0 ? (
+        {isEmpty ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Waiting for the next turn on <span className="ml-1 font-mono">{viewSessionKey}</span>…
           </div>
         ) : (
-          <>
-            {userTurns.map((u) => (
-              <div key={u.id} className="flex justify-end">
-                <UserMessageBubble content={u.text} />
+          orderedItems.map((item) =>
+            item.kind === 'bubble' ? (
+              <div key={item.key} data-testid="turn-or-bubble" className="flex justify-end">
+                <UserMessageBubble content={item.text} />
               </div>
-            ))}
-            {allAgentTurns.map((turn) => (
-              <TurnCard key={turn.id} turn={turn} />
-            ))}
-          </>
+            ) : (
+              <div key={item.key} data-testid="turn-or-bubble">
+                <TurnCard turn={item.turn} />
+              </div>
+            ),
+          )
         )}
       </div>
       {history.isError && (
