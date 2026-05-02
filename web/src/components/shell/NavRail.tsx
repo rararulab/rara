@@ -53,10 +53,13 @@ function readCollapsed(): boolean {
 /**
  * Persistent global nav rail rendered by `DashboardLayout`.
  *
- * Layout — top: brand. Middle: route entries. Bottom: Settings + a
- * single connection-status dot. The rail is collapsible; collapsed
- * state shows icons only and persists in localStorage under
- * `rara.shell.navRailCollapsed`.
+ * Layout — top: small brand cue (only when collapsed). Middle: route
+ * entries plus Settings as a peer nav item (no separator, no boxed
+ * pill). Bottom: a quiet brand footer carrying the "rara" wordmark and
+ * a small connection-status dot (tooltip on hover). The collapse
+ * toggle is hover-revealed when the rail is expanded and rendered as
+ * a single permanent affordance when collapsed, so the bottom no
+ * longer ships a dedicated toggle strip.
  */
 export default function NavRail() {
   const { openSettings } = useSettingsModal();
@@ -73,72 +76,74 @@ export default function NavRail() {
 
   return (
     <aside
-      // Width transitions only; main column has min-w-0 so it absorbs
-      // the delta without re-flowing children mid-animation.
-      className="hidden shrink-0 flex-col border-r border-border/40 bg-background/30 backdrop-blur-sm transition-[width] duration-200 ease-out md:flex"
+      // `group` lets descendants opt into hover-revealed visibility
+      // (`group-hover:opacity-100`) without each one needing its own
+      // hover state. Width transitions only; main column has min-w-0
+      // so it absorbs the delta without re-flowing children mid-animation.
+      className="group/rail hidden shrink-0 flex-col border-r border-border/40 bg-background/30 backdrop-blur-sm transition-[width] duration-200 ease-out md:flex"
       style={{ width: collapsed ? RAIL_WIDTH_COLLAPSED : RAIL_WIDTH_EXPANDED }}
       aria-label="Global navigation"
     >
-      {/* Brand spot */}
+      {/* Top spot — brand glyph only when collapsed; expanded rail
+          carries the wordmark in the footer instead, so the two never
+          share weight. */}
       <div
-        className={cn(
-          'flex h-12 shrink-0 items-center border-b border-border/40 px-3',
-          collapsed && 'justify-center px-0',
-        )}
+        className={cn('flex h-12 shrink-0 items-center px-3', collapsed && 'justify-center px-0')}
       >
         {collapsed ? (
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-foreground/90 text-[12px] font-semibold leading-none tracking-tight text-background">
             r
           </div>
         ) : (
-          <span className="text-[15px] font-semibold leading-none tracking-tight text-foreground">
-            rara
-          </span>
+          // Expanded mode reserves the top strip's vertical space so
+          // the nav list begins at a consistent baseline regardless of
+          // collapse state, but renders nothing — the brand lives in
+          // the footer.
+          <span aria-hidden="true" />
         )}
       </div>
 
-      {/* Nav items */}
+      {/* Nav list — Chat, Docs, and Settings share identical styling.
+          Settings stays a button (it opens a modal, not a route) but
+          is visually one of the nav entries. */}
       <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
         {NAV_ITEMS.map((item) => (
           <RailNavLink key={item.to} item={item} collapsed={collapsed} />
         ))}
-      </nav>
-
-      {/* Bottom strip — Settings + status dot + collapse toggle */}
-      <div
-        className={cn(
-          'flex shrink-0 flex-col gap-1 border-t border-border/40 p-2',
-          collapsed && 'items-center',
-        )}
-      >
-        <RailButton
+        <RailNavButton
           icon={Settings}
           label="Settings"
           collapsed={collapsed}
           onClick={() => openSettings()}
         />
-        <div
-          className={cn(
-            'flex items-center',
-            collapsed ? 'justify-center px-1.5 py-1.5' : 'gap-2 px-2 py-1.5',
-          )}
-        >
-          <ConnectionDot />
-          {!collapsed && <ConnectionLabel />}
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            'h-7 w-7 self-end text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]',
-            collapsed && 'self-center',
-          )}
-          onClick={() => setCollapsed((v) => !v)}
-          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-          title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-        >
-          {collapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-        </Button>
+      </nav>
+
+      {/* Brand footer — wordmark + status dot when expanded; just the
+          dot when collapsed. Collapse toggle is hover-revealed here
+          (expanded) or rendered as the only element (collapsed) so the
+          user always has a discoverable affordance. */}
+      <div
+        className={cn(
+          'flex shrink-0 items-center px-3 py-2.5',
+          collapsed ? 'flex-col gap-2' : 'justify-between gap-2',
+        )}
+      >
+        {collapsed ? (
+          <>
+            <ConnectionDot />
+            <CollapseToggle collapsed={collapsed} onClick={() => setCollapsed((v) => !v)} />
+          </>
+        ) : (
+          <>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-[11px] font-medium tracking-wide text-muted-foreground/80">
+                rara
+              </span>
+              <ConnectionDot />
+            </div>
+            <CollapseToggle collapsed={collapsed} onClick={() => setCollapsed((v) => !v)} />
+          </>
+        )}
       </div>
     </aside>
   );
@@ -170,7 +175,12 @@ function RailNavLink({ item, collapsed }: { item: NavItem; collapsed: boolean })
   );
 }
 
-function RailButton({
+/**
+ * Button styled identically to `RailNavLink` for nav-equivalent
+ * actions (e.g. opening a modal). Visual parity with the route entries
+ * is the whole point — no separator, no boxed pill.
+ */
+function RailNavButton({
   icon: Icon,
   label,
   collapsed,
@@ -206,7 +216,9 @@ function ConnectionDot() {
   return (
     <span
       className={cn(
-        'inline-block h-2 w-2 rounded-full transition-colors',
+        // Fixed size so the footer baseline never shifts when the
+        // status color flips between checking / online / offline.
+        'inline-block h-1.5 w-1.5 shrink-0 rounded-full transition-colors',
         isChecking ? 'bg-muted-foreground/50' : isOnline ? 'bg-green-500' : 'bg-red-500',
       )}
       title={tooltip}
@@ -216,16 +228,32 @@ function ConnectionDot() {
   );
 }
 
-function ConnectionLabel() {
-  const { isOnline, isChecking } = useServerStatus();
-  // Rail-only label — kept terse so the rail width can stay slim. The
-  // top bar no longer carries the "Connected" word per the #2059
-  // restructure; this label is the only place it survives, gated to the
-  // expanded rail.
-  if (isChecking) {
-    return <span className="text-xs text-muted-foreground/70">Checking…</span>;
-  }
+/**
+ * Collapse / expand affordance. Expanded rail hides it until the rail
+ * is hovered or the button itself is focused (keyboard access stays
+ * intact). Collapsed rail keeps it permanently visible — otherwise
+ * the user has no way back out of the collapsed state.
+ */
+function CollapseToggle({ collapsed, onClick }: { collapsed: boolean; onClick: () => void }) {
   return (
-    <span className="text-xs text-muted-foreground">{isOnline ? 'Connected' : 'Disconnected'}</span>
+    <Button
+      variant="ghost"
+      size="icon"
+      className={cn(
+        'h-6 w-6 shrink-0 text-muted-foreground/70 transition-[opacity,color] hover:text-foreground',
+        // Hover-reveal only when expanded; collapsed mode needs a
+        // permanent affordance so the user can expand back.
+        !collapsed && 'opacity-0 focus-visible:opacity-100 group-hover/rail:opacity-100',
+      )}
+      onClick={onClick}
+      aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+      title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+    >
+      {collapsed ? (
+        <PanelLeft className="h-3.5 w-3.5" />
+      ) : (
+        <PanelLeftClose className="h-3.5 w-3.5" />
+      )}
+    </Button>
   );
 }
