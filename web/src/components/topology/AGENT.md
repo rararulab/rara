@@ -9,12 +9,13 @@ turns plus a right-rail worker inbox of spawned subagents.
 
 ## Architecture
 
-The page is a craft-style 3-pane shell hosted by `pages/Topology.tsx`:
+The page is a craft-style 3-pane shell hosted by `pages/Chat.tsx`:
 `SessionPicker` (left, 280px) | `TimelineView` (centre, flex) |
-`WorkerInbox` + `TapeLineageView` (right, 320px). The shell auto-selects
-the most-recent session on first load so users never have to paste a
-session UUID — task #9 of #1999 fixed that UX complaint by replacing
-the old free-text "root session key" input with a clickable list.
+`WorkerInbox` + `SessionAnchorMinimap` (right, 320px). The shell
+auto-selects the most-recent session on first load so users never have
+to paste a session UUID — task #9 of #1999 fixed that UX complaint by
+replacing the old free-text "root session key" input with a clickable
+list.
 
 The topology header carries a `PanelLeft` / `PanelLeftClose` icon button
 (issue #2022) that toggles the left rail by conditionally rendering the
@@ -73,23 +74,21 @@ button would be overreach.
   `Topology` page's `viewChild` state so the timeline focuses on that
   child. The back-to-root affordance lives in the timeline header, not
   the inbox.
-- `TapeLineageView.tsx` — right-rail panel (under the worker inbox)
-  that renders the tape fork forest as a hand-drawn SVG. Default
-  collapsed. Lives in the right rail rather than above the timeline so
-  the centre column is dedicated to the conversation stream — matches
-  the craft "right rail = meta" pattern.
-  Pure SVG (no d3 / dagre) because tape forests are tiny (≤ a few dozen
-  nodes per session) and a static layout keeps the view
-  snapshot-testable. Highlights nodes whose `sessionKey` matches the
-  current `viewSessionKey` so the panel and timeline stay visually
-  linked. Click is intentionally not a navigation action — `tape ↔
-session` is many-to-one, so a click would not unambiguously map to
-  one worker; use the inbox to switch focus.
-- `tape-tree-layout.ts` — pure reducer + layered layout. `buildTapeForest`
-  folds `tape_forked` events into `{nodes, edges}`; `layoutTapeForest`
-  assigns `(x, y)` by depth (column) and a stable per-session DFS order
-  (row). Constants (`NODE_WIDTH`, `COL_GAP`, …) live next to the layout,
-  not in config — they tune the mechanism, not deployment behavior.
+- `SessionAnchorMinimap.tsx` — right-rail vertical anchor minimap
+  (issue #2052). Reads `anchors[]` from the session row that `Chat.tsx`
+  fetches and renders one row per anchor in append order, day-grouped
+  by `timestamp`. Click invokes `onSelectAnchor(from, to)` — same
+  contract as the retired `TimelineChapterStrip` — and `Chat.tsx` calls
+  `fetchSessionMessagesBetweenAnchors` and threads the result into
+  `TimelineView` via `segmentMessages`. The current segment is
+  highlighted with a left-edge accent bar + tinted row; when no segment
+  is selected, the most-recent anchor is the implicit "you are here".
+  Replaced the prior horizontal chapter strip because a `flex-wrap`
+  row of identical chips did not scale to long sessions and offered no
+  hierarchy. Also replaced the deliberately non-navigable fork-lineage
+  panel (PR #1999) that previously sat in the right rail — it was not
+  earning the 320px in everyday use; the per-session anchor minimap is
+  the navigation surface long sessions actually need.
 - The cross-session topology WebSocket lives in
   `@/hooks/use-topology-subscription` (read-only stream of every event
   on root + descendants). The per-session **send** WebSocket lives in
@@ -116,10 +115,14 @@ backend StreamHub                       ▼
     → useTopologySubscription            (TopologyEventEntry[])
       ├→ TimelineView.filter(viewSessionKey)
       │    → buildTurnsFromEvents → TurnCard[]
-      ├→ WorkerInbox.deriveWorkers
-      │    → WorkerCard[]
-      └→ TapeLineageView (buildTapeForest → layoutTapeForest)
-           → SVG nodes + edges
+      └→ WorkerInbox.deriveWorkers
+           → WorkerCard[]
+
+GET /api/v1/chat/sessions/{key}
+  → Chat.tsx (sessionQuery.anchors)
+    → SessionAnchorMinimap (right rail)
+      → onSelectAnchor → fetchSessionMessagesBetweenAnchors
+        → TimelineView.segmentMessages
 ```
 
 ## Critical Invariants
@@ -148,16 +151,12 @@ backend StreamHub                       ▼
   variants. Task #8 will unify the two.
 - Do NOT render multiple sessions in one `TimelineView` instance. Use
   the `viewSessionKey` prop and let `WorkerInbox` switch focus instead.
-  Tape fork lineage lives in `TapeLineageView`, not `TimelineView`.
-- Do NOT make `TapeLineageView` nodes clickable for navigation. Tapes
-  and sessions are not 1:1 (one session can host many fork tapes), so a
-  click would not unambiguously map to one worker. Highlight by
-  `viewSessionKey` is the link; navigation goes through the inbox.
-- Do NOT pull in d3 / dagre / react-flow for the lineage SVG. The data
-  is tiny (≤ a few dozen nodes per session), the layout is static, and
-  a hand-drawn SVG keeps the bundle slim and the layout
-  snapshot-testable. If the visualisation outgrows this, the right move
-  is a paginated / collapsible per-session subtree, not a layout lib.
+  Cross-session structure is the worker inbox's job, not the timeline's.
+- Do NOT bring back a non-navigable fork-forest panel in the right
+  rail. Issue #2052 retired the previous one because it could not earn
+  its 320px when click was intentionally a no-op. If a future cross-session
+  lineage view is needed, it must be navigable (click jumps to the target
+  session) and must justify the rail space against the anchor minimap.
 - Do NOT drop completed / failed workers from `WorkerInbox`. The
   surface is an observation deck — historical workers stay visible so
   operators can inspect what ran. If inbox length becomes a UX problem,
