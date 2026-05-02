@@ -23,9 +23,8 @@ import { useNavigate, useParams } from 'react-router';
 import { api } from '@/api/client';
 import { fetchSessionMessagesBetweenAnchors } from '@/api/sessions';
 import type { ChatMessageData, ChatSession, SessionAnchor } from '@/api/types';
+import { SessionAnchorMinimap } from '@/components/topology/SessionAnchorMinimap';
 import { SessionPicker } from '@/components/topology/SessionPicker';
-import { TapeLineageView } from '@/components/topology/TapeLineageView';
-import { TimelineChapterStrip } from '@/components/topology/TimelineChapterStrip';
 import { TimelineView } from '@/components/topology/TimelineView';
 import { WorkerInbox } from '@/components/topology/WorkerInbox';
 import { Badge } from '@/components/ui/badge';
@@ -38,10 +37,10 @@ import { useTopologySubscription, type TopologyStatus } from '@/hooks/use-topolo
  * Layout:
  *
  * ```
- * ┌──────────────┬────────────────────┬──────────────┐
- * │ SessionPicker│  TimelineView      │ WorkerInbox  │
- * │              │  (selected session)│ + Lineage    │
- * └──────────────┴────────────────────┴──────────────┘
+ * ┌──────────────┬────────────────────┬──────────────────┐
+ * │ SessionPicker│  TimelineView      │ WorkerInbox      │
+ * │              │  (selected session)│ + AnchorMinimap  │
+ * └──────────────┴────────────────────┴──────────────────┘
  * ```
  *
  * URL: `/chat` (no session) or `/chat/:rootSessionKey`. The
@@ -108,6 +107,11 @@ export default function Chat() {
   // chapter selected" → `TimelineView` falls back to its own
   // `useSessionHistory` fetch (the legacy "last 200" path).
   const [segmentMessages, setSegmentMessages] = useState<ChatMessageData[] | null>(null);
+  // `anchor_id` of the segment whose messages are currently rendered, so
+  // the right-rail minimap can highlight "you are here". `null` while the
+  // user has not picked a chapter — the minimap then falls back to the
+  // most-recent anchor as the implicit current position.
+  const [currentAnchorId, setCurrentAnchorId] = useState<number | null>(null);
 
   // Reset the chapter selection whenever the rendered session changes —
   // a chapter is meaningful only against the tape it was clicked on, and
@@ -116,6 +120,7 @@ export default function Chat() {
   const renderedSessionKey = viewChild ?? rootSessionKey ?? null;
   useEffect(() => {
     setSegmentMessages(null);
+    setCurrentAnchorId(null);
   }, [renderedSessionKey]);
 
   // Fetch the session row to get `anchors[]` for the chapter strip.
@@ -138,6 +143,7 @@ export default function Chat() {
   const handleSelectAnchor = useCallback(
     (from: SessionAnchor, to: SessionAnchor | null) => {
       if (!renderedSessionKey) return;
+      setCurrentAnchorId(from.anchor_id);
       void fetchSessionMessagesBetweenAnchors(
         renderedSessionKey,
         from.anchor_id,
@@ -284,7 +290,6 @@ export default function Chat() {
                   </span>
                 </div>
               )}
-              <TimelineChapterStrip anchors={anchors} onSelectAnchor={handleSelectAnchor} />
               <TimelineView
                 viewSessionKey={viewChild ?? rootSessionKey}
                 events={subscription.events}
@@ -322,10 +327,11 @@ export default function Chat() {
               />
             </div>
             <div>
-              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Tape lineage</div>
-              <TapeLineageView
-                events={subscription.events}
-                activeSessionKey={viewChild ?? rootSessionKey}
+              <div className="mb-1.5 text-xs font-medium text-muted-foreground">Anchors</div>
+              <SessionAnchorMinimap
+                anchors={anchors}
+                currentAnchorId={currentAnchorId}
+                onSelectAnchor={handleSelectAnchor}
               />
             </div>
           </motion.aside>

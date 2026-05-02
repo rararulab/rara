@@ -68,10 +68,10 @@ import Chat from '../Chat';
 // --- Module mocks --------------------------------------------------------
 //
 // `Chat` mounts `SessionPicker`, `TimelineView`, `WorkerInbox`,
-// `TapeLineageView`, and the topology WS subscription. The toggle test
-// exercises the layout/grid level only — children are stubbed to thin
-// markers so the assertions can target the picker's presence in the DOM
-// without spinning up react-query, the WS, or the editor.
+// `SessionAnchorMinimap`, and the topology WS subscription. The toggle
+// test exercises the layout/grid level only — children are stubbed to
+// thin markers so the assertions can target the picker's presence in
+// the DOM without spinning up react-query, the WS, or the editor.
 
 vi.mock('@/components/topology/SessionPicker', () => ({
   SessionPicker: () => <div data-testid="session-picker">picker</div>,
@@ -85,16 +85,13 @@ vi.mock('@/components/topology/WorkerInbox', () => ({
   WorkerInbox: () => <div data-testid="worker-inbox">workers</div>,
 }));
 
-vi.mock('@/components/topology/TapeLineageView', () => ({
-  TapeLineageView: () => <div data-testid="tape-lineage">lineage</div>,
-}));
-
-// Issue #2040 added a chapter strip + a `useQuery` for the session row so
-// the strip can read `anchors[]`. The sidebar tests don't care about the
-// chapter UI, so stub the strip and the query+helper to keep this test
-// focused on the layout/persistence behaviour it was written for.
-vi.mock('@/components/topology/TimelineChapterStrip', () => ({
-  TimelineChapterStrip: () => <div data-testid="chapter-strip" />,
+// Issue #2052 moved the anchor list into the right rail as a minimap
+// (and retired the prior fork-lineage panel). The sidebar tests don't
+// care about the minimap UI, so stub it and the segment-fetch helper
+// + the session `useQuery` so the assertions stay focused on layout /
+// persistence.
+vi.mock('@/components/topology/SessionAnchorMinimap', () => ({
+  SessionAnchorMinimap: () => <div data-testid="anchor-minimap" />,
 }));
 vi.mock('@/api/sessions', async () => {
   const actual = await vi.importActual<typeof import('@/api/sessions')>('@/api/sessions');
