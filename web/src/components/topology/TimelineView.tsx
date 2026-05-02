@@ -135,6 +135,7 @@ export function TimelineView({
   const defaultModelIdString =
     typeof defaultModelId === 'string' ? defaultModelId : defaultModelId?.id;
   const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
+  const [pickedProvider, setPickedProvider] = useState<string | undefined>(undefined);
   const currentModel = pickedModel ?? defaultModelIdString ?? '';
 
   const history = useSessionHistory(viewSessionKey);
@@ -346,7 +347,13 @@ export function TimelineView({
       // Forward the picker's current selection as the per-turn override.
       // Empty string means "use whatever the backend default resolves to",
       // which the WS client drops rather than sending a blank `model` field.
-      const ok = ws.sendPrompt(trimmed, currentModel ? { model: currentModel } : undefined);
+      const promptOptions = currentModel
+        ? {
+            model: currentModel,
+            ...(pickedProvider ? { modelProvider: pickedProvider } : {}),
+          }
+        : undefined;
+      const ok = ws.sendPrompt(trimmed, promptOptions);
       if (!ok) return;
       const id = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       setUserTurnsBySession((prev) => {
@@ -357,8 +364,13 @@ export function TimelineView({
         };
       });
     },
-    [ws, viewSessionKey, currentModel],
+    [ws, viewSessionKey, currentModel, pickedProvider],
   );
+
+  const handleModelChange = useCallback((model: string, connection?: string) => {
+    setPickedModel(model);
+    setPickedProvider(connection && connection !== RARA_CONNECTION_SLUG ? connection : undefined);
+  }, []);
 
   const handleStop = useCallback(() => {
     ws.sendAbort();
@@ -408,6 +420,14 @@ export function TimelineView({
                 Failed to load conversation history. Live chat still works — refresh to retry.
               </div>
             )}
+            {ws.error && (
+              <div
+                role="alert"
+                className="mt-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300"
+              >
+                {ws.error}
+              </div>
+            )}
             <div className="pt-2">
               <InputContainer
                 onSubmit={handleSubmit}
@@ -415,7 +435,7 @@ export function TimelineView({
                 disabled={inputDisabled}
                 isProcessing={isProcessing}
                 currentModel={currentModel}
-                onModelChange={setPickedModel}
+                onModelChange={handleModelChange}
                 currentConnection={RARA_CONNECTION_SLUG}
                 placeholder="Send a message…"
               />

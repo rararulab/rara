@@ -182,6 +182,27 @@ describe('SessionWsClient', () => {
     expect(JSON.parse(ws.sent[0]!)).toEqual({ type: 'prompt', content: 'hello world' });
   });
 
+  it('prompt() includes model provider when provided', () => {
+    const client = new SessionWsClient({ sessionKey: 'sess-1' });
+    client.connect();
+    const ws = FakeWebSocket.instances[0]!;
+    ws.fireOpen();
+    ws.fireMessage({ type: 'hello' });
+
+    expect(
+      client.prompt('hello world', {
+        model: 'kimi-for-coding',
+        modelProvider: 'kimi-code',
+      }),
+    ).toBe(true);
+    expect(JSON.parse(ws.sent[0]!)).toEqual({
+      type: 'prompt',
+      content: 'hello world',
+      model: 'kimi-for-coding',
+      model_provider: 'kimi-code',
+    });
+  });
+
   it('prompt() returns false when socket is not open', () => {
     const client = new SessionWsClient({ sessionKey: 'sess-1' });
     client.connect();

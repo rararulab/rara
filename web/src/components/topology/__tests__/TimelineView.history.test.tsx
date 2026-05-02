@@ -37,13 +37,17 @@ import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 // the vendored craft `InputContainer`. We replace them with thin stubs so
 // the test exercises only the history-rendering wiring.
 
-vi.mock('@/hooks/use-chat-session-ws', () => ({
-  useChatSessionWs: () => ({
+const chatWsMock = vi.hoisted(() => ({
+  state: {
     status: 'live',
-    error: null,
-    sendPrompt: () => true,
-    sendAbort: () => true,
-  }),
+    error: null as string | null,
+    sendPrompt: vi.fn(() => true),
+    sendAbort: vi.fn(() => true),
+  },
+}));
+
+vi.mock('@/hooks/use-chat-session-ws', () => ({
+  useChatSessionWs: () => chatWsMock.state,
 }));
 
 vi.mock('@/hooks/use-chat-models', () => ({
@@ -115,6 +119,10 @@ function renderTimeline(props: {
 
 beforeEach(() => {
   listMessagesMock.mockReset();
+  chatWsMock.state.status = 'live';
+  chatWsMock.state.error = null;
+  chatWsMock.state.sendPrompt.mockClear();
+  chatWsMock.state.sendAbort.mockClear();
 });
 
 afterEach(() => {
@@ -122,6 +130,17 @@ afterEach(() => {
 });
 
 describe('TimelineView.history', () => {
+  it('session_ws_error_frame_is_rendered_near_composer', async () => {
+    listMessagesMock.mockResolvedValueOnce([]);
+    chatWsMock.state.error = 'Model "kimi-for-coding" returned an error during streaming';
+
+    renderTimeline({ viewSessionKey: 'sess-error' });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('kimi-for-coding');
+    expect(alert).toHaveTextContent('returned an error');
+  });
+
   it('renders_history_before_live_events: shows persisted user + assistant messages on mount', async () => {
     listMessagesMock.mockResolvedValueOnce([
       makeMessage({ seq: 1, role: 'user', content: 'hello' }),
