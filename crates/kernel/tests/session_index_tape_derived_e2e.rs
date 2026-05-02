@@ -54,10 +54,13 @@ const SESSIONS_DDL: &[&str] = &[
         entries_since_last_anchor    INTEGER NOT NULL DEFAULT 0,
         anchors_json                 TEXT NOT NULL DEFAULT '[]',
         metadata                     TEXT,
+        status                       TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'archived')),
         created_at                   TEXT NOT NULL,
         updated_at                   TEXT NOT NULL
     ) WITHOUT ROWID",
     "CREATE INDEX idx_sessions_updated_at ON sessions (updated_at DESC)",
+    "CREATE INDEX idx_sessions_status_updated_at ON sessions (status, updated_at DESC)",
     "CREATE TABLE session_channel_bindings (
         channel_type TEXT NOT NULL,
         chat_id      TEXT NOT NULL,
