@@ -38,7 +38,7 @@ use rara_kernel::{
     channel::{adapter::ChannelAdapter, types::ChannelType},
     io::{Endpoint, EndpointAddress, PlatformOutbound},
     notification::KernelNotification,
-    session::SessionKey,
+    session::{SessionEntry, SessionKey},
 };
 use tokio_tungstenite::tungstenite::Message;
 
@@ -392,6 +392,29 @@ async fn session_ws_prompt_with_model_override_pins_turn_model() {
     });
 
     let session_key = SessionKey::new();
+    let now = chrono::Utc::now();
+    tk.handle
+        .session_index()
+        .create_session(&SessionEntry {
+            key: session_key,
+            title: None,
+            model: Some("old-model".to_owned()),
+            model_provider: Some("missing-provider".to_owned()),
+            thinking_level: None,
+            system_prompt: None,
+            total_entries: 0,
+            preview: None,
+            last_token_usage: None,
+            estimated_context_tokens: 0,
+            entries_since_last_anchor: 0,
+            anchors: Vec::new(),
+            metadata: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("seed stale session override");
+
     let (mut ws, _resp) =
         tokio_tungstenite::connect_async(&session_url(addr, &session_key, OWNER_TOKEN))
             .await
@@ -429,6 +452,18 @@ async fn session_ws_prompt_with_model_override_pins_turn_model() {
     assert_eq!(
         turn.model, override_model,
         "agent loop must honour the per-prompt model override"
+    );
+    let session = tk
+        .handle
+        .session_index()
+        .get_session(&session_key)
+        .await
+        .expect("load session")
+        .expect("session exists");
+    assert_eq!(session.model.as_deref(), Some(override_model));
+    assert_eq!(
+        session.model_provider, None,
+        "model-only WS pins must clear stale provider overrides"
     );
 
     ws.send(Message::Close(None)).await.ok();

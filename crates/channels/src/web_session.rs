@@ -145,7 +145,7 @@ pub enum InboundFrame {
     /// `transcribe_audio_blocks` + `build_raw_platform_message` +
     /// `KernelHandle::submit_message`, mirroring the legacy chat WS path.
     Prompt {
-        content: rara_kernel::channel::types::MessageContent,
+        content:        rara_kernel::channel::types::MessageContent,
         /// Optional per-turn model override sent by the model picker.
         /// When present, the field is treated as a session-sticky pin:
         /// `SessionEntry.model` is updated so the agent loop's existing
@@ -153,7 +153,13 @@ pub enum InboundFrame {
         /// shape as the Telegram `/model` callback path so both channels
         /// stay aligned.
         #[serde(default)]
-        model:   Option<String>,
+        model:          Option<String>,
+        /// Optional provider paired with the model override. If a prompt
+        /// carries a model without this field, any stale session provider pin
+        /// is cleared so the model resolves against the current default
+        /// provider instead of an old incompatible provider.
+        #[serde(default)]
+        model_provider: Option<String>,
     },
     /// User clicked stop. Dispatches `Signal::Interrupt` against the
     /// kernel session — replaces the deleted REST interrupt endpoint.
@@ -467,7 +473,11 @@ async fn handle_session_ws(
                 }
 
                 match serde_json::from_str::<InboundFrame>(&text) {
-                    Ok(InboundFrame::Prompt { content, model }) => {
+                    Ok(InboundFrame::Prompt {
+                        content,
+                        model,
+                        model_provider,
+                    }) => {
                         let content = transcribe_audio_blocks(content, &stt_service).await;
                         let raw = build_raw_platform_message(&session_key_str, &user_id, content);
 
@@ -507,7 +517,13 @@ async fn handle_session_ws(
                         // two consecutive prompts is a cheap idempotent
                         // write, so the round-trip cost stays bounded.
                         if let Some(ref pinned) = model {
-                            apply_model_override(s, &session_key, pinned).await;
+                            apply_model_override(
+                                s,
+                                &session_key,
+                                pinned,
+                                model_provider.as_deref(),
+                            )
+                            .await;
                         }
 
                         // First-contact sessions arrive with no resolved
@@ -645,14 +661,17 @@ async fn apply_model_override(
     handle: &rara_kernel::handle::KernelHandle,
     key: &SessionKey,
     model: &str,
+    model_provider: Option<&str>,
 ) {
     let session_index = handle.session_index();
     match session_index.get_session(key).await {
         Ok(Some(mut entry)) => {
-            if entry.model.as_deref() == Some(model) {
+            let next_provider = model_provider.map(ToOwned::to_owned);
+            if entry.model.as_deref() == Some(model) && entry.model_provider == next_provider {
                 return;
             }
             entry.model = Some(model.to_owned());
+            entry.model_provider = next_provider;
             if let Err(e) = session_index.update_session(&entry).await {
                 warn!(
                     session_key = %key,
@@ -674,7 +693,7 @@ async fn apply_model_override(
                 key: *key,
                 title: None,
                 model: Some(model.to_owned()),
-                model_provider: None,
+                model_provider: model_provider.map(ToOwned::to_owned),
                 thinking_level: None,
                 system_prompt: None,
                 total_entries: 0,

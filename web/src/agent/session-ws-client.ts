@@ -168,14 +168,14 @@ export type PromptContentBlock =
 export type PromptContent = string | PromptContentBlock[];
 
 /** Optional per-prompt overrides forwarded as top-level fields on the
- *  `prompt` frame. Currently just `model`, but kept as an options object
- *  so future per-turn knobs (thinking level, sampling) don't churn the
- *  signature. */
+ *  `prompt` frame. */
 export interface PromptOptions {
   /** Pinned model id for this turn — mirrors the picker selection. The
    *  backend treats this as a session-sticky pin, matching the Telegram
    *  `/model` command path. */
   model?: string;
+  /** Provider paired with `model` when the picker exposes one. */
+  modelProvider?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +327,9 @@ export class SessionWsClient {
     const payload: Record<string, unknown> = { type: 'prompt', content };
     if (options.model && options.model.length > 0) {
       payload.model = options.model;
+    }
+    if (options.modelProvider && options.modelProvider.length > 0) {
+      payload.model_provider = options.modelProvider;
     }
     return this.send(payload);
   }
