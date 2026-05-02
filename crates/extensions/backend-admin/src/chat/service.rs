@@ -861,43 +861,17 @@ impl SessionService {
                     message: format!("failed to read tape: {e}"),
                 })?;
 
-        // Walk the tape mirroring `tap_entries_to_chat_messages`'s seq
-        // counter so we can correlate `message_seq` back to the specific
-        // user-message TapEntry. We keep that entry's `metadata`
-        // (which is where `rara_turn_id` is recorded) rather than
-        // re-deriving it — the kernel writes it at turn start and it
-        // uniquely keys the persisted trace row.
-        let i_seq = message_seq as i64;
-        let mut seq: i64 = 0;
-        let mut last_user_entry: Option<&TapEntry> = None;
-        for entry in &entries {
-            match entry.kind {
-                TapEntryKind::Message => {
-                    if let Ok(msg) = serde_json::from_value::<Message>(entry.payload.clone()) {
-                        seq += 1;
-                        if seq > i_seq {
-                            break;
-                        }
-                        if matches!(msg.role, Role::User) {
-                            last_user_entry = Some(entry);
-                        }
-                    }
+        // Resolve the seq via the same shared walker `tap_entries_to_chat_messages`
+        // uses, so that a seq returned by `/messages` always maps back to
+        // the right user-message TapEntry — even when the turn contains a
+        // `ToolResult` carrying N parallel results (which advances seq by
+        // N, not 1; #2039).
+        let user_entry =
+            resolve_user_entry_for_seq(&entries, message_seq as i64).ok_or_else(|| {
+                ChatError::InvalidRequest {
+                    message: format!("no user message found for seq {message_seq}"),
                 }
-                TapEntryKind::ToolCall | TapEntryKind::ToolResult => {
-                    seq += 1;
-                    if seq > i_seq {
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let Some(user_entry) = last_user_entry else {
-            return Err(ChatError::InvalidRequest {
-                message: format!("no user message found for seq {message_seq}"),
-            });
-        };
+            })?;
 
         let rara_turn_id = user_entry
             .metadata
@@ -1063,123 +1037,215 @@ impl std::fmt::Debug for SessionService {
 // Tape → ChatMessage conversion
 // ---------------------------------------------------------------------------
 
-/// Convert tape entries into a flat list of [`ChatMessage`] structs.
+/// One emission from [`walk_tape_with_seq`]: the assigned seq, the
+/// originating tape entry, and — for `ToolResult` entries — the index
+/// into the entry's `results` array.
 ///
-/// Mirrors the logic in `memory/context.rs` but targets the channel-layer
-/// `ChatMessage` type instead of `llm::Message`.
-fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
-    let mut messages = Vec::new();
-    let mut seq: i64 = 0;
-    let mut pending_calls: Vec<(String, String)> = Vec::new(); // (id, name)
+/// `result_index` is `Some(i)` for the i-th result in a `ToolResult`
+/// entry that holds N results, and `None` for every other kind. This
+/// matches the per-result seq that `tap_entries_to_chat_messages`
+/// commits to and that the frontend consumes via `/messages`.
+type SeqWalkItem<'a> = (i64, &'a TapEntry, Option<usize>);
 
+/// Walk a tape and emit `(seq, entry, result_index)` tuples in tape
+/// order, matching the seq accounting `tap_entries_to_chat_messages`
+/// uses on the chat-history endpoint.
+///
+/// Emission rules — kept symmetric with the construction logic in
+/// `tap_entries_to_chat_messages` so both endpoints derive seq from a
+/// single source of truth (#2039):
+///
+/// - `Message` whose payload deserializes as [`Message`]: emits one tuple with
+///   `result_index = None`.
+/// - `ToolCall` carrying a `calls` array: emits one tuple with `result_index =
+///   None`.
+/// - `ToolResult` carrying a `results` array of length N: emits N tuples
+///   sharing the same `&TapEntry` with `result_index = Some(0..N)`. Seq
+///   advances by N.
+/// - Anything else (other kinds, malformed payloads): no emission, no seq
+///   advance.
+fn walk_tape_with_seq(entries: &[TapEntry]) -> Vec<SeqWalkItem<'_>> {
+    let mut out: Vec<SeqWalkItem<'_>> = Vec::new();
+    let mut seq: i64 = 0;
     for entry in entries {
         match entry.kind {
-            TapEntryKind::Message => {
-                if let Ok(msg) = serde_json::from_value::<Message>(entry.payload.clone()) {
-                    seq += 1;
-                    let role = match msg.role {
-                        Role::System | Role::Developer => MessageRole::System,
-                        Role::User => MessageRole::User,
-                        Role::Assistant => MessageRole::Assistant,
-                        Role::Tool => MessageRole::Tool,
-                    };
-                    // Preserve multimodal content (images) via serde round-trip
-                    // between llm::MessageContent and channel::types::MessageContent
-                    // (both share the same serde format).
-                    let content: MessageContent = serde_json::to_value(&msg.content)
-                        .and_then(|v| serde_json::from_value(v))
-                        .unwrap_or_else(|_| MessageContent::Text(msg.content.as_text().to_owned()));
-                    let tool_calls: Vec<ChannelToolCall> = msg
-                        .tool_calls
-                        .iter()
-                        .map(|tc| ChannelToolCall {
-                            id:        tc.id.clone().into(),
-                            name:      tc.name.clone().into(),
-                            arguments: serde_json::from_str(&tc.arguments)
-                                .unwrap_or(Value::String(tc.arguments.clone())),
-                        })
-                        .collect();
-                    messages.push(ChatMessage {
-                        seq,
-                        role,
-                        content,
-                        tool_calls,
-                        tool_call_id: msg.tool_call_id.clone(),
-                        tool_name: None,
-                        created_at: entry.timestamp,
-                    });
-                }
+            TapEntryKind::Message
+                if serde_json::from_value::<Message>(entry.payload.clone()).is_ok() =>
+            {
+                seq += 1;
+                out.push((seq, entry, None));
             }
-            TapEntryKind::ToolCall => {
-                pending_calls.clear();
-                if let Some(calls) = entry.payload.get("calls").and_then(Value::as_array) {
-                    let mut tc_list = Vec::new();
-                    for call in calls {
-                        let id = call
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned();
-                        let func = call.get("function").and_then(Value::as_object);
-                        let name = func
-                            .and_then(|f| f.get("name"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned();
-                        let arguments = func
-                            .and_then(|f| f.get("arguments"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("{}");
-                        let args_val: Value = serde_json::from_str(arguments)
-                            .unwrap_or(Value::String(arguments.to_owned()));
-                        pending_calls.push((id.clone(), name.clone()));
-                        tc_list.push(ChannelToolCall {
-                            id:        id.into(),
-                            name:      name.into(),
-                            arguments: args_val,
-                        });
-                    }
-                    seq += 1;
-                    messages.push(ChatMessage {
-                        seq,
-                        role: MessageRole::Assistant,
-                        content: MessageContent::Text(String::new()),
-                        tool_calls: tc_list,
-                        tool_call_id: None,
-                        tool_name: None,
-                        created_at: entry.timestamp,
-                    });
-                }
+            TapEntryKind::ToolCall
+                if entry
+                    .payload
+                    .get("calls")
+                    .and_then(Value::as_array)
+                    .is_some() =>
+            {
+                seq += 1;
+                out.push((seq, entry, None));
             }
             TapEntryKind::ToolResult => {
                 if let Some(results) = entry.payload.get("results").and_then(Value::as_array) {
-                    for (i, result) in results.iter().enumerate() {
-                        let content_str = match result {
-                            Value::String(s) => s.clone(),
-                            other => serde_json::to_string(other).unwrap_or_default(),
-                        };
-                        let (call_id, tool_name) =
-                            pending_calls.get(i).cloned().unwrap_or_default();
+                    for i in 0..results.len() {
                         seq += 1;
-                        messages.push(ChatMessage {
-                            seq,
-                            role: MessageRole::ToolResult,
-                            content: MessageContent::Text(content_str),
-                            tool_calls: Vec::new(),
-                            tool_call_id: if call_id.is_empty() {
-                                None
-                            } else {
-                                Some(call_id)
-                            },
-                            tool_name: if tool_name.is_empty() {
-                                None
-                            } else {
-                                Some(tool_name)
-                            },
-                            created_at: entry.timestamp,
-                        });
+                        out.push((seq, entry, Some(i)));
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Find the tape entry of the user-role `Message` whose seq is the
+/// largest value `<= message_seq`.
+///
+/// Both `/messages` and `/execution-trace?seq=X` walk the tape via
+/// [`walk_tape_with_seq`]; this function consumes that walk and locates
+/// the user TapEntry that opens the turn containing seq `message_seq`.
+/// Returning the [`TapEntry`] (not just the index) lets the caller read
+/// `rara_turn_id` metadata directly off the persisted entry.
+fn resolve_user_entry_for_seq(entries: &[TapEntry], message_seq: i64) -> Option<&TapEntry> {
+    let mut last_user: Option<&TapEntry> = None;
+    for (seq, entry, _result_idx) in walk_tape_with_seq(entries) {
+        if seq > message_seq {
+            break;
+        }
+        if matches!(entry.kind, TapEntryKind::Message)
+            && let Ok(msg) = serde_json::from_value::<Message>(entry.payload.clone())
+            && matches!(msg.role, Role::User)
+        {
+            last_user = Some(entry);
+        }
+    }
+    last_user
+}
+
+/// Convert tape entries into a flat list of [`ChatMessage`] structs.
+///
+/// Mirrors the logic in `memory/context.rs` but targets the channel-layer
+/// `ChatMessage` type instead of `llm::Message`. Walks the tape via
+/// [`walk_tape_with_seq`] so the per-result seq advance for parallel
+/// `ToolResult` entries stays in lockstep with `get_execution_trace`.
+fn tap_entries_to_chat_messages(entries: &[TapEntry]) -> Vec<ChatMessage> {
+    let mut messages = Vec::new();
+    let mut pending_calls: Vec<(String, String)> = Vec::new(); // (id, name)
+
+    for (seq, entry, result_idx) in walk_tape_with_seq(entries) {
+        match entry.kind {
+            TapEntryKind::Message => {
+                // Safe to unwrap: walk_tape_with_seq only emits Message
+                // tuples when the payload deserializes successfully.
+                let msg: Message = serde_json::from_value(entry.payload.clone())
+                    .expect("walk_tape_with_seq filtered undecodable Message payloads");
+                let role = match msg.role {
+                    Role::System | Role::Developer => MessageRole::System,
+                    Role::User => MessageRole::User,
+                    Role::Assistant => MessageRole::Assistant,
+                    Role::Tool => MessageRole::Tool,
+                };
+                // Preserve multimodal content (images) via serde round-trip
+                // between llm::MessageContent and channel::types::MessageContent
+                // (both share the same serde format).
+                let content: MessageContent = serde_json::to_value(&msg.content)
+                    .and_then(|v| serde_json::from_value(v))
+                    .unwrap_or_else(|_| MessageContent::Text(msg.content.as_text().to_owned()));
+                let tool_calls: Vec<ChannelToolCall> = msg
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ChannelToolCall {
+                        id:        tc.id.clone().into(),
+                        name:      tc.name.clone().into(),
+                        arguments: serde_json::from_str(&tc.arguments)
+                            .unwrap_or(Value::String(tc.arguments.clone())),
+                    })
+                    .collect();
+                messages.push(ChatMessage {
+                    seq,
+                    role,
+                    content,
+                    tool_calls,
+                    tool_call_id: msg.tool_call_id.clone(),
+                    tool_name: None,
+                    created_at: entry.timestamp,
+                });
+            }
+            TapEntryKind::ToolCall => {
+                pending_calls.clear();
+                let calls = entry
+                    .payload
+                    .get("calls")
+                    .and_then(Value::as_array)
+                    .expect("walk_tape_with_seq filtered ToolCall without calls array");
+                let mut tc_list = Vec::new();
+                for call in calls {
+                    let id = call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let func = call.get("function").and_then(Value::as_object);
+                    let name = func
+                        .and_then(|f| f.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let arguments = func
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("{}");
+                    let args_val: Value = serde_json::from_str(arguments)
+                        .unwrap_or(Value::String(arguments.to_owned()));
+                    pending_calls.push((id.clone(), name.clone()));
+                    tc_list.push(ChannelToolCall {
+                        id:        id.into(),
+                        name:      name.into(),
+                        arguments: args_val,
+                    });
+                }
+                messages.push(ChatMessage {
+                    seq,
+                    role: MessageRole::Assistant,
+                    content: MessageContent::Text(String::new()),
+                    tool_calls: tc_list,
+                    tool_call_id: None,
+                    tool_name: None,
+                    created_at: entry.timestamp,
+                });
+            }
+            TapEntryKind::ToolResult => {
+                let i = result_idx
+                    .expect("walk_tape_with_seq emits result_index for every ToolResult tuple");
+                let results = entry
+                    .payload
+                    .get("results")
+                    .and_then(Value::as_array)
+                    .expect("walk_tape_with_seq filtered ToolResult without results array");
+                let result = &results[i];
+                let content_str = match result {
+                    Value::String(s) => s.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                };
+                let (call_id, tool_name) = pending_calls.get(i).cloned().unwrap_or_default();
+                messages.push(ChatMessage {
+                    seq,
+                    role: MessageRole::ToolResult,
+                    content: MessageContent::Text(content_str),
+                    tool_calls: Vec::new(),
+                    tool_call_id: if call_id.is_empty() {
+                        None
+                    } else {
+                        Some(call_id)
+                    },
+                    tool_name: if tool_name.is_empty() {
+                        None
+                    } else {
+                        Some(tool_name)
+                    },
+                    created_at: entry.timestamp,
+                });
             }
             _ => {}
         }
@@ -1236,6 +1302,187 @@ fn project_search_hit(
         timestamp_ms: entry.timestamp.as_millisecond(),
         seq: entry.id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the shared seq walker used by `tap_entries_to_chat_messages`
+    //! and `get_execution_trace`. The bug being fixed (#2039) was that the
+    //! two endpoints maintained independent counters that disagreed on how
+    //! to count `ToolResult` entries holding N parallel results.
+
+    use jiff::Timestamp;
+    use rara_kernel::memory::{TapEntry, TapEntryKind};
+    use serde_json::json;
+
+    use super::{resolve_user_entry_for_seq, tap_entries_to_chat_messages, walk_tape_with_seq};
+
+    fn user_msg(id: u64, turn_id: &str) -> TapEntry {
+        TapEntry {
+            id,
+            kind: TapEntryKind::Message,
+            payload: json!({"role": "user", "content": "do two things"}),
+            timestamp: Timestamp::now(),
+            metadata: Some(json!({"rara_turn_id": turn_id})),
+        }
+    }
+
+    fn assistant_msg(id: u64) -> TapEntry {
+        TapEntry {
+            id,
+            kind: TapEntryKind::Message,
+            payload: json!({"role": "assistant", "content": "done"}),
+            timestamp: Timestamp::now(),
+            metadata: None,
+        }
+    }
+
+    fn system_msg(id: u64) -> TapEntry {
+        TapEntry {
+            id,
+            kind: TapEntryKind::Message,
+            payload: json!({"role": "system", "content": "you are rara"}),
+            timestamp: Timestamp::now(),
+            metadata: None,
+        }
+    }
+
+    fn tool_call_entry(id: u64, calls: &[(&str, &str)]) -> TapEntry {
+        let calls_json: Vec<_> = calls
+            .iter()
+            .map(|(call_id, name)| {
+                json!({
+                    "id": call_id,
+                    "function": { "name": name, "arguments": "{}" }
+                })
+            })
+            .collect();
+        TapEntry {
+            id,
+            kind: TapEntryKind::ToolCall,
+            payload: json!({"calls": calls_json}),
+            timestamp: Timestamp::now(),
+            metadata: None,
+        }
+    }
+
+    fn tool_result_entry(id: u64, results: &[&str]) -> TapEntry {
+        let results_json: Vec<_> = results.iter().map(|r| json!(r)).collect();
+        TapEntry {
+            id,
+            kind: TapEntryKind::ToolResult,
+            payload: json!({"results": results_json}),
+            timestamp: Timestamp::now(),
+            metadata: None,
+        }
+    }
+
+    /// Scenario: parallel tool results map seq correctly across endpoints.
+    ///
+    /// A turn with two parallel tool calls produces:
+    ///   seq=1 user, seq=2 ToolCall(2 calls), seq=3 ToolResult[0],
+    ///   seq=4 ToolResult[1], seq=5 trailing assistant.
+    /// `/messages` and `/execution-trace?seq=5` must agree: seq=5
+    /// resolves to the user TapEntry that opened this turn (#2039).
+    #[test]
+    fn execution_trace_resolves_after_parallel_tool_results() {
+        let entries = vec![
+            user_msg(1, "turn-A"),
+            tool_call_entry(2, &[("a", "Read"), ("b", "Bash")]),
+            tool_result_entry(3, &["foo.md contents", "ls output"]),
+            assistant_msg(4),
+        ];
+
+        // The chat-history walker emits one ChatMessage per parallel result.
+        let chat_msgs = tap_entries_to_chat_messages(&entries);
+        assert_eq!(
+            chat_msgs.len(),
+            5,
+            "expected user + tool_call + 2 tool_results + assistant"
+        );
+        let trailing_seq = chat_msgs.last().expect("non-empty").seq;
+        assert_eq!(
+            trailing_seq, 5,
+            "trailing assistant seq must advance past both parallel results"
+        );
+
+        // The trace walker must agree on that seq → user TapEntry mapping.
+        let resolved = resolve_user_entry_for_seq(&entries, trailing_seq)
+            .expect("trailing seq must resolve to the opening user entry");
+        let turn_id = resolved
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("rara_turn_id"))
+            .and_then(|v| v.as_str());
+        assert_eq!(turn_id, Some("turn-A"));
+    }
+
+    /// Scenario: single tool result behaves the same as before.
+    ///
+    /// A turn with one tool call + one result produces:
+    ///   seq=1 user, seq=2 ToolCall, seq=3 ToolResult[0],
+    ///   seq=4 trailing assistant. Verifies the helper does not
+    ///   over-correct on the N=1 case.
+    #[test]
+    fn execution_trace_single_tool_result_unchanged() {
+        let entries = vec![
+            user_msg(1, "turn-B"),
+            tool_call_entry(2, &[("a", "Read")]),
+            tool_result_entry(3, &["foo.md contents"]),
+            assistant_msg(4),
+        ];
+
+        let chat_msgs = tap_entries_to_chat_messages(&entries);
+        assert_eq!(chat_msgs.len(), 4);
+        let trailing_seq = chat_msgs.last().expect("non-empty").seq;
+        assert_eq!(trailing_seq, 4);
+
+        let resolved = resolve_user_entry_for_seq(&entries, trailing_seq)
+            .expect("trailing seq must resolve to the opening user entry");
+        let turn_id = resolved
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("rara_turn_id"))
+            .and_then(|v| v.as_str());
+        assert_eq!(turn_id, Some("turn-B"));
+    }
+
+    /// Scenario: requesting a seq before the first user message is rejected.
+    ///
+    /// A tape that begins with a system message has no user TapEntry at
+    /// or before seq=0; resolution must return `None` so
+    /// `get_execution_trace` can map that to `ChatError::InvalidRequest`.
+    #[test]
+    fn execution_trace_no_user_message_rejects() {
+        let entries = vec![system_msg(1)];
+        assert!(resolve_user_entry_for_seq(&entries, 0).is_none());
+        assert!(resolve_user_entry_for_seq(&entries, 1).is_none());
+    }
+
+    /// Bench-style sanity: every chat message's seq is reproduced by the
+    /// shared walker, so the two endpoints can never disagree by
+    /// construction.
+    #[test]
+    fn walk_tape_seq_matches_chat_messages_seq() {
+        let entries = vec![
+            user_msg(1, "turn-A"),
+            tool_call_entry(2, &[("a", "Read"), ("b", "Bash"), ("c", "Grep")]),
+            tool_result_entry(3, &["r1", "r2", "r3"]),
+            assistant_msg(4),
+            user_msg(5, "turn-B"),
+            assistant_msg(6),
+        ];
+
+        let walker_seqs: Vec<i64> = walk_tape_with_seq(&entries)
+            .into_iter()
+            .map(|(seq, ..)| seq)
+            .collect();
+        let msg_seqs: Vec<i64> = tap_entries_to_chat_messages(&entries)
+            .into_iter()
+            .map(|m| m.seq)
+            .collect();
+        assert_eq!(walker_seqs, msg_seqs);
+    }
 }
 
 #[cfg(test)]

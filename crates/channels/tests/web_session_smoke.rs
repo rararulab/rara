@@ -408,6 +408,7 @@ async fn session_ws_prompt_with_model_override_pins_turn_model() {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata: None,
             created_at: now,
             updated_at: now,
