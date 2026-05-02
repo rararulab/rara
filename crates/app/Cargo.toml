@@ -81,9 +81,11 @@ yunara-store = { workspace = true }
 similar = "3.1.0"
 
 [dev-dependencies]
+axum = { workspace = true }
 rara-kernel = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+tower = { workspace = true }
 
 [lints]
 workspace = true

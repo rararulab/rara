@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use chrono::Utc;
 use dashmap::DashMap;
 
-use super::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey};
+use super::{
+    ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey, SessionListFilter,
+};
 use crate::channel::types::ChannelType;
 
 /// A minimal in-memory [`SessionIndex`] for unit tests.
@@ -56,9 +58,14 @@ impl SessionIndex for InMemorySessionIndex {
         &self,
         limit: i64,
         offset: i64,
+        filter: SessionListFilter,
     ) -> Result<Vec<SessionEntry>, SessionError> {
-        let mut entries: Vec<SessionEntry> =
-            self.sessions.iter().map(|entry| entry.clone()).collect();
+        let mut entries: Vec<SessionEntry> = self
+            .sessions
+            .iter()
+            .map(|entry| entry.clone())
+            .filter(|entry| filter.matches(entry.status))
+            .collect();
         entries.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
         let start = offset.max(0) as usize;
         let take = limit.max(0) as usize;
@@ -168,6 +175,7 @@ pub async fn create_test_session(
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: crate::session::SessionStatus::Active,
             metadata,
             created_at: now,
             updated_at: now,

@@ -15,16 +15,19 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, RefreshCw } from 'lucide-react';
-import { useEffect } from 'react';
+import { Archive, ArchiveRestore, EyeOff, Plus, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '@/api/client';
+import { updateSessionStatus } from '@/api/sessions';
 import type { ChatSession } from '@/api/types';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 /** React-query key for the session list — exported so other panels can
- *  invalidate it after creating / mutating sessions. */
+ *  invalidate it after creating / mutating sessions. The query is
+ *  partitioned by `showArchived` so toggling between the two views does
+ *  not poison the cache. */
 export const SESSIONS_QUERY_KEY = ['topology', 'chat-sessions'] as const;
 
 /** Page size for the picker. The view is a sidebar, not a session
@@ -34,6 +37,34 @@ const SESSION_LIMIT = 50;
 /** Background poll cadence. The topology WS already covers in-flight
  *  events; this only catches sessions created in another tab. */
 const REFETCH_MS = 30_000;
+
+/** localStorage key for the "Show archived" toggle (issue #2043
+ *  Decision 7). Stable string so a future migration can detect prior
+ *  user preference. */
+export const SHOW_ARCHIVED_STORAGE_KEY = 'rara.sidebar.showArchived';
+
+/** Read the persisted "show archived" flag, defaulting to `false`.
+ *  Defensive against older browsers / SSR contexts that lack
+ *  `localStorage`. */
+function readShowArchived(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(SHOW_ARCHIVED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Persist the toggle. Failures (quota / disabled storage) are
+ *  swallowed — the toggle still works for the current session. */
+function writeShowArchived(value: boolean) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SHOW_ARCHIVED_STORAGE_KEY, value ? 'true' : 'false');
+  } catch {
+    // ignore — the in-memory state is the source of truth for this session
+  }
+}
 
 export interface SessionPickerProps {
   /** Currently selected session key, or `null` when no selection yet. */
@@ -53,13 +84,28 @@ export interface SessionPickerProps {
  * recently updated chat sessions and lets the user click into one
  * (or create a new one) instead of pasting a session UUID into a text
  * input — the experience #1999 reviewers complained about.
+ *
+ * Issue #2043: archived sessions are hidden by default behind the
+ * "Show archived" toggle in the rail header. Each row carries an
+ * archive / unarchive button (disabled on the active session so the
+ * post-archive "what now?" question never surfaces).
  */
 export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: SessionPickerProps) {
   const queryClient = useQueryClient();
+  const [showArchived, setShowArchived] = useState<boolean>(readShowArchived);
+
+  // The query key carries the toggle so the rail does not flash stale
+  // results when the user flips the visibility — react-query treats
+  // them as two distinct caches.
+  const queryKey = [...SESSIONS_QUERY_KEY, showArchived ? 'all' : 'active'] as const;
+  const statusParam = showArchived ? 'all' : 'active';
 
   const sessionsQuery = useQuery({
-    queryKey: SESSIONS_QUERY_KEY,
-    queryFn: () => api.get<ChatSession[]>(`/api/v1/chat/sessions?limit=${SESSION_LIMIT}&offset=0`),
+    queryKey,
+    queryFn: () =>
+      api.get<ChatSession[]>(
+        `/api/v1/chat/sessions?limit=${SESSION_LIMIT}&offset=0&status=${statusParam}`,
+      ),
     refetchInterval: REFETCH_MS,
   });
 
@@ -69,12 +115,38 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
       // Optimistically prepend so the new session is selectable before
       // the next refetch — matches what the user expects after clicking
       // a Create button.
-      queryClient.setQueryData<ChatSession[]>(SESSIONS_QUERY_KEY, (prev) =>
+      queryClient.setQueryData<ChatSession[]>(queryKey, (prev) =>
         prev ? [created, ...prev] : [created],
       );
       onSelect(created.key);
     },
   });
+
+  const archiveMutation = useMutation({
+    mutationFn: ({ key, status }: { key: string; status: 'active' | 'archived' }) =>
+      updateSessionStatus(key, status),
+    onSuccess: (_updated, vars) => {
+      // The default-Active view drops archived rows; the all-view
+      // keeps both. Either way, an explicit invalidate is the smallest
+      // correct behaviour — the optimistic prune below covers the
+      // archive-from-active case so the row disappears immediately
+      // without waiting for the refetch round-trip.
+      if (!showArchived && vars.status === 'archived') {
+        queryClient.setQueryData<ChatSession[]>(queryKey, (prev) =>
+          prev ? prev.filter((s) => s.key !== vars.key) : prev,
+        );
+      }
+      void queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
+    },
+  });
+
+  const handleToggleShowArchived = useCallback(() => {
+    setShowArchived((prev) => {
+      const next = !prev;
+      writeShowArchived(next);
+      return next;
+    });
+  }, []);
 
   const sessions = sessionsQuery.data ?? [];
   const firstKey = sessions[0]?.key;
@@ -95,6 +167,19 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">Sessions</span>
         <div className="flex items-center gap-1">
+          <Button
+            size="icon"
+            variant="ghost"
+            className={cn(
+              'h-6 w-6 transition-transform active:scale-[0.96]',
+              showArchived && 'bg-accent/30 text-foreground',
+            )}
+            title={showArchived ? 'Hide archived' : 'Show archived'}
+            aria-pressed={showArchived}
+            onClick={handleToggleShowArchived}
+          >
+            {showArchived ? <ArchiveRestore className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+          </Button>
           <Button
             size="icon"
             variant="ghost"
@@ -137,14 +222,26 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
           />
         ) : (
           <ul className="flex flex-col gap-px p-1.5">
-            {sessions.map((session) => (
-              <SessionPickerItem
-                key={session.key}
-                session={session}
-                active={session.key === activeSessionKey}
-                onSelect={onSelect}
-              />
-            ))}
+            {sessions.map((session) => {
+              const isActiveSelected = session.key === activeSessionKey;
+              const status = session.status ?? 'active';
+              return (
+                <SessionPickerItem
+                  key={session.key}
+                  session={session}
+                  active={isActiveSelected}
+                  onSelect={onSelect}
+                  onArchiveToggle={(targetStatus) =>
+                    archiveMutation.mutate({ key: session.key, status: targetStatus })
+                  }
+                  archiveDisabled={isActiveSelected || archiveMutation.isPending}
+                  archiveDisabledReason={
+                    isActiveSelected ? 'Switch to another session first' : undefined
+                  }
+                  status={status}
+                />
+              );
+            })}
           </ul>
         )}
       </div>
@@ -156,14 +253,36 @@ interface SessionPickerItemProps {
   session: ChatSession;
   active: boolean;
   onSelect: (key: string) => void;
+  /** Fires the archive / unarchive PATCH for this row. */
+  onArchiveToggle: (status: 'active' | 'archived') => void;
+  /** Block the archive button (active-row case + in-flight mutation). */
+  archiveDisabled: boolean;
+  /** Tooltip shown on the disabled archive button. `undefined` when the
+   *  button is enabled. */
+  archiveDisabledReason: string | undefined;
+  /** Materialised status — `'active'` when the wire payload omits the
+   *  field (back-compat with payloads predating issue #2043). */
+  status: 'active' | 'archived';
 }
 
-function SessionPickerItem({ session, active, onSelect }: SessionPickerItemProps) {
+function SessionPickerItem({
+  session,
+  active,
+  onSelect,
+  onArchiveToggle,
+  archiveDisabled,
+  archiveDisabledReason,
+  status,
+}: SessionPickerItemProps) {
   const title = session.title?.trim() || 'Untitled session';
   const meta = `${formatRelativeTime(session.updated_at)} · ${session.message_count} msg`;
+  const isArchived = status === 'archived';
+  const targetStatus: 'active' | 'archived' = isArchived ? 'active' : 'archived';
+  const buttonTitle =
+    archiveDisabledReason ?? (isArchived ? 'Unarchive session' : 'Archive session');
 
   return (
-    <li>
+    <li className="group/row relative">
       <button
         type="button"
         onClick={() => onSelect(session.key)}
@@ -177,6 +296,7 @@ function SessionPickerItem({ session, active, onSelect }: SessionPickerItemProps
           active
             ? 'border-accent bg-accent/10 text-foreground'
             : 'border-transparent text-foreground hover:bg-accent/5',
+          isArchived && 'opacity-60',
         )}
       >
         <span className="line-clamp-1 text-sm font-medium leading-tight">{title}</span>
@@ -184,6 +304,22 @@ function SessionPickerItem({ session, active, onSelect }: SessionPickerItemProps
             session and would otherwise reflow the row width. */}
         <span className="text-[11px] tabular-nums text-muted-foreground">{meta}</span>
       </button>
+      <div className="absolute right-1 top-1 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6"
+          title={buttonTitle}
+          aria-label={buttonTitle}
+          disabled={archiveDisabled}
+          onClick={(event) => {
+            event.stopPropagation();
+            onArchiveToggle(targetStatus);
+          }}
+        >
+          {isArchived ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
+        </Button>
+      </div>
     </li>
   );
 }

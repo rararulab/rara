@@ -137,6 +137,76 @@ pub enum ThinkingLevel {
 }
 
 // ---------------------------------------------------------------------------
+// SessionStatus
+// ---------------------------------------------------------------------------
+
+/// User-controlled archive bit on a session row (issue #2043).
+///
+/// Two states only: a session is either visible in the default sidebar
+/// (`Active`) or hidden until the user opts in to "show archived"
+/// (`Archived`). This is **not** the kernel's run-state — that lives on
+/// [`SessionState`] and refers to the live agent loop. Conflating the
+/// two would surface in-flight churn as user-visible archive flicker.
+///
+/// Stored as `TEXT` in SQLite with a `CHECK` constraint pinning the
+/// value space; the default-on-read path treats unknown / missing
+/// values as [`SessionStatus::Active`] so a session predating the
+/// migration stays visible.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::EnumString,
+    strum::Display,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum SessionStatus {
+    /// Default state — visible in the sidebar.
+    Active,
+    /// User has hidden this session from the default sidebar view.
+    Archived,
+}
+
+/// Filter applied to [`SessionIndex::list_sessions`] (issue #2043).
+///
+/// Carried as a separate enum (rather than `Option<SessionStatus>`) so
+/// the "show me both" case has a name and the HTTP layer can map a
+/// `?status=all` query directly without the `Option<Option<...>>`
+/// gymnastics that the PATCH path uses for clear-vs-leave-alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionListFilter {
+    /// Return only sessions whose `status` is `Active`. This is the
+    /// default the HTTP handler applies on a missing `?status=` query
+    /// param so legacy clients (Telegram, web pre-deploy) stop seeing
+    /// archived rows the moment the column lands.
+    Active,
+    /// Return only sessions whose `status` is `Archived`.
+    Archived,
+    /// Return both `Active` and `Archived` rows, ordered by
+    /// `updated_at DESC` like the unfiltered case.
+    All,
+}
+
+impl SessionListFilter {
+    /// Whether this filter admits the given status — used by in-memory
+    /// implementations that scan a `Vec`/`HashMap` instead of running an
+    /// indexed query.
+    pub fn matches(self, status: SessionStatus) -> bool {
+        match self {
+            Self::All => true,
+            Self::Active => status == SessionStatus::Active,
+            Self::Archived => status == SessionStatus::Archived,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SessionEntry
 // ---------------------------------------------------------------------------
 
@@ -203,6 +273,13 @@ pub struct SessionEntry {
     /// cold-start "seek to last anchor" can avoid re-parsing the tape.
     #[serde(default)]
     pub anchors: Vec<AnchorRef>,
+    /// User-controlled archive bit (issue #2043). Defaults to
+    /// [`SessionStatus::Active`] for any payload that omits the field
+    /// (existing JSON tape exports, legacy DB rows, telemetry fixtures)
+    /// so a missing column does not silently flip a session into the
+    /// archived list.
+    #[serde(default = "session_status_default")]
+    pub status: SessionStatus,
     /// Arbitrary JSON metadata for client-specific extensions.
     pub metadata: Option<serde_json::Value>,
     /// When the session was first created.
@@ -213,6 +290,13 @@ pub struct SessionEntry {
     /// snapshot.
     pub updated_at: DateTime<Utc>,
 }
+
+/// Default for [`SessionEntry::status`] when the wire payload omits the
+/// field. Kept as a free function (rather than `impl Default for
+/// SessionStatus`) so the only path that produces a default value is the
+/// explicit serde back-compat case — call sites that construct a fresh
+/// `SessionEntry` must spell `SessionStatus::Active` out themselves.
+fn session_status_default() -> SessionStatus { SessionStatus::Active }
 
 /// One anchor entry stored in [`SessionEntry::anchors`].
 ///
@@ -318,10 +402,18 @@ pub trait SessionIndex: Send + Sync + 'static {
     async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError>;
 
     /// List sessions, ordered by `updated_at` descending.
+    ///
+    /// `filter` selects which `status` values are returned. The HTTP
+    /// layer maps a missing `?status=` query parameter to
+    /// [`SessionListFilter::Active`] so legacy clients stop seeing
+    /// archived rows the moment the column lands (issue #2043,
+    /// Decision 6); callers that genuinely want every row pass
+    /// [`SessionListFilter::All`] explicitly.
     async fn list_sessions(
         &self,
         limit: i64,
         offset: i64,
+        filter: SessionListFilter,
     ) -> Result<Vec<SessionEntry>, SessionError>;
 
     /// Update mutable session fields.
@@ -1422,6 +1514,7 @@ mod wire_compat_tests {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: vec![],
+            status: SessionStatus::Active,
             metadata: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

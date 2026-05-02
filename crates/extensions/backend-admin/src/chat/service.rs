@@ -36,7 +36,7 @@ use rara_kernel::{
     handle::KernelHandle,
     llm::{Message, Role},
     memory::{TapEntry, TapEntryKind, TapeSearchHit, TapeService},
-    session::SessionIndexRef,
+    session::{SessionIndexRef, SessionListFilter, SessionStatus},
     trace::{ExecutionTrace, TraceService},
 };
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
@@ -276,6 +276,11 @@ pub struct SessionPatch {
     pub thinking_level: Option<Option<ThinkingLevel>>,
     /// New system prompt override.
     pub system_prompt:  Option<Option<String>>,
+    /// New archive bit (issue #2043). Single-option (not double-option)
+    /// because `status` has no "clear" semantics — every session has a
+    /// concrete value, and the wire encoding sends `"active"` /
+    /// `"archived"` strings, never `null`.
+    pub status:         Option<SessionStatus>,
 }
 
 /// Apply a [`SessionPatch`] to a [`SessionEntry`] in place, returning
@@ -305,11 +310,25 @@ fn apply_session_patch(session: &mut SessionEntry, patch: &SessionPatch) -> bool
     // `|` (bitwise-or) instead of `||` is intentional: every field must
     // be evaluated so its write lands even when an earlier field already
     // flipped `changed` to true.
+    /// Single-option assigner for `status` — same semantics as
+    /// `assign` but without the outer "leave alone vs clear" branch
+    /// since the field has no `None` value on the stored side.
+    fn assign_status(slot: &mut SessionStatus, new: &Option<SessionStatus>) -> bool {
+        match new {
+            Some(v) if slot != v => {
+                *slot = *v;
+                true
+            }
+            _ => false,
+        }
+    }
+
     assign(&mut session.title, &patch.title)
         | assign(&mut session.model, &patch.model)
         | assign(&mut session.model_provider, &patch.model_provider)
         | assign(&mut session.thinking_level, &patch.thinking_level)
         | assign(&mut session.system_prompt, &patch.system_prompt)
+        | assign_status(&mut session.status, &patch.status)
 }
 
 /// One matched message surfaced by
@@ -504,6 +523,7 @@ impl SessionService {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata: None,
             created_at: now,
             updated_at: now,
@@ -513,16 +533,25 @@ impl SessionService {
         Ok(created)
     }
 
-    /// List sessions ordered by most recently updated, with pagination.
+    /// List sessions ordered by most recently updated, with pagination
+    /// and an optional `status` filter (issue #2043). When `filter` is
+    /// `None`, the service applies [`SessionListFilter::Active`] so the
+    /// default sidebar surface stops piling up archived rows; callers
+    /// that want every row pass [`SessionListFilter::All`] explicitly.
     #[instrument(skip(self))]
     pub async fn list_sessions(
         &self,
         limit: Option<i64>,
         offset: Option<i64>,
+        filter: Option<SessionListFilter>,
     ) -> Result<Vec<SessionEntry>, ChatError> {
         let sessions = self
             .session_index
-            .list_sessions(limit.unwrap_or(50), offset.unwrap_or(0))
+            .list_sessions(
+                limit.unwrap_or(50),
+                offset.unwrap_or(0),
+                filter.unwrap_or(SessionListFilter::Active),
+            )
             .await?;
         Ok(sessions)
     }
@@ -627,6 +656,7 @@ impl SessionService {
                     estimated_context_tokens: 0,
                     entries_since_last_anchor: 0,
                     anchors: Vec::new(),
+                    status: rara_kernel::session::SessionStatus::Active,
                     metadata: None,
                     created_at: now,
                     updated_at: now,
@@ -1230,6 +1260,7 @@ mod session_patch_tests {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata: None,
             created_at: now,
             updated_at: now,
@@ -1298,6 +1329,7 @@ mod session_patch_tests {
             model_provider: Some(None),
             thinking_level: Some(None),
             system_prompt:  Some(None),
+            status:         None,
         };
         let changed = apply_session_patch(&mut session, &patch);
         assert!(changed);
@@ -1317,6 +1349,7 @@ mod session_patch_tests {
             model_provider: Some(Some("openai".to_owned())),
             thinking_level: Some(Some(ThinkingLevel::High)),
             system_prompt:  Some(Some("new prompt".to_owned())),
+            status:         None,
         };
         let changed = apply_session_patch(&mut session, &patch);
         assert!(changed);
@@ -1540,6 +1573,7 @@ mod search_sessions_tests {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata: None,
             created_at: now,
             updated_at: now,

@@ -1468,7 +1468,7 @@ impl TapeService {
         // This is O(all_sessions) but anchor trees are rarely deep, so acceptable for
         // now.
         let all_sessions = sessions
-            .list_sessions(10_000, 0)
+            .list_sessions(10_000, 0, crate::session::SessionListFilter::All)
             .await
             .context(super::error::SessionSnafu)?;
 

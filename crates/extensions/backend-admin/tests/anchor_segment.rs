@@ -34,7 +34,7 @@ use rara_kernel::{
     memory::{FileTapeStore, HandoffState, TapeService},
     session::{
         ChannelBinding, SessionDerivedState, SessionError, SessionIndex, SessionKey,
-        test_utils::InMemorySessionIndex,
+        SessionListFilter, SessionStatus, test_utils::InMemorySessionIndex,
     },
     trace::TraceService,
 };
@@ -69,8 +69,9 @@ impl SessionIndex for DerivedSessionIndex {
         &self,
         limit: i64,
         offset: i64,
+        filter: SessionListFilter,
     ) -> Result<Vec<SessionEntry>, SessionError> {
-        self.inner.list_sessions(limit, offset).await
+        self.inner.list_sessions(limit, offset, filter).await
     }
 
     async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
@@ -218,6 +219,7 @@ async fn register_session(sessions: &InMemorySessionIndex, key: &SessionKey) {
         entries_since_last_anchor: 0,
         anchors: Vec::new(),
         metadata: None,
+        status: SessionStatus::Active,
         created_at: now,
         updated_at: now,
     };

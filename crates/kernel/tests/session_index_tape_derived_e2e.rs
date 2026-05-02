@@ -144,6 +144,7 @@ fn fresh_session_entry() -> SessionEntry {
         estimated_context_tokens: 0,
         entries_since_last_anchor: 0,
         anchors: Vec::new(),
+        status: rara_kernel::session::SessionStatus::Active,
         metadata: None,
         created_at: now,
         updated_at: now,
@@ -204,7 +205,7 @@ async fn list_sessions_reflects_tape_state() {
 
     let listed = h
         .index_ref
-        .list_sessions(50, 0)
+        .list_sessions(50, 0, rara_kernel::session::SessionListFilter::All)
         .await
         .expect("list sessions");
     let row = listed

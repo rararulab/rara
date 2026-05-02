@@ -20,5 +20,5 @@ pub mod snippet;
 
 pub use router::{
     BindChannelRequest, CreateSessionRequest, GetTraceQuery, ListMessagesQuery, ListSessionsQuery,
-    SearchSessionsQuery, SetFavoritesRequest, UpdateSessionRequest, routes,
+    SearchSessionsQuery, SetFavoritesRequest, UpdateSessionRequest, parse_status_filter, routes,
 };

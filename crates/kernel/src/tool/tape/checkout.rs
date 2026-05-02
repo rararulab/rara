@@ -101,6 +101,7 @@ impl ToolExecute for TapeCheckoutTool {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: crate::session::SessionStatus::Active,
             metadata,
             created_at: now,
             updated_at: now,

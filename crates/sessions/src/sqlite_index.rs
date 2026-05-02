@@ -36,7 +36,7 @@ use rara_kernel::{
     channel::types::ChannelType,
     session::{
         AnchorRef, ChannelBinding, FileIoSnafu, JsonSnafu, SessionDerivedState, SessionEntry,
-        SessionError, SessionIndex, SessionKey, ThinkingLevel,
+        SessionError, SessionIndex, SessionKey, SessionListFilter, SessionStatus, ThinkingLevel,
     },
 };
 use rara_model::schema::{session_channel_bindings, sessions};
@@ -140,7 +140,9 @@ impl SqliteSessionIndex {
     where
         F: ReconcileTape,
     {
-        let rows = self.list_sessions(i64::MAX, 0).await?;
+        let rows = self
+            .list_sessions(i64::MAX, 0, SessionListFilter::All)
+            .await?;
         let mut repaired = 0;
         for row in rows {
             let Some(report) = info_provider.read_tape(&row.key).await else {
@@ -246,15 +248,38 @@ impl SessionIndex for SqliteSessionIndex {
         &self,
         limit: i64,
         offset: i64,
+        filter: SessionListFilter,
     ) -> Result<Vec<SessionEntry>, SessionError> {
         let mut conn = self.pools.reader.get().await.map_err(map_pool_err)?;
-        let rows: Vec<SessionRow> = sessions::table
-            .order(sessions::updated_at.desc())
-            .limit(limit.max(0))
-            .offset(offset.max(0))
-            .load(&mut *conn)
-            .await
-            .map_err(map_diesel_err)?;
+        // Build the query with the status filter applied at the SQL
+        // layer so the partial index `idx_sessions_status_updated_at`
+        // can short-circuit the default-filtered scan (issue #2043,
+        // Decision 3).
+        let rows: Vec<SessionRow> = match filter {
+            SessionListFilter::All => sessions::table
+                .order(sessions::updated_at.desc())
+                .limit(limit.max(0))
+                .offset(offset.max(0))
+                .load(&mut *conn)
+                .await
+                .map_err(map_diesel_err)?,
+            SessionListFilter::Active => sessions::table
+                .filter(sessions::status.eq(SessionStatus::Active.to_string()))
+                .order(sessions::updated_at.desc())
+                .limit(limit.max(0))
+                .offset(offset.max(0))
+                .load(&mut *conn)
+                .await
+                .map_err(map_diesel_err)?,
+            SessionListFilter::Archived => sessions::table
+                .filter(sessions::status.eq(SessionStatus::Archived.to_string()))
+                .order(sessions::updated_at.desc())
+                .limit(limit.max(0))
+                .offset(offset.max(0))
+                .load(&mut *conn)
+                .await
+                .map_err(map_diesel_err)?,
+        };
         rows.into_iter().map(SessionRow::into_entry).collect()
     }
 
@@ -270,6 +295,7 @@ impl SessionIndex for SqliteSessionIndex {
                 sessions::system_prompt.eq(&row.system_prompt),
                 sessions::preview.eq(&row.preview),
                 sessions::metadata.eq(&row.metadata),
+                sessions::status.eq(&row.status),
                 sessions::updated_at.eq(&row.updated_at),
             ))
             .execute(&mut *conn)
@@ -493,6 +519,11 @@ struct SessionRow {
     metadata: Option<String>,
     created_at: String,
     updated_at: String,
+    /// Lower-cased `SessionStatus` (`"active"` / `"archived"`). Stored
+    /// as `TEXT` because SQLite enforces the value space via the
+    /// column-level `CHECK` constraint added in the
+    /// `2026-05-01-132410-0000_session_status` migration.
+    status: String,
 }
 
 impl SessionRow {
@@ -520,6 +551,7 @@ impl SessionRow {
             metadata,
             created_at: entry.created_at.to_rfc3339(),
             updated_at: entry.updated_at.to_rfc3339(),
+            status: entry.status.to_string(),
         })
     }
 
@@ -541,6 +573,14 @@ impl SessionRow {
             serde_json::from_str(&self.anchors_json).context(JsonSnafu)?;
         let created_at = parse_dt(&self.created_at)?;
         let updated_at = parse_dt(&self.updated_at)?;
+        // Default to `Active` for any value SQLite produced that the
+        // enum cannot parse — the column has a `CHECK` constraint, so
+        // the only realistic path here is a row migrated in before the
+        // constraint shipped (Decision 5).
+        let status = self
+            .status
+            .parse::<SessionStatus>()
+            .unwrap_or(SessionStatus::Active);
         Ok(SessionEntry {
             key,
             title: self.title,
@@ -554,6 +594,7 @@ impl SessionRow {
             estimated_context_tokens: self.estimated_context_tokens,
             entries_since_last_anchor: self.entries_since_last_anchor,
             anchors,
+            status,
             metadata,
             created_at,
             updated_at,
