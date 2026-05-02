@@ -27,9 +27,13 @@ single route under `DashboardLayout`.
 - Pages are layout consumers. They MUST NOT render their own top-bar or
   global nav rail; that work belongs to `DashboardLayout` and
   `@/components/shell/NavRail`. The page title is surfaced to the slim
-  top bar via the route's `handle: { title, showLiveIndicator? }`
-  metadata read by `DashboardLayout` through `useMatches()` (#2059); a
-  page that owns a long-lived subscription publishes its live state via
+  top bar via the `ROUTE_HANDLES` pathname → `{ title,
+showLiveIndicator? }` lookup table in `DashboardLayout.tsx` (#2059) —
+  add a new entry there when you mount a new top-level route. The table
+  is used in place of `<Route handle>` + `useMatches()` because
+  `App.tsx` still mounts a plain `BrowserRouter`, and `useMatches()`
+  only works under the data router (`createBrowserRouter`). A page that
+  owns a long-lived subscription publishes its live state via
   `usePublishPageStatus` (see `@/components/shell/PageStatusContext`)
   instead of opening a second WebSocket from the layout. Per-page
   internal columns (e.g. `Chat.tsx`'s sessions sidebar) are still the

@@ -23,15 +23,7 @@ import { Button } from '@/components/ui/button';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { cn } from '@/lib/utils';
 
-/**
- * localStorage key for the rail's collapsed preference.
- *
- * Intentionally distinct from `rara.topology.sidebarCollapsed` — that key
- * governs the per-page sessions sidebar inside `Chat.tsx` and is a
- * user-data contract; the rail is a separate global concern. Mixing them
- * would silently force the rail and the sessions column into the same
- * collapse state on first load after upgrade.
- */
+/** localStorage key for the rail's collapsed preference; distinct from `rara.topology.sidebarCollapsed` (per-page sessions sidebar). */
 const RAIL_COLLAPSED_STORAGE_KEY = 'rara.shell.navRailCollapsed';
 
 const RAIL_WIDTH_EXPANDED = 208;

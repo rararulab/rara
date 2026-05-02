@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 /**
  * Coarse live-indicator state surfaced by a page to the slim top bar.
@@ -58,18 +58,13 @@ export function usePageStatus(): PageLiveStatus | null {
  */
 export function usePublishPageStatus(status: PageLiveStatus | null): void {
   const { setStatus } = useContext(PageStatusContext);
-  // Stable setter via useCallback so the effect below only fires when the
-  // status itself changes, not on every parent render.
-  const publish = useCallback(
-    (next: PageLiveStatus | null) => {
-      setStatus(next);
-    },
-    [setStatus],
-  );
+  // `setStatus` is React's `useState` setter — already referentially
+  // stable across renders — so the effect re-runs only when `status`
+  // actually changes.
   useEffect(() => {
-    publish(status);
+    setStatus(status);
     return () => {
-      publish(null);
+      setStatus(null);
     };
-  }, [publish, status]);
+  }, [setStatus, status]);
 }

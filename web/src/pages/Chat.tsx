@@ -15,7 +15,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { ArrowLeft, PanelLeft } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -194,28 +194,19 @@ export default function Chat() {
               transition={SPRING}
               className="hidden shrink-0 overflow-hidden border-r border-border md:block"
             >
-              <div className="relative h-full w-[280px]">
+              <div className="h-full w-[280px]">
                 {/*
-                 * Per-page sessions-column collapse affordance. Floats
-                 * over the picker's own header (no extra row of chrome
-                 * stacked on top). The toggle used to live in the
-                 * page-level chrome before #2059 moved app chrome into
-                 * the global rail.
+                 * The sessions-column collapse affordance lives inside
+                 * the picker's action row (`onCollapse`) so it shares
+                 * geometry with the picker's other actions. A floating
+                 * overlay button used to overlap the `+` button — see
+                 * the #2059 follow-up review.
                  */}
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="absolute right-1.5 top-1.5 z-10 h-7 w-7 text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]"
-                  aria-label="Hide sessions"
-                  title="Hide sessions"
-                  onClick={() => setSidebarCollapsed(true)}
-                >
-                  <PanelLeftClose className="h-4 w-4" />
-                </Button>
                 <SessionPicker
                   activeSessionKey={rootSessionKey ?? null}
                   onSelect={selectSession}
                   onAutoSelect={selectSession}
+                  onCollapse={() => setSidebarCollapsed(true)}
                 />
               </div>
             </motion.aside>

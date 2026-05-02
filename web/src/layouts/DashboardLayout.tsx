@@ -46,11 +46,16 @@ const SETTINGS_KEYS = {
 } as const;
 
 /**
- * Per-route metadata consumed by the slim top bar. Keyed by pathname
- * pattern; the longest-matching prefix wins. Kept as a lookup table
- * rather than `<Route handle>` because the app still uses the legacy
- * `BrowserRouter` (not the data router required by `useMatches()`),
- * and a one-table indirection is smaller than the migration.
+ * Per-route metadata consumed by the slim top bar. Iterated in
+ * declaration order; the first matching predicate wins, so list more
+ * specific patterns before broader ones.
+ *
+ * Kept as a lookup table rather than `<Route handle>` + `useMatches()`
+ * because the app still mounts a plain `BrowserRouter` from
+ * `react-router` (see `App.tsx`). `useMatches()` is a data-router
+ * primitive — calling it under `BrowserRouter` throws — and a small
+ * pathname → handle table is smaller than migrating the whole router
+ * topology to `createBrowserRouter` for a top-bar title.
  */
 interface RouteHandle {
   title: string;
@@ -58,13 +63,21 @@ interface RouteHandle {
 }
 
 const ROUTE_HANDLES: ReadonlyArray<{ test: (path: string) => boolean; handle: RouteHandle }> = [
-  // Order matters: first match wins. `/chat` covers `/chat`, `/chat/:key`,
-  // and the index route (`/`) which renders `<Chat />`.
+  // First match wins; declaration order matters. The list MUST cover
+  // every layout-mounted route in `App.tsx` — there is no fallback
+  // entry, so a missed route renders an empty top-bar title. Keep this
+  // list aligned with the `<Route>` children of `<DashboardLayout />`.
+  //
+  // `/chat` covers `/chat`, `/chat/:rootSessionKey`, and the index
+  // route (`/`) which also renders `<Chat />`.
   {
     test: (p) => p === '/' || p === '/chat' || p.startsWith('/chat/'),
     handle: { title: 'Chat', showLiveIndicator: true },
   },
   { test: (p) => p === '/docs' || p.startsWith('/docs/'), handle: { title: 'Documentation' } },
+  // `/topology` and `/topology/:key` are pure redirects to `/chat` (see
+  // `App.tsx`); they never render under this layout, so they
+  // deliberately have no entry here.
 ];
 
 function resolveHandle(pathname: string): RouteHandle | null {
