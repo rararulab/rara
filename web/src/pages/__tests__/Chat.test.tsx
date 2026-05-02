@@ -73,8 +73,22 @@ import Chat from '../Chat';
 // thin markers so the assertions can target the picker's presence in
 // the DOM without spinning up react-query, the WS, or the editor.
 
+// The real `SessionPicker` exposes its sidebar-collapse affordance via the
+// `onCollapse` prop (issue-2059 moved the collapse button into the picker's
+// action row). The stub forwards that callback as a button so the layout
+// tests below can simulate the user collapsing the sidebar without
+// pulling in the picker's full DOM.
 vi.mock('@/components/topology/SessionPicker', () => ({
-  SessionPicker: () => <div data-testid="session-picker">picker</div>,
+  SessionPicker: ({ onCollapse }: { onCollapse?: () => void }) => (
+    <div data-testid="session-picker">
+      picker
+      {onCollapse && (
+        <button type="button" aria-label="Hide sidebar" onClick={onCollapse}>
+          Hide sidebar
+        </button>
+      )}
+    </div>
+  ),
 }));
 
 vi.mock('@/components/topology/TimelineView', () => ({
@@ -151,7 +165,7 @@ describe('Chat — collapsible sidebar (issue-2022)', () => {
     // animation a tick to complete before asserting absence.
     await waitForElementToBeRemoved(() => screen.queryByTestId('session-picker'));
     // Toggle button now reflects the collapsed state.
-    expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show sessions' })).toBeInTheDocument();
   });
 
   it('toggle_restores_session_picker', () => {
@@ -161,7 +175,7 @@ describe('Chat — collapsible sidebar (issue-2022)', () => {
 
     expect(screen.queryByTestId('session-picker')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show sidebar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show sessions' }));
 
     expect(screen.getByTestId('session-picker')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeInTheDocument();
@@ -181,7 +195,7 @@ describe('Chat — collapsible sidebar (issue-2022)', () => {
     render(<Chat />);
 
     expect(screen.queryByTestId('session-picker')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show sessions' })).toBeInTheDocument();
   });
 
   it('default_state_is_expanded', () => {

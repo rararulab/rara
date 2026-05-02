@@ -15,7 +15,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, EyeOff, Plus, RefreshCw } from 'lucide-react';
+import { Archive, ArchiveRestore, EyeOff, PanelLeftClose, Plus, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '@/api/client';
@@ -77,6 +77,13 @@ export interface SessionPickerProps {
    * uses this to auto-redirect `/topology` → `/topology/{key}`.
    */
   onAutoSelect?: (key: string) => void;
+  /**
+   * Optional collapse handler. When provided, the action row renders an
+   * extra icon button that hides the entire sessions sidebar. Lives in
+   * the picker (not the page) so it shares the action row's geometry —
+   * a floating overlay button used to overlap the `+` action button.
+   */
+  onCollapse?: () => void;
 }
 
 /**
@@ -90,7 +97,12 @@ export interface SessionPickerProps {
  * archive / unarchive button (disabled on the active session so the
  * post-archive "what now?" question never surfaces).
  */
-export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: SessionPickerProps) {
+export function SessionPicker({
+  activeSessionKey,
+  onSelect,
+  onAutoSelect,
+  onCollapse,
+}: SessionPickerProps) {
   const queryClient = useQueryClient();
   const [showArchived, setShowArchived] = useState<boolean>(readShowArchived);
 
@@ -200,6 +212,18 @@ export function SessionPicker({ activeSessionKey, onSelect, onAutoSelect }: Sess
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
+          {onCollapse && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6 transition-transform active:scale-[0.96]"
+              title="Hide sessions"
+              aria-label="Hide sessions"
+              onClick={onCollapse}
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 
