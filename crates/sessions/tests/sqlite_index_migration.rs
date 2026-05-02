@@ -45,10 +45,14 @@ const SESSIONS_DDL: &[&str] = &[
         entries_since_last_anchor    INTEGER NOT NULL DEFAULT 0,
         anchors_json                 TEXT NOT NULL DEFAULT '[]',
         metadata                     TEXT,
+        status                       TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'archived')),
         created_at                   TEXT NOT NULL,
         updated_at                   TEXT NOT NULL
     ) WITHOUT ROWID",
     "CREATE INDEX idx_sessions_updated_at ON sessions (updated_at DESC)",
+    "CREATE INDEX idx_sessions_status_updated_at
+        ON sessions (status, updated_at DESC)",
     "CREATE TABLE session_channel_bindings (
         channel_type TEXT NOT NULL,
         chat_id      TEXT NOT NULL,
@@ -104,6 +108,7 @@ fn sample_entry(title: &str) -> SessionEntry {
         estimated_context_tokens: 0,
         entries_since_last_anchor: 0,
         anchors: Vec::new(),
+        status: rara_kernel::session::SessionStatus::Active,
         metadata: None,
         created_at: now,
         updated_at: now,
@@ -148,7 +153,7 @@ async fn boot_migration_is_idempotent() {
     assert_eq!(migrated, 2, "two sessions migrated");
 
     let listed = sqlite_idx
-        .list_sessions(100, 0)
+        .list_sessions(100, 0, rara_kernel::session::SessionListFilter::All)
         .await
         .expect("list after migration");
     assert_eq!(listed.len(), 2);
@@ -181,7 +186,10 @@ async fn boot_migration_is_idempotent() {
         .await
         .expect("idempotent migrate");
     assert_eq!(migrated_again, 0, "second pass is a no-op");
-    let listed_again = sqlite_idx.list_sessions(100, 0).await.expect("re-list");
+    let listed_again = sqlite_idx
+        .list_sessions(100, 0, rara_kernel::session::SessionListFilter::All)
+        .await
+        .expect("re-list");
     assert_eq!(listed_again.len(), 2, "no duplicate rows");
 }
 

@@ -16,7 +16,7 @@
 
 import { api } from './client';
 import type { CascadeTrace, ExecutionTrace } from './kernel-types';
-import type { ChatMessageData } from './types';
+import type { ChatMessageData, ChatSession, SessionStatus } from './types';
 
 /**
  * One hit returned by `GET /api/v1/chat/sessions/search`.
@@ -58,6 +58,29 @@ export async function searchSessions(
     options?.signal ? { signal: options.signal } : undefined,
   );
   return res.hits;
+}
+
+/**
+ * Update the per-session archive bit via
+ * `PATCH /api/v1/chat/sessions/{key}` (issue #2043).
+ *
+ * Sends a single-field PATCH body — the backend's double-option
+ * deserialiser preserves "leave alone" for every other field. The
+ * caller is expected to refresh the session list after the call
+ * resolves; this helper does not touch react-query cache state on its
+ * own to keep it usable from non-React paths.
+ */
+export async function updateSessionStatus(
+  sessionKey: string,
+  status: SessionStatus,
+  options?: { signal?: AbortSignal },
+): Promise<ChatSession> {
+  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}`;
+  return api.patch<ChatSession>(
+    path,
+    { status },
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 /**

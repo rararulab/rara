@@ -26,7 +26,7 @@ use rara_kernel::{
     channel::types::ChannelType,
     session::{
         ChannelBinding, FileIoSnafu, JsonSnafu, SessionEntry, SessionError, SessionIndex,
-        SessionKey,
+        SessionKey, SessionListFilter,
     },
 };
 use snafu::ResultExt;
@@ -140,6 +140,7 @@ impl SessionIndex for FileSessionIndex {
         &self,
         limit: i64,
         offset: i64,
+        filter: SessionListFilter,
     ) -> Result<Vec<SessionEntry>, SessionError> {
         let mut entries = Vec::new();
         let mut dir = fs::read_dir(&self.index_dir).await.context(FileIoSnafu)?;
@@ -155,7 +156,9 @@ impl SessionIndex for FileSessionIndex {
             }
 
             if let Some(session) = self.read_json::<SessionEntry>(&path).await? {
-                entries.push(session);
+                if filter.matches(session.status) {
+                    entries.push(session);
+                }
             }
         }
 

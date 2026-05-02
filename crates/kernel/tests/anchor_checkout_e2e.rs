@@ -14,7 +14,9 @@ use rara_kernel::{
         AnchorTree, FileTapeStore, HandoffState, TapEntryKind, TapeService, get_fork_metadata,
         set_fork_metadata,
     },
-    session::{ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey},
+    session::{
+        ChannelBinding, SessionEntry, SessionError, SessionIndex, SessionKey, SessionListFilter,
+    },
 };
 use serde_json::json;
 
@@ -46,9 +48,14 @@ impl SessionIndex for TestSessionIndex {
         &self,
         limit: i64,
         _offset: i64,
+        filter: SessionListFilter,
     ) -> Result<Vec<SessionEntry>, SessionError> {
-        let mut entries: Vec<SessionEntry> =
-            self.sessions.iter().map(|r| r.value().clone()).collect();
+        let mut entries: Vec<SessionEntry> = self
+            .sessions
+            .iter()
+            .map(|r| r.value().clone())
+            .filter(|e| filter.matches(e.status))
+            .collect();
         entries.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
         entries.truncate(limit as usize);
         Ok(entries)
@@ -122,6 +129,7 @@ async fn create_session(
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata,
             created_at: now,
             updated_at: now,

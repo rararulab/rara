@@ -42,6 +42,7 @@ use axum::{
 use rara_kernel::{
     cascade::CascadeTrace,
     channel::types::{ChannelType, ChatMessage},
+    session::{SessionListFilter, SessionStatus},
     trace::ExecutionTrace,
 };
 use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey, ThinkingLevel};
@@ -163,12 +164,75 @@ pub struct CreateSessionRequest {
 }
 
 /// Query parameters for `GET /sessions`.
+///
+/// `status` carries the raw string from the URL so the handler can map
+/// an unknown value to a 400 with the allowed list (issue #2043,
+/// scenario `list_sessions_rejects_unknown_status`) — using a
+/// `SessionListFilter` here directly would lean on serde's default
+/// deserialization error, which loses the human-readable allow-list
+/// when surfaced as `?status=banana` → `Failed to deserialize query
+/// string`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ListSessionsQuery {
     /// Maximum number of sessions to return (default: 50).
     pub limit:  Option<i64>,
     /// Number of sessions to skip (default: 0).
     pub offset: Option<i64>,
+    /// Optional archive-status filter — one of `active`, `archived`,
+    /// `all`. Missing → server applies `active` (issue #2043,
+    /// Decision 6).
+    pub status: Option<String>,
+}
+
+/// Allowed values for `status` on `PATCH /sessions/{key}` — strict
+/// subset of the list-filter values (`all` is meaningless on a single
+/// row).
+const STATUS_PATCH_VALUES: &[&str] = &["active", "archived"];
+
+/// Parse the `status` field on a PATCH body. `None` (absent) means
+/// "leave the stored value alone"; `Some("active")` / `Some("archived")`
+/// map to the matching enum variant; anything else is a 400 with the
+/// allowed list. There is no `null` (clear) shape because every
+/// session has a concrete status.
+fn parse_patch_status(raw: Option<&str>) -> Result<Option<SessionStatus>, ChatError> {
+    match raw {
+        None => Ok(None),
+        Some("active") => Ok(Some(SessionStatus::Active)),
+        Some("archived") => Ok(Some(SessionStatus::Archived)),
+        Some(other) => Err(ChatError::InvalidRequest {
+            message: format!(
+                "invalid status: {other} (expected one of: {})",
+                STATUS_PATCH_VALUES.join(", "),
+            ),
+        }),
+    }
+}
+
+/// Allowed values for `?status=` on `GET /sessions`. Kept next to the
+/// parser so a third state added later only touches one place.
+const STATUS_FILTER_VALUES: &[&str] = &["active", "archived", "all"];
+
+/// Parse the raw `?status=` query parameter into a
+/// [`SessionListFilter`], or surface a 400 with the allowed list when
+/// the value is unknown. `None` (missing) is the caller's signal to
+/// apply the service-side default.
+///
+/// Exposed `pub` so the rara-app integration test
+/// `list_sessions_rejects_unknown_status` can drive the same parser
+/// the HTTP handler uses without spinning up the full service.
+pub fn parse_status_filter(raw: Option<&str>) -> Result<Option<SessionListFilter>, ChatError> {
+    match raw {
+        None => Ok(None),
+        Some("active") => Ok(Some(SessionListFilter::Active)),
+        Some("archived") => Ok(Some(SessionListFilter::Archived)),
+        Some("all") => Ok(Some(SessionListFilter::All)),
+        Some(other) => Err(ChatError::InvalidRequest {
+            message: format!(
+                "invalid status: {other} (expected one of: {})",
+                STATUS_FILTER_VALUES.join(", "),
+            ),
+        }),
+    }
 }
 
 /// Request body for `PATCH /sessions/{key}`.
@@ -217,6 +281,12 @@ pub struct UpdateSessionRequest {
     #[serde(default, deserialize_with = "deserialize_double_option")]
     #[schema(value_type = Option<String>, nullable)]
     pub system_prompt:  Option<Option<String>>,
+    /// New archive bit (issue #2043) — `"active"` or `"archived"`.
+    /// Absent leaves the stored value alone; unlike the other PATCH
+    /// fields there is no `null` (clear) variant because every session
+    /// has a concrete status.
+    #[serde(default)]
+    pub status:         Option<String>,
 }
 
 /// Request body for `PUT /models/favorites`.
@@ -405,6 +475,7 @@ async fn create_session(
     params(
         ("limit" = Option<i64>, Query, description = "Maximum number of sessions to return"),
         ("offset" = Option<i64>, Query, description = "Number of sessions to skip"),
+        ("status" = Option<String>, Query, description = "Archive-status filter: active (default), archived, or all"),
     ),
     responses(
         (status = 200, description = "List of sessions", body = Vec<Object>),
@@ -415,7 +486,8 @@ async fn list_sessions(
     State(service): State<SessionService>,
     Query(q): Query<ListSessionsQuery>,
 ) -> Result<Json<Vec<SessionEntry>>, ChatError> {
-    let sessions = service.list_sessions(q.limit, q.offset).await?;
+    let filter = parse_status_filter(q.status.as_deref())?;
+    let sessions = service.list_sessions(q.limit, q.offset, filter).await?;
     Ok(Json(sessions))
 }
 
@@ -490,6 +562,7 @@ async fn update_session(
         model_provider: req.model_provider,
         thinking_level: parse_patch_thinking_level(req.thinking_level)?,
         system_prompt:  req.system_prompt,
+        status:         parse_patch_status(req.status.as_deref())?,
     };
     let session = service
         .update_session_fields(&parse_session_key(&key)?, patch)

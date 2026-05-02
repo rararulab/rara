@@ -121,6 +121,11 @@ export interface SessionAnchor {
   entry_count_in_segment: number;
 }
 
+/** Per-session archive bit (issue #2043). The default sidebar surface
+ *  hides `archived` rows behind a toggle so live conversations rise to
+ *  the top of the picker. */
+export type SessionStatus = 'active' | 'archived';
+
 export interface ChatSession {
   key: string;
   title: string | null;
@@ -134,6 +139,11 @@ export interface ChatSession {
    *  the session has not yet emitted any. Optional on the wire so older
    *  backends still parse — see `#[serde(default)]` on the Rust side. */
   anchors?: SessionAnchor[];
+  /** Archive bit (issue #2043). New sessions default to `active`; the
+   *  user flips to `archived` via the per-row archive button. Optional
+   *  on the wire so older payloads (predating PR #2043) keep parsing —
+   *  the picker treats a missing value as `active`. */
+  status?: SessionStatus;
   metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;

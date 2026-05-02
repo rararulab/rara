@@ -194,6 +194,7 @@ diesel::table! {
         metadata -> Nullable<Text>,
         created_at -> Text,
         updated_at -> Text,
+        status -> Text,
     }
 }
 

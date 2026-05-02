@@ -683,6 +683,7 @@ async fn apply_model_override(
                 estimated_context_tokens: 0,
                 entries_since_last_anchor: 0,
                 anchors: Vec::new(),
+                status: rara_kernel::session::SessionStatus::Active,
                 metadata: None,
                 created_at: now,
                 updated_at: now,

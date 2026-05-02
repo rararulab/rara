@@ -572,6 +572,7 @@ async fn handle_new_session(state: &mut ChatState, kernel_handle: &KernelHandle)
         estimated_context_tokens: 0,
         entries_since_last_anchor: 0,
         anchors: Vec::new(),
+        status: rara_kernel::session::SessionStatus::Active,
         metadata: None,
         created_at: now,
         updated_at: now,
@@ -618,7 +619,10 @@ async fn handle_list_sessions(
     kernel_handle: &KernelHandle,
 ) {
     let session_index = kernel_handle.session_index();
-    let sessions = match session_index.list_sessions(10, 0).await {
+    let sessions = match session_index
+        .list_sessions(10, 0, rara_kernel::session::SessionListFilter::All)
+        .await
+    {
         Ok(list) => list,
         Err(e) => {
             state.push_message(Role::System, format!("Failed to list sessions: {e}"));
@@ -682,7 +686,10 @@ async fn handle_switch_session(
     let session_index = kernel_handle.session_index();
 
     // Try to find a session whose key starts with the given prefix.
-    let sessions = match session_index.list_sessions(100, 0).await {
+    let sessions = match session_index
+        .list_sessions(100, 0, rara_kernel::session::SessionListFilter::All)
+        .await
+    {
         Ok(list) => list,
         Err(e) => {
             state.push_message(Role::System, format!("Failed to list sessions: {e}"));
@@ -897,6 +904,7 @@ async fn get_or_create_cli_session(
         estimated_context_tokens: 0,
         entries_since_last_anchor: 0,
         anchors: Vec::new(),
+        status: rara_kernel::session::SessionStatus::Active,
         metadata: None,
         created_at: now,
         updated_at: now,
@@ -1304,7 +1312,10 @@ mod tests {
             .expect("first session");
 
         // list_sessions should return at least one.
-        let sessions = session_index.list_sessions(10, 0).await.expect("list");
+        let sessions = session_index
+            .list_sessions(10, 0, rara_kernel::session::SessionListFilter::All)
+            .await
+            .expect("list");
         assert!(!sessions.is_empty());
     }
 
@@ -1320,7 +1331,10 @@ mod tests {
             .await
             .expect("first session");
 
-        let sessions = session_index.list_sessions(10, 0).await.expect("list");
+        let sessions = session_index
+            .list_sessions(10, 0, rara_kernel::session::SessionListFilter::All)
+            .await
+            .expect("list");
         assert_eq!(sessions.len(), 1);
     }
 

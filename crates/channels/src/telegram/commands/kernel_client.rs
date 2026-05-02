@@ -183,6 +183,7 @@ impl BotServiceClient for KernelBotServiceClient {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata: None,
             created_at: now,
             updated_at: now,
@@ -208,7 +209,11 @@ impl BotServiceClient for KernelBotServiceClient {
 
     async fn list_sessions(&self, limit: u32) -> Result<Vec<SessionListItem>, BotServiceError> {
         self.sessions
-            .list_sessions(limit as i64, 0)
+            .list_sessions(
+                limit as i64,
+                0,
+                rara_kernel::session::SessionListFilter::Active,
+            )
             .await
             .map(|v| v.iter().map(entry_to_list_item).collect())
             .context(SessionSnafu)
@@ -321,6 +326,7 @@ impl BotServiceClient for KernelBotServiceClient {
             estimated_context_tokens: 0,
             entries_since_last_anchor: 0,
             anchors: Vec::new(),
+            status: rara_kernel::session::SessionStatus::Active,
             metadata,
             created_at: now,
             updated_at: now,
@@ -649,9 +655,14 @@ mod tests {
             &self,
             limit: i64,
             offset: i64,
+            filter: rara_kernel::session::SessionListFilter,
         ) -> Result<Vec<SessionEntry>, SessionError> {
-            let mut sessions: Vec<SessionEntry> =
-                self.sessions.iter().map(|entry| entry.clone()).collect();
+            let mut sessions: Vec<SessionEntry> = self
+                .sessions
+                .iter()
+                .map(|entry| entry.clone())
+                .filter(|entry| filter.matches(entry.status))
+                .collect();
             sessions.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
             let start = offset.max(0) as usize;
             let take = limit.max(0) as usize;
@@ -733,6 +744,7 @@ mod tests {
                 estimated_context_tokens: 0,
                 entries_since_last_anchor: 0,
                 anchors: Vec::new(),
+                status: rara_kernel::session::SessionStatus::Active,
                 metadata: None,
                 created_at: now,
                 updated_at: now,
