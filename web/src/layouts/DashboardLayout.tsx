@@ -15,16 +15,18 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { MessageSquare, Settings } from 'lucide-react';
-import { useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router';
+import { useMemo, useState } from 'react';
+import { Outlet, useLocation } from 'react-router';
 
 import { settingsApi } from '@/api/client';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
-import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import NavRail from '@/components/shell/NavRail';
+import {
+  PageStatusProvider,
+  usePageStatus,
+  type PageLiveStatus,
+} from '@/components/shell/PageStatusContext';
 import ThemeToggle from '@/components/ThemeToggle';
-import { Button } from '@/components/ui/button';
-import { useServerStatus } from '@/hooks/use-server-status';
 import { cn } from '@/lib/utils';
 
 /** Routes that need zero padding in the main content area. */
@@ -42,6 +44,35 @@ const SETTINGS_KEYS = {
   ollamaBaseUrl: 'llm.providers.ollama.base_url',
   codexEnabled: 'llm.providers.codex.enabled',
 } as const;
+
+/**
+ * Per-route metadata consumed by the slim top bar. Keyed by pathname
+ * pattern; the longest-matching prefix wins. Kept as a lookup table
+ * rather than `<Route handle>` because the app still uses the legacy
+ * `BrowserRouter` (not the data router required by `useMatches()`),
+ * and a one-table indirection is smaller than the migration.
+ */
+interface RouteHandle {
+  title: string;
+  showLiveIndicator?: boolean;
+}
+
+const ROUTE_HANDLES: ReadonlyArray<{ test: (path: string) => boolean; handle: RouteHandle }> = [
+  // Order matters: first match wins. `/chat` covers `/chat`, `/chat/:key`,
+  // and the index route (`/`) which renders `<Chat />`.
+  {
+    test: (p) => p === '/' || p === '/chat' || p.startsWith('/chat/'),
+    handle: { title: 'Chat', showLiveIndicator: true },
+  },
+  { test: (p) => p === '/docs' || p.startsWith('/docs/'), handle: { title: 'Documentation' } },
+];
+
+function resolveHandle(pathname: string): RouteHandle | null {
+  for (const entry of ROUTE_HANDLES) {
+    if (entry.test(pathname)) return entry.handle;
+  }
+  return null;
+}
 
 function hasConfiguredLlmProvider(settings: Record<string, string> | undefined): boolean {
   if (!settings) {
@@ -72,22 +103,68 @@ function hasConfiguredLlmProvider(settings: Record<string, string> | undefined):
   }
 }
 
-/** Small dot + label showing live backend connectivity. */
-function ConnectionStatus() {
-  const { isOnline, isChecking } = useServerStatus();
-  if (isChecking) return null;
+/**
+ * Tiny live-state pill rendered next to the page title in the top bar
+ * when the current route opts in via `handle.showLiveIndicator`. Reads
+ * the page-published status (see `PageStatusContext`) — never opens its
+ * own subscription, because the page already owns one.
+ */
+function LiveIndicator({ status }: { status: PageLiveStatus | null }) {
+  if (!status) return null;
+
+  const variants: Record<PageLiveStatus, { dot: string; text: string; label: string }> = {
+    idle: { dot: 'bg-muted-foreground/50', text: 'text-muted-foreground', label: 'idle' },
+    connecting: {
+      dot: 'bg-amber-500 animate-pulse',
+      text: 'text-amber-600 dark:text-amber-400',
+      label: 'connecting',
+    },
+    live: {
+      dot: 'bg-emerald-500',
+      text: 'text-emerald-600 dark:text-emerald-400',
+      label: 'live',
+    },
+    reconnecting: {
+      dot: 'bg-amber-500 animate-pulse',
+      text: 'text-amber-600 dark:text-amber-400',
+      label: 'reconnecting',
+    },
+    closed: { dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400', label: 'closed' },
+  };
+  const v = variants[status];
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <div className={cn('h-2 w-2 rounded-full', isOnline ? 'bg-green-500' : 'bg-red-500')} />
-      <span>{isOnline ? 'Connected' : 'Disconnected'}</span>
+    <span className={cn('inline-flex items-center gap-1.5 text-[11px]', v.text)}>
+      <span className={cn('h-1.5 w-1.5 rounded-full', v.dot)} />
+      {v.label}
+    </span>
+  );
+}
+
+/** Slim top bar — page title (left) + theme toggle (right). */
+function TopBar() {
+  const { pathname } = useLocation();
+  const status = usePageStatus();
+  const handle = useMemo(() => resolveHandle(pathname), [pathname]);
+
+  return (
+    <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-background/30 px-4 backdrop-blur-sm">
+      <div className="flex min-w-0 items-center gap-2">
+        {handle?.title && (
+          <h1 className="truncate text-sm font-medium text-foreground [text-wrap:balance]">
+            {handle.title}
+          </h1>
+        )}
+        {handle?.showLiveIndicator && <LiveIndicator status={status} />}
+      </div>
+      <div className="flex items-center">
+        <ThemeToggle />
+      </div>
     </div>
   );
 }
 
 export default function DashboardLayout() {
   const location = useLocation();
-  const navigate = useNavigate();
-  const { openSettings } = useSettingsModal();
   const isFullBleed =
     FULL_BLEED_ROUTES.has(location.pathname) ||
     FULL_BLEED_PREFIXES.some((p) => location.pathname.startsWith(p));
@@ -107,50 +184,31 @@ export default function DashboardLayout() {
   };
 
   return (
-    <div className="rara-admin flex h-screen bg-transparent">
-      {shouldShowOnboarding && (
-        <OnboardingModal
-          open={onboardingOpen}
-          onDismiss={handleOnboardingDismiss}
-          showLlmProviderPrompt={!hasConfiguredLlmProvider(settingsQuery.data)}
-        />
-      )}
-
-      <main
-        className={cn(
-          'relative flex min-w-0 flex-1 flex-col',
-          isFullBleed ? 'overflow-hidden' : 'overflow-auto',
+    <PageStatusProvider>
+      <div className="rara-admin flex h-screen bg-transparent">
+        {shouldShowOnboarding && (
+          <OnboardingModal
+            open={onboardingOpen}
+            onDismiss={handleOnboardingDismiss}
+            showLlmProviderPrompt={!hasConfiguredLlmProvider(settingsQuery.data)}
+          />
         )}
-      >
-        {/* Top bar */}
-        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
-          <ConnectionStatus />
-          <div className="mx-1 h-4 w-px bg-border/60" />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]"
-            onClick={() => navigate('/chat')}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            Chat
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]"
-            onClick={() => openSettings()}
-          >
-            <Settings className="h-3.5 w-3.5" />
-            Settings
-          </Button>
-          <ThemeToggle />
-        </div>
 
-        <div className={cn('flex-1 min-h-0', isFullBleed ? 'p-2 md:p-3' : 'p-4 md:p-6')}>
-          <Outlet />
-        </div>
-      </main>
-    </div>
+        <NavRail />
+
+        <main
+          className={cn(
+            'relative flex min-w-0 flex-1 flex-col',
+            isFullBleed ? 'overflow-hidden' : 'overflow-auto',
+          )}
+        >
+          <TopBar />
+
+          <div className={cn('flex-1 min-h-0', isFullBleed ? 'p-2 md:p-3' : 'p-4 md:p-6')}>
+            <Outlet />
+          </div>
+        </main>
+      </div>
+    </PageStatusProvider>
   );
 }

@@ -15,19 +15,19 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Network, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { ArrowLeft, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { api } from '@/api/client';
 import { fetchSessionMessagesBetweenAnchors } from '@/api/sessions';
 import type { ChatMessageData, ChatSession, SessionAnchor } from '@/api/types';
+import { usePublishPageStatus, type PageLiveStatus } from '@/components/shell/PageStatusContext';
 import { SessionAnchorMinimap } from '@/components/topology/SessionAnchorMinimap';
 import { SessionPicker } from '@/components/topology/SessionPicker';
 import { TimelineView } from '@/components/topology/TimelineView';
 import { WorkerInbox } from '@/components/topology/WorkerInbox';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useTopologySubscription, type TopologyStatus } from '@/hooks/use-topology-subscription';
 
@@ -103,6 +103,16 @@ export default function Chat() {
 
   const subscription = useTopologySubscription(rootSessionKey ?? null);
 
+  // Publish the WS status up to the slim top bar so the layout can show
+  // the live pill without re-subscribing. `null` while no session is
+  // selected — the indicator is not meaningful before a connection is
+  // even attempted.
+  const publishedStatus = useMemo<PageLiveStatus | null>(() => {
+    if (!rootSessionKey) return null;
+    return mapTopologyStatusToPageStatus(subscription.status);
+  }, [rootSessionKey, subscription.status]);
+  usePublishPageStatus(publishedStatus);
+
   // Currently-selected anchor segment (issue #2040). `null` means "no
   // chapter selected" → `TimelineView` falls back to its own
   // `useSessionHistory` fetch (the legacy "last 200" path).
@@ -168,73 +178,6 @@ export default function Chat() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-3 border-b border-border px-3 py-2">
-        {/*
-         * Wrap the chevron in a 40x40 hit-area target (principle #16).
-         * The inner Button stays visually 28x28 so the header doesn't
-         * grow; the surrounding flex centers it inside the larger click
-         * region.
-         */}
-        <span className="-my-1.5 -ml-1 flex h-10 w-10 items-center justify-center">
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-7 w-7 transition-transform active:scale-[0.96]"
-            aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-            title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-            onClick={() => setSidebarCollapsed((v) => !v)}
-          >
-            {/*
-             * Cross-fade the panel-left / panel-left-close glyph instead
-             * of hard-swapping (principle #7). `mode="wait"` keeps a
-             * single icon mounted at a time so the absolute-position
-             * trick is unnecessary, and `initial={false}` skips the
-             * first-render animation per principle #13.
-             */}
-            <AnimatePresence initial={false} mode="wait">
-              {sidebarCollapsed ? (
-                <motion.span
-                  key="open"
-                  initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-                  animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
-                  exit={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-                  transition={SPRING}
-                  className="flex"
-                >
-                  <PanelLeft className="h-4 w-4" />
-                </motion.span>
-              ) : (
-                <motion.span
-                  key="close"
-                  initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-                  animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
-                  exit={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-                  transition={SPRING}
-                  className="flex"
-                >
-                  <PanelLeftClose className="h-4 w-4" />
-                </motion.span>
-              )}
-            </AnimatePresence>
-          </Button>
-        </span>
-        <Network className="h-4 w-4 text-muted-foreground" />
-        {/*
-         * `text-wrap: balance` per principle #10 — even on a one-word
-         * title it costs nothing and keeps any future i18n balanced.
-         */}
-        <h1 className="text-sm font-medium [text-wrap:balance]">Chat</h1>
-        <div className="ml-auto">
-          {rootSessionKey ? (
-            <StatusPill status={subscription.status} />
-          ) : (
-            <Badge variant="outline" className="text-[10px]">
-              no session
-            </Badge>
-          )}
-        </div>
-      </header>
-
       <div className="flex flex-1 min-h-0">
         {/*
          * Sidebar collapse uses a spring on `width` (interruptible per
@@ -251,7 +194,24 @@ export default function Chat() {
               transition={SPRING}
               className="hidden shrink-0 overflow-hidden border-r border-border md:block"
             >
-              <div className="w-[280px]">
+              <div className="relative h-full w-[280px]">
+                {/*
+                 * Per-page sessions-column collapse affordance. Floats
+                 * over the picker's own header (no extra row of chrome
+                 * stacked on top). The toggle used to live in the
+                 * page-level chrome before #2059 moved app chrome into
+                 * the global rail.
+                 */}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="absolute right-1.5 top-1.5 z-10 h-7 w-7 text-muted-foreground transition-transform hover:text-foreground active:scale-[0.96]"
+                  aria-label="Hide sessions"
+                  title="Hide sessions"
+                  onClick={() => setSidebarCollapsed(true)}
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </Button>
                 <SessionPicker
                   activeSessionKey={rootSessionKey ?? null}
                   onSelect={selectSession}
@@ -272,6 +232,20 @@ export default function Chat() {
           transition={{ ...SPRING, delay: 0.1 }}
           className="flex flex-1 min-w-0 min-h-0 flex-col p-3"
         >
+          {sidebarCollapsed && (
+            <div className="mb-2 hidden md:flex">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 transition-transform active:scale-[0.96]"
+                aria-label="Show sessions"
+                title="Show sessions"
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                <PanelLeft className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
           {rootSessionKey ? (
             <div className="flex flex-1 min-h-0 flex-col gap-2">
               {viewChild && (
@@ -341,42 +315,24 @@ export default function Chat() {
   );
 }
 
-function StatusPill({ status }: { status: TopologyStatus }) {
+/**
+ * Map the per-session WS status to the coarse `PageLiveStatus` consumed
+ * by the slim top bar. The granular `attempt` / `delayMs` info on
+ * `reconnecting` and the `reason` on `closed` are intentionally dropped —
+ * the layout-level pill only carries a single-word state (#2059); pages
+ * that need the detail can render their own badge inline.
+ */
+function mapTopologyStatusToPageStatus(status: TopologyStatus): PageLiveStatus {
   switch (status.kind) {
     case 'idle':
-      return (
-        <Badge variant="outline" className="text-[10px]">
-          idle
-        </Badge>
-      );
+      return 'idle';
     case 'connecting':
-      return (
-        <Badge variant="outline" className="text-[10px]">
-          connecting…
-        </Badge>
-      );
+      return 'connecting';
     case 'open':
-      return (
-        <Badge
-          variant="outline"
-          className="border-emerald-500/40 text-[10px] text-emerald-600 dark:text-emerald-400"
-        >
-          live
-        </Badge>
-      );
+      return 'live';
     case 'reconnecting':
-      // Tabular-nums on the attempt counter + delay (#9) so the badge
-      // doesn't shimmy as the numerals tick up.
-      return (
-        <Badge variant="outline" className="text-[10px] tabular-nums">
-          reconnect #{status.attempt} ({Math.round(status.delayMs / 1000)}s)
-        </Badge>
-      );
+      return 'reconnecting';
     case 'closed':
-      return (
-        <Badge variant="destructive" className="text-[10px]">
-          closed: {status.reason.replace(/_/g, ' ')}
-        </Badge>
-      );
+      return 'closed';
   }
 }

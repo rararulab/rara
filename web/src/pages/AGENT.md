@@ -24,8 +24,16 @@ single route under `DashboardLayout`.
 - The index route MUST resolve to a real component, not a redirect — the
   router treats `index` as a sibling of named routes, and a `Navigate`
   inside the layout would re-mount on every navigation.
-- Pages are layout consumers. They MUST NOT render their own top-bar /
-  sidebar; that work belongs to `DashboardLayout`.
+- Pages are layout consumers. They MUST NOT render their own top-bar or
+  global nav rail; that work belongs to `DashboardLayout` and
+  `@/components/shell/NavRail`. The page title is surfaced to the slim
+  top bar via the route's `handle: { title, showLiveIndicator? }`
+  metadata read by `DashboardLayout` through `useMatches()` (#2059); a
+  page that owns a long-lived subscription publishes its live state via
+  `usePublishPageStatus` (see `@/components/shell/PageStatusContext`)
+  instead of opening a second WebSocket from the layout. Per-page
+  internal columns (e.g. `Chat.tsx`'s sessions sidebar) are still the
+  page's own concern — the rule only forbids re-rendering app chrome.
 
 ## What NOT To Do
 
