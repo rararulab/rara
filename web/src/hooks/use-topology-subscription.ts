@@ -36,6 +36,7 @@ import { useEffect, useRef, useState } from 'react';
 import { buildWsBaseUrl } from '@/adapters/ws-base-url';
 import type { WebFrame } from '@/agent/session-ws-client';
 import { getAccessToken } from '@/api/client';
+import type { ChatMessageData } from '@/api/types';
 
 // ---------------------------------------------------------------------------
 // Wire frames — server → client (topology endpoint)
@@ -74,6 +75,17 @@ export type TopologyWebFrame =
       forked_from: string;
       child_tape: string;
       forked_at_anchor?: string | null;
+    }
+  | {
+      // Kernel-side echo of a user-message tape append (#2063). `seq` is
+      // the same value the REST `/messages` endpoint would return for
+      // this entry — keying both history and live bubbles on it lets
+      // `TimelineView` retire the old optimistic-bubble state.
+      type: 'user_message_appended';
+      parent_session: string;
+      seq: number;
+      content: ChatMessageData['content'];
+      created_at: string;
     };
 
 /** Descendant entry in the topology `hello` snapshot. */

@@ -43,14 +43,17 @@ button would be overreach.
   WebSocket) and pushes plain-text prompts. The editor always sends into
   the **root** session — browsing a worker child via the inbox stays
   observation-only so replies do not get written to a sandbox tape the
-  user did not pick. User-message rendering is **optimistic**: the typed
-  text is added to local state on submit so it appears before the
-  backend round-trip; the kernel does not echo user prompts back as
-  topology events today. History-on-reload fetches
-  `GET /api/v1/chat/sessions/{key}/messages` via `useSessionHistory` and
-  reduces persisted assistant turns through `buildTurnsFromHistory`,
-  while persisted user messages render as `UserMessageBubble`s ahead of
-  any optimistic prompts. Live/history dedupe uses an **arrival-time
+  user did not pick. User-message rendering rides the kernel's
+  `user_message_appended` topology frame (#2063): the kernel emits this
+  synchronously after persisting the user message to the main tape and
+  before the agent loop spawns, so the bubble appears within one WS
+  round-trip of submit — no FE optimistic state. Persisted bubbles come
+  from `useSessionHistory`, live bubbles from the topology event; both
+  are keyed on the backend `seq` so a collision (history refetch races
+  the live frame) dedupes by React key with history canonical. History-
+  on-reload fetches `GET /api/v1/chat/sessions/{key}/messages` via
+  `useSessionHistory` and reduces persisted assistant turns through
+  `buildTurnsFromHistory`. Live/history dedupe uses an **arrival-time
   barrier**, not seq comparison: at the moment the history query resolves
   for `viewSessionKey`, the current length of the session-filtered topology
   buffer is snapshotted; only entries whose buffer index is `>= barrier`
