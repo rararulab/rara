@@ -10,7 +10,7 @@
 mod repo;
 mod tokenizer;
 
-use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::Value;
 use snafu::ResultExt;
 pub(crate) use tokenizer::warmup as warmup_tokenizer;
@@ -101,50 +101,45 @@ impl TapeFts {
         // open transaction back to the pool whenever an inner step
         // returned `Err`, which produced "cannot start a transaction
         // within a transaction" on the next checkout (#1843).
+        let tape_name_owned = tape_name.to_owned();
+        let session_key_owned = session_key.to_owned();
         let count = conn
-            .transaction::<_, diesel::result::Error, _>(|conn| {
-                let tape_name = tape_name.to_owned();
-                let session_key = session_key.to_owned();
-                let segmented = segmented.clone();
-                async move {
-                    use diesel::{
-                        ExpressionMethods,
-                        sql_types::{BigInt, Text},
-                        upsert::excluded,
-                    };
-                    use rara_model::schema::tape_fts_meta;
+            .transaction::<_, diesel::result::Error, _>(async |conn| {
+                use diesel::{
+                    ExpressionMethods,
+                    sql_types::{BigInt, Text},
+                    upsert::excluded,
+                };
+                use rara_model::schema::tape_fts_meta;
 
-                    let mut count = 0usize;
-                    for (entry_id, kind_str, content) in &segmented {
-                        diesel::sql_query(
-                            "INSERT INTO tape_fts (content, tape_name, entry_kind, entry_id, \
-                             session_key) VALUES (?, ?, ?, ?, ?)",
-                        )
-                        .bind::<Text, _>(content)
-                        .bind::<Text, _>(&tape_name)
-                        .bind::<Text, _>(kind_str)
-                        .bind::<BigInt, _>(*entry_id as i64)
-                        .bind::<Text, _>(&session_key)
-                        .execute(&mut *conn)
-                        .await?;
-                        count += 1;
-                    }
-                    diesel::insert_into(tape_fts_meta::table)
-                        .values((
-                            tape_fts_meta::tape_name.eq(&tape_name),
-                            tape_fts_meta::last_indexed_id.eq(max_id as i32),
-                        ))
-                        .on_conflict(tape_fts_meta::tape_name)
-                        .do_update()
-                        .set(
-                            tape_fts_meta::last_indexed_id
-                                .eq(excluded(tape_fts_meta::last_indexed_id)),
-                        )
-                        .execute(conn)
-                        .await?;
-                    Ok(count)
+                let mut count = 0usize;
+                for (entry_id, kind_str, content) in &segmented {
+                    diesel::sql_query(
+                        "INSERT INTO tape_fts (content, tape_name, entry_kind, entry_id, \
+                         session_key) VALUES (?, ?, ?, ?, ?)",
+                    )
+                    .bind::<Text, _>(content)
+                    .bind::<Text, _>(&tape_name_owned)
+                    .bind::<Text, _>(kind_str)
+                    .bind::<BigInt, _>(*entry_id as i64)
+                    .bind::<Text, _>(&session_key_owned)
+                    .execute(&mut *conn)
+                    .await?;
+                    count += 1;
                 }
-                .scope_boxed()
+                diesel::insert_into(tape_fts_meta::table)
+                    .values((
+                        tape_fts_meta::tape_name.eq(&tape_name_owned),
+                        tape_fts_meta::last_indexed_id.eq(max_id as i32),
+                    ))
+                    .on_conflict(tape_fts_meta::tape_name)
+                    .do_update()
+                    .set(
+                        tape_fts_meta::last_indexed_id.eq(excluded(tape_fts_meta::last_indexed_id)),
+                    )
+                    .execute(conn)
+                    .await?;
+                Ok(count)
             })
             .await
             .context(DieselSnafu)?;

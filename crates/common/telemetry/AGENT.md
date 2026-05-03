@@ -42,6 +42,6 @@ Telemetry utilities — logging initialization, tracing subscriber setup (with o
 
 ## Dependencies
 
-**Upstream:** `tracing`, `tracing-subscriber`, `tracing-appender`, `opentelemetry` (optional OTLP), `pyroscope` + `pyroscope_pprofrs` (continuous profiling).
+**Upstream:** `tracing`, `tracing-subscriber`, `tracing-appender`, `opentelemetry` (optional OTLP), `pyroscope` with the `backend-pprof-rs` feature (continuous profiling — the pprof backend ships in-tree as of `pyroscope` 2.0, so the standalone `pyroscope_pprofrs` crate is no longer used).
 
 **Downstream:** `crates/cmd` (initializes logging at startup).
