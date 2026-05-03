@@ -1775,7 +1775,9 @@ async fn run_agent_loop_inner(
                     if !text.is_empty() {
                         if first_token_at.is_none() {
                             first_token_at = Some(Instant::now());
-                            let ttft = first_token_at.unwrap().duration_since(stream_start);
+                            let ttft = first_token_at
+                                .expect("first_token_at was just assigned Some(..) one line above")
+                                .duration_since(stream_start);
                             iter_span.record("first_token_ms", ttft.as_millis() as u64);
                             // gen_ai.server.time_to_first_token is in seconds
                             // per the OTel GenAI spec.

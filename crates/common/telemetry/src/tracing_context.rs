@@ -95,7 +95,10 @@ impl TracingContext {
     /// Panics if JSON serialization fails (should not happen with valid W3C
     /// context).
     #[must_use]
-    pub fn to_json(&self) -> String { serde_json::to_string(&self.to_w3c()).unwrap() }
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(&self.to_w3c())
+            .expect("W3cTrace is a flat map of String->String and always serializes")
+    }
 
     /// Deserialize from JSON string. Returns empty context on invalid JSON.
     #[must_use]

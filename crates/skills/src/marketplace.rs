@@ -135,11 +135,19 @@ impl MarketplaceService {
     }
 
     /// List registered marketplace sources.
-    pub fn list_sources(&self) -> Vec<MarketplaceSource> { self.sources.read().unwrap().clone() }
+    pub fn list_sources(&self) -> Vec<MarketplaceSource> {
+        self.sources
+            .read()
+            .expect("sources RwLock poisoned by an earlier panic")
+            .clone()
+    }
 
     /// Register a new marketplace source by `owner/repo`.
     pub fn add_source(&self, repo: &str) -> Result<()> {
-        let mut sources = self.sources.write().unwrap();
+        let mut sources = self
+            .sources
+            .write()
+            .expect("sources RwLock poisoned by an earlier panic");
         if sources.iter().any(|s| s.repo == repo) {
             return Ok(()); // idempotent
         }
@@ -153,9 +161,15 @@ impl MarketplaceService {
 
     /// Remove a marketplace source.
     pub fn remove_source(&self, repo: &str) -> Result<()> {
-        let mut sources = self.sources.write().unwrap();
+        let mut sources = self
+            .sources
+            .write()
+            .expect("sources RwLock poisoned by an earlier panic");
         sources.retain(|s| s.repo != repo);
-        self.cache.write().unwrap().remove(repo);
+        self.cache
+            .write()
+            .expect("cache RwLock poisoned by an earlier panic")
+            .remove(repo);
         save_sources(&self.persist_path, &sources)
     }
 
@@ -166,7 +180,12 @@ impl MarketplaceService {
     /// → base64 decode → parse as MarketplaceIndex → cache.
     pub async fn fetch_index(&self, repo: &str) -> Result<MarketplaceIndex> {
         // Return cached if available.
-        if let Some(idx) = self.cache.read().unwrap().get(repo) {
+        if let Some(idx) = self
+            .cache
+            .read()
+            .expect("cache RwLock poisoned by an earlier panic")
+            .get(repo)
+        {
             return Ok(idx.clone());
         }
 
@@ -209,7 +228,7 @@ impl MarketplaceService {
                 let index = synthetic_index_from_plugin_json(repo, &json_str)?;
                 self.cache
                     .write()
-                    .unwrap()
+                    .expect("cache RwLock poisoned by an earlier panic")
                     .insert(repo.to_string(), index.clone());
                 return Ok(index);
             }
@@ -233,16 +252,26 @@ impl MarketplaceService {
 
         self.cache
             .write()
-            .unwrap()
+            .expect("cache RwLock poisoned by an earlier panic")
             .insert(repo.to_string(), index.clone());
         Ok(index)
     }
 
     /// Clear cached indexes. Next `fetch_index` will re-fetch from GitHub.
-    pub fn clear_cache(&self) { self.cache.write().unwrap().clear(); }
+    pub fn clear_cache(&self) {
+        self.cache
+            .write()
+            .expect("cache RwLock poisoned by an earlier panic")
+            .clear();
+    }
 
     /// Clear cache for a specific marketplace.
-    pub fn clear_cache_for(&self, repo: &str) { self.cache.write().unwrap().remove(repo); }
+    pub fn clear_cache_for(&self, repo: &str) {
+        self.cache
+            .write()
+            .expect("cache RwLock poisoned by an earlier panic")
+            .remove(repo);
+    }
 
     /// Browse all plugins across all (or one) marketplace.
     pub async fn browse(&self, marketplace: Option<&str>) -> Result<Vec<PluginInfo>> {

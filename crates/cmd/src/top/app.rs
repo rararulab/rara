@@ -345,7 +345,10 @@ impl App {
             let ss = &mut self.session_state;
 
             // Use uptime_ms to compute the actual start time of this process.
-            let agent_start = now.checked_sub(Duration::from_millis(p.uptime_ms)).unwrap();
+            let agent_start = now.checked_sub(Duration::from_millis(p.uptime_ms)).expect(
+                "agent uptime_ms is reported by the kernel and never exceeds wall time since \
+                 process start",
+            );
 
             let session_view =
                 ss.sessions
