@@ -286,7 +286,7 @@ impl SupervisorService {
 
         // Wait for the child to exit, a shutdown signal, or a command.
         tokio::select! {
-            status = self.child.as_mut().unwrap().wait() => {
+            status = self.child.as_mut().expect("child was assigned to self.child immediately above").wait() => {
                 match status {
                     Ok(s) if s.success() => {
                         info!("Agent process exited with status 0");

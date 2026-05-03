@@ -408,10 +408,10 @@ impl JobWheel {
 
     /// Return the next fire time, or `None` if the wheel is empty.
     pub fn next_deadline(&self) -> Option<jiff::Timestamp> {
-        self.jobs
-            .keys()
-            .next()
-            .map(|(secs, _)| jiff::Timestamp::from_second(*secs).unwrap())
+        self.jobs.keys().next().map(|(secs, _)| {
+            jiff::Timestamp::from_second(*secs)
+                .expect("secs was produced by Timestamp::as_second() and stays in jiff's range")
+        })
     }
 
     /// Pure query: which jobs have expired as of `now`?

@@ -225,7 +225,15 @@ impl BrowserManager {
                 .active
                 .as_ref()
                 .and_then(|id| store.tabs.get(id))
-                .map(|tab| (store.active.clone().unwrap(), tab.page.clone()))
+                .map(|tab| {
+                    (
+                        store
+                            .active
+                            .clone()
+                            .expect("active is Some because and_then(|id| ...) succeeded above"),
+                        tab.page.clone(),
+                    )
+                })
         };
 
         let nav_timeout = Duration::from_secs(self.config.navigate_timeout_secs);

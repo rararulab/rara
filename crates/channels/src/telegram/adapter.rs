@@ -362,7 +362,7 @@ struct PlanStepState {
 /// [`ExecutionTrace`] and emitted
 /// [`rara_kernel::io::StreamEvent::TraceReady`] carrying the `trace_id`.
 /// This adapter fetches the trace via `TraceService::get` and
-/// edits the Telegram message to a compact summary with an inline "📊 详情"
+/// edits the Telegram message to a compact summary with an inline "📊 Details"
 /// button that toggles the full trace view.
 ///
 /// ## Token semantics (from kernel `UsageUpdate`)
@@ -746,7 +746,7 @@ pub(super) fn format_token_count(tokens: u32) -> String {
 
 /// Render a compact one-line summary for a completed execution trace.
 /// Example: `✅ 45s · ↑12.5k ↓1.2k · thought 9s`
-/// This is the collapsed state shown with the inline "详情" button.
+/// This is the collapsed state shown with the inline "Details" button.
 fn render_compact_summary(trace: &ExecutionTrace) -> String {
     let mut parts = Vec::new();
     parts.push(format_duration_compact(std::time::Duration::from_secs(
@@ -2251,9 +2251,9 @@ async fn handle_tool_call_limit_callback(
 /// Handle a trace show/hide callback query from an inline keyboard button.
 ///
 /// Callback data format: `"trace:{action}:{chat_id}:{msg_id}"`
-/// - `action` = "show" → expand to full trace, button becomes "收起"
+/// - `action` = "show" → expand to full trace, button becomes "Collapse"
 /// - `action` = "hide" → collapse back to compact summary, button becomes
-///   "详情"
+///   "Details"
 ///
 /// Trace data is fetched from [`rara_kernel::trace::TraceService`] (SQLite)
 /// and rendered into Telegram HTML on demand. The callback is always answered
@@ -3250,7 +3250,10 @@ async fn handle_update(
                                             if let Some(url) = btn.url {
                                                 teloxide::types::InlineKeyboardButton::url(
                                                     btn.text,
-                                                    url.parse().unwrap(),
+                                                    url.parse().expect(
+                                                        "button URL string is constructed by \
+                                                         adapter code and is always a valid URL",
+                                                    ),
                                                 )
                                             } else {
                                                 teloxide::types::InlineKeyboardButton::callback(
@@ -3864,7 +3867,13 @@ async fn dispatch_command_result(
                     row.into_iter()
                         .map(|btn| {
                             if let Some(url) = btn.url {
-                                InlineKeyboardButton::url(btn.text, url.parse().unwrap())
+                                InlineKeyboardButton::url(
+                                    btn.text,
+                                    url.parse().expect(
+                                        "button URL string is constructed by adapter code and is \
+                                         always a valid URL",
+                                    ),
+                                )
                             } else {
                                 InlineKeyboardButton::callback(
                                     btn.text,
@@ -4075,7 +4084,7 @@ fn spawn_stream_forwarder(
                                     state.dirty = true;
 
                                     if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
-                                        // 剥离 LLM 可能泄漏到 content 中的 tool call XML
+                                        // Strip tool-call XML the LLM may have leaked into content.
                                         let cleaned = strip_tool_call_xml(&state.accumulated);
                                         let split_chars = cleaned.chars().count();
                                         let html = crate::telegram::markdown::markdown_to_telegram_html(&cleaned);
@@ -4455,7 +4464,7 @@ fn spawn_stream_forwarder(
                             // Hard-truncated to ~500 chars to bound memory; the
                             // full reasoning stays in the kernel's TurnTrace.
                             // Uses .chars().count() for char-level limit to avoid
-                            // panic on slicing multi-byte UTF-8 (中文, emoji, etc).
+                            // panic on slicing multi-byte UTF-8 (Chinese, emoji, etc).
                             let current_chars = progress.reasoning_preview.chars().count();
                             if current_chars < 500 {
                                 let remaining = 500 - current_chars;
@@ -4579,7 +4588,7 @@ fn spawn_stream_forwarder(
                             let flush_req = {
                                 if let Some(state) = active_streams.get(&chat_id) {
                                     if state.dirty {
-                                        // 剥离 LLM 可能泄漏到 content 中的 tool call XML
+                                        // Strip tool-call XML the LLM may have leaked into content.
                                         let cleaned = strip_tool_call_xml(&state.accumulated);
                                         let html = crate::telegram::markdown::markdown_to_telegram_html(&cleaned);
                                         Some(FlushRequest {
@@ -5157,7 +5166,10 @@ async fn flush_edit(
             }
         }
     } else {
-        let msg_id = *req.message_ids.last().unwrap();
+        let msg_id = *req
+            .message_ids
+            .last()
+            .expect("the is_empty() branch returned above, so message_ids has at least one entry");
         rate_limiter.acquire(chat_id).await;
         match bot
             .edit_message_text(ChatId(chat_id), msg_id, &req.text_html)
@@ -5198,7 +5210,10 @@ fn apply_flush_result(
         match result {
             FlushResult::Sent(msg_id) => {
                 if state.message_ids.last().copied() == Some(MessageId(0)) {
-                    *state.message_ids.last_mut().unwrap() = msg_id;
+                    *state
+                        .message_ids
+                        .last_mut()
+                        .expect("the outer guard checked last() == Some(MessageId(0))") = msg_id;
                 } else {
                     state.message_ids.push(msg_id);
                 }

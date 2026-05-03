@@ -479,7 +479,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -501,7 +502,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -524,7 +526,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -547,7 +550,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -570,7 +574,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -593,7 +598,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -887,7 +893,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -907,7 +914,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -927,7 +935,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -947,7 +956,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -967,7 +977,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
@@ -987,7 +998,8 @@ where
             name,
             self.blocking,
             self.eager,
-            self.trigger.unwrap(),
+            self.trigger
+                .expect("typestate guarantees trigger is Some once spawn() is callable"),
             pause_mode,
         )
     }
