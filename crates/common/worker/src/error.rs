@@ -24,7 +24,8 @@ use snafu::Snafu;
 pub type WorkResult<T = ()> = std::result::Result<T, WorkError>;
 
 /// Error severity level for worker operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
+#[strum(serialize_all = "lowercase")]
 pub enum ErrorSeverity {
     /// Transient error - worker will continue and retry on next trigger.
     ///
@@ -145,11 +146,7 @@ impl WorkError {
 
 impl fmt::Display for WorkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let severity = match self.severity {
-            ErrorSeverity::Transient => "transient",
-            ErrorSeverity::Fatal => "fatal",
-        };
-        write!(f, "[{}] {}", severity, self.message)
+        write!(f, "[{}] {}", self.severity, self.message)
     }
 }
 

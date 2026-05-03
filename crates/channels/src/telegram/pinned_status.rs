@@ -86,19 +86,10 @@ fn fallback_context_window(model: &str) -> Option<u32> {
 // ---------------------------------------------------------------------------
 
 /// Agent execution state shown in the card header.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
 pub(super) enum State {
     Running,
     Idle,
-}
-
-impl std::fmt::Display for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Running => f.write_str("Running"),
-            Self::Idle => f.write_str("Idle"),
-        }
-    }
 }
 
 /// A background sub-agent tracked in the session card.
