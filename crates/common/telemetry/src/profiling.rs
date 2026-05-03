@@ -14,9 +14,10 @@
 
 //! Continuous CPU profiling via [Pyroscope](https://github.com/grafana/pyroscope).
 //!
-//! Wraps `pyroscope` + `pyroscope_pprofrs` so the `rara-cli` bootstrap can
-//! turn profiling on/off from YAML config without dragging the underlying
-//! crates into every binary.
+//! Wraps the `pyroscope` crate (with its `backend-pprof-rs` feature, which
+//! absorbs what used to be the standalone `pyroscope_pprofrs` crate) so the
+//! `rara-cli` bootstrap can turn profiling on/off from YAML config without
+//! dragging the underlying crate into every binary.
 //!
 //! ## Cardinality contract
 //!
