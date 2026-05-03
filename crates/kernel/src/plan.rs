@@ -1572,4 +1572,29 @@ mod tests {
             "needs_replan"
         );
     }
+
+    /// Wire-format lock: every `StepOutcome` variant maps to a stable
+    /// snake_case string consumed by the frontend timeline
+    /// (`web/src/hooks/use-session-timeline.ts` switches on
+    /// `'success'` / `'failed'` / `'needs_replan'`). Renaming a variant
+    /// or dropping the `#[strum(serialize = "...")]` attribute must not
+    /// silently change these strings.
+    #[test]
+    fn step_outcome_wire_strings_are_stable() {
+        assert_eq!(StepOutcome::Success.label(), "success");
+        assert_eq!(
+            StepOutcome::Failed {
+                reason: String::new(),
+            }
+            .label(),
+            "failed"
+        );
+        assert_eq!(
+            StepOutcome::NeedsReplan {
+                reason: String::new(),
+            }
+            .label(),
+            "needs_replan"
+        );
+    }
 }
