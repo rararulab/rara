@@ -58,16 +58,19 @@ export interface TimelineViewProps {
 
 /**
  * Main-timeline view of an agent's stream of consciousness. Renders user
- * turns (from optimistic local state) and agent turns (from the topology
- * stream) in arrival order, with a craft-style {@link InputContainer}
- * pinned to the bottom of the column.
+ * bubbles and agent turns in chronological order, with a craft-style
+ * {@link InputContainer} pinned to the bottom of the column.
  *
- * Optimistic user-message rendering: when the user submits, the message
- * is pushed into `userTurns` immediately so it shows up in the timeline
- * before the WS round-trip finishes. The kernel does not echo user
- * prompts back as topology events today, so without this the user would
- * see their text vanish into the input box and only an assistant
- * response appear later.
+ * User bubbles come from two sources, both keyed on the backend `seq`:
+ *
+ * 1. `useSessionHistory` for messages already persisted on disk before
+ *    this mount.
+ * 2. The `user_message_appended` topology frame (kernel echo, #2063) for
+ *    in-flight prompts. The kernel emits this synchronously, pre-fork,
+ *    right after the user message is appended to the main tape — so the
+ *    bubble appears within one WS round-trip of submit, replacing the
+ *    old optimistic-state mechanism that fought with mid-turn history
+ *    refetches.
  */
 export function TimelineView({
   viewSessionKey,
@@ -75,12 +78,6 @@ export function TimelineView({
   promptSessionKey,
   segmentMessages,
 }: TimelineViewProps) {
-  // Per-session ordered user turns. Cleared when the viewed session
-  // changes so a new conversation does not inherit a stale prompt list.
-  const [userTurnsBySession, setUserTurnsBySession] = useState<
-    Record<string, { id: string; text: string; t: number; createdAt: number | null }[]>
-  >({});
-
   const sessionForPrompt = promptSessionKey ?? viewSessionKey;
   const ws = useChatSessionWs(sessionForPrompt);
 
@@ -243,12 +240,11 @@ export function TimelineView({
     return buildTurnsFromEvents(sliced.map((e) => ({ seq: e.seq, event: e.event })));
   }, [sessionEvents, viewSessionKey, barrierBySession]);
 
-  // Historical user prompts merged with the optimistic local prompts the
-  // editor pushes on submit. Historical entries come first in seq order;
-  // optimistic entries follow because they were typed after the page
-  // loaded.
+  // Persisted user prompts from the REST history payload. Keyed on the
+  // backend `seq` so a colliding live `user_message_appended` frame
+  // dedupes by React key naturally — history is canonical on collision.
   const historyUserBubbles = useMemo<
-    { id: string; text: string; t: number; createdAt: number | null }[]
+    { id: string; seq: number; text: string; createdAt: number | null }[]
   >(() => {
     if (!historyMessages) return [];
     return historyMessages
@@ -256,28 +252,70 @@ export function TimelineView({
       .map((m) => {
         const ts = Date.parse(m.created_at);
         return {
-          id: `history-user-${String(m.seq)}`,
+          // Source-agnostic React key: collapses with the live-bubble
+          // key below so a mid-turn history refetch swapping a live entry
+          // for the persisted one reconciles as the same node (no
+          // unmount/remount flicker on focus / WS reconnect).
+          id: `user-${String(m.seq)}`,
+          seq: m.seq,
           text: contentToText(m.content),
-          t: 0,
           createdAt: Number.isNaN(ts) ? null : ts,
         };
       })
       .filter((u) => u.text.length > 0);
   }, [historyMessages]);
 
-  // Build a single ordered list of bubbles + turns. History items sort by
-  // `createdAt` ascending; items without a timestamp (live agent turns and
-  // optimistic local user prompts) trail the history block in arrival
-  // order. Each rendered node carries `data-testid="turn-or-bubble"` so
-  // the chronological-ordering scenarios can query in document order.
+  // Live user bubbles fold from `user_message_appended` topology frames
+  // that arrived strictly after the history barrier — same arrival-barrier
+  // policy as `agentTurns`, so frames mirrored in the history payload
+  // don't render twice. On `seq` collision with a history bubble, history
+  // wins (the live entry is filtered out below in the merge).
+  const liveUserBubbles = useMemo<
+    { id: string; seq: number; text: string; createdAt: number | null }[]
+  >(() => {
+    const barrier = barrierBySession[viewSessionKey];
+    const sliced = barrier === undefined ? sessionEvents : sessionEvents.slice(barrier);
+    return sliced.flatMap((entry) => {
+      const ev = entry.event;
+      if (ev.type !== 'user_message_appended') return [];
+      const ts = Date.parse(ev.created_at);
+      const text = contentToText(ev.content);
+      if (text.length === 0) return [];
+      return [
+        {
+          id: `user-${String(ev.seq)}`,
+          seq: ev.seq,
+          text,
+          createdAt: Number.isNaN(ts) ? null : ts,
+        },
+      ];
+    });
+  }, [sessionEvents, viewSessionKey, barrierBySession]);
+
+  // Build a single ordered list of bubbles + turns. History items and
+  // live user bubbles (which carry the kernel-emitted `created_at`) sort
+  // by `createdAt` ascending; live agent turns have no timestamp and
+  // trail the history block in arrival order. Each rendered node carries
+  // `data-testid="turn-or-bubble"` so chronological-ordering scenarios
+  // can query in document order.
   type Item =
     | { kind: 'bubble'; key: string; createdAt: number | null; text: string }
     | { kind: 'turn'; key: string; createdAt: number | null; turn: TurnCardData };
 
   const orderedItems = useMemo<Item[]>(() => {
-    const optimistic = userTurnsBySession[viewSessionKey] ?? [];
+    // Drop any live bubble whose seq collides with a persisted history
+    // bubble — history is canonical (covers the WS-reconnect-then-refetch
+    // race called out in spec scenario `reconnect_does_not_duplicate`).
+    const historySeqs = new Set(historyUserBubbles.map((u) => u.seq));
+    const liveDeduped = liveUserBubbles.filter((u) => !historySeqs.has(u.seq));
     const items: Item[] = [
       ...historyUserBubbles.map<Item>((u) => ({
+        kind: 'bubble',
+        key: u.id,
+        createdAt: u.createdAt,
+        text: u.text,
+      })),
+      ...liveDeduped.map<Item>((u) => ({
         kind: 'bubble',
         key: u.id,
         createdAt: u.createdAt,
@@ -295,12 +333,6 @@ export function TimelineView({
         createdAt: null,
         turn: t,
       })),
-      ...optimistic.map<Item>((u) => ({
-        kind: 'bubble',
-        key: u.id,
-        createdAt: null,
-        text: u.text,
-      })),
     ];
     // Stable sort: items with a `createdAt` come first in ascending order;
     // items without one preserve their input order at the tail. The input
@@ -317,7 +349,7 @@ export function TimelineView({
       return a.idx - b.idx;
     });
     return indexed.map(({ it }) => it);
-  }, [historyUserBubbles, historyTurns, agentTurns, userTurnsBySession, viewSessionKey]);
+  }, [historyUserBubbles, liveUserBubbles, historyTurns, agentTurns]);
 
   const isEmpty = orderedItems.length === 0;
 
@@ -353,18 +385,12 @@ export function TimelineView({
             ...(pickedProvider ? { modelProvider: pickedProvider } : {}),
           }
         : undefined;
-      const ok = ws.sendPrompt(trimmed, promptOptions);
-      if (!ok) return;
-      const id = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      setUserTurnsBySession((prev) => {
-        const list = prev[viewSessionKey] ?? [];
-        return {
-          ...prev,
-          [viewSessionKey]: [...list, { id, text: trimmed, t: Date.now(), createdAt: null }],
-        };
-      });
+      // Bubble rendering now comes exclusively from the
+      // `user_message_appended` topology frame the kernel emits after
+      // persisting the message (#2063) — no optimistic state to clear.
+      ws.sendPrompt(trimmed, promptOptions);
     },
-    [ws, viewSessionKey, currentModel, pickedProvider],
+    [ws, currentModel, pickedProvider],
   );
 
   const handleModelChange = useCallback((model: string, connection?: string) => {

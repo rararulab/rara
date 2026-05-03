@@ -1063,7 +1063,8 @@ fn stream_event_to_cli_event(event: StreamEvent) -> Option<CliEvent> {
         // CLI rendering is a separate downstream spec.
         StreamEvent::SubagentSpawned { .. }
         | StreamEvent::SubagentDone { .. }
-        | StreamEvent::TapeForked { .. } => return None,
+        | StreamEvent::TapeForked { .. }
+        | StreamEvent::UserMessageAppended { .. } => return None,
     })
 }
 

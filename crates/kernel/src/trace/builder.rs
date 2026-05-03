@@ -272,7 +272,8 @@ impl TraceBuilder {
             | StreamEvent::StreamClosed { .. }
             | StreamEvent::SubagentSpawned { .. }
             | StreamEvent::SubagentDone { .. }
-            | StreamEvent::TapeForked { .. } => {}
+            | StreamEvent::TapeForked { .. }
+            | StreamEvent::UserMessageAppended { .. } => {}
         }
     }
 

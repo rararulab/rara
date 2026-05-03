@@ -274,6 +274,26 @@ pub enum WebEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         forked_at_anchor: Option<String>,
     },
+    /// A user message was appended to the session's main tape, immediately
+    /// before the agent loop spawn. Mirrors
+    /// [`StreamEvent::UserMessageAppended`]. Lets the topology UI render
+    /// the user bubble from the same channel as every other turn artefact
+    /// instead of an FE-side optimistic bridge (#2063). Mita directives
+    /// and tape-append failures emit nothing.
+    ///
+    /// `seq` is the position-based chat seq — the same value the
+    /// `/api/v1/chat/sessions/{key}/messages` REST endpoint returns for
+    /// this entry — so FE dedupe can key on a single integer regardless
+    /// of which path (history refetch or live frame) delivered the
+    /// bubble.
+    ///
+    /// [`StreamEvent::UserMessageAppended`]: rara_kernel::io::StreamEvent::UserMessageAppended
+    UserMessageAppended {
+        parent_session: String,
+        seq:            i64,
+        content:        serde_json::Value,
+        created_at:     jiff::Timestamp,
+    },
     /// A new entry was appended to the session's tape. Emitted on the
     /// persistent per-session WS in two situations:
     ///
@@ -480,6 +500,17 @@ pub(crate) fn stream_event_to_web_event(event: StreamEvent) -> Option<WebEvent> 
             forked_from,
             child_tape,
             forked_at_anchor,
+        }),
+        StreamEvent::UserMessageAppended {
+            parent_session,
+            seq,
+            content,
+            created_at,
+        } => Some(WebEvent::UserMessageAppended {
+            parent_session: parent_session.to_string(),
+            seq,
+            content,
+            created_at,
         }),
     }
 }
@@ -1162,6 +1193,54 @@ mod tests {
             stream_event_to_web_event(event),
             Some(WebEvent::TextDelta { text }) if text == "hello"
         ));
+    }
+
+    #[test]
+    fn web_event_user_message_appended_round_trip() {
+        use rara_kernel::session::SessionKey;
+        use serde_json::json;
+
+        let session = SessionKey::new();
+        let created_at = "2026-01-01T00:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .expect("parse timestamp");
+        let content = json!("hello world");
+
+        let event = StreamEvent::UserMessageAppended {
+            parent_session: session,
+            seq: 7,
+            content: content.clone(),
+            created_at,
+        };
+
+        let mapped =
+            stream_event_to_web_event(event).expect("UserMessageAppended must forward to WebEvent");
+        match &mapped {
+            WebEvent::UserMessageAppended {
+                parent_session,
+                seq,
+                content: c,
+                created_at: ts,
+            } => {
+                assert_eq!(
+                    parent_session,
+                    &session.to_string(),
+                    "parent_session preserved"
+                );
+                assert_eq!(*seq, 7, "seq preserved");
+                assert_eq!(*c, content, "content preserved");
+                assert_eq!(*ts, created_at, "created_at preserved");
+            }
+            other => panic!("expected WebEvent::UserMessageAppended, got {other:?}"),
+        }
+
+        // Wire-format guard: the FE consumer keys on the snake_case
+        // variant tag — locking it down here so a future serde rename
+        // can't silently break the topology timeline (#2063).
+        let json_value = serde_json::to_value(&mapped).expect("serialize");
+        assert_eq!(json_value["type"], "user_message_appended");
+        assert_eq!(json_value["seq"], 7);
+        assert_eq!(json_value["content"], json!("hello world"));
     }
 
     #[test]

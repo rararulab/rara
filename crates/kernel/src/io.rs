@@ -1202,6 +1202,33 @@ pub enum StreamEvent {
         /// distinction explicit on the wire).
         forked_at_anchor: Option<String>,
     },
+    /// A non-Mita-directive user message has been appended to the session's
+    /// main tape, immediately before the agent loop spawns.
+    ///
+    /// Emitted by `Kernel::handle_inbound_to_session` (Phase 5) on the
+    /// session's bus right after `TapeService::append_message` returns Ok.
+    /// Lets live topology subscribers render the user bubble from the same
+    /// channel as every other turn artefact, retiring the front-end
+    /// optimistic-bubble path (#2063). Mita directives and tape-append
+    /// failures emit nothing.
+    ///
+    /// `seq` matches the `ChatMessage.seq` produced by the `/messages`
+    /// REST endpoint for the same tape entry — i.e. the position-based
+    /// counter walked by `tap_entries_to_chat_messages` — so frontend
+    /// dedupe can key on a single integer regardless of which path
+    /// (history refetch or live frame) delivered the bubble.
+    UserMessageAppended {
+        /// Session that owns the tape the entry was appended to.
+        parent_session: SessionKey,
+        /// Position-based chat seq matching the REST `/messages` endpoint.
+        seq:            i64,
+        /// Persisted entry payload's `content` field — text-only as a
+        /// JSON string, multimodal as the structured passthrough exactly
+        /// as written to tape.
+        content:        serde_json::Value,
+        /// Persisted tape entry timestamp (`TapEntry.timestamp`).
+        created_at:     jiff::Timestamp,
+    },
 }
 
 // ---------------------------------------------------------------------------
