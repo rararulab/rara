@@ -238,13 +238,70 @@ describe('TimelineView.user_message_appended', () => {
 
     const node = await screen.findByText('Q');
     expect(screen.getAllByText('Q')).toHaveLength(1);
-    // Outer wrapper carries the React key derived from seq=1. RTL does
-    // not expose the React `key` directly, but we can verify the render
-    // is sourced from the live (`live-user-${seq}`) path by checking
-    // it is a `user-bubble` node (via testid). The wrapper around it
-    // has no DOM trace of the key, so the falsifier is "exactly one
-    // node" combined with the bubble actually being present.
+    // Outer wrapper carries the React key derived from seq=1
+    // (`user-${seq}`, source-agnostic since the live and history paths
+    // were unified). RTL does not expose React `key` directly; the
+    // falsifier is "exactly one node" combined with the bubble actually
+    // being present.
     expect(node).toHaveAttribute('data-testid', 'user-bubble');
+  });
+
+  it('unified_key_history_wrapper_survives_late_live_event: a same-seq live event arriving after history does not remount the history wrapper', async () => {
+    // Companion to the FE polish fix that unifies the React key for
+    // live + history user bubbles to `user-${seq}` (was
+    // `live-user-${seq}` / `history-user-${seq}`). This test pins the
+    // observable invariant the unified key is meant to preserve in the
+    // common "history canonical, live arrives later" path: the outer
+    // `data-testid="turn-or-bubble"` wrapper is the SAME DOM node
+    // before and after the late live event lands. Note this scenario
+    // alone does NOT falsify the key change in isolation — the seq
+    // dedupe in `orderedItems` keeps history canonical regardless of
+    // key — but it locks in "no remount on collision", which is the
+    // user-visible promise the unified key reinforces against future
+    // refactors that might shuffle iteration order.
+    listMessagesMock.mockResolvedValueOnce([
+      makeMessage({
+        seq: 7,
+        role: 'user',
+        content: 'K',
+        created_at: '2026-04-30T00:00:01Z',
+      }),
+    ]);
+
+    const sessionKey = 'sess-K';
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey={sessionKey} events={[]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+
+    const beforeNode = await screen.findByText('K');
+    const beforeWrapper = beforeNode.closest('[data-testid="turn-or-bubble"]');
+    expect(beforeWrapper).not.toBeNull();
+
+    // Late-arriving live frame at the same seq. With the seq dedupe in
+    // `orderedItems` (history canonical), the live entry is filtered
+    // out. With unified keys (`user-7`), the history wrapper is NOT
+    // unmounted — it stays as the same DOM node.
+    const lateLive = makeUserAppended(sessionKey, 7, 'K', '2026-04-30T00:00:01Z', 1);
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TimelineView viewSessionKey={sessionKey} events={[lateLive]} promptSessionKey={null} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('K')).toHaveLength(1);
+    });
+    const afterNode = screen.getByText('K');
+    const afterWrapper = afterNode.closest('[data-testid="turn-or-bubble"]');
+    // Same DOM node ⇒ React reconciled, no remount, no flicker.
+    expect(afterWrapper).toBe(beforeWrapper);
+    expect(beforeWrapper?.isConnected).toBe(true);
   });
 
   it('reconnect_does_not_duplicate: WS reconnect + history refetch keeps exactly one bubble', async () => {

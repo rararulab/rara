@@ -252,7 +252,11 @@ export function TimelineView({
       .map((m) => {
         const ts = Date.parse(m.created_at);
         return {
-          id: `history-user-${String(m.seq)}`,
+          // Source-agnostic React key: collapses with the live-bubble
+          // key below so a mid-turn history refetch swapping a live entry
+          // for the persisted one reconciles as the same node (no
+          // unmount/remount flicker on focus / WS reconnect).
+          id: `user-${String(m.seq)}`,
           seq: m.seq,
           text: contentToText(m.content),
           createdAt: Number.isNaN(ts) ? null : ts,
@@ -279,7 +283,7 @@ export function TimelineView({
       if (text.length === 0) return [];
       return [
         {
-          id: `live-user-${String(ev.seq)}`,
+          id: `user-${String(ev.seq)}`,
           seq: ev.seq,
           text,
           createdAt: Number.isNaN(ts) ? null : ts,
