@@ -530,7 +530,7 @@ pub enum LlmProviderFamily {
     OpenRouter,
     Ollama,
     Codex,
-    /// 智谱 BigModel (GLM series).
+    /// Zhipu BigModel (GLM series).
     Glm,
     Unknown,
 }

@@ -384,7 +384,7 @@ impl Default for TraceBuilder {
 
 /// Append `src` to `dst`, stopping once `dst` reaches `max_chars`.
 ///
-/// Operates on char count (not byte count) so multi-byte UTF-8 (中文, emoji)
+/// Operates on char count (not byte count) so multi-byte UTF-8 (Chinese, emoji)
 /// does not accidentally slice a code point in half. When the cap is hit
 /// mid-append, a horizontal-ellipsis `…` is pushed to signal truncation.
 fn append_capped_chars(dst: &mut String, src: &str, max_chars: usize) {

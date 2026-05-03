@@ -711,7 +711,7 @@ pub async fn start_with_options(
 
     // TraceService is shared between the kernel (which writes traces at
     // turn end) and the backend session service (which reads them for
-    // the web "📊 详情" button). Create it once here so both sides see
+    // the web "📊 Details" button). Create it once here so both sides see
     // the same underlying pool.
     let trace_service = rara_kernel::trace::TraceService::new(diesel_pools.clone());
 
