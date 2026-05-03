@@ -430,28 +430,27 @@ pub type Result<T> = std::result::Result<T, KernelError>;
 /// pick a user-facing title/CTA without reparsing free-form messages.
 /// Stable string values are used because this travels over the wire as the
 /// `category` field in `OutboundPayload::Error` / `WebEvent::Error`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum OutboundErrorCategory {
+    #[strum(serialize = "quota")]
     Quota,
+    #[strum(serialize = "network")]
     Network,
+    #[strum(serialize = "context_window")]
     ContextWindow,
+    #[strum(serialize = "provider")]
     Provider,
+    #[strum(serialize = "tool")]
     Tool,
+    #[strum(serialize = "cancelled")]
     Cancelled,
 }
 
 impl OutboundErrorCategory {
-    /// Wire string. Frontend code matches on these.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Quota => "quota",
-            Self::Network => "network",
-            Self::ContextWindow => "context_window",
-            Self::Provider => "provider",
-            Self::Tool => "tool",
-            Self::Cancelled => "cancelled",
-        }
-    }
+    /// Wire string. Frontend code matches on these. Backed by
+    /// `strum::IntoStaticStr` with explicit per-variant `serialize`
+    /// attributes; renaming a variant does not change the wire string.
+    pub fn as_str(&self) -> &'static str { (*self).into() }
 }
 
 /// Structured turn failure carried from the agent loop to the egress
@@ -529,6 +528,23 @@ impl OutboundError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wire-format lock: every `OutboundErrorCategory` variant maps to a
+    /// stable snake_case string consumed by frontends and embedded in
+    /// `OutboundError.category`. Renaming a variant must not silently
+    /// change these strings.
+    #[test]
+    fn outbound_error_category_wire_strings_are_stable() {
+        assert_eq!(OutboundErrorCategory::Quota.as_str(), "quota");
+        assert_eq!(OutboundErrorCategory::Network.as_str(), "network");
+        assert_eq!(
+            OutboundErrorCategory::ContextWindow.as_str(),
+            "context_window"
+        );
+        assert_eq!(OutboundErrorCategory::Provider.as_str(), "provider");
+        assert_eq!(OutboundErrorCategory::Tool.as_str(), "tool");
+        assert_eq!(OutboundErrorCategory::Cancelled.as_str(), "cancelled");
+    }
 
     #[test]
     fn classify_kimi_access_terminated_403_returns_quota() {

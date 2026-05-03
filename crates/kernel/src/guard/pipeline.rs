@@ -25,8 +25,6 @@
 //!     which bind-mounts the workspace at `/workspace` and rejects
 //!     host-absolute paths outside it (#1936).
 
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -34,22 +32,14 @@ use super::{pattern::PatternGuard, taint::TaintTracker};
 use crate::session::SessionKey;
 
 /// Which guard layer produced a block verdict.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "lowercase")]
 pub enum GuardLayer {
     /// Taint-flow analysis (session-level label propagation).
     Taint,
     /// Regex pattern scanning on tool arguments.
     Pattern,
-}
-
-impl fmt::Display for GuardLayer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Taint => f.write_str("taint"),
-            Self::Pattern => f.write_str("pattern"),
-        }
-    }
 }
 
 /// Verdict from the guard pipeline.

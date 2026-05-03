@@ -19,8 +19,6 @@
 //! [`transport`](DataFeedConfig::transport) JSON blob, and authentication
 //! is handled uniformly via [`AuthConfig`].
 
-use std::fmt;
-
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -78,8 +76,9 @@ pub struct DataFeedConfig {
 // ---------------------------------------------------------------------------
 
 /// Transport type for a data feed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum FeedType {
     /// HTTP POST receiver — external services push events to rara.
     Webhook,
@@ -89,23 +88,14 @@ pub enum FeedType {
     Polling,
 }
 
-impl fmt::Display for FeedType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Webhook => write!(f, "webhook"),
-            Self::WebSocket => write!(f, "websocket"),
-            Self::Polling => write!(f, "polling"),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // FeedStatus
 // ---------------------------------------------------------------------------
 
 /// Runtime status of a data feed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum FeedStatus {
     /// Registered but not currently running.
     Idle,
@@ -113,16 +103,6 @@ pub enum FeedStatus {
     Running,
     /// Stopped due to an error.
     Error,
-}
-
-impl fmt::Display for FeedStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Idle => write!(f, "idle"),
-            Self::Running => write!(f, "running"),
-            Self::Error => write!(f, "error"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -194,8 +194,9 @@ pub struct SandboxConfig {
 ///
 /// Controls whether a session uses the standard reactive agent loop (v1)
 /// or the plan-execute architecture (v2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, strum::Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "lowercase")]
 pub enum ExecutionMode {
     /// Standard reactive agent loop (v1). The agent processes each message
     /// through the normal LLM → tool → LLM cycle.
@@ -205,15 +206,6 @@ pub enum ExecutionMode {
     /// executes each step with verification. Activated via `/plan` prefix
     /// or `default_execution_mode: plan` in agent manifest.
     Plan,
-}
-
-impl std::fmt::Display for ExecutionMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reactive => write!(f, "reactive"),
-            Self::Plan => write!(f, "plan"),
-        }
-    }
 }
 
 impl ExecutionMode {

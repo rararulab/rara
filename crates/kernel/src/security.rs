@@ -130,21 +130,14 @@ impl Default for ApprovalPolicy {
 // ---------------------------------------------------------------------------
 
 /// Error from resolving an approval request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, strum::Display)]
 pub enum ResolveError {
     /// The request timed out before the user responded.
+    #[strum(to_string = "approval request has expired")]
     Expired,
     /// The request ID was never seen.
+    #[strum(to_string = "no pending approval request: {0}")]
     NotFound(Uuid),
-}
-
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Expired => write!(f, "approval request has expired"),
-            Self::NotFound(id) => write!(f, "no pending approval request: {id}"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -78,23 +78,22 @@ impl Default for ExecutionMode {
 }
 
 /// Step outcome after execution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 pub enum StepOutcome {
+    #[strum(serialize = "success")]
     Success,
+    #[strum(serialize = "failed")]
     Failed { reason: String },
+    #[strum(serialize = "needs_replan")]
     NeedsReplan { reason: String },
 }
 
 impl StepOutcome {
-    /// Returns a short label for stream event reporting.
-    fn label(&self) -> &str {
-        match self {
-            Self::Success => "success",
-            Self::Failed { .. } => "failed",
-            Self::NeedsReplan { .. } => "needs_replan",
-        }
-    }
+    /// Returns the short wire label for stream event reporting. Backed by
+    /// `strum::IntoStaticStr` with explicit per-variant `serialize`
+    /// attributes; renaming a variant does not change the wire string.
+    fn label(&self) -> &'static str { self.into() }
 }
 
 /// A planned step to be executed.
