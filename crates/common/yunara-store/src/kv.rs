@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use bon::Builder;
 use diesel::{ExpressionMethods, QueryDsl, upsert::excluded};
-use diesel_async::{RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::RunQueryDsl;
 use rara_model::schema::kv_table;
 use serde::{Serialize, de::DeserializeOwned};
 use snafu::ResultExt;
@@ -116,20 +116,17 @@ impl KVStore {
 
         let mut conn = self.pools.writer.get().await.context(DieselPoolRunSnafu)?;
         use diesel_async::AsyncConnection;
-        conn.transaction::<_, diesel::result::Error, _>(|tx| {
-            async move {
-                for (key, value_json) in &serialized_pairs {
-                    diesel::insert_into(kv_table::table)
-                        .values((kv_table::key.eq(key), kv_table::value.eq(value_json)))
-                        .on_conflict(kv_table::key)
-                        .do_update()
-                        .set(kv_table::value.eq(excluded(kv_table::value)))
-                        .execute(tx)
-                        .await?;
-                }
-                Ok(())
+        conn.transaction::<_, diesel::result::Error, _>(async |tx| {
+            for (key, value_json) in &serialized_pairs {
+                diesel::insert_into(kv_table::table)
+                    .values((kv_table::key.eq(key), kv_table::value.eq(value_json)))
+                    .on_conflict(kv_table::key)
+                    .do_update()
+                    .set(kv_table::value.eq(excluded(kv_table::value)))
+                    .execute(tx)
+                    .await?;
             }
-            .scope_boxed()
+            Ok(())
         })
         .await
         .context(DieselSnafu)?;

@@ -31,8 +31,11 @@
 //! stalls or tokio mutex contention — for those, use `tokio-console`
 //! (separate feature flag, tracked as a future chore).
 
-use pyroscope::{PyroscopeAgent, pyroscope::PyroscopeAgentRunning};
-use pyroscope_pprofrs::{PprofConfig, pprof_backend};
+use pyroscope::{
+    PyroscopeAgent,
+    backend::{BackendConfig, PprofConfig, pprof_backend},
+    pyroscope::{PyroscopeAgentBuilder, PyroscopeAgentRunning},
+};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 
@@ -121,17 +124,33 @@ pub fn init_pyroscope(
         return Ok(None);
     }
 
-    let pprof = PprofConfig::new().sample_rate(cfg.sample_rate);
+    let pprof = PprofConfig {
+        sample_rate: cfg.sample_rate,
+    };
     // `tags` is a Vec<(&str, &str)>, so build owned strings up-front and
     // borrow into the call. Pyroscope copies them internally.
     let tags: Vec<(&str, &str)> =
         vec![("env", env), ("host", host), ("build_commit", build_commit)];
 
-    let agent = PyroscopeAgent::builder(&cfg.endpoint, &cfg.application_name)
-        .backend(pprof_backend(pprof))
-        .tags(tags)
-        .build()
-        .context(BuildAgentSnafu)?;
+    // pyroscope 2.0 absorbed the pprof-rs backend behind the
+    // `backend-pprof-rs` feature (the standalone `pyroscope_pprofrs`
+    // crate is dead — last published against pyroscope 0.5.7). It also
+    // dropped the `PyroscopeAgent::builder` shortcut, so we go through
+    // `PyroscopeAgentBuilder::new` and supply sample_rate + spy
+    // identity (name + version) up-front. We report ourselves as
+    // `pyroscope-rs` (the canonical Rust spy name) at our crate version
+    // so the server can disambiguate uploads.
+    let agent: PyroscopeAgent<_> = PyroscopeAgentBuilder::new(
+        &cfg.endpoint,
+        &cfg.application_name,
+        cfg.sample_rate,
+        "pyroscope-rs",
+        env!("CARGO_PKG_VERSION"),
+        pprof_backend(pprof, BackendConfig::default()),
+    )
+    .tags(tags)
+    .build()
+    .context(BuildAgentSnafu)?;
 
     let running = agent.start().context(StartAgentSnafu)?;
     tracing::info!(

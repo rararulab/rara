@@ -314,7 +314,7 @@ impl SessionIndex for SqliteSessionIndex {
         key: &SessionKey,
         derived: &SessionDerivedState,
     ) -> Result<(), SessionError> {
-        use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
+        use diesel_async::AsyncConnection;
 
         let anchors_json = serde_json::to_string(&derived.anchors).context(JsonSnafu)?;
         let updated_at = derived.updated_at.to_rfc3339();
@@ -329,37 +329,34 @@ impl SessionIndex for SqliteSessionIndex {
         // Wrap both UPDATEs in a single transaction so a concurrent
         // `update_session` (PATCH /sessions) cannot slip a write between
         // the derived-state UPDATE and the conditional preview UPDATE.
-        conn.transaction::<_, diesel::result::Error, _>(|tx| {
-            async move {
-                diesel::update(sessions::table.filter(sessions::key.eq(&key_str)))
-                    .set((
-                        sessions::total_entries.eq(total_entries),
-                        sessions::last_token_usage.eq(last_token_usage),
-                        sessions::estimated_context_tokens.eq(estimated_context_tokens),
-                        sessions::entries_since_last_anchor.eq(entries_since_last_anchor),
-                        sessions::anchors_json.eq(&anchors_json),
-                        sessions::updated_at.eq(&updated_at),
-                    ))
-                    .execute(tx)
-                    .await?;
+        conn.transaction::<_, diesel::result::Error, _>(async |tx| {
+            diesel::update(sessions::table.filter(sessions::key.eq(&key_str)))
+                .set((
+                    sessions::total_entries.eq(total_entries),
+                    sessions::last_token_usage.eq(last_token_usage),
+                    sessions::estimated_context_tokens.eq(estimated_context_tokens),
+                    sessions::entries_since_last_anchor.eq(entries_since_last_anchor),
+                    sessions::anchors_json.eq(&anchors_json),
+                    sessions::updated_at.eq(&updated_at),
+                ))
+                .execute(tx)
+                .await?;
 
-                // Preview is "what this conversation started as" — only
-                // set it when the row currently has none. A second
-                // UPDATE keeps the contract simple at the cost of one
-                // extra statement on the (very rare) preview-write path.
-                if let Some(preview) = &preview {
-                    diesel::update(
-                        sessions::table
-                            .filter(sessions::key.eq(&key_str))
-                            .filter(sessions::preview.is_null()),
-                    )
-                    .set(sessions::preview.eq(preview))
-                    .execute(tx)
-                    .await?;
-                }
-                Ok(())
+            // Preview is "what this conversation started as" — only
+            // set it when the row currently has none. A second
+            // UPDATE keeps the contract simple at the cost of one
+            // extra statement on the (very rare) preview-write path.
+            if let Some(preview) = &preview {
+                diesel::update(
+                    sessions::table
+                        .filter(sessions::key.eq(&key_str))
+                        .filter(sessions::preview.is_null()),
+                )
+                .set(sessions::preview.eq(preview))
+                .execute(tx)
+                .await?;
             }
-            .scope_boxed()
+            Ok(())
         })
         .await
         .map_err(map_diesel_err)?;

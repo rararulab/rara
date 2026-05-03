@@ -26,8 +26,7 @@ opentelemetry-appender-tracing = { version = "0.31.0" }
 opentelemetry-otlp = { version = "0.31.0", features = ["trace", "metrics", "logs", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
 opentelemetry-semantic-conventions = { version = "0.31.0", features = ["semconv_experimental"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace", "metrics", "logs"] }
-pyroscope = { workspace = true }
-pyroscope_pprofrs = { workspace = true }
+pyroscope = { workspace = true, features = ["backend-pprof-rs"] }
 # Pinned to 0.12 to match opentelemetry-http 0.31's reqwest dep — the
 # `HttpClient` trait impl is only visible for the version that crate links
 # against. Workspace reqwest is 0.13.
