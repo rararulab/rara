@@ -2383,18 +2383,40 @@ impl Kernel {
             };
             let tape_payload = serde_json::json!({
                 "role": "user",
-                "content": tape_content,
+                "content": tape_content.clone(),
             });
-            if let Err(e) = &self
+            match self
                 .tape_service
-                .append_message(
+                .append_message_with_chat_seq(
                     &tape_name,
                     tape_payload,
                     Some(serde_json::json!({"rara_turn_id": msg.id.to_string()})),
                 )
                 .await
             {
-                warn!(%e, "failed to persist user message to tape");
+                Ok((entry, chat_seq)) => {
+                    // Echo the tape persistence on the session topology bus
+                    // so live subscribers (web TimelineView) render the user
+                    // bubble from the same channel as every other turn
+                    // artefact — see #2063 for the FE optimistic-bubble bug
+                    // this collapses. Emitted synchronously, before the
+                    // agent loop spawn, so subscribers see the user bubble
+                    // before any text_delta / tape_forked frame for the
+                    // turn. Failure cases (the `Err` arm below) emit
+                    // nothing — the spec binds emit-on-success only.
+                    self.io.stream_hub().emit_to_session_bus(
+                        &session_key,
+                        crate::io::StreamEvent::UserMessageAppended {
+                            parent_session: session_key,
+                            seq:            chat_seq,
+                            content:        tape_content,
+                            created_at:     entry.timestamp,
+                        },
+                    );
+                }
+                Err(e) => {
+                    warn!(%e, "failed to persist user message to tape");
+                }
             }
         }
 

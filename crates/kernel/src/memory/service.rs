@@ -382,10 +382,53 @@ impl TapeService {
         payload: Value,
         metadata: Option<Value>,
     ) -> TapResult<TapEntry> {
-        let outcome = self
-            .store
-            .append(tape_name, TapEntryKind::Message, payload, metadata)
+        let (entry, _seq) = self
+            .append_message_inner(tape_name, payload, metadata, false)
             .await?;
+        Ok(entry)
+    }
+
+    /// Append a message entry and additionally surface the position-based
+    /// chat seq the `/messages` REST endpoint will return for it.
+    ///
+    /// Used by `Kernel::handle_inbound_to_session` to emit
+    /// `StreamEvent::UserMessageAppended` carrying the same seq the
+    /// frontend will see when it refetches history (#2063), removing the
+    /// need for an FE-side optimistic-bubble bridge keyed on a different
+    /// id space. The seq computation is atomic with the append (runs in
+    /// the same tape-IO worker call) so no concurrent append can shift
+    /// the counter between persistence and emission.
+    pub async fn append_message_with_chat_seq(
+        &self,
+        tape_name: &str,
+        payload: Value,
+        metadata: Option<Value>,
+    ) -> TapResult<(TapEntry, i64)> {
+        self.append_message_inner(tape_name, payload, metadata, true)
+            .await
+    }
+
+    /// Shared body of [`Self::append_message`] and
+    /// [`Self::append_message_with_chat_seq`]. `with_chat_seq=true`
+    /// dispatches the worker call that also walks for the chat seq.
+    async fn append_message_inner(
+        &self,
+        tape_name: &str,
+        payload: Value,
+        metadata: Option<Value>,
+        with_chat_seq: bool,
+    ) -> TapResult<(TapEntry, i64)> {
+        let (outcome, seq) = if with_chat_seq {
+            self.store
+                .append_with_chat_seq(tape_name, TapEntryKind::Message, payload, metadata)
+                .await?
+        } else {
+            let outcome = self
+                .store
+                .append(tape_name, TapEntryKind::Message, payload, metadata)
+                .await?;
+            (outcome, 0)
+        };
         let entry = outcome.entry.clone();
         self.record_append(tape_name, &outcome).await;
 
@@ -420,7 +463,7 @@ impl TapeService {
             }
         }
 
-        Ok(entry)
+        Ok((entry, seq))
     }
 
     /// Append a tool-call entry.

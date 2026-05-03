@@ -753,6 +753,43 @@ impl WorkerState {
             })
     }
 
+    /// Persist one new entry and, in the same worker call, compute the
+    /// position-based chat seq for the just-appended entry.
+    ///
+    /// "Chat seq" matches the counter
+    /// `extensions/backend-admin::tap_entries_to_chat_messages` walks for
+    /// the `/messages` REST endpoint — see `chat_seq_for_entry_id` for the
+    /// rules. Doing the walk inside the worker (i.e. while we still hold
+    /// the tape file's `&mut` and no concurrent appends can land) is the
+    /// race-free way to surface the chat seq alongside the append: callers
+    /// must not re-read the tape from outside the worker to derive the
+    /// seq, because a concurrent append on the same tape could shift the
+    /// counter under them (#2063 spec, "Where the seq comes from").
+    fn append_with_chat_seq(
+        &mut self,
+        tape: &str,
+        kind: super::TapEntryKind,
+        payload: serde_json::Value,
+        metadata: Option<serde_json::Value>,
+    ) -> TapResult<(AppendOutcome, i64)> {
+        let path = self.tape_path(tape);
+        let file = self
+            .tape_files
+            .entry(tape.to_owned())
+            .or_insert_with(|| TapeFile::new(path));
+        let outcome = file.append(TapEntry {
+            id: 0,
+            kind,
+            payload,
+            timestamp: jiff::Timestamp::now(),
+            metadata,
+        })?;
+        let target_id = outcome.entry.id;
+        let entries = file.read()?;
+        let seq = chat_seq_for_entry_id(&entries, target_id).unwrap_or(0);
+        Ok((outcome, seq))
+    }
+
     /// Rename the active tape into a timestamped archive file.
     fn archive(&mut self, tape: &str) -> TapResult<Option<PathBuf>> {
         let mut file = self.take_tape_file(tape);
@@ -994,11 +1031,97 @@ impl FileTapeStore {
             .await
     }
 
+    /// Append one entry and atomically resolve the position-based chat seq
+    /// of the just-appended entry.
+    ///
+    /// Used by `TapeService::append_message_with_chat_seq` to emit
+    /// `StreamEvent::UserMessageAppended` (#2063) with a seq that matches
+    /// the `/messages` REST endpoint's `ChatMessage.seq`. The walk runs
+    /// inside the worker dispatch so no concurrent append can interleave
+    /// between the append and the seq lookup.
+    pub async fn append_with_chat_seq(
+        &self,
+        tape: &str,
+        kind: super::TapEntryKind,
+        payload: serde_json::Value,
+        metadata: Option<serde_json::Value>,
+    ) -> TapResult<(AppendOutcome, i64)> {
+        let tape = tape.to_owned();
+        self.worker
+            .call(move |state| state.append_with_chat_seq(&tape, kind, payload, metadata))
+            .await
+    }
+
     /// Archive one tape into a timestamped backup file.
     pub async fn archive(&self, tape: &str) -> TapResult<Option<PathBuf>> {
         let tape = tape.to_owned();
         self.worker.call(move |state| state.archive(&tape)).await
     }
+}
+
+/// Compute the position-based chat seq for the entry whose `id ==
+/// target_entry_id`, walking `entries` with the same rules as
+/// `extensions/backend-admin::tap_entries_to_chat_messages`'s seq walker.
+///
+/// Emission rules — kept symmetric with `walk_tape_with_seq` in
+/// `crates/extensions/backend-admin/src/chat/service.rs`:
+///
+/// - `Message` whose payload deserializes as [`crate::llm::Message`]: advances
+///   seq by 1 and is emittable.
+/// - `ToolCall` carrying a `calls` array: advances seq by 1.
+/// - `ToolResult` carrying a `results` array of length N: advances seq by N.
+///   The first result of the just-appended entry takes the post- advance seq
+///   (seq + 1).
+/// - Anything else (other kinds, malformed payloads): no advance.
+///
+/// Returns `None` when no entry with the target id is found, or when the
+/// target entry's payload does not advance the seq under the rules above
+/// (callers emit a topology event only on Message/ToolCall/ToolResult
+/// appends, so this is fine to surface as `None`).
+fn chat_seq_for_entry_id(entries: &[TapEntry], target_entry_id: u64) -> Option<i64> {
+    use serde_json::Value;
+
+    use super::TapEntryKind;
+    let mut seq: i64 = 0;
+    for entry in entries {
+        match entry.kind {
+            TapEntryKind::Message
+                if serde_json::from_value::<crate::llm::Message>(entry.payload.clone()).is_ok() =>
+            {
+                seq += 1;
+                if entry.id == target_entry_id {
+                    return Some(seq);
+                }
+            }
+            TapEntryKind::ToolCall
+                if entry
+                    .payload
+                    .get("calls")
+                    .and_then(Value::as_array)
+                    .is_some() =>
+            {
+                seq += 1;
+                if entry.id == target_entry_id {
+                    return Some(seq);
+                }
+            }
+            TapEntryKind::ToolResult => {
+                if let Some(results) = entry.payload.get("results").and_then(Value::as_array) {
+                    let n = results.len() as i64;
+                    if entry.id == target_entry_id {
+                        // The first result owns seq+1 in
+                        // `tap_entries_to_chat_messages`; the kernel
+                        // emits the topology event for the entry as a
+                        // whole, so return that first-result seq.
+                        return if n > 0 { Some(seq + 1) } else { None };
+                    }
+                    seq += n;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Trim ASCII whitespace around one JSONL record before decoding it.
