@@ -51,7 +51,7 @@ tracing-subscriber = { workspace = true }
 reqwest = { version = "0.13", features = ["json"] }
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
-opentelemetry_sdk = { version = "0.31.0", features = ["trace"] }
+opentelemetry_sdk = { version = "0.32.0", features = ["trace"] }
 tracing-subscriber = { workspace = true }
 
 [lints]
