@@ -43,7 +43,7 @@ jieba-rs.workspace = true
 jiff.workspace = true
 md5.workspace = true
 opendal = { workspace = true }
-opentelemetry = { version = "0.31.0", default-features = false, features = ["trace", "metrics"] }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace", "metrics"] }
 parking_lot.workspace = true
 rapidfuzz.workspace = true
 rara-browser.workspace = true
