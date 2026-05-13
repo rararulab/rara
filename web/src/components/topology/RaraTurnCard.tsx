@@ -18,7 +18,6 @@ import { useMemo, useState } from 'react';
 
 import { CascadeModal } from './CascadeModal';
 import { ExecutionTraceModal } from './ExecutionTraceModal';
-import { RaraTurnCardActionsMenu } from './RaraTurnCardActionsMenu';
 import { SpawnMarker } from './SpawnMarker';
 import type { TurnCardData } from './TurnCard';
 
@@ -34,16 +33,12 @@ import type { ActivityItem, ResponseContent } from '~vendor/components/chat/Turn
  * only place that bridges the two — keeping the rest of the topology tree
  * unaware of the vendor surface.
  *
- * The trace + cascade affordances are wired through the vendor's
- * `onOpenDetails` (three-dot actions menu → "view turn details") and
- * `onOpenActivityDetails` (clicking a completed tool row) slots. Both
- * slots are left undefined when `turn.finalSeq === null` or
- * `turn.inFlight === true`, which causes the vendor to suppress the
- * three-dot trigger entirely (see `TurnCardActionsMenu.tsx` lines 39-42)
- * and the activity row's hover-affordance (see `TurnCard.tsx` ~line 1030).
- * That's the structural mitigation for #1672 — affordances cannot leak
- * onto live or seq-less turns because the props they depend on are not
- * passed.
+ * Trace + cascade are wired as plain-English buttons in the response
+ * footer via the vendor's `renderResponseActions` slot. Both are
+ * turn-level affordances scoped to `turn.finalSeq`; they remain absent
+ * for live turns and seq-less turns because the slot is left undefined.
+ * That mirrors the Telegram inline-keyboard parity (PR 703 / issue 702)
+ * and supersedes PR 2028's three-dot menu + tool-row cascade wiring.
  */
 export interface RaraTurnCardProps {
   turn: TurnCardData;
@@ -121,25 +116,29 @@ export function RaraTurnCard({ turn, sessionKey }: RaraTurnCardProps) {
   const responseProps = response ? { response } : {};
 
   // Affordance gate: the trace / cascade endpoints are keyed on a
-  // persisted seq, so leave the slots undefined for live turns and for
-  // any turn whose seq we have not yet observed.
+  // persisted seq, so leave the slot undefined for live turns and for
+  // any turn whose seq we have not yet observed. This is also the
+  // structural mitigation for #1672 — without `finalSeq`, no buttons.
   const inspectable = turn.finalSeq !== null && !turn.inFlight;
-  // Replace the vendor's `TurnCardActionsMenu` with our own dropdown.
-  // The vendor menu wraps the trigger in `SimpleDropdown`, whose
-  // `setItemRef` callback runs `setHighlightedId` during a child item's
-  // mount render — that's a vendor bug (issue 2032). `renderActionsMenu`
-  // lets us bypass `SimpleDropdown` without touching vendor code.
   const inspectProps = inspectable
     ? {
-        onOpenDetails: () => setTraceOpen(true),
-        // Cascade only makes sense on rows backed by a real tool call.
-        // Vendor passes the activity for both `tool` and `intermediate`
-        // rows, so we filter here. `thinking` rows have no cascade.
-        onOpenActivityDetails: (activity: ActivityItem) => {
-          if (activity.type === 'tool') setCascadeOpen(true);
-        },
-        renderActionsMenu: () => (
-          <RaraTurnCardActionsMenu onOpenDetails={() => setTraceOpen(true)} />
+        renderResponseActions: () => (
+          <>
+            <button
+              type="button"
+              onClick={() => setTraceOpen(true)}
+              className="turn-action-btn flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors select-none focus:outline-none focus-visible:underline"
+            >
+              Trace
+            </button>
+            <button
+              type="button"
+              onClick={() => setCascadeOpen(true)}
+              className="turn-action-btn flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors select-none focus:outline-none focus-visible:underline"
+            >
+              Cascade
+            </button>
+          </>
         ),
       }
     : {};
