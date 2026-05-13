@@ -2148,7 +2148,10 @@ impl Kernel {
         // without invoking the agent loop.
         let raw_text = msg.content.as_text();
         if raw_text.starts_with("/msg_version") {
-            let arg = raw_text.strip_prefix("/msg_version").unwrap().trim();
+            let arg = raw_text
+                .strip_prefix("/msg_version")
+                .expect("starts_with(\"/msg_version\") was checked one line above")
+                .trim();
             let user = msg.user.clone();
             let msg_id = msg.id.clone();
             let origin_endpoint = msg.origin_endpoint().or_else(|| {
@@ -2450,7 +2453,7 @@ impl Kernel {
                             .unwrap_or_else(|| serde_json::json!({}));
                         let images = meta
                             .as_object_mut()
-                            .unwrap()
+                            .expect("meta defaulted to json!({}) above, which is always an object")
                             .entry("images")
                             .or_insert_with(|| serde_json::json!({}));
                         if let Some(images_map) = images.as_object_mut() {
@@ -2821,7 +2824,7 @@ impl Kernel {
                 // -- 7f: Persist execution trace --
                 // Why: Every agent turn — success or failure — gets its trace
                 // persisted to SQLite so that any channel can later retrieve
-                // it (Telegram "📊 详情" inline button, web chat
+                // it (Telegram "📊 Details" inline button, web chat
                 // execution-trace modal). Before #1613 this was TG-adapter
                 // responsibility and only TG turns had rows; now trace
                 // construction + save is a single kernel-owned concern.

@@ -400,7 +400,10 @@ pub fn init_default_ut_logging() {
     static START: Once = Once::new();
 
     START.call_once(|| {
-        let mut g = GLOBAL_UT_LOG_GUARD.as_ref().lock().unwrap();
+        let mut g = GLOBAL_UT_LOG_GUARD
+            .as_ref()
+            .lock()
+            .expect("GLOBAL_UT_LOG_GUARD mutex poisoned by an earlier panic");
 
         let dir =
             env::var("UNITTEST_LOG_DIR").unwrap_or_else(|_| "/tmp/__unittest_logs".to_string());

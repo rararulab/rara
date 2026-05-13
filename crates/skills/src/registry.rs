@@ -80,22 +80,37 @@ impl InMemoryRegistry {
 
     /// Add a skill directly.
     pub fn insert(&self, meta: SkillMetadata) {
-        self.skills.write().unwrap().insert(meta.name.clone(), meta);
+        self.skills
+            .write()
+            .expect("skills RwLock poisoned by an earlier panic")
+            .insert(meta.name.clone(), meta);
     }
 
     /// List all skill metadata.
     pub fn list_all(&self) -> Vec<SkillMetadata> {
-        self.skills.read().unwrap().values().cloned().collect()
+        self.skills
+            .read()
+            .expect("skills RwLock poisoned by an earlier panic")
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Get a clone of a skill's metadata by name.
     pub fn get(&self, name: &str) -> Option<SkillMetadata> {
-        self.skills.read().unwrap().get(name).cloned()
+        self.skills
+            .read()
+            .expect("skills RwLock poisoned by an earlier panic")
+            .get(name)
+            .cloned()
     }
 
     /// Remove a skill by name. Returns the removed metadata, if any.
     pub fn remove(&self, name: &str) -> Option<SkillMetadata> {
-        self.skills.write().unwrap().remove(name)
+        self.skills
+            .write()
+            .expect("skills RwLock poisoned by an earlier panic")
+            .remove(name)
     }
 }
 

@@ -100,18 +100,20 @@ impl Serialize for ReadableSize {
     {
         let size = self.0;
         let mut buffer = String::new();
+        // SAFETY: writing into a `String` via `fmt::Write` cannot fail —
+        // String's Write impl never returns Err.
         if size == 0 {
-            write!(buffer, "{size}KiB").unwrap();
+            write!(buffer, "{size}KiB").expect("write! into String never fails");
         } else if size.is_multiple_of(PIB) {
-            write!(buffer, "{}PiB", size / PIB).unwrap();
+            write!(buffer, "{}PiB", size / PIB).expect("write! into String never fails");
         } else if size.is_multiple_of(TIB) {
-            write!(buffer, "{}TiB", size / TIB).unwrap();
+            write!(buffer, "{}TiB", size / TIB).expect("write! into String never fails");
         } else if size.is_multiple_of(GIB) {
-            write!(buffer, "{}GiB", size / GIB).unwrap();
+            write!(buffer, "{}GiB", size / GIB).expect("write! into String never fails");
         } else if size.is_multiple_of(MIB) {
-            write!(buffer, "{}MiB", size / MIB).unwrap();
+            write!(buffer, "{}MiB", size / MIB).expect("write! into String never fails");
         } else if size.is_multiple_of(KIB) {
-            write!(buffer, "{}KiB", size / KIB).unwrap();
+            write!(buffer, "{}KiB", size / KIB).expect("write! into String never fails");
         } else {
             return serializer.serialize_u64(size);
         }

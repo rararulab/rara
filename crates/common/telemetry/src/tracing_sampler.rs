@@ -153,7 +153,10 @@ fn sample_based_on_probability(prob: f64, trace_id: TraceId) -> SamplingDecision
         let prob_upper_bound = (prob.max(0.0) * (1u64 << 63) as f64) as u64;
         let bytes = trace_id.to_bytes();
         let (_, low) = bytes.split_at(8);
-        let trace_id_low = u64::from_be_bytes(low.try_into().unwrap());
+        let trace_id_low = u64::from_be_bytes(
+            low.try_into()
+                .expect("split_at(8) on a 16-byte TraceId guarantees the second half is 8 bytes"),
+        );
         let rnd_from_trace_id = trace_id_low >> 1;
 
         if rnd_from_trace_id < prob_upper_bound {
