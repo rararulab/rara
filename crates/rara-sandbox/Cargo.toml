@@ -17,7 +17,7 @@ workspace = true
 
 [dependencies]
 bon = { workspace = true }
-boxlite = { git = "https://github.com/boxlite-ai/boxlite", tag = "v0.8.2" }
+boxlite = { git = "https://github.com/boxlite-ai/boxlite", tag = "v0.9.3" }
 futures = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
