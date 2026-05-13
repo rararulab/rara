@@ -39,7 +39,7 @@ use super::prompt;
 ///
 /// This is a mechanism constant (matches the dependency, not user
 /// preference), not a YAML knob.
-const BOXLITE_VERSION: &str = "v0.8.2";
+const BOXLITE_VERSION: &str = "v0.9.3";
 
 /// Base URL for the upstream boxlite release archive. Appended with
 /// `{version}/boxlite-runtime-{version}-{target}.tar.gz`.
