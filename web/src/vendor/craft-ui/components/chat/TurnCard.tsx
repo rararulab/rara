@@ -337,6 +337,11 @@ export interface TurnCardProps {
   todos?: TodoItem[]
   /** Optional render prop for actions menu (Electron provides dropdown) */
   renderActionsMenu?: () => React.ReactNode
+  /** Optional render slot for host-supplied turn-level actions inside the
+   *  response footer action bar, on the right side alongside BranchDropdown.
+   *  When provided, the response footer renders even in page-flow mode so
+   *  the actions remain reachable. */
+  renderResponseActions?: () => React.ReactNode
   /** Callback when user accepts the plan (plan responses only) */
   onAcceptPlan?: () => void
   /** Callback when user accepts the plan with compaction (compact conversation first, then execute) */
@@ -1436,6 +1441,11 @@ export interface ResponseCardProps {
   openAnnotationRequest?: OpenAnnotationRequest | null
   /** Annotation interaction mode (viewer uses tooltip-only to suppress the island) */
   annotationInteractionMode?: AnnotationInteractionMode
+  /** Optional host-supplied turn-level actions rendered on the right side
+   *  of the response footer alongside BranchDropdown. When provided, the
+   *  footer renders even in page-flow mode so the actions remain
+   *  reachable. */
+  renderResponseActions?: () => React.ReactNode
 }
 
 interface BranchDropdownProps {
@@ -1677,6 +1687,7 @@ export function ResponseCard({
   hasActiveFollowUpAnnotations = false,
   openAnnotationRequest,
   annotationInteractionMode = 'interactive',
+  renderResponseActions,
 }: ResponseCardProps) {
   const { t } = useTranslation()
   // Throttled content for display - updates every CONTENT_THROTTLE_MS during streaming
@@ -2504,8 +2515,12 @@ export function ResponseCard({
             </div>
           </div>
 
-          {/* Footer with actions - hidden in compact mode */}
-          {!isPageFlowResponse && !compactMode && (
+          {/* Footer with actions - hidden in compact mode.
+              In page-flow mode the footer is normally suppressed (PR #2054),
+              but if the host supplied `renderResponseActions` it needs a
+              home — keep the same footer chrome rather than introducing a
+              second slimmer strip, so layout stays uniform across modes. */}
+          {(!isPageFlowResponse || renderResponseActions) && !compactMode && (
             <div className={cn(
               "pl-4 pr-2.5 py-2 border-t border-border/30 flex items-center justify-between bg-muted/20",
               SIZE_CONFIG.fontSize
@@ -2567,6 +2582,7 @@ export function ResponseCard({
                     />
                   </div>
                 )}
+                {renderResponseActions?.()}
                 {onBranch && <BranchDropdown onBranch={onBranch} />}
               </div>
             </div>
@@ -2752,6 +2768,7 @@ export const TurnCard = React.memo(function TurnCard({
   hasEditOrWriteActivities,
   todos,
   renderActionsMenu,
+  renderResponseActions,
   onAcceptPlan,
   onAcceptPlanWithCompact,
   isLastResponse,
@@ -3172,6 +3189,7 @@ export const TurnCard = React.memo(function TurnCard({
                 hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
                 openAnnotationRequest={openAnnotationRequest}
                 annotationInteractionMode={annotationInteractionMode}
+                renderResponseActions={renderResponseActions}
               />
             </motion.div>
           )}
@@ -3205,6 +3223,7 @@ export const TurnCard = React.memo(function TurnCard({
             hasActiveFollowUpAnnotations={hasActiveFollowUpAnnotations}
             openAnnotationRequest={openAnnotationRequest}
             annotationInteractionMode={annotationInteractionMode}
+            renderResponseActions={renderResponseActions}
           />
         </div>
       )}
