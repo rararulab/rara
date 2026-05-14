@@ -671,6 +671,12 @@ pub fn init_global_logging(
             None
         };
 
+        // OTLP init failures are auxiliary — buffer one WARN per failed
+        // subsystem (traces / metrics / logs) and emit them via `tracing`
+        // AFTER `set_global_default`, so the warnings land in stdout and
+        // the file appender like every other log line.
+        let mut deferred_warnings: Vec<String> = Vec::new();
+
         let otel_trace_layer = if opts.enable_otlp_tracing {
             global::set_text_map_propagator(TraceContextPropagator::new());
 
@@ -687,18 +693,36 @@ pub fn init_global_logging(
                 .clone()
                 .expect("otel_resource present when enable_otlp_tracing");
 
-            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-                .with_batch_exporter(build_otlp_exporter(opts))
-                .with_sampler(sampler)
-                .with_resource(resource.clone())
-                .build();
-            let tracer = provider.tracer("job");
+            // Build the span exporter and metric provider independently.
+            // A failure in one MUST NOT prevent the other from trying —
+            // operators care about whichever signal still works.
+            let trace_layer = match build_otlp_exporter(opts) {
+                Ok(exporter) => {
+                    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                        .with_batch_exporter(exporter)
+                        .with_sampler(sampler)
+                        .with_resource(resource.clone())
+                        .build();
+                    let tracer = provider.tracer("job");
+                    Some(tracing_opentelemetry::layer().with_tracer(tracer))
+                }
+                Err(e) => {
+                    deferred_warnings.push(format!(
+                        "OTLP traces disabled: failed to build span exporter: {e}"
+                    ));
+                    None
+                }
+            };
 
             // Initialize the OTel metrics pipeline alongside traces.
-            let meter_provider = init_meter_provider(opts, resource);
-            global::set_meter_provider(meter_provider);
+            match init_meter_provider(opts, resource) {
+                Ok(meter_provider) => global::set_meter_provider(meter_provider),
+                Err(e) => deferred_warnings.push(format!(
+                    "OTLP metrics disabled: failed to build metric exporter: {e}"
+                )),
+            }
 
-            Some(tracing_opentelemetry::layer().with_tracer(tracer))
+            trace_layer
         } else {
             None
         };
@@ -707,11 +731,21 @@ pub fn init_global_logging(
             let resource = otel_resource
                 .clone()
                 .expect("otel_resource present when enable_otlp_logs");
-            let logger_provider = init_logger_provider(opts, resource);
-            // The bridge converts every `tracing` event into an OTLP
-            // `LogRecord`. Keep it as a separate layer so it stacks on the
-            // same `Registry` as the file/stdout layers and the trace layer.
-            Some(OpenTelemetryTracingBridge::new(&logger_provider))
+            match init_logger_provider(opts, resource) {
+                Ok(logger_provider) => {
+                    // The bridge converts every `tracing` event into an OTLP
+                    // `LogRecord`. Keep it as a separate layer so it stacks on
+                    // the same `Registry` as the file/stdout layers and the
+                    // trace layer.
+                    Some(OpenTelemetryTracingBridge::new(&logger_provider))
+                }
+                Err(e) => {
+                    deferred_warnings.push(format!(
+                        "OTLP logs disabled: failed to build log exporter: {e}"
+                    ));
+                    None
+                }
+            }
         } else {
             None
         };
@@ -720,6 +754,12 @@ pub fn init_global_logging(
             subscriber.with(otel_trace_layer).with(otel_logs_layer),
         )
         .expect("error setting global tracing subscriber");
+
+        // The subscriber is now installed — buffered OTLP init warnings
+        // can reach stdout + file appender like any other log line.
+        for msg in deferred_warnings {
+            tracing::warn!(target: "common_telemetry::logging", "{msg}");
+        }
     });
 
     guards
@@ -761,20 +801,39 @@ fn build_otel_resource(
     }
 }
 
+/// Boxed error returned by the fallible OTLP construction helpers below.
+///
+/// OTLP init failures are auxiliary — the caller turns them into a single
+/// `WARN` line and skips the affected subsystem. The exact error type from
+/// `reqwest` / `opentelemetry-otlp` is preserved only for the message.
+type OtlpInitError = Box<dyn std::error::Error + Send + Sync>;
+
 /// Build a `reqwest::blocking::Client` configured for OTLP HTTP exporters.
 ///
 /// OTLP exporters target collectors on the LAN (Alloy, Langfuse, Loki). They
 /// must NOT honor `HTTP_PROXY` / `HTTPS_PROXY` from the environment, and
 /// OTel's BatchProcessor / PeriodicReader threads have no tokio runtime, so we
 /// use the blocking client.
-fn build_otlp_http_client() -> reqwest::blocking::Client {
+///
+/// # Errors
+///
+/// Returns an error if `reqwest` cannot build the blocking client (rare —
+/// typically a TLS backend init failure). Callers soft-fail.
+fn build_otlp_http_client() -> Result<reqwest::blocking::Client, OtlpInitError> {
     reqwest::blocking::Client::builder()
         .no_proxy()
         .build()
-        .expect("Failed to build reqwest client for OTLP HTTP exporter")
+        .map_err(Into::into)
 }
 
-fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
+/// Build the OTLP span exporter.
+///
+/// # Errors
+///
+/// Returns an error if the underlying SDK builder fails (e.g. invalid TLS
+/// config, malformed endpoint, or an HTTP client that could not be
+/// constructed). Callers soft-fail.
+fn build_otlp_exporter(opts: &LoggingOptions) -> Result<SpanExporter, OtlpInitError> {
     let protocol = opts
         .otlp_export_protocol
         .clone()
@@ -800,16 +859,16 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
             .with_tonic()
             .with_endpoint(endpoint)
             .build()
-            .expect("Failed to create OTLP gRPC exporter "),
+            .map_err(Into::into),
 
         OtlpExportProtocol::Http => SpanExporter::builder()
             .with_http()
-            .with_http_client(build_otlp_http_client())
+            .with_http_client(build_otlp_http_client()?)
             .with_endpoint(endpoint)
             .with_protocol(Protocol::HttpBinary)
             .with_headers(opts.otlp_headers.clone())
             .build()
-            .expect("Failed to create OTLP HTTP exporter "),
+            .map_err(Into::into),
     }
 }
 
@@ -818,10 +877,15 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> SpanExporter {
 ///
 /// The exporter reuses the same endpoint / protocol configuration as the trace
 /// exporter so that a single collector receives both signals.
+///
+/// # Errors
+///
+/// Returns an error if the OTLP metric exporter could not be built. Callers
+/// soft-fail (skip the metrics layer, keep the rest of logging alive).
 fn init_meter_provider(
     opts: &LoggingOptions,
     resource: opentelemetry_sdk::Resource,
-) -> SdkMeterProvider {
+) -> Result<SdkMeterProvider, OtlpInitError> {
     let protocol = opts
         .otlp_export_protocol
         .clone()
@@ -852,24 +916,24 @@ fn init_meter_provider(
             .with_tonic()
             .with_endpoint(&endpoint)
             .build()
-            .expect("failed to build OTLP gRPC metric exporter"),
+            .map_err(OtlpInitError::from)?,
         OtlpExportProtocol::Http => opentelemetry_otlp::MetricExporter::builder()
             .with_http()
-            .with_http_client(build_otlp_http_client())
+            .with_http_client(build_otlp_http_client()?)
             .with_endpoint(&endpoint)
             .with_headers(opts.otlp_headers.clone())
             .build()
-            .expect("failed to build OTLP HTTP metric exporter"),
+            .map_err(OtlpInitError::from)?,
     };
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
         .with_interval(std::time::Duration::from_secs(30))
         .build();
 
-    SdkMeterProvider::builder()
+    Ok(SdkMeterProvider::builder()
         .with_reader(reader)
         .with_resource(resource)
-        .build()
+        .build())
 }
 
 /// Initialize an OpenTelemetry `SdkLoggerProvider` that ships log records to
@@ -880,10 +944,15 @@ fn init_meter_provider(
 /// log backend. `otlp_logs_endpoint` is independent from `otlp_endpoint`
 /// because logs and traces typically live on different services even when
 /// colocated (Loki vs Langfuse).
+///
+/// # Errors
+///
+/// Returns an error if the OTLP log exporter could not be built. Callers
+/// soft-fail (skip the logs bridge, keep stdout/file logging alive).
 fn init_logger_provider(
     opts: &LoggingOptions,
     resource: opentelemetry_sdk::Resource,
-) -> SdkLoggerProvider {
+) -> Result<SdkLoggerProvider, OtlpInitError> {
     let endpoint = opts
         .otlp_logs_endpoint
         .as_ref()
@@ -898,17 +967,17 @@ fn init_logger_provider(
 
     let exporter = LogExporter::builder()
         .with_http()
-        .with_http_client(build_otlp_http_client())
+        .with_http_client(build_otlp_http_client()?)
         .with_endpoint(endpoint)
         .with_protocol(Protocol::HttpBinary)
         .with_headers(opts.otlp_logs_headers.clone())
         .build()
-        .expect("failed to build OTLP HTTP log exporter");
+        .map_err(OtlpInitError::from)?;
 
-    SdkLoggerProvider::builder()
+    Ok(SdkLoggerProvider::builder()
         .with_batch_exporter(exporter)
         .with_resource(resource)
-        .build()
+        .build())
 }
 
 #[cfg(test)]
@@ -973,7 +1042,7 @@ mod tests {
 
         // The exporter builds the HTTP client synchronously. If the
         // panic regresses, this line aborts the test thread.
-        let _exporter = build_otlp_exporter(&opts);
+        let _exporter = build_otlp_exporter(&opts).expect("exporter builds");
     }
 
     /// Scenario 2: OTLP HTTP client preserves `.no_proxy()`.
@@ -1013,7 +1082,7 @@ mod tests {
             std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:1");
         }
 
-        let client = build_otlp_http_client();
+        let client = build_otlp_http_client().expect("client builds");
         // A short timeout keeps the test fast — we only need to see
         // *which* address the client tried to connect to.
         let url = format!("http://{addr}/");
@@ -1089,7 +1158,7 @@ mod tests {
         // but assemble the provider locally so this test does not
         // collide with the process-global `Once` guard inside
         // `init_global_logging`.
-        let exporter = build_otlp_exporter(&opts);
+        let exporter = build_otlp_exporter(&opts).expect("exporter builds");
         let resource = build_otel_resource("test", None, &opts);
         let provider = SdkTracerProvider::builder()
             .with_batch_exporter(exporter)
@@ -1127,6 +1196,110 @@ mod tests {
             got_post,
             "BatchSpanProcessor did not deliver any POST to the stub OTLP server within 5s",
         );
+    }
+
+    /// Scenario 4a: `build_otlp_http_client` returns `Ok` for the standard
+    /// config — the soft-fail wrapper does not regress the happy path.
+    #[test]
+    fn build_otlp_http_client_returns_ok_for_default_config() {
+        let _ = build_otlp_http_client().expect("client builds for default config");
+    }
+
+    /// Scenario 4b: when OTLP is enabled with an unreachable endpoint the
+    /// span exporter builder still succeeds — the SDK defers the actual
+    /// connection until export time. The point of asserting `Ok` here is
+    /// that the build-time codepath is exception-free (no panic, no Err
+    /// for a structurally valid config), which is the prerequisite for
+    /// soft-fail to even reach the runtime BatchProcessor.
+    #[test]
+    fn build_otlp_exporter_does_not_validate_reachability() {
+        let opts = LoggingOptions {
+            enable_otlp_tracing: true,
+            otlp_endpoint: Some("http://127.0.0.1:1/v1/traces".to_string()),
+            otlp_export_protocol: Some(OtlpExportProtocol::Http),
+            ..Default::default()
+        };
+        let _ = build_otlp_exporter(&opts).expect("structurally valid config builds");
+    }
+
+    /// Scenario 4c: a malformed OTLP endpoint causes the SDK builder to
+    /// return `Err` — proves the soft-fail wrapper preserves real failure
+    /// signals rather than silently mapping them to `Ok`.
+    ///
+    /// Malformed URLs (missing scheme, control characters, etc.) are
+    /// rejected by `resolve_http_endpoint` inside the OTel SDK before any
+    /// IO is attempted. Our wrapper must surface that as `Err` for
+    /// `init_global_logging` to log a WARN and skip the layer.
+    #[test]
+    fn build_otlp_exporter_returns_err_for_malformed_endpoint() {
+        let opts = LoggingOptions {
+            enable_otlp_tracing: true,
+            // Embedded control character; reqwest/url cannot parse this.
+            // Note we bypass the `starts_with("http")` prefix check by
+            // starting with "http" then injecting a NUL inside the host.
+            otlp_endpoint: Some("http://bad\u{0}host/v1/traces".to_string()),
+            otlp_export_protocol: Some(OtlpExportProtocol::Http),
+            ..Default::default()
+        };
+        match build_otlp_exporter(&opts) {
+            Err(_) => {} // expected
+            Ok(_) => {
+                // If the SDK ever starts accepting this string, this test
+                // becomes a no-op rather than a false positive. Surface
+                // it loudly so a future maintainer picks a different
+                // malformed input.
+                panic!(
+                    "expected malformed endpoint to fail at build time; SDK has changed its \
+                     validation behavior",
+                );
+            }
+        }
+    }
+
+    /// Scenario 4: soft-fail — `init_global_logging` does not panic when
+    /// every OTLP builder returns `Err`.
+    ///
+    /// Uses malformed endpoint URLs (NUL in host) so the OTel SDK rejects
+    /// them at build time. This exercises the full WARN-on-failure path:
+    /// the span exporter, the metric exporter, and the log exporter all
+    /// fail, each branch contributes one WARN line, and the function must
+    /// still return its `WorkerGuard`s — the server's `init_server_sync`
+    /// depends on this for the boot path to continue past telemetry init.
+    ///
+    /// Runs in an isolated thread so the process-wide `Once` guard inside
+    /// `init_global_logging` does not collide with sibling tests.
+    #[test]
+    fn init_global_logging_soft_fails_when_otlp_builder_returns_err() {
+        let handle = thread::spawn(|| {
+            let opts = LoggingOptions {
+                // No file dir — keep the test hermetic.
+                dir: String::new(),
+                // Enable stdout + ensure the WARN target is accepted so a
+                // developer running `cargo test
+                // init_global_logging_soft_fails -- --nocapture` sees the
+                // three WARN lines that the production codepath emits.
+                append_stdout: true,
+                level: Some("warn,common_telemetry=warn".to_string()),
+                enable_otlp_tracing: true,
+                // NUL in host — rejected by the OTel HTTP exporter's
+                // endpoint parser before any IO is attempted.
+                otlp_endpoint: Some("http://bad\u{0}host/v1/traces".to_string()),
+                otlp_export_protocol: Some(OtlpExportProtocol::Http),
+                enable_otlp_logs: true,
+                otlp_logs_endpoint: Some("http://bad\u{0}host/v1/logs".to_string()),
+                ..Default::default()
+            };
+
+            // If this panics, the soft-fail contract is broken.
+            let _guards =
+                init_global_logging("soft_fail_test", &opts, &TracingOptions::default(), None);
+        });
+
+        // If init_global_logging panicked, join returns Err and we fail
+        // with a precise message.
+        handle
+            .join()
+            .expect("init_global_logging must not panic when OTLP builders return Err");
     }
 
     fn handle_one_post(mut stream: TcpStream, post_tx: &mpsc::Sender<()>) {
