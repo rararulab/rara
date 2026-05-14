@@ -40,6 +40,7 @@ use opentelemetry_sdk::{
 use opentelemetry_semantic_conventions::resource;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use smart_default::SmartDefault;
+use snafu::{ResultExt, Snafu};
 /// Re-export so binary crates that hold the guards returned by
 /// `init_global_logging` can name their type without depending on
 /// `tracing-appender` directly.
@@ -707,9 +708,7 @@ pub fn init_global_logging(
                     Some(tracing_opentelemetry::layer().with_tracer(tracer))
                 }
                 Err(e) => {
-                    deferred_warnings.push(format!(
-                        "OTLP traces disabled: failed to build span exporter: {e}"
-                    ));
+                    deferred_warnings.push(format!("OTLP traces disabled: {e}"));
                     None
                 }
             };
@@ -717,9 +716,7 @@ pub fn init_global_logging(
             // Initialize the OTel metrics pipeline alongside traces.
             match init_meter_provider(opts, resource) {
                 Ok(meter_provider) => global::set_meter_provider(meter_provider),
-                Err(e) => deferred_warnings.push(format!(
-                    "OTLP metrics disabled: failed to build metric exporter: {e}"
-                )),
+                Err(e) => deferred_warnings.push(format!("OTLP metrics disabled: {e}")),
             }
 
             trace_layer
@@ -740,9 +737,7 @@ pub fn init_global_logging(
                     Some(OpenTelemetryTracingBridge::new(&logger_provider))
                 }
                 Err(e) => {
-                    deferred_warnings.push(format!(
-                        "OTLP logs disabled: failed to build log exporter: {e}"
-                    ));
+                    deferred_warnings.push(format!("OTLP logs disabled: {e}"));
                     None
                 }
             }
@@ -801,12 +796,34 @@ fn build_otel_resource(
     }
 }
 
-/// Boxed error returned by the fallible OTLP construction helpers below.
+/// Errors raised while wiring up the OTLP exporters.
 ///
-/// OTLP init failures are auxiliary — the caller turns them into a single
-/// `WARN` line and skips the affected subsystem. The exact error type from
-/// `reqwest` / `opentelemetry-otlp` is preserved only for the message.
-type OtlpInitError = Box<dyn std::error::Error + Send + Sync>;
+/// OTLP init failures are auxiliary — the caller turns each variant into a
+/// single `WARN` line and skips the affected subsystem (traces / metrics /
+/// logs). Mirrors the in-crate precedent for `ProfilingError` so every
+/// observability subsystem reports build failures the same way.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
+#[allow(clippy::enum_variant_names)] // each variant names the OTLP subsystem whose build failed
+enum OtlpInitError {
+    #[snafu(display("failed to build OTLP HTTP client: {source}"))]
+    BuildHttpClient { source: reqwest::Error },
+
+    #[snafu(display("failed to build OTLP span exporter: {source}"))]
+    BuildSpanExporter {
+        source: opentelemetry_otlp::ExporterBuildError,
+    },
+
+    #[snafu(display("failed to build OTLP metric exporter: {source}"))]
+    BuildMetricExporter {
+        source: opentelemetry_otlp::ExporterBuildError,
+    },
+
+    #[snafu(display("failed to build OTLP log exporter: {source}"))]
+    BuildLogExporter {
+        source: opentelemetry_otlp::ExporterBuildError,
+    },
+}
 
 /// Build a `reqwest::blocking::Client` configured for OTLP HTTP exporters.
 ///
@@ -823,7 +840,7 @@ fn build_otlp_http_client() -> Result<reqwest::blocking::Client, OtlpInitError> 
     reqwest::blocking::Client::builder()
         .no_proxy()
         .build()
-        .map_err(Into::into)
+        .context(BuildHttpClientSnafu)
 }
 
 /// Build the OTLP span exporter.
@@ -859,7 +876,7 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> Result<SpanExporter, OtlpInitEr
             .with_tonic()
             .with_endpoint(endpoint)
             .build()
-            .map_err(Into::into),
+            .context(BuildSpanExporterSnafu),
 
         OtlpExportProtocol::Http => SpanExporter::builder()
             .with_http()
@@ -868,7 +885,7 @@ fn build_otlp_exporter(opts: &LoggingOptions) -> Result<SpanExporter, OtlpInitEr
             .with_protocol(Protocol::HttpBinary)
             .with_headers(opts.otlp_headers.clone())
             .build()
-            .map_err(Into::into),
+            .context(BuildSpanExporterSnafu),
     }
 }
 
@@ -916,14 +933,14 @@ fn init_meter_provider(
             .with_tonic()
             .with_endpoint(&endpoint)
             .build()
-            .map_err(OtlpInitError::from)?,
+            .context(BuildMetricExporterSnafu)?,
         OtlpExportProtocol::Http => opentelemetry_otlp::MetricExporter::builder()
             .with_http()
             .with_http_client(build_otlp_http_client()?)
             .with_endpoint(&endpoint)
             .with_headers(opts.otlp_headers.clone())
             .build()
-            .map_err(OtlpInitError::from)?,
+            .context(BuildMetricExporterSnafu)?,
     };
 
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
@@ -972,7 +989,7 @@ fn init_logger_provider(
         .with_protocol(Protocol::HttpBinary)
         .with_headers(opts.otlp_logs_headers.clone())
         .build()
-        .map_err(OtlpInitError::from)?;
+        .context(BuildLogExporterSnafu)?;
 
     Ok(SdkLoggerProvider::builder()
         .with_batch_exporter(exporter)
@@ -1202,7 +1219,7 @@ mod tests {
     /// config — the soft-fail wrapper does not regress the happy path.
     #[test]
     fn build_otlp_http_client_returns_ok_for_default_config() {
-        let _ = build_otlp_http_client().expect("client builds for default config");
+        build_otlp_http_client().expect("client builds for default config");
     }
 
     /// Scenario 4b: when OTLP is enabled with an unreachable endpoint the
