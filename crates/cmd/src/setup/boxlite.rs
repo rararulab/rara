@@ -33,13 +33,13 @@ use tracing::{instrument, warn};
 
 use super::prompt;
 
-/// Boxlite version pinned by `crates/rara-sandbox/Cargo.toml`. Bump
-/// lockstep with the `tag = "vX.Y.Z"` git dependency there — boxlite stages
-/// per-version, so a stale value silently writes to the wrong directory.
-///
-/// This is a mechanism constant (matches the dependency, not user
-/// preference), not a YAML knob.
-const BOXLITE_VERSION: &str = "v0.9.4";
+// Boxlite version is derived from `Cargo.lock` at build time by
+// `crates/cmd/build.rs`, which writes the `BOXLITE_VERSION` const into
+// `$OUT_DIR/boxlite_version.rs`. The single source of truth is the
+// `tag = "vX.Y.Z"` field on the boxlite git dep in
+// `crates/rara-sandbox/Cargo.toml`; dependabot edits that line and we
+// pick it up mechanically. See spec issue-2099 for rationale.
+include!(concat!(env!("OUT_DIR"), "/boxlite_version.rs"));
 
 /// Base URL for the upstream boxlite release archive. Appended with
 /// `{version}/boxlite-runtime-{version}-{target}.tar.gz`.
@@ -784,13 +784,28 @@ mod tests {
     }
 
     #[test]
-    fn version_matches_sandbox_dep() {
-        // Sanity: every staged dir is keyed by this version. If the
-        // sandbox crate bumps boxlite, this constant must move with it.
-        let cargo_toml = include_str!("../../../rara-sandbox/Cargo.toml");
+    fn generated_const_matches_sandbox_tag() {
+        // The build script derives BOXLITE_VERSION from Cargo.lock, which
+        // cargo itself wrote based on the sandbox crate's `tag = "..."`.
+        // Pinning the current resolved value documents the source-of-truth
+        // chain end-to-end: change the sandbox tag → Cargo.lock updates →
+        // this const updates → this test updates in lockstep.
+        assert_eq!(BOXLITE_VERSION, "v0.9.4");
+    }
+
+    #[test]
+    fn generated_const_has_v_prefix() {
+        // The staged-dir path shape (`runtimes/vX.Y.Z/`) bakes in the
+        // leading `v`. If boxlite ever switches its tag-naming convention
+        // (e.g. drops the `v`), this fires before the wrong directory gets
+        // staged on user machines.
         assert!(
-            cargo_toml.contains(&format!("tag = \"{BOXLITE_VERSION}\"")),
-            "BOXLITE_VERSION must match the git tag pinned in rara-sandbox/Cargo.toml"
+            BOXLITE_VERSION.starts_with('v'),
+            "BOXLITE_VERSION ({BOXLITE_VERSION}) must start with 'v'"
+        );
+        assert!(
+            BOXLITE_VERSION.len() > 1,
+            "BOXLITE_VERSION must be non-empty after the v prefix"
         );
     }
 
