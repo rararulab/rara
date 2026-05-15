@@ -29,7 +29,7 @@ use std::{
 };
 
 use snafu::{ResultExt, Whatever};
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use super::prompt;
 
@@ -128,6 +128,7 @@ async fn run_boxlite_setup_with(
 
     if opts.dest.join(COMPLETE_STAMP).is_file() && has_required_files(&opts.dest) {
         prompt::print_ok(&format!("already staged at {}", opts.dest.display()));
+        gc_stale_siblings(&opts.dest);
         return Ok(StageOutcome::Staged {
             dest: opts.dest.clone(),
         });
@@ -152,9 +153,54 @@ async fn run_boxlite_setup_with(
     ))?;
 
     prompt::print_ok(&format!("staged at {}", opts.dest.display()));
+    gc_stale_siblings(&opts.dest);
     Ok(StageOutcome::Staged {
         dest: opts.dest.clone(),
     })
+}
+
+/// Remove every direct sibling subdirectory of `dest` under `dest.parent()`.
+///
+/// `dest` is the per-version staging dir (e.g. `runtimes/v0.9.4/`); the
+/// parent (`runtimes/`) is owned end-to-end by `rara-cli setup boxlite`
+/// and any sibling versioned dir is a stale prior install that bloats
+/// disk usage with no consumer. Stray non-directory entries are left
+/// alone (safer not to delete files we did not put there). Per-sibling
+/// removal failures emit a `tracing::warn!` and continue — the user's
+/// primary outcome (staging the current version) already succeeded.
+fn gc_stale_siblings(dest: &Path) {
+    let (Some(parent), Some(keep)) = (dest.parent(), dest.file_name()) else {
+        return;
+    };
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!(
+                parent = %parent.display(),
+                error = %err,
+                "boxlite GC: failed to read runtimes parent; skipping cleanup",
+            );
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == keep {
+            continue;
+        }
+        // Only reclaim directories — leave stray files alone.
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if !is_dir {
+            continue;
+        }
+        let path = entry.path();
+        if let Err(err) = fs::remove_dir_all(&path) {
+            warn!(
+                sibling = %path.display(),
+                error = %err,
+                "boxlite GC: failed to remove stale sibling runtime dir; continuing",
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -579,13 +625,23 @@ mod tests {
     // Scenario tests (BDD selectors in spec map to these names).
     // -----------------------------------------------------------------
 
+    /// Build a hermetic `(parent, dest)` pair where `parent` is the
+    /// tempdir that plays the role of `runtimes/` and `dest` is the
+    /// version-keyed subdir inside it. Mirrors production layout so
+    /// `dest.parent()` is owned end-to-end by the test.
+    fn fresh_dest() -> (tempfile::TempDir, PathBuf) {
+        let parent = tempdir().expect("create runtimes parent");
+        let dest = parent.path().join("v-current");
+        (parent, dest)
+    }
+
     #[tokio::test]
     async fn fresh_setup_downloads_and_stages_all_files() {
         let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
-        let dest_dir = tempdir().unwrap();
+        let (_parent, dest) = fresh_dest();
         let opts = SetupOptions {
             url:  server.url.clone(),
-            dest: dest_dir.path().to_path_buf(),
+            dest: dest.clone(),
         };
 
         let outcome = run_boxlite_setup_with(false, &opts)
@@ -593,24 +649,21 @@ mod tests {
             .expect("staging should succeed against the fixture server");
 
         match outcome {
-            StageOutcome::Staged { dest } => assert_eq!(dest, opts.dest),
+            StageOutcome::Staged { dest: got } => assert_eq!(got, opts.dest),
             StageOutcome::CheckOnly { .. } => panic!("expected Staged, got CheckOnly"),
         }
 
         for name in REQUIRED_NAMED_FILES {
-            assert!(
-                dest_dir.path().join(name).is_file(),
-                "missing staged file {name}"
-            );
+            assert!(dest.join(name).is_file(), "missing staged file {name}");
         }
-        let libkrunfw = find_libkrunfw(dest_dir.path()).expect("staged libkrunfw present");
+        let libkrunfw = find_libkrunfw(&dest).expect("staged libkrunfw present");
         #[cfg(target_os = "macos")]
         assert_eq!(libkrunfw, "libkrunfw.5.dylib");
         #[cfg(target_os = "linux")]
         assert_eq!(libkrunfw, "libkrunfw.so.5");
 
         assert!(
-            dest_dir.path().join(COMPLETE_STAMP).is_file(),
+            dest.join(COMPLETE_STAMP).is_file(),
             ".complete stamp must be written"
         );
 
@@ -618,14 +671,10 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             for name in EXECUTABLE_FILES {
-                let mode = fs::metadata(dest_dir.path().join(name))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777;
+                let mode = fs::metadata(dest.join(name)).unwrap().permissions().mode() & 0o777;
                 assert_eq!(mode, 0o755, "{name} should be 0o755");
             }
-            let lib_mode = fs::metadata(dest_dir.path().join(&libkrunfw))
+            let lib_mode = fs::metadata(dest.join(&libkrunfw))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -637,22 +686,23 @@ mod tests {
     #[tokio::test]
     async fn idempotent_skip_when_already_complete() {
         let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
-        let dest_dir = tempdir().unwrap();
+        let (_parent, dest) = fresh_dest();
 
         // Pre-populate destination with a valid staging layout.
+        fs::create_dir_all(&dest).unwrap();
         for name in REQUIRED_NAMED_FILES {
-            fs::write(dest_dir.path().join(name), b"existing").unwrap();
+            fs::write(dest.join(name), b"existing").unwrap();
         }
         #[cfg(target_os = "macos")]
-        fs::write(dest_dir.path().join("libkrunfw.5.dylib"), b"existing").unwrap();
+        fs::write(dest.join("libkrunfw.5.dylib"), b"existing").unwrap();
         #[cfg(target_os = "linux")]
-        fs::write(dest_dir.path().join("libkrunfw.so.5"), b"existing").unwrap();
-        fs::write(dest_dir.path().join(COMPLETE_STAMP), BOXLITE_VERSION).unwrap();
+        fs::write(dest.join("libkrunfw.so.5"), b"existing").unwrap();
+        fs::write(dest.join(COMPLETE_STAMP), BOXLITE_VERSION).unwrap();
 
-        let original_bytes = fs::read(dest_dir.path().join("boxlite-shim")).unwrap();
+        let original_bytes = fs::read(dest.join("boxlite-shim")).unwrap();
         let opts = SetupOptions {
             url:  server.url.clone(),
-            dest: dest_dir.path().to_path_buf(),
+            dest: dest.clone(),
         };
 
         let outcome = run_boxlite_setup_with(false, &opts)
@@ -667,17 +717,17 @@ mod tests {
             "server must not be hit on idempotent run"
         );
         // Existing files are unchanged byte-for-byte.
-        let after_bytes = fs::read(dest_dir.path().join("boxlite-shim")).unwrap();
+        let after_bytes = fs::read(dest.join("boxlite-shim")).unwrap();
         assert_eq!(original_bytes, after_bytes);
     }
 
     #[tokio::test]
     async fn check_only_is_pure_dry_run() {
         let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
-        let dest_dir = tempdir().unwrap();
+        let (_parent, dest) = fresh_dest();
         let opts = SetupOptions {
             url:  server.url.clone(),
-            dest: dest_dir.path().to_path_buf(),
+            dest: dest.clone(),
         };
 
         let outcome = run_boxlite_setup_with(true, &opts)
@@ -685,15 +735,14 @@ mod tests {
             .expect("--check should succeed");
 
         match outcome {
-            StageOutcome::CheckOnly { url, dest } => {
+            StageOutcome::CheckOnly { url, dest: got } => {
                 assert_eq!(url, opts.url);
-                assert_eq!(dest, opts.dest);
+                assert_eq!(got, opts.dest);
             }
             StageOutcome::Staged { .. } => panic!("expected CheckOnly, got Staged"),
         }
         assert_eq!(server.hits.load(Ordering::SeqCst), 0);
-        assert!(!dest_dir.path().join(COMPLETE_STAMP).exists());
-        assert!(fs::read_dir(dest_dir.path()).unwrap().next().is_none());
+        assert!(!dest.exists());
     }
 
     #[tokio::test]
@@ -702,10 +751,10 @@ mod tests {
             include_boxlite_guest: false,
         }))
         .await;
-        let dest_dir = tempdir().unwrap();
+        let (_parent, dest) = fresh_dest();
         let opts = SetupOptions {
             url:  server.url.clone(),
-            dest: dest_dir.path().to_path_buf(),
+            dest: dest.clone(),
         };
 
         let err = run_boxlite_setup_with(false, &opts)
@@ -717,7 +766,7 @@ mod tests {
             "error message must name the missing file, got: {msg}"
         );
         assert!(
-            !dest_dir.path().join(COMPLETE_STAMP).exists(),
+            !dest.join(COMPLETE_STAMP).exists(),
             "no stamp must be written on failure"
         );
     }
@@ -765,12 +814,12 @@ mod tests {
         }
 
         let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
-        let dest_dir = tempdir().unwrap();
+        let (_parent, dest) = fresh_dest();
         let opts = SetupOptions {
             url:  server.url.clone(),
             // Destination intentionally lives inside the scratch dir so
             // any "consulted target/" bug would be visible.
-            dest: dest_dir.path().to_path_buf(),
+            dest: dest.clone(),
         };
 
         run_boxlite_setup_with(false, &opts)
@@ -779,7 +828,7 @@ mod tests {
 
         // Staged content must come from the fixture (real signature),
         // not from `target/` (would be the literal "GARBAGE" payload).
-        let shim = fs::read(dest_dir.path().join("boxlite-shim")).unwrap();
+        let shim = fs::read(dest.join("boxlite-shim")).unwrap();
         assert_ne!(shim, b"GARBAGE", "staged file must not come from target/");
         assert_eq!(server.hits.load(Ordering::SeqCst), 1);
     }
@@ -804,6 +853,198 @@ mod tests {
             assert!(is_libkrunfw_soname("libkrunfw.so.5.0"));
             assert!(!is_libkrunfw_soname("libkrunfw.so"));
             assert!(!is_libkrunfw_soname("libkrunfw.5.dylib"));
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Runtime-GC scenarios (#2097).
+    //
+    // The pipeline owns `dest.parent()` end-to-end; every stage —
+    // including the idempotent skip path — sweeps stale sibling dirs.
+    // -----------------------------------------------------------------
+
+    /// Build a `runtimes/` parent populated with stale sibling dirs and
+    /// return `(parent, target_dest)` where `target_dest` does not yet
+    /// exist on disk (the staging pipeline will create it).
+    fn runtimes_parent_with_stale_siblings(stale_names: &[&str]) -> (tempfile::TempDir, PathBuf) {
+        let parent = tempdir().expect("create runtimes parent");
+        for name in stale_names {
+            let stale = parent.path().join(name);
+            fs::create_dir_all(&stale).expect("create stale sibling dir");
+            // Drop a file inside so `remove_dir_all` has something to
+            // reclaim (a no-op empty dir would not exercise the recursive
+            // path).
+            fs::write(stale.join("bloat.bin"), b"stale runtime payload").unwrap();
+        }
+        let dest = parent.path().join("v-current");
+        (parent, dest)
+    }
+
+    /// Pre-populate `dest` with a valid staged runtime so the idempotent
+    /// skip path short-circuits.
+    fn prepopulate_valid_staging(dest: &Path) {
+        fs::create_dir_all(dest).unwrap();
+        for name in REQUIRED_NAMED_FILES {
+            fs::write(dest.join(name), b"existing").unwrap();
+        }
+        #[cfg(target_os = "macos")]
+        fs::write(dest.join("libkrunfw.5.dylib"), b"existing").unwrap();
+        #[cfg(target_os = "linux")]
+        fs::write(dest.join("libkrunfw.so.5"), b"existing").unwrap();
+        fs::write(dest.join(COMPLETE_STAMP), BOXLITE_VERSION).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_sibling_runtime_dirs_removed_on_fresh_stage() {
+        let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
+        let (parent, dest) = runtimes_parent_with_stale_siblings(&["v0.0.1", "v0.0.2"]);
+        let opts = SetupOptions {
+            url:  server.url.clone(),
+            dest: dest.clone(),
+        };
+
+        run_boxlite_setup_with(false, &opts)
+            .await
+            .expect("fresh stage should succeed");
+
+        assert!(dest.join(COMPLETE_STAMP).is_file(), "stamp must be written");
+        for name in REQUIRED_NAMED_FILES {
+            assert!(dest.join(name).is_file(), "missing staged file {name}");
+        }
+        assert!(
+            !parent.path().join("v0.0.1").exists(),
+            "stale v0.0.1 must be removed"
+        );
+        assert!(
+            !parent.path().join("v0.0.2").exists(),
+            "stale v0.0.2 must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_siblings_removed_on_idempotent_skip() {
+        let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
+        let (parent, dest) = runtimes_parent_with_stale_siblings(&["v0.0.1"]);
+        prepopulate_valid_staging(&dest);
+        let original_bytes = fs::read(dest.join("boxlite-shim")).unwrap();
+
+        let opts = SetupOptions {
+            url:  server.url.clone(),
+            dest: dest.clone(),
+        };
+
+        let outcome = run_boxlite_setup_with(false, &opts)
+            .await
+            .expect("idempotent skip should succeed");
+        assert!(matches!(outcome, StageOutcome::Staged { .. }));
+
+        // Skip path: no HTTP traffic.
+        assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+        // Stale sibling reclaimed.
+        assert!(
+            !parent.path().join("v0.0.1").exists(),
+            "stale sibling must be removed on idempotent skip"
+        );
+        // Existing files untouched.
+        let after_bytes = fs::read(dest.join("boxlite-shim")).unwrap();
+        assert_eq!(original_bytes, after_bytes);
+    }
+
+    #[tokio::test]
+    async fn check_mode_does_not_gc_siblings() {
+        let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
+        let (parent, dest) = runtimes_parent_with_stale_siblings(&["v0.0.1"]);
+        let opts = SetupOptions {
+            url:  server.url.clone(),
+            dest: dest.clone(),
+        };
+
+        let outcome = run_boxlite_setup_with(true, &opts)
+            .await
+            .expect("--check should succeed");
+        assert!(matches!(outcome, StageOutcome::CheckOnly { .. }));
+        assert!(
+            parent.path().join("v0.0.1").is_dir(),
+            "--check must leave stale siblings in place"
+        );
+    }
+
+    #[tokio::test]
+    async fn stray_files_in_runtimes_parent_are_preserved() {
+        let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
+        let (parent, dest) = runtimes_parent_with_stale_siblings(&[]);
+        let stray = parent.path().join("README.txt");
+        fs::write(&stray, b"hand-placed note, not ours to delete").unwrap();
+
+        let opts = SetupOptions {
+            url:  server.url.clone(),
+            dest: dest.clone(),
+        };
+
+        run_boxlite_setup_with(false, &opts)
+            .await
+            .expect("staging should succeed alongside a stray file");
+
+        assert!(dest.join(COMPLETE_STAMP).is_file());
+        assert!(
+            stray.is_file(),
+            "stray non-directory entry must be left alone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gc_failure_on_sibling_does_not_fail_setup() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Skip under root — root bypasses write-bit-cleared dir perms,
+        // so the GC failure we're trying to provoke wouldn't actually
+        // fail. Detected by probing: create a 0o000 dir and see whether
+        // we can still create a file inside it.
+        let probe = tempdir().unwrap();
+        let locked = probe.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let bypass_perms = fs::write(locked.join("x"), b"").is_ok();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        if bypass_perms {
+            eprintln!("skipping: running as root (perms bypassed)");
+            return;
+        }
+
+        let server = FixtureServer::start(build_fixture_tarball(&FixtureContents::default())).await;
+        let (parent, dest) = runtimes_parent_with_stale_siblings(&["v0.0.1"]);
+
+        // Clear the parent's write bit so `remove_dir_all` of the sibling
+        // fails with EACCES. The new `dest` was created *before* we lock
+        // the parent, so staging itself still succeeds (it only mutates
+        // inside `dest`, not the parent's entry list — though we also
+        // pre-create `dest` to keep the test independent of that detail).
+        fs::create_dir_all(&dest).unwrap();
+        let parent_mode = fs::metadata(parent.path()).unwrap().permissions().mode();
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o555)).unwrap();
+
+        let opts = SetupOptions {
+            url:  server.url.clone(),
+            dest: dest.clone(),
+        };
+
+        let outcome = run_boxlite_setup_with(false, &opts).await;
+
+        // Restore perms before any assertion so tempdir cleanup works.
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(parent_mode)).unwrap();
+
+        let outcome = outcome.expect("staging must succeed even when GC cannot reclaim a sibling");
+        match outcome {
+            StageOutcome::Staged { dest: got } => assert_eq!(got, dest),
+            StageOutcome::CheckOnly { .. } => panic!("expected Staged, got CheckOnly"),
+        }
+        assert!(
+            dest.join(COMPLETE_STAMP).is_file(),
+            "staging must complete its own stamp"
+        );
+        for name in REQUIRED_NAMED_FILES {
+            assert!(dest.join(name).is_file(), "missing staged file {name}");
         }
     }
 }
