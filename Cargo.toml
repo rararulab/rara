@@ -235,7 +235,7 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 validator = "^0.20"
 
 # Testing
-git2 = "0.20"
+git2 = "0.21"
 tempfile = "3"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres", "k3s"] }
