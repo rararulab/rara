@@ -73,7 +73,7 @@ subtle.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }
 tracing.workspace = true
-tracing-opentelemetry = "0.32.0"
+tracing-opentelemetry = "0.33.0"
 ulid.workspace = true
 unicode-normalization.workspace = true
 urlencoding.workspace = true
