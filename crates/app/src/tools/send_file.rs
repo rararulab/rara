@@ -109,13 +109,14 @@ impl ToolExecute for SendFileTool {
             .map(|s| s.to_string());
 
         // Web sessions don't receive the OutboundEnvelope via the standard
-        // adapter fanout (see `binding_to_endpoint` in kernel/src/io.rs —
-        // Web returns `None` because chat_id == session_key). Emit the
-        // bytes on the stream instead so the browser can render the file
-        // inline next to the send-file tool call. Other channels already
-        // render the attachment through their own adapter and would
-        // double-render if they observed this event, so we scope it to
-        // Web origins.
+        // adapter fanout (see `Endpoint::try_from(&ChannelBinding)` in
+        // kernel/src/io.rs — Web is rejected with
+        // `BindingConversionError::StreamHubFanout` because
+        // chat_id == session_key). Emit the bytes on the stream instead so
+        // the browser can render the file inline next to the send-file tool
+        // call. Other channels already render the attachment through their
+        // own adapter and would double-render if they observed this event,
+        // so we scope it to Web origins.
         let is_web_origin = matches!(
             context.origin_endpoint.as_ref().map(|e| e.channel_type),
             Some(ChannelType::Web)

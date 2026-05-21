@@ -34,7 +34,7 @@
 //! ```
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, Mutex},
 };
 
@@ -298,36 +298,15 @@ impl InboundMessage {
         if let Some(ref ep) = self.origin_endpoint_override {
             return Some(ep.clone());
         }
-        match self.source.channel_type {
-            ChannelType::Telegram => {
-                let chat_id = self.source.platform_chat_id.as_ref()?.parse::<i64>().ok()?;
-                let thread_id = self
-                    .reply_context
-                    .as_ref()
-                    .and_then(|rc| rc.thread_id.as_deref())
-                    .and_then(|t| t.parse::<i64>().ok());
-                Some(Endpoint {
-                    channel_type: ChannelType::Telegram,
-                    address:      EndpointAddress::Telegram { chat_id, thread_id },
-                })
-            }
-            ChannelType::Wechat => {
-                let user_id = self.source.platform_chat_id.clone()?;
-                Some(Endpoint {
-                    channel_type: ChannelType::Wechat,
-                    address:      EndpointAddress::Wechat { user_id },
-                })
-            }
-            ChannelType::Web => {
-                let connection_id = self.source.platform_chat_id.clone()?;
-                Some(Endpoint {
-                    channel_type: ChannelType::Web,
-                    address:      EndpointAddress::Web { connection_id },
-                })
-            }
-            // Internal / Api / Proactive have no external peer to address.
-            _ => None,
-        }
+        let thread_id = self
+            .reply_context
+            .as_ref()
+            .and_then(|rc| rc.thread_id.as_deref());
+        endpoint_from_raw_parts(
+            self.source.channel_type,
+            self.source.platform_chat_id.as_deref(),
+            thread_id,
+        )
     }
 }
 
@@ -1119,8 +1098,10 @@ pub enum StreamEvent {
     /// Emitted alongside an outbound envelope when the delivery target is a
     /// channel that does not receive the envelope through the standard
     /// adapter fanout (currently the Web UI, whose bindings are
-    /// self-referential and skipped by
-    /// [`binding_to_endpoint`](crate::io::IOSubsystem)). Channel adapters
+    /// self-referential and rejected by
+    /// [`Endpoint::try_from(&ChannelBinding)`](crate::io::Endpoint) with
+    /// `BindingConversionError::StreamHubFanout` — Web fans out through
+    /// [`StreamHub`] rather than `deliver_to_endpoints`). Channel adapters
     /// that already deliver the envelope via `ChannelAdapter::send` (e.g.
     /// Telegram) ignore this event to avoid double-rendering.
     Attachment {
@@ -1707,15 +1688,31 @@ pub enum EndpointAddress {
     },
 }
 
-/// Derive an [`Endpoint`] from inbound routing data carried in
-/// `platform_chat_id`.
+// ---------------------------------------------------------------------------
+// Endpoint construction — single canonical mapping
+// ---------------------------------------------------------------------------
+//
+// All `(channel_type, chat_id, thread_id) → Endpoint` conversions in the
+// kernel funnel through [`endpoint_from_raw_parts`]. Adding a new channel
+// means adding exactly one arm here; the egress-binding entry
+// (`impl TryFrom<&ChannelBinding> for Endpoint`) and the inbound ingress
+// path (`InboundMessage::origin_endpoint`, `IOSubsystem::resolve` auto-
+// register) both delegate to this function. Historical context: before this
+// was unified, four near-duplicate match blocks lived in this file and
+// silently disagreed on what counted as deliverable (see issue #2108).
+
+/// Build a deliverable [`Endpoint`] from raw ingress parts.
 ///
-/// Used by [`IOSubsystem::resolve`] to auto-register the originating endpoint
-/// for channels whose address is fully determined by the raw platform message
-/// (Telegram, WeChat, CLI, Web — the Web adapter writes its `connection_id`
-/// into `platform_chat_id` at WS/SSE ingress). Returns `None` for `Internal`,
-/// `Api`, and `Proactive`, which have no external peer to address.
-fn derive_endpoint(
+/// Returns `None` for channels with no external peer to address
+/// (`Internal`, `Api`, `Proactive`) or when `platform_chat_id` is missing.
+/// Telegram chat ids that fail to parse as `i64` also yield `None`.
+///
+/// This is the single canonical conversion: every callsite that builds an
+/// `Endpoint` from raw `(channel_type, chat_id, thread_id)` parts routes
+/// through here. The egress path goes through
+/// [`Endpoint::try_from(&ChannelBinding)`](Endpoint), which filters
+/// self-fanout channels (Web, CLI) before delegating here.
+fn endpoint_from_raw_parts(
     channel_type: ChannelType,
     platform_chat_id: Option<&str>,
     thread_id: Option<&str>,
@@ -1745,60 +1742,66 @@ fn derive_endpoint(
     })
 }
 
-// ---------------------------------------------------------------------------
-// EndpointRegistry
-// ---------------------------------------------------------------------------
-
-/// Tracks per-user active endpoints.
+/// Reason a [`ChannelBinding`](crate::session::ChannelBinding) cannot be
+/// converted to a deliverable [`Endpoint`].
 ///
-/// Thread-safe via `DashMap`. Adapters register endpoints when a user
-/// connects and unregister when they disconnect.
-#[derive(Default)]
-pub struct EndpointRegistry {
-    connections: DashMap<UserId, HashSet<Endpoint>>,
+/// Egress callers map this to "skip this binding"; it exists so the
+/// [`TryFrom`] impl carries a real error type instead of `()`.
+#[derive(Debug, Snafu)]
+pub enum BindingConversionError {
+    /// The channel routes outbound replies through [`StreamHub`] rather
+    /// than via [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter),
+    /// so building an `Endpoint` here would double-deliver. Applies to
+    /// `Web` and `Cli` bindings, which are self-referential
+    /// (`chat_id == session_key`).
+    #[snafu(display("channel {channel_type:?} fans out via StreamHub, not adapter egress"))]
+    StreamHubFanout { channel_type: ChannelType },
+
+    /// The binding's raw fields could not be parsed into a valid endpoint
+    /// (e.g. a Telegram chat id that is not an `i64`).
+    #[snafu(display("binding fields could not be parsed into endpoint for {channel_type:?}"))]
+    Malformed { channel_type: ChannelType },
+
+    /// The channel type has no external peer to address
+    /// (`Internal`, `Api`, `Proactive`).
+    #[snafu(display("channel {channel_type:?} has no external peer"))]
+    NoExternalPeer { channel_type: ChannelType },
 }
 
-impl EndpointRegistry {
-    /// Create an empty registry.
-    pub fn new() -> Self {
-        Self {
-            connections: DashMap::new(),
-        }
-    }
+impl TryFrom<&crate::session::ChannelBinding> for Endpoint {
+    type Error = BindingConversionError;
 
-    /// Register an endpoint for a user.
-    pub fn register(&self, user: &UserId, endpoint: Endpoint) {
-        self.connections
-            .entry(user.clone())
-            .or_default()
-            .insert(endpoint);
-    }
-
-    /// Unregister an endpoint for a user.
-    pub fn unregister(&self, user: &UserId, endpoint: &Endpoint) {
-        if let Some(mut endpoints) = self.connections.get_mut(user) {
-            endpoints.remove(endpoint);
-            if endpoints.is_empty() {
-                drop(endpoints);
-                self.connections.remove(user);
+    /// Build a deliverable [`Endpoint`] from a session-scoped channel
+    /// binding.
+    ///
+    /// Web and CLI bindings are rejected with
+    /// [`BindingConversionError::StreamHubFanout`] because those adapters
+    /// fan out via [`StreamHub`] rather than
+    /// [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter);
+    /// returning an endpoint here would double-deliver. All other channels
+    /// delegate to the private `endpoint_from_raw_parts` helper — the
+    /// single match arm per channel lives there.
+    fn try_from(binding: &crate::session::ChannelBinding) -> Result<Self, Self::Error> {
+        match binding.channel_type {
+            ChannelType::Web | ChannelType::Cli => StreamHubFanoutSnafu {
+                channel_type: binding.channel_type,
             }
+            .fail(),
+            ChannelType::Api | ChannelType::Internal | ChannelType::Proactive => {
+                NoExternalPeerSnafu {
+                    channel_type: binding.channel_type,
+                }
+                .fail()
+            }
+            ChannelType::Telegram | ChannelType::Wechat => endpoint_from_raw_parts(
+                binding.channel_type,
+                Some(&binding.chat_id),
+                binding.thread_id.as_deref(),
+            )
+            .ok_or(BindingConversionError::Malformed {
+                channel_type: binding.channel_type,
+            }),
         }
-    }
-
-    /// Get all active endpoints for a user.
-    fn get_endpoints(&self, user: &UserId) -> Vec<Endpoint> {
-        self.connections
-            .get(user)
-            .map(|set| set.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// Check whether a user has any active endpoints.
-    fn is_online(&self, user: &UserId) -> bool {
-        self.connections
-            .get(user)
-            .map(|set| !set.is_empty())
-            .unwrap_or(false)
     }
 }
 
@@ -1870,9 +1873,6 @@ pub enum EgressError {
 /// Shared reference to a
 /// [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter).
 pub type ChannelAdapterRef = crate::channel::adapter::ChannelAdapterRef;
-
-/// Shared reference to the [`EndpointRegistry`].
-pub type EndpointRegistryRef = Arc<EndpointRegistry>;
 
 // ---------------------------------------------------------------------------
 // IngressRateLimiter
@@ -1992,7 +1992,6 @@ pub struct IOSubsystem {
     /// so contention is effectively zero. `std::sync::RwLock` keeps this
     /// usable from non-async call sites.
     adapters:                std::sync::RwLock<HashMap<ChannelType, ChannelAdapterRef>>,
-    endpoint_registry:       EndpointRegistryRef,
     /// Telegram channel ID for agent-initiated notifications.
     notification_channel_id: Option<i64>,
     rate_limiter:            IngressRateLimiter,
@@ -2001,9 +2000,9 @@ pub struct IOSubsystem {
 impl IOSubsystem {
     /// Create a new I/O subsystem.
     ///
-    /// Internally creates a [`StreamHub`] and [`EndpointRegistry`].
-    /// Call [`register_adapter`](Self::register_adapter) to add egress
-    /// adapters before passing to the kernel.
+    /// Internally creates a [`StreamHub`]. Call
+    /// [`register_adapter`](Self::register_adapter) to add egress adapters
+    /// before passing to the kernel.
     pub fn new(
         identity_resolver: IdentityResolverRef,
         session_index: Arc<dyn SessionIndex>,
@@ -2015,7 +2014,6 @@ impl IOSubsystem {
             session_index,
             stream_hub: Arc::new(StreamHub::new(STREAM_HUB_BROADCAST_CAPACITY)),
             adapters: std::sync::RwLock::new(HashMap::new()),
-            endpoint_registry: Arc::new(EndpointRegistry::new()),
             notification_channel_id,
             rate_limiter: IngressRateLimiter::new(max_ingress_per_minute),
         }
@@ -2097,21 +2095,13 @@ impl IOSubsystem {
             None => None,
         };
 
-        // 4. Auto-register the originating endpoint.
+        // 4. Build InboundMessage with optional session_key.
         //
-        // Why: only the Web adapter has an explicit connection lifecycle
-        // (WS/SSE open/close) and registers itself there. Telegram, WeChat,
-        // and CLI have no equivalent signal — without this, outbound fan-out
-        // via `deliver_to_endpoints()` cannot find them and cross-channel
-        // delivery (e.g. web → tg) silently drops. `HashSet` insert is
-        // idempotent, so re-registering on every message is safe.
-        if let Some(endpoint) =
-            derive_endpoint(raw.channel_type, raw.platform_chat_id.as_deref(), thread_id)
-        {
-            self.endpoint_registry.register(&user_id, endpoint);
-        }
-
-        // 5. Build InboundMessage with optional session_key
+        // No per-user endpoint registration happens here: egress fanout
+        // routes via session-scoped `ChannelBinding`s in
+        // [`Self::deliver_to_endpoints`] (and per-message
+        // `origin_endpoint`), so a parallel per-user index would be
+        // dead state. See issue #2108.
         let msg = InboundMessage::unresolved(
             MessageId::new(),
             ChannelSource {
@@ -2224,47 +2214,6 @@ impl IOSubsystem {
         );
     }
 
-    /// Register egress endpoint for stateless channels (e.g. Telegram).
-    ///
-    /// Connection-oriented channels (Web) register on WS/SSE connect.
-    /// Stateless channels have no persistent connection, so we register on
-    /// every inbound message (idempotent — EndpointRegistry uses a HashSet).
-    pub fn register_stateless_endpoint(&self, msg: &InboundMessage) {
-        let endpoint = match msg.source.channel_type {
-            ChannelType::Telegram => {
-                let chat_id_str = msg.source.platform_chat_id.as_ref();
-                let chat_id = chat_id_str.and_then(|s| s.parse::<i64>().ok());
-                let thread_id = msg
-                    .reply_context
-                    .as_ref()
-                    .and_then(|rc| rc.thread_id.as_deref())
-                    .and_then(|t| t.parse::<i64>().ok());
-                chat_id.map(|id| Endpoint {
-                    channel_type: ChannelType::Telegram,
-                    address:      EndpointAddress::Telegram {
-                        chat_id: id,
-                        thread_id,
-                    },
-                })
-            }
-            ChannelType::Wechat => msg
-                .source
-                .platform_chat_id
-                .as_ref()
-                .map(|user_id| Endpoint {
-                    channel_type: ChannelType::Wechat,
-                    address:      EndpointAddress::Wechat {
-                        user_id: user_id.clone(),
-                    },
-                }),
-            _ => return,
-        };
-        let Some(endpoint) = endpoint else {
-            return;
-        };
-        self.endpoint_registry.register(&msg.user, endpoint);
-    }
-
     /// Propagate a session title change to the channel layer (e.g.
     /// rename the Telegram forum topic). Silent no-op if the session
     /// has no channel binding or the adapter does not implement rename.
@@ -2325,9 +2274,6 @@ impl IOSubsystem {
     /// Access the stream hub.
     pub fn stream_hub(&self) -> &StreamHubRef { &self.stream_hub }
 
-    /// Access the endpoint registry.
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
-
     /// Access the identity resolver (platform id → kernel `UserId`).
     pub fn identity_resolver(&self) -> &IdentityResolverRef { &self.identity_resolver }
 
@@ -2359,8 +2305,8 @@ impl IOSubsystem {
                 .await
             {
                 Ok(bindings) => bindings
-                    .into_iter()
-                    .filter_map(binding_to_endpoint)
+                    .iter()
+                    .filter_map(|b| Endpoint::try_from(b).ok())
                     .collect(),
                 Err(e) => {
                     tracing::warn!(
@@ -2435,40 +2381,6 @@ impl IOSubsystem {
             }
         });
         futures::future::join_all(futs).await;
-    }
-}
-
-/// Convert a [`ChannelBinding`](crate::session::ChannelBinding) into a
-/// deliverable [`Endpoint`].
-///
-/// Only channels that accept platform-level delivery via
-/// [`ChannelAdapter`](crate::channel::adapter::ChannelAdapter) are mapped.
-/// Web and CLI bindings are self-referential (`chat_id == session_key`) —
-/// their adapters fan out through [`StreamHub`] rather than
-/// `deliver_to_endpoints`, so routing them here would double-deliver.
-/// Returning `None` for those variants keeps the fanout list
-/// adapter-compatible without relying on downstream routing filters.
-fn binding_to_endpoint(binding: crate::session::ChannelBinding) -> Option<Endpoint> {
-    match binding.channel_type {
-        ChannelType::Telegram => {
-            let chat_id = binding.chat_id.parse::<i64>().ok()?;
-            let thread_id = binding.thread_id.and_then(|t| t.parse::<i64>().ok());
-            Some(Endpoint {
-                channel_type: ChannelType::Telegram,
-                address:      EndpointAddress::Telegram { chat_id, thread_id },
-            })
-        }
-        ChannelType::Wechat => Some(Endpoint {
-            channel_type: ChannelType::Wechat,
-            address:      EndpointAddress::Wechat {
-                user_id: binding.chat_id,
-            },
-        }),
-        ChannelType::Web
-        | ChannelType::Cli
-        | ChannelType::Api
-        | ChannelType::Internal
-        | ChannelType::Proactive => None,
     }
 }
 
@@ -2656,7 +2568,7 @@ mod delivery_routing_tests {
             created_at:   now,
             updated_at:   now,
         };
-        let ep = binding_to_endpoint(binding).expect("telegram binding maps");
+        let ep = Endpoint::try_from(&binding).expect("telegram binding maps");
         assert_eq!(
             ep,
             Endpoint {
@@ -2684,7 +2596,7 @@ mod delivery_routing_tests {
             created_at:   now,
             updated_at:   now,
         };
-        assert!(binding_to_endpoint(binding).is_none());
+        assert!(Endpoint::try_from(&binding).is_err());
     }
 
     #[test]
@@ -2698,7 +2610,7 @@ mod delivery_routing_tests {
             created_at:   now,
             updated_at:   now,
         };
-        assert!(binding_to_endpoint(binding).is_none());
+        assert!(Endpoint::try_from(&binding).is_err());
     }
 }
 
@@ -3211,11 +3123,12 @@ mod inbound_message_tests {
     }
 
     #[test]
-    fn derive_endpoint_web_uses_connection_id() {
-        // `derive_endpoint` is the IOSubsystem path: the Web adapter
-        // ingests a connection_id via `platform_chat_id`, and we must
-        // construct a matching Web endpoint for registry auto-register.
-        let endpoint = derive_endpoint(ChannelType::Web, Some("conn-xyz"), None);
+    fn endpoint_from_raw_parts_web_uses_connection_id() {
+        // The Web adapter ingests a connection_id via `platform_chat_id`;
+        // the unified raw-parts conversion must round-trip it into a Web
+        // endpoint so `origin_endpoint` can route replies back to the
+        // originating WS.
+        let endpoint = endpoint_from_raw_parts(ChannelType::Web, Some("conn-xyz"), None);
         assert_eq!(
             endpoint,
             Some(Endpoint {
@@ -3228,9 +3141,56 @@ mod inbound_message_tests {
     }
 
     #[test]
-    fn derive_endpoint_web_without_chat_id_returns_none() {
+    fn endpoint_from_raw_parts_web_without_chat_id_returns_none() {
         // Without a connection_id we cannot build a Web endpoint.
-        assert!(derive_endpoint(ChannelType::Web, None, None).is_none());
+        assert!(endpoint_from_raw_parts(ChannelType::Web, None, None).is_none());
+    }
+
+    #[test]
+    fn endpoint_from_raw_parts_cli_uses_session_id() {
+        // CLI raw-parts conversion mirrors Web: the chat_id slot carries
+        // the CLI session alias.
+        let endpoint = endpoint_from_raw_parts(ChannelType::Cli, Some("cli-1"), None);
+        assert_eq!(
+            endpoint,
+            Some(Endpoint {
+                channel_type: ChannelType::Cli,
+                address:      EndpointAddress::Cli {
+                    session_id: "cli-1".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn endpoint_from_raw_parts_telegram_parses_thread_id() {
+        let endpoint = endpoint_from_raw_parts(ChannelType::Telegram, Some("-100"), Some("42"));
+        assert_eq!(
+            endpoint,
+            Some(Endpoint {
+                channel_type: ChannelType::Telegram,
+                address:      EndpointAddress::Telegram {
+                    chat_id:   -100,
+                    thread_id: Some(42),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn endpoint_from_raw_parts_telegram_rejects_malformed_chat_id() {
+        // Telegram chat ids that are not parseable as i64 yield None — the
+        // single canonical mapping must not silently produce a malformed
+        // endpoint.
+        assert!(endpoint_from_raw_parts(ChannelType::Telegram, Some("nope"), None).is_none());
+    }
+
+    #[test]
+    fn endpoint_from_raw_parts_internal_returns_none() {
+        // Internal / Api / Proactive have no external peer to address.
+        assert!(endpoint_from_raw_parts(ChannelType::Internal, Some("x"), None).is_none());
+        assert!(endpoint_from_raw_parts(ChannelType::Api, Some("x"), None).is_none());
+        assert!(endpoint_from_raw_parts(ChannelType::Proactive, Some("x"), None).is_none());
     }
 
     #[test]
