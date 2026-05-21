@@ -232,10 +232,18 @@ async fn stub_knowledge_service() -> crate::memory::knowledge::KnowledgeServiceR
     )
     .expect("noop embedding service");
 
+    let tape_dir = std::env::temp_dir().join(format!("rara-test-tape-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tape_dir).expect("tape dir");
+    let store = crate::memory::FileTapeStore::new(&tape_dir, &tape_dir)
+        .await
+        .expect("tape store");
+    let tape_service = Arc::new(crate::memory::TapeService::new(store));
+
     Arc::new(crate::memory::knowledge::KnowledgeService {
         pools: pool,
         embedding_svc: Arc::new(embedding_svc),
         config,
+        tape_service,
     })
 }
 

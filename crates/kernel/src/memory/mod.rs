@@ -230,6 +230,15 @@ pub enum TapEntryKind {
     TaskReport,
     /// External data feed event appended via silent-append delivery.
     FeedEvent,
+    /// Retrieval trace recording which memory items shaped a turn's
+    /// context. Emitted by `MemoryTool::exec_search` once per call with
+    /// payload `{"item_ids": [...], "weights": [...]}` in
+    /// retrieval-rank order. Read back via
+    /// `KnowledgeService::explain` to power post-hoc "why did rara
+    /// think that?" inspection and to feed item ids into
+    /// `commit_outcome`. See
+    /// `specs/issue-2113-memory-explain-context-sources.spec.md`.
+    ContextSources,
 }
 
 // ---------------------------------------------------------------------------
