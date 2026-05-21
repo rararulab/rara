@@ -106,3 +106,7 @@ specs/**/timings/*.html
 # Zig build cache (written next to zig/build.zig on every `zig build`)
 .zig-cache/
 zig/zig-out/
+
+# mise per-user override (mise.toml is checked in; *.local.toml is opt-in)
+.mise.local.toml
+mise.local.toml

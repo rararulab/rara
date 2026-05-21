@@ -60,6 +60,15 @@ else
     fail "prek not found — install: brew install prek"
 fi
 
+# mise is warn-only: it pins the non-Rust toolchain (node/bun/go/just/gh) for
+# parity with CI, but rustup-only contributors working on pure Rust changes
+# can still pass this check. See docs/guides/tooling.md.
+if mise --version >/dev/null 2>&1; then
+    ok "mise: $(mise --version)"
+else
+    warn "mise not found — install: brew install mise (see docs/guides/tooling.md)"
+fi
+
 # ----------------------------------------------------------------------------
 # Workspace — fatal
 # ----------------------------------------------------------------------------
