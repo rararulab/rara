@@ -150,6 +150,17 @@ diesel::table! {
         embedding -> Nullable<Binary>,
         created_at -> Text,
         updated_at -> Text,
+        confidence -> Float,
+    }
+}
+
+diesel::table! {
+    memory_outcomes (id) {
+        id -> Nullable<Integer>,
+        item_id -> Integer,
+        outcome_kind -> Text,
+        tape_entry_id -> Nullable<Integer>,
+        created_at -> Text,
     }
 }
 
@@ -210,6 +221,7 @@ diesel::table! {
 }
 
 diesel::joinable!(channel_binding -> chat_session (session_key));
+diesel::joinable!(memory_outcomes -> memory_items (item_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     channel_binding,
@@ -224,6 +236,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     kernel_users,
     kv_table,
     memory_items,
+    memory_outcomes,
     session_channel_bindings,
     sessions,
     skill_cache,
