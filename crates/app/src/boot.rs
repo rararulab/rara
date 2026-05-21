@@ -461,10 +461,14 @@ pub(crate) async fn boot(
 
     // -- knowledge layer ------------------------------------------------------
 
-    let knowledge_service =
-        init_knowledge_service(diesel_pools.clone(), settings_provider.as_ref(), embedder)
-            .await
-            .whatever_context("Failed to initialize knowledge layer")?;
+    let knowledge_service = init_knowledge_service(
+        diesel_pools.clone(),
+        settings_provider.as_ref(),
+        embedder,
+        Arc::new(tape_service.clone()),
+    )
+    .await
+    .whatever_context("Failed to initialize knowledge layer")?;
 
     info!("Boot completed");
 
@@ -1052,6 +1056,7 @@ async fn init_knowledge_service(
     pools: yunara_store::diesel_pool::DieselSqlitePools,
     settings: &dyn rara_domain_shared::settings::SettingsProvider,
     embedder: rara_kernel::llm::LlmEmbedderRef,
+    tape_service: Arc<rara_kernel::memory::TapeService>,
 ) -> anyhow::Result<rara_kernel::memory::knowledge::KnowledgeServiceRef> {
     use rara_domain_shared::settings::keys;
     use rara_kernel::memory::knowledge::{EmbeddingService, KnowledgeConfig, KnowledgeService};
@@ -1096,6 +1101,7 @@ async fn init_knowledge_service(
         pools,
         embedding_svc,
         config,
+        tape_service,
     }))
 }
 
