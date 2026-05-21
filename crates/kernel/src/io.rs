@@ -1069,7 +1069,7 @@ pub enum StreamEvent {
     /// callback data so that stale buttons from an earlier limit cannot
     /// accidentally resolve a newer one.
     ToolCallLimit {
-        session_key:     String,
+        session_key:     crate::session::SessionKey,
         /// Monotonic limit instance ID — prevents stale callback resolution.
         limit_id:        u64,
         /// Cumulative tool calls executed so far in this turn.
@@ -1082,7 +1082,7 @@ pub enum StreamEvent {
     /// Informational only — adapters may use this to update UI (e.g. edit
     /// the Telegram inline keyboard message to show the decision).
     ToolCallLimitResolved {
-        session_key: String,
+        session_key: crate::session::SessionKey,
         /// Must match the `limit_id` from the corresponding `ToolCallLimit`.
         limit_id:    u64,
         /// `true` if the user chose to continue; `false` on stop or timeout.

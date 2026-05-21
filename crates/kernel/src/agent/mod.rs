@@ -3358,7 +3358,7 @@ async fn run_agent_loop_inner(
             let current_limit_id = limit_id_counter;
             let elapsed_secs = turn_start.elapsed().as_secs();
             stream_handle.emit(StreamEvent::ToolCallLimit {
-                session_key: session_key.to_string(),
+                session_key,
                 limit_id: current_limit_id,
                 tool_calls_made,
                 elapsed_secs,
@@ -3395,9 +3395,9 @@ async fn run_agent_loop_inner(
                     // Additive: next limit fires after another full interval.
                     next_limit_at = tool_calls_made + limit_interval;
                     stream_handle.emit(StreamEvent::ToolCallLimitResolved {
-                        session_key: session_key.to_string(),
-                        limit_id:    current_limit_id,
-                        continued:   true,
+                        session_key,
+                        limit_id: current_limit_id,
+                        continued: true,
                     });
                 }
                 _ => {
@@ -3405,9 +3405,9 @@ async fn run_agent_loop_inner(
                     // treated as a graceful stop. NOT max-iteration exhaustion.
                     warn!(tool_calls_made, "agent loop stopped by user or timeout");
                     stream_handle.emit(StreamEvent::ToolCallLimitResolved {
-                        session_key: session_key.to_string(),
-                        limit_id:    current_limit_id,
-                        continued:   false,
+                        session_key,
+                        limit_id: current_limit_id,
+                        continued: false,
                     });
                     stopped_by_limit = true;
                     break;
