@@ -1098,8 +1098,10 @@ pub enum StreamEvent {
     /// Emitted alongside an outbound envelope when the delivery target is a
     /// channel that does not receive the envelope through the standard
     /// adapter fanout (currently the Web UI, whose bindings are
-    /// self-referential and skipped by
-    /// [`binding_to_endpoint`](crate::io::IOSubsystem)). Channel adapters
+    /// self-referential and rejected by
+    /// [`Endpoint::try_from(&ChannelBinding)`](crate::io::Endpoint) with
+    /// `BindingConversionError::StreamHubFanout` — Web fans out through
+    /// [`StreamHub`] rather than `deliver_to_endpoints`). Channel adapters
     /// that already deliver the envelope via `ChannelAdapter::send` (e.g.
     /// Telegram) ignore this event to avoid double-rendering.
     Attachment {
