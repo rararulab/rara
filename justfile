@@ -244,6 +244,12 @@ run-standalone:
     @echo "🏃 Running rara server (standalone)..."
     cargo run -p rara-cli -- server
 
+[doc("run rara under portless — gives this worktree a stable .localhost URL (see docs/guides/debug.md)")]
+[group("🏃 Running")]
+portless-run:
+    @echo "🏃 Starting rara via portless (each worktree gets its own .localhost URL)..."
+    portless run just run
+
 [doc("run hello-world example")]
 [group("🏃 Running")]
 example-hello:

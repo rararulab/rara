@@ -477,10 +477,14 @@ impl AppConfig {
     /// keys cause a deserialization error at startup.
     pub fn new() -> Result<Self, config::ConfigError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self::load_from_paths(
+        let mut cfg = Self::load_from_paths(
             rara_paths::config_file().as_path(),
             &cwd.join("config.yaml"),
-        )
+        )?;
+        if let Ok(port) = std::env::var("PORT") {
+            apply_http_port_override(&mut cfg.http.bind_address, &port)?;
+        }
+        Ok(cfg)
     }
 
     fn load_from_paths(global_path: &Path, local_path: &Path) -> Result<Self, config::ConfigError> {
@@ -520,6 +524,36 @@ impl AppConfig {
             }
         })
     }
+}
+
+/// Rewrite the port portion of an `addr:port` bind address.
+///
+/// Used by the `PORT` env override so tools like
+/// [portless](https://github.com/leerob/portless) can give each
+/// worktree its own stable `.localhost` URL without editing
+/// `config.yaml`. Preserves the original host (typically `127.0.0.1`)
+/// and rejects malformed inputs early so we fail at boot rather than
+/// silently bind the wrong address.
+fn apply_http_port_override(
+    bind_address: &mut String,
+    port_override: &str,
+) -> Result<(), config::ConfigError> {
+    let port: u16 = port_override.parse().map_err(|_| {
+        config::ConfigError::Message(format!(
+            "PORT env var must be a valid TCP port (1..=65535), got {port_override:?}"
+        ))
+    })?;
+    let host = bind_address
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .ok_or_else(|| {
+            config::ConfigError::Message(format!(
+                "http.bind_address {bind_address:?} is missing a `:port` suffix; cannot apply \
+                 PORT override"
+            ))
+        })?;
+    *bind_address = format!("{host}:{port}");
+    Ok(())
 }
 
 /// Initialize infrastructure, wire services, start servers & workers,
@@ -1966,6 +2000,33 @@ gateway:
         assert_eq!(cfg.owner_user_id, "rara");
         assert!(cfg.sandbox.is_none());
         assert!(cfg.gateway.is_some());
+    }
+
+    #[test]
+    fn apply_http_port_override_rewrites_port_keeps_host() {
+        let mut bind = String::from("127.0.0.1:25555");
+        super::apply_http_port_override(&mut bind, "4001").expect("override applies");
+        assert_eq!(bind, "127.0.0.1:4001");
+    }
+
+    #[test]
+    fn apply_http_port_override_rejects_non_numeric() {
+        let mut bind = String::from("127.0.0.1:25555");
+        let err = super::apply_http_port_override(&mut bind, "notaport")
+            .expect_err("non-numeric rejected");
+        assert!(
+            err.to_string()
+                .contains("PORT env var must be a valid TCP port")
+        );
+        assert_eq!(bind, "127.0.0.1:25555", "bind address unchanged on error");
+    }
+
+    #[test]
+    fn apply_http_port_override_rejects_missing_port_suffix() {
+        let mut bind = String::from("localhost-no-colon");
+        let err =
+            super::apply_http_port_override(&mut bind, "4001").expect_err("missing colon rejected");
+        assert!(err.to_string().contains("missing a `:port` suffix"));
     }
 
     #[test]
