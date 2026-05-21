@@ -1,0 +1,25 @@
+## rara dev toolchain — managed by mise (https://mise.jdx.dev)
+##
+## Rust is intentionally NOT here: `rust-toolchain.toml` pins stable, and
+## nightly (for fmt + doc warnings) comes from rustup. mise's rust backend
+## would fight rustup.
+##
+## prek / diesel_cli stay on brew / cargo install — mise's cargo backend
+## compiles from source on every `mise install`, which is slower than the
+## current setup with no upside.
+
+[tools]
+node = "25"           # web/, desktop/, site/ — site/package.json needs >=22.12
+bun  = "latest"       # web/ dev + build
+go   = "1.26"         # go.work + scripts/
+just = "latest"       # justfile runner
+gh   = "latest"       # PR + issue workflow
+
+[env]
+## Match the justfile's defaults so `mise exec` / `mise en` users get the
+## same env as `just`. justfile already loads .env via `set dotenv-load`,
+## so secrets stay there — only put non-secret defaults here.
+RARA__DATABASE__MIGRATION_DIR = "crates/rara-model/migrations"
+
+## Tasks intentionally omitted — `justfile` is the task runner.
+## If you want `mise run X`, add it to justfile and call `just X`.

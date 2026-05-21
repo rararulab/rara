@@ -25,11 +25,9 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+      # Node version is pinned via mise.toml at the repo root. See
+      # docs/guides/tooling.md.
+      - uses: jdx/mise-action@v2
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
@@ -53,11 +51,7 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+      - uses: jdx/mise-action@v2
       - name: Install dependencies
         run: npm ci
       - name: Install Playwright browsers
