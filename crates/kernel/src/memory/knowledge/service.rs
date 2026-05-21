@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use yunara_store::diesel_pool::DieselSqlitePools;
 
-use super::{EmbeddingService, KnowledgeConfig};
+use super::{EmbeddingService, KnowledgeConfig, outcome::OutcomeKind};
+use crate::error::Result;
 
 /// Bundles the knowledge layer's runtime dependencies into a single handle
 /// that can be shared across the kernel.
@@ -35,6 +36,29 @@ pub struct KnowledgeService {
 }
 
 impl KnowledgeService {
+    /// Record one outcome row per `item_id` and update each item's
+    /// `confidence` via the EMA defined in
+    /// [`super::outcome`].
+    ///
+    /// Both halves of the pair land in a single writer transaction. An
+    /// empty `item_ids` slice is a no-op; unknown ids are silently
+    /// skipped (the call still returns Ok). See the issue 2112 spec
+    /// for the rationale on the skip semantics — memory feedback is a
+    /// debugging seam, not a consistency contract.
+    ///
+    /// `tape_entry_id` is the optional pointer into the tape that
+    /// triggered this outcome; populating it from real LLM turns is
+    /// issue 2113's job.
+    pub async fn commit_outcome(
+        &self,
+        item_ids: &[i64],
+        kind: OutcomeKind,
+        tape_entry_id: Option<i64>,
+    ) -> Result<()> {
+        super::outcome::commit_outcome_inner(&self.pools.writer, item_ids, kind, tape_entry_id)
+            .await
+    }
+
     /// Resolve source tape entries for memory items that have source
     /// references.
     ///
