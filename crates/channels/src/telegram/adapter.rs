@@ -1061,25 +1061,27 @@ impl Default for TelegramConfig {
 ///    handled separately via [`ChannelAdapter::send`].
 /// 3. Call [`stop`](ChannelAdapter::stop) to signal the polling loop to exit
 ///    gracefully.
+#[derive(bon::Builder)]
 pub struct TelegramAdapter {
     bot:                   teloxide::Bot,
     allowed_chat_ids:      Vec<i64>,
+    /// Long-poll timeout in seconds. The HTTP client timeout is derived from
+    /// this (poll + 30s).
+    #[builder(default = POLL_TIMEOUT_SECS)]
     polling_timeout:       u32,
-    shutdown_tx:           watch::Sender<bool>,
-    shutdown_rx:           watch::Receiver<bool>,
-    /// Bot username from getMe (set during start).
-    bot_username:          Arc<RwLock<Option<String>>>,
-    /// Registered command handlers for slash commands.
-    command_handlers:      StdRwLock<Vec<Arc<dyn CommandHandler>>>,
-    /// Registered callback handlers for interactive elements.
-    callback_handlers:     StdRwLock<Vec<Arc<dyn CallbackHandler>>>,
+    /// Registered command handlers for slash commands. Required at
+    /// construction — empty handlers in production is always a bug (see
+    /// #2109 and the `start()` "no commands registered" warning path).
+    command_handlers:      Vec<Arc<dyn CommandHandler>>,
+    /// Registered callback handlers for interactive elements. Required at
+    /// construction for the same reason as `command_handlers`.
+    callback_handlers:     Vec<Arc<dyn CallbackHandler>>,
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
-    /// ID).
+    /// ID). Wrapped in `Arc<StdRwLock<…>>` so external callers can hot-reload
+    /// via [`config_handle`](Self::config_handle); pass a plain
+    /// [`TelegramConfig`] to the builder.
+    #[builder(with = |c: TelegramConfig| Arc::new(StdRwLock::new(c)))]
     config:                Arc<StdRwLock<TelegramConfig>>,
-    /// StreamHub for subscribing to real-time token deltas.
-    stream_hub:            Arc<RwLock<Option<StreamHubRef>>>,
-    /// Per-chat active streaming state, keyed by `chat_id`.
-    active_streams:        Arc<DashMap<i64, StreamingMessage>>,
     /// User question manager for the ask-user tool — when set, the adapter
     /// subscribes to new questions and resolves them via reply-to messages.
     user_question_manager: Option<UserQuestionManagerRef>,
@@ -1087,183 +1089,42 @@ pub struct TelegramAdapter {
     stt_service:           Option<rara_stt::SttService>,
     /// Optional TTS service for synthesizing voice replies.
     tts_service:           Option<rara_tts::TtsService>,
-    /// Chat IDs whose most recent inbound message was a voice note.
-    /// Checked at egress to decide whether to reply with a voice note.
-    voice_chat_ids:        Arc<DashSet<i64>>,
     /// Settings provider for persisting pinned message IDs across restarts.
     settings:              Arc<dyn SettingsProvider>,
+
+    // -- Internally-initialized state (not part of the builder API) -----------
+    #[builder(skip = {
+        let (tx, _rx) = watch::channel(false);
+        tx
+    })]
+    shutdown_tx:    watch::Sender<bool>,
+    /// Bot username from getMe (set during start).
+    #[builder(skip = Arc::new(RwLock::new(None)))]
+    bot_username:   Arc<RwLock<Option<String>>>,
+    /// StreamHub for subscribing to real-time token deltas.
+    #[builder(skip = Arc::new(RwLock::new(None)))]
+    stream_hub:     Arc<RwLock<Option<StreamHubRef>>>,
+    /// Per-chat active streaming state, keyed by `chat_id`.
+    #[builder(skip = Arc::new(DashMap::new()))]
+    active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    /// Chat IDs whose most recent inbound message was a voice note.
+    /// Checked at egress to decide whether to reply with a voice note.
+    #[builder(skip = Arc::new(DashSet::new()))]
+    voice_chat_ids: Arc<DashSet<i64>>,
     /// Per-chat + global rate limiter for outbound Telegram API calls. All
     /// `sendMessage`, `editMessageText`, `sendPhoto`, `sendVoice`, and
     /// `sendChatAction` call sites must `.acquire(chat_id)` first (see
     /// `AGENT.md` invariants).
-    rate_limiter:          Arc<super::rate_limit::ChatRateLimiter>,
+    #[builder(skip = Arc::new(super::rate_limit::ChatRateLimiter::new()))]
+    rate_limiter:   Arc<super::rate_limit::ChatRateLimiter>,
 }
 
 impl TelegramAdapter {
-    /// Create a new Telegram adapter.
-    ///
-    /// # Arguments
-    ///
-    /// - `bot` — a configured [`teloxide::Bot`] instance
-    /// - `allowed_chat_ids` — list of Telegram chat IDs that are permitted to
-    ///   interact with the adapter. Pass an empty vec to allow all chats.
-    pub fn new(
-        bot: teloxide::Bot,
-        allowed_chat_ids: Vec<i64>,
-        settings: Arc<dyn SettingsProvider>,
-    ) -> Self {
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        Self {
-            bot,
-            allowed_chat_ids,
-            polling_timeout: POLL_TIMEOUT_SECS,
-            shutdown_tx,
-            shutdown_rx,
-            bot_username: Arc::new(RwLock::new(None)),
-            command_handlers: StdRwLock::new(Vec::new()),
-            callback_handlers: StdRwLock::new(Vec::new()),
-            config: Arc::new(StdRwLock::new(TelegramConfig::default())),
-            stream_hub: Arc::new(RwLock::new(None)),
-            active_streams: Arc::new(DashMap::new()),
-            user_question_manager: None,
-            stt_service: None,
-            tts_service: None,
-            voice_chat_ids: Arc::new(DashSet::new()),
-            settings,
-            rate_limiter: Arc::new(super::rate_limit::ChatRateLimiter::new()),
-        }
-    }
-
-    /// Build a [`teloxide::Bot`] with an optional proxy, then wrap it in an
-    /// adapter.
-    ///
-    /// The proxy URL is passed to [`reqwest012::Proxy::all`] (supports
-    /// `http://`, `https://`, `socks5://`).
-    pub fn with_proxy(
-        token: &str,
-        allowed_chat_ids: Vec<i64>,
-        proxy: Option<&str>,
-        settings: Arc<dyn SettingsProvider>,
-    ) -> Result<Self, anyhow::Error> {
-        let bot = build_bot(token, proxy)?;
-        Ok(Self::new(bot, allowed_chat_ids, settings))
-    }
-
-    /// Create a new Telegram adapter with a custom polling timeout.
-    #[must_use]
-    pub fn with_polling_timeout(mut self, timeout_secs: u32) -> Self {
-        self.polling_timeout = timeout_secs;
-        self
-    }
-
-    /// Register command handlers (builder pattern — must be called before `Arc`
-    /// wrapping).
-    #[must_use]
-    pub fn with_command_handlers(self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
-        *self
-            .command_handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = handlers;
-        self
-    }
-
-    /// Replace command handlers at runtime (works through `&self` /
-    /// `Arc<Self>`).
-    pub fn set_command_handlers(&self, handlers: Vec<Arc<dyn CommandHandler>>) {
-        *self
-            .command_handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = handlers;
-    }
-
-    /// Register callback handlers (builder pattern — must be called before
-    /// `Arc` wrapping).
-    #[must_use]
-    pub fn with_callback_handlers(self, handlers: Vec<Arc<dyn CallbackHandler>>) -> Self {
-        *self
-            .callback_handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = handlers;
-        self
-    }
-
-    /// Replace callback handlers at runtime (works through `&self` /
-    /// `Arc<Self>`).
-    pub fn set_callback_handlers(&self, handlers: Vec<Arc<dyn CallbackHandler>>) {
-        *self
-            .callback_handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = handlers;
-    }
-
     /// Return a clone of the underlying [`teloxide::Bot`] handle.
     ///
     /// Used by command handlers that need to call Telegram APIs directly
     /// (e.g. deleting forum topics on `/clear`).
     pub fn bot(&self) -> teloxide::Bot { self.bot.clone() }
-
-    /// Set the primary chat ID for privileged commands.
-    ///
-    /// Commands like `/search` and `/jd` are restricted to this chat only.
-    /// This is a convenience builder that mutates the internal config.
-    #[must_use]
-    pub fn with_primary_chat_id(self, id: i64) -> Self {
-        {
-            let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
-            cfg.primary_chat_id = Some(id);
-        }
-        self
-    }
-
-    /// Set the allowed group chat ID.
-    ///
-    /// When set, only the specified group is authorized for group-chat
-    /// interactions. Messages from other groups receive an "unauthorized"
-    /// response and are not dispatched further.
-    /// This is a convenience builder that mutates the internal config.
-    #[must_use]
-    pub fn with_allowed_group_chat_id(self, id: i64) -> Self {
-        {
-            let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
-            cfg.allowed_group_chat_id = Some(id);
-        }
-        self
-    }
-
-    /// Set the full runtime config.
-    ///
-    /// Replaces the current config with the provided one.
-    #[must_use]
-    pub fn with_config(self, config: TelegramConfig) -> Self {
-        {
-            let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
-            *cfg = config;
-        }
-        self
-    }
-
-    /// Attach a [`UserQuestionManager`](rara_kernel::user_question::UserQuestionManager)
-    /// so the adapter can render agent questions and resolve them via
-    /// reply-to messages.
-    #[must_use]
-    pub fn with_user_question_manager(mut self, mgr: UserQuestionManagerRef) -> Self {
-        self.user_question_manager = Some(mgr);
-        self
-    }
-
-    /// Attach an STT service for voice message transcription.
-    #[must_use]
-    pub fn with_stt_service(mut self, stt: Option<rara_stt::SttService>) -> Self {
-        self.stt_service = stt;
-        self
-    }
-
-    /// Attach a TTS service for synthesizing voice replies.
-    #[must_use]
-    pub fn with_tts_service(mut self, tts: Option<rara_tts::TtsService>) -> Self {
-        self.tts_service = tts;
-        self
-    }
 
     /// Return a shared handle to the runtime config.
     ///
@@ -1650,23 +1511,15 @@ impl ChannelAdapter for TelegramAdapter {
         let bot = self.bot.clone();
         let allowed_chat_ids = self.allowed_chat_ids.clone();
         let polling_timeout = self.polling_timeout;
-        let mut shutdown_rx = self.shutdown_rx.clone();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         let bot_username = Arc::clone(&self.bot_username);
         let config = Arc::clone(&self.config);
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
-        let command_handlers: Arc<[Arc<dyn CommandHandler>]> = self
-            .command_handlers
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .into();
-        let callback_handlers: Arc<[Arc<dyn CallbackHandler>]> = self
-            .callback_handlers
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .into();
+        let command_handlers: Arc<[Arc<dyn CommandHandler>]> =
+            Arc::from(self.command_handlers.clone());
+        let callback_handlers: Arc<[Arc<dyn CallbackHandler>]> =
+            Arc::from(self.callback_handlers.clone());
         let stt_service = self.stt_service.clone();
         let voice_chat_ids = Arc::clone(&self.voice_chat_ids);
         let settings = Arc::clone(&self.settings);
@@ -1699,7 +1552,7 @@ impl ChannelAdapter for TelegramAdapter {
             let approval_config = Arc::clone(&self.config);
             let approval_session_index = Arc::clone(handle.session_index());
             let approval_rate_limiter = Arc::clone(&self.rate_limiter);
-            let mut approval_shutdown = self.shutdown_rx.clone();
+            let mut approval_shutdown = self.shutdown_tx.subscribe();
             tokio::spawn(async move {
                 approval_listener(
                     approval_bot,
@@ -1722,7 +1575,7 @@ impl ChannelAdapter for TelegramAdapter {
             let question_config = Arc::clone(&self.config);
             let question_mgr = Arc::clone(mgr);
             let question_rate_limiter = Arc::clone(&self.rate_limiter);
-            let mut question_shutdown = self.shutdown_rx.clone();
+            let mut question_shutdown = self.shutdown_tx.subscribe();
             tokio::spawn(async move {
                 question_listener(
                     question_bot,

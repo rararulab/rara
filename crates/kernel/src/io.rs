@@ -1983,7 +1983,15 @@ pub struct IOSubsystem {
     identity_resolver:       IdentityResolverRef,
     session_index:           Arc<dyn SessionIndex>,
     stream_hub:              StreamHubRef,
-    adapters:                HashMap<ChannelType, ChannelAdapterRef>,
+    /// Egress adapters keyed by channel type. `RwLock` allows late registration
+    /// through `&self` so call sites that only have `Arc<IOSubsystem>` (e.g.
+    /// after `Kernel::start`) can wire in adapters whose own construction
+    /// depends on `KernelHandle` (e.g. Telegram, whose command handlers need
+    /// `bot_client = KernelBotServiceClient::new(.., kernel_handle, ..)`).
+    /// Reads happen on every outbound egress path and inserts only at boot —
+    /// so contention is effectively zero. `std::sync::RwLock` keeps this
+    /// usable from non-async call sites.
+    adapters:                std::sync::RwLock<HashMap<ChannelType, ChannelAdapterRef>>,
     endpoint_registry:       EndpointRegistryRef,
     /// Telegram channel ID for agent-initiated notifications.
     notification_channel_id: Option<i64>,
@@ -2006,7 +2014,7 @@ impl IOSubsystem {
             identity_resolver,
             session_index,
             stream_hub: Arc::new(StreamHub::new(STREAM_HUB_BROADCAST_CAPACITY)),
-            adapters: HashMap::new(),
+            adapters: std::sync::RwLock::new(HashMap::new()),
             endpoint_registry: Arc::new(EndpointRegistry::new()),
             notification_channel_id,
             rate_limiter: IngressRateLimiter::new(max_ingress_per_minute),
@@ -2136,9 +2144,16 @@ impl IOSubsystem {
 
     /// Register an egress adapter for a channel type.
     ///
-    /// Must be called **before** passing to the kernel.
-    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: ChannelAdapterRef) {
-        self.adapters.insert(channel_type, adapter);
+    /// May be called either at boot (before the subsystem is wrapped in `Arc`
+    /// and handed to `Kernel::builder`) or post-start through `Arc<Self>` —
+    /// the latter is needed by adapters whose own construction depends on a
+    /// running `KernelHandle` (e.g. Telegram). Last writer wins per channel
+    /// type. Lock poisoning is recovered via `into_inner`.
+    pub fn register_adapter(&self, channel_type: ChannelType, adapter: ChannelAdapterRef) {
+        self.adapters
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(channel_type, adapter);
     }
 
     /// Spawn a deliver task so that egress I/O (Telegram API, WebSocket
@@ -2174,7 +2189,13 @@ impl IOSubsystem {
             tracing::warn!("send_notification: no notification_channel_id configured, dropping");
             return;
         };
-        let Some(adapter) = self.adapters.get(&ChannelType::Telegram).cloned() else {
+        let Some(adapter) = self
+            .adapters
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&ChannelType::Telegram)
+            .cloned()
+        else {
             tracing::warn!("send_notification: no Telegram adapter registered, dropping");
             return;
         };
@@ -2275,7 +2296,13 @@ impl IOSubsystem {
             return;
         }
         for binding in &bindings {
-            let Some(adapter) = self.adapters.get(&binding.channel_type).cloned() else {
+            let Some(adapter) = self
+                .adapters
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&binding.channel_type)
+                .cloned()
+            else {
                 continue;
             };
             if let Err(e) = adapter.rename_session_label(binding, title).await {
@@ -2356,7 +2383,11 @@ impl IOSubsystem {
         };
         tracing::info!(
             targets = targets.len(),
-            adapters = self.adapters.len(),
+            adapters = self
+                .adapters
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
             has_origin = envelope.origin_endpoint.is_some(),
             routing = ?envelope.routing,
             payload = %payload_variant,
@@ -2368,7 +2399,12 @@ impl IOSubsystem {
         // copy work for nothing.
         let outbound = envelope.to_platform_outbound();
         let futs = targets.into_iter().map(|endpoint| {
-            let adapter = self.adapters.get(&endpoint.channel_type).cloned();
+            let adapter = self
+                .adapters
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&endpoint.channel_type)
+                .cloned();
             let outbound = outbound.clone();
             async move {
                 if let Some(adapter) = adapter {
