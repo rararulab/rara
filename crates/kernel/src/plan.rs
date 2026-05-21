@@ -476,7 +476,7 @@ pub(crate) async fn run_plan_loop(
             let current_limit_id = limit_id_counter;
             let elapsed_secs = start.elapsed().as_secs();
             stream_handle.emit(StreamEvent::ToolCallLimit {
-                session_key: session_key.to_string(),
+                session_key,
                 limit_id: current_limit_id,
                 tool_calls_made: total_tool_calls,
                 elapsed_secs,
@@ -507,9 +507,9 @@ pub(crate) async fn run_plan_loop(
                 Ok(Ok(crate::io::ToolCallLimitDecision::Continue)) => {
                     next_limit_at = total_tool_calls + limit_interval;
                     stream_handle.emit(StreamEvent::ToolCallLimitResolved {
-                        session_key: session_key.to_string(),
-                        limit_id:    current_limit_id,
-                        continued:   true,
+                        session_key,
+                        limit_id: current_limit_id,
+                        continued: true,
                     });
                 }
                 _ => {
@@ -519,9 +519,9 @@ pub(crate) async fn run_plan_loop(
                         "plan loop stopped by user or timeout"
                     );
                     stream_handle.emit(StreamEvent::ToolCallLimitResolved {
-                        session_key: session_key.to_string(),
-                        limit_id:    current_limit_id,
-                        continued:   false,
+                        session_key,
+                        limit_id: current_limit_id,
+                        continued: false,
                     });
                     plan.status = PlanStatus::Failed;
                     break;

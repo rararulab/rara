@@ -296,42 +296,6 @@ impl ChatMessage {
             created_at:   jiff::Timestamp::now(),
         }
     }
-
-    /// Create a tool-call message representing a tool invocation by the LLM.
-    #[must_use]
-    pub fn tool(
-        tool_call_id: impl Into<String>,
-        name: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            seq:          0,
-            role:         MessageRole::Tool,
-            content:      MessageContent::Text(content.into()),
-            tool_calls:   Vec::new(),
-            tool_call_id: Some(tool_call_id.into()),
-            tool_name:    Some(name.into()),
-            created_at:   jiff::Timestamp::now(),
-        }
-    }
-
-    /// Create a tool-result message carrying the output of a tool execution.
-    #[must_use]
-    pub fn tool_result(
-        tool_call_id: impl Into<String>,
-        name: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            seq:          0,
-            role:         MessageRole::ToolResult,
-            content:      MessageContent::Text(content.into()),
-            tool_calls:   Vec::new(),
-            tool_call_id: Some(tool_call_id.into()),
-            tool_name:    Some(name.into()),
-            created_at:   jiff::Timestamp::now(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -464,35 +428,17 @@ pub enum StreamEvent {
     Error { message: String },
     /// Agent loop paused at tool call limit — adapter should prompt user.
     ToolCallLimit {
-        session_key:     String,
+        session_key:     crate::session::SessionKey,
         limit_id:        u64,
         tool_calls_made: usize,
         elapsed_secs:    u64,
     },
     /// Tool call limit resolved by user.
     ToolCallLimitResolved {
-        session_key: String,
+        session_key: crate::session::SessionKey,
         limit_id:    u64,
         continued:   bool,
     },
-}
-
-// ---------------------------------------------------------------------------
-// CommandInfo
-// ---------------------------------------------------------------------------
-
-/// Parsed command extracted from a channel message.
-///
-/// Adapters parse platform-specific command formats (e.g. `/search keywords`)
-/// and populate this struct for routing to command handlers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandInfo {
-    /// Command name without the leading slash (e.g. "search", "help").
-    pub name: String,
-    /// Raw argument string after the command name.
-    pub args: String,
-    /// The complete raw text including the command prefix.
-    pub raw:  String,
 }
 
 // ---------------------------------------------------------------------------
@@ -507,21 +453,6 @@ pub struct CallbackInfo {
     pub data:       String,
     /// Platform-specific message ID that originated the callback.
     pub message_id: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// PhotoAttachment
-// ---------------------------------------------------------------------------
-
-/// An image attachment for outbound messages.
-#[derive(Debug, Clone)]
-pub struct PhotoAttachment {
-    /// Image data as bytes.
-    pub data:      Vec<u8>,
-    /// MIME type (e.g. "image/jpeg", "image/png").
-    pub mime_type: String,
-    /// Optional caption text.
-    pub caption:   Option<String>,
 }
 
 // ---------------------------------------------------------------------------
