@@ -97,7 +97,17 @@ function docsBookPlugin() {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const apiTarget = env.VITE_API_URL || 'http://localhost:25555';
+  // Proxy target precedence:
+  //   1. VITE_API_URL — explicit override (e.g. pointing at remote)
+  //   2. PORT — when running under portless or any wrapper that injects PORT
+  //      for the backend, the frontend proxy must follow it.
+  //   3. localhost:25555 — the YAML default.
+  const apiTarget =
+    env.VITE_API_URL || (env.PORT ? `http://localhost:${env.PORT}` : 'http://localhost:25555');
+  // Vite's own listen port: VITE_PORT overrides, default 5173.
+  // portless (or any per-worktree wrapper) sets VITE_PORT so two worktrees
+  // can run side-by-side without strictPort collisions.
+  const vitePort = env.VITE_PORT ? Number(env.VITE_PORT) : 5173;
 
   return {
     plugins: [react(), tailwindcss(), docsBookPlugin()],
@@ -122,7 +132,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: true,
-      port: 5173,
+      port: vitePort,
       strictPort: true,
       proxy: {
         '/api': {

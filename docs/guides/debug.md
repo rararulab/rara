@@ -49,6 +49,36 @@ This is the loop you should be in for almost everything: code change →
 `just run` (or let it auto-reload via the gateway) → `bun run dev` →
 click through the affected path in the browser → check the local log.
 
+## Using portless (optional)
+
+When you have multiple worktrees running side-by-side, hard-coded
+`localhost:5173` / `localhost:25555` collide — the second `just run`
+fails with "address in use", and even if you remap ports manually,
+each worktree's bookmark / browser session points at a different URL.
+
+[portless](https://github.com/leerob/portless) solves this by assigning
+a stable `.localhost` URL per project and injecting `PORT` (and friends)
+into the wrapped process. rara's `AppConfig::new()` honors `PORT` by
+rewriting the port portion of `http.bind_address` after YAML load;
+`web/vite.config.ts` honors `VITE_PORT` for its own listen port and
+falls back to `PORT` when computing the `/api` proxy target. The YAML
+file itself is never edited.
+
+```bash
+# terminal 1 — backend, e.g. rara-issue-2114.localhost
+just portless-run            # wraps `portless run just run`
+
+# terminal 2 — frontend on a portless-assigned VITE_PORT,
+# proxying /api to the PORT portless injected above
+cd web
+VITE_PORT=<assigned> VITE_API_URL=http://127.0.0.1:<backend-port> bun run dev
+```
+
+If you do not use portless, `just run` and `bun run dev` keep their
+YAML defaults (`:25555` / `:5173`) — nothing changes. gRPC `:50051`
+and the gateway admin port `:25556` are not affected by `PORT`; they
+remain whatever `config.yaml` says.
+
 ## Topology
 
 ```
