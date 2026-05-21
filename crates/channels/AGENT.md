@@ -29,8 +29,8 @@ Concrete channel adapter implementations for the rara platform — bridges the k
 
 ### Telegram specifics
 
-- Command and callback handlers are set after adapter construction via `set_command_handlers()` / `set_callback_handlers()`.
-- `TelegramConfig` is hot-reloadable via `config_handle()` (returns `Arc<RwLock<TelegramConfig>>`), updated when settings change.
+- `TelegramAdapter` is built via `TelegramAdapter::builder()` (`bon::Builder`). `command_handlers` and `callback_handlers` are **required** fields — dropping either is a `cargo check` error, killing the historical footgun where forgetting `set_command_handlers` left `/session` silently no-op (#2109). The app boot path resolves the apparent construction cycle (handlers need `KernelHandle` → handlers need the adapter's `bot()`) by building the `teloxide::Bot` up front via `build_bot(token, proxy)`, then handing the same `Bot` to both the command handlers and the `TelegramAdapter::builder().bot(...)` call.
+- `TelegramConfig` is hot-reloadable via `config_handle()` (returns `Arc<RwLock<TelegramConfig>>`), updated when settings change. The builder takes a plain `TelegramConfig` value via `.config(...)` and wraps it internally.
 - Proxy support via `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` env vars. Uses pinned `reqwest 0.12` for teloxide compatibility.
 
 ## Critical Invariants

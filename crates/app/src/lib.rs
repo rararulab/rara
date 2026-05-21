@@ -749,7 +749,11 @@ pub async fn start_with_options(
     );
     let web_router = web_adapter.router();
 
-    let telegram_adapter = match try_build_telegram(
+    // Build the Telegram bot + config precursor up front. The adapter itself
+    // is constructed later (after `KernelHandle` is available and command
+    // handlers can be built), since command/callback handlers are now a
+    // **required** builder field on `TelegramAdapter` (#2109).
+    let telegram_precursor = match try_build_telegram_precursor(
         &backend.settings_svc,
         rara.user_question_manager.clone(),
         stt_service,
@@ -757,16 +761,16 @@ pub async fn start_with_options(
     )
     .await
     {
-        Ok(Some(adapter)) => {
-            info!("Telegram adapter built");
-            Some(adapter)
+        Ok(Some(p)) => {
+            info!("Telegram precursor resolved (bot built, settings polled)");
+            Some(p)
         }
         Ok(None) => {
             info!("Telegram not configured (bot_token unset in settings), skipping");
             None
         }
         Err(e) => {
-            warn!(error = %e, "Failed to build Telegram adapter, skipping");
+            warn!(error = %e, "Failed to resolve Telegram precursor, skipping");
             None
         }
     };
@@ -791,15 +795,13 @@ pub async fn start_with_options(
         .get(rara_domain_shared::settings::keys::TELEGRAM_NOTIFICATION_CHANNEL_ID)
         .await
         .and_then(|s| s.parse::<i64>().ok());
-    let mut io = rara_kernel::io::IOSubsystem::new(
+    let io = rara_kernel::io::IOSubsystem::new(
         rara.identity_resolver.clone(),
         rara.session_index.clone(),
         notification_channel_id,
         config.max_ingress_per_minute,
     );
-    if let Some(ref tg) = telegram_adapter {
-        io.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn ChannelAdapter>);
-    }
+    // Telegram is registered after `KernelHandle` is available; see below.
     if let Some(ref wc) = wechat_adapter {
         io.register_adapter(ChannelType::Wechat, wc.clone() as Arc<dyn ChannelAdapter>);
     }
@@ -1126,7 +1128,7 @@ pub async fn start_with_options(
             BasicCommandHandler, DebugCommandHandler, McpCommandHandler, RenameCommandHandler,
             SessionCommandHandler, StatusCommandHandler, StopCommandHandler, TapeCommandHandler,
         };
-        let tg_bot = telegram_adapter.as_ref().map(|a| a.bot());
+        let tg_bot = telegram_precursor.as_ref().map(|p| p.bot.clone());
         let session_handler =
             std::sync::Arc::new(SessionCommandHandler::new(bot_client.clone(), tg_bot));
         let stop_handler = std::sync::Arc::new(StopCommandHandler::new(
@@ -1168,37 +1170,77 @@ pub async fn start_with_options(
         ]
     };
 
-    if let Some(ref tg_adapter) = telegram_adapter {
-        tg_adapter.set_command_handlers(command_handlers.clone());
+    // Build callback handlers for inline keyboard interactions. Built
+    // unconditionally so both the (Telegram) adapter wiring path and the
+    // dead-code path stay symmetric — `vec!` allocation is cheap and the
+    // handlers are also used implicitly by any future channel that
+    // dispatches kernel callbacks.
+    let callback_handlers: Vec<std::sync::Arc<dyn rara_kernel::channel::command::CallbackHandler>> = {
+        use rara_channels::telegram::commands::{
+            ModelSwitchCallbackHandler, SessionDeleteCallbackHandler, SessionDeleteCancelHandler,
+            SessionDeleteConfirmHandler, SessionDetailCallbackHandler,
+            SessionSwitchCallbackHandler, StatusJobsCallbackHandler,
+        };
+        vec![
+            std::sync::Arc::new(SessionSwitchCallbackHandler::new(bot_client.clone())),
+            std::sync::Arc::new(SessionDetailCallbackHandler::new(bot_client.clone())),
+            std::sync::Arc::new(SessionDeleteCallbackHandler::new(bot_client.clone())),
+            std::sync::Arc::new(SessionDeleteConfirmHandler::new(bot_client.clone())),
+            std::sync::Arc::new(SessionDeleteCancelHandler::new()),
+            std::sync::Arc::new(ModelSwitchCallbackHandler::new(bot_client.clone())),
+            std::sync::Arc::new(StatusJobsCallbackHandler::new(kernel_handle.clone())),
+        ]
+    };
 
-        // Register callback handlers for inline keyboard interactions.
-        {
-            use rara_channels::telegram::commands::{
-                ModelSwitchCallbackHandler, SessionDeleteCallbackHandler,
-                SessionDeleteCancelHandler, SessionDeleteConfirmHandler,
-                SessionDetailCallbackHandler, SessionSwitchCallbackHandler,
-                StatusJobsCallbackHandler,
-            };
-            let callback_handlers: Vec<
-                std::sync::Arc<dyn rara_kernel::channel::command::CallbackHandler>,
-            > = vec![
-                std::sync::Arc::new(SessionSwitchCallbackHandler::new(bot_client.clone())),
-                std::sync::Arc::new(SessionDetailCallbackHandler::new(bot_client.clone())),
-                std::sync::Arc::new(SessionDeleteCallbackHandler::new(bot_client.clone())),
-                std::sync::Arc::new(SessionDeleteConfirmHandler::new(bot_client.clone())),
-                std::sync::Arc::new(SessionDeleteCancelHandler::new()),
-                std::sync::Arc::new(ModelSwitchCallbackHandler::new(bot_client.clone())),
-                std::sync::Arc::new(StatusJobsCallbackHandler::new(kernel_handle.clone())),
-            ];
-            tg_adapter.set_callback_handlers(callback_handlers);
-        }
+    // Build the Telegram adapter now that handlers (which depend on
+    // `kernel_handle` and `bot_client`) exist. Construction is compile-time
+    // total: `TelegramAdapter::builder()` requires `command_handlers` and
+    // `callback_handlers`, so dropping either makes `cargo check` fail (no
+    // more silent "/session does nothing" runtime no-op, see #2109).
+    let telegram_adapter: Option<Arc<rara_channels::telegram::TelegramAdapter>> =
+        if let Some(precursor) = telegram_precursor {
+            let TelegramPrecursor {
+                bot,
+                initial_config,
+                settings,
+                user_question_manager,
+                stt_service,
+                tts_service,
+            } = precursor;
+            let adapter = Arc::new(
+                rara_channels::telegram::TelegramAdapter::builder()
+                    .bot(bot)
+                    .allowed_chat_ids(vec![])
+                    .command_handlers(command_handlers.clone())
+                    .callback_handlers(callback_handlers)
+                    .config(initial_config)
+                    .user_question_manager(user_question_manager)
+                    .maybe_stt_service(stt_service)
+                    .maybe_tts_service(tts_service)
+                    .settings(Arc::clone(&settings))
+                    .build(),
+            );
 
-        use rara_kernel::channel::adapter::ChannelAdapter as _;
-        match tg_adapter.start(kernel_handle.clone()).await {
-            Ok(()) => info!("Telegram adapter started"),
-            Err(e) => warn!(error = %e, "Failed to start Telegram adapter"),
-        }
-    }
+            // Register the adapter with the kernel I/O subsystem (deferred
+            // from boot for the same reason — handlers need `KernelHandle`).
+            kernel_handle.io().register_adapter(
+                ChannelType::Telegram,
+                adapter.clone() as Arc<dyn ChannelAdapter>,
+            );
+
+            // Wire settings → TelegramConfig hot-reload now that the
+            // adapter (and its `config_handle`) exists.
+            spawn_telegram_config_reloader(&adapter, settings);
+
+            use rara_kernel::channel::adapter::ChannelAdapter as _;
+            match adapter.start(kernel_handle.clone()).await {
+                Ok(()) => info!("Telegram adapter started"),
+                Err(e) => warn!(error = %e, "Failed to start Telegram adapter"),
+            }
+            Some(adapter)
+        } else {
+            None
+        };
     {
         use rara_kernel::channel::adapter::ChannelAdapter as _;
         match web_adapter.start(kernel_handle.clone()).await {
@@ -1263,23 +1305,33 @@ pub async fn start_with_options(
     Ok(app_handle)
 }
 
-async fn try_build_telegram(
+/// Precursor inputs needed to construct a
+/// [`rara_channels::telegram::TelegramAdapter`] late, after `KernelHandle`
+/// and the command/callback handlers are available.
+///
+/// Decoupling bot + config + service-handle resolution from the adapter
+/// itself is what lets command handlers be a **required** builder field on
+/// `TelegramAdapter` (see #2109): handlers depend on `bot_client` which
+/// depends on `kernel_handle`, so the adapter must be built **after** the
+/// kernel — but its underlying [`teloxide::Bot`] (and the polled
+/// settings) can be built up front, and the handlers can take the bot
+/// directly without going through `adapter.bot()`.
+struct TelegramPrecursor {
+    bot:                   teloxide::Bot,
+    initial_config:        rara_channels::telegram::TelegramConfig,
+    settings:              Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
+    stt_service:           Option<rara_stt::SttService>,
+    tts_service:           Option<rara_tts::TtsService>,
+}
+
+async fn try_build_telegram_precursor(
     settings_svc: &rara_backend_admin::settings::SettingsSvc,
     user_question_manager: rara_kernel::user_question::UserQuestionManagerRef,
     stt_service: Option<rara_stt::SttService>,
     tts_service: Option<rara_tts::TtsService>,
-) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
+) -> Result<Option<TelegramPrecursor>, Whatever> {
     use rara_domain_shared::settings::{SettingsProvider, keys};
-
-    fn parse_group_policy(raw: Option<String>) -> GroupPolicy {
-        raw.and_then(|s| {
-            s.trim()
-                .parse::<GroupPolicy>()
-                .map_err(|e| warn!(error = %e, "invalid telegram.group_policy, using default"))
-                .ok()
-        })
-        .unwrap_or_default()
-    }
 
     let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
     let token = match settings.get(keys::TELEGRAM_BOT_TOKEN).await {
@@ -1295,6 +1347,9 @@ async fn try_build_telegram(
         info!(proxy = %p, "telegram adapter: using proxy");
     }
 
+    let bot = rara_channels::telegram::build_bot(&token, proxy.as_deref())
+        .whatever_context("failed to build telegram bot")?;
+
     let chat_id: Option<i64> = settings
         .get(keys::TELEGRAM_CHAT_ID)
         .await
@@ -1303,26 +1358,43 @@ async fn try_build_telegram(
         .get(keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID)
         .await
         .and_then(|v| v.parse().ok());
-    let group_policy = parse_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
+    let group_policy = parse_telegram_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
 
-    let mut tg_config = rara_channels::telegram::TelegramConfig::default();
-    tg_config.primary_chat_id = chat_id;
-    tg_config.allowed_group_chat_id = group_id;
-    tg_config.group_policy = group_policy;
+    let initial_config = rara_channels::telegram::TelegramConfig {
+        primary_chat_id: chat_id,
+        allowed_group_chat_id: group_id,
+        group_policy,
+    };
 
-    let adapter = Arc::new(
-        rara_channels::telegram::TelegramAdapter::with_proxy(
-            &token,
-            vec![],
-            proxy.as_deref(),
-            Arc::clone(&settings),
-        )
-        .whatever_context("failed to build telegram adapter")?
-        .with_config(tg_config)
-        .with_user_question_manager(user_question_manager)
-        .with_stt_service(stt_service)
-        .with_tts_service(tts_service),
-    );
+    Ok(Some(TelegramPrecursor {
+        bot,
+        initial_config,
+        settings,
+        user_question_manager,
+        stt_service,
+        tts_service,
+    }))
+}
+
+fn parse_telegram_group_policy(raw: Option<String>) -> GroupPolicy {
+    raw.and_then(|s| {
+        s.trim()
+            .parse::<GroupPolicy>()
+            .map_err(|e| warn!(error = %e, "invalid telegram.group_policy, using default"))
+            .ok()
+    })
+    .unwrap_or_default()
+}
+
+/// Spawn the settings → `TelegramConfig` hot-reload task. Mirrors the
+/// previous inline `tokio::spawn` in `try_build_telegram`; pulled out so
+/// the call site that builds the adapter via `TelegramAdapter::builder`
+/// can wire it up in one line.
+fn spawn_telegram_config_reloader(
+    adapter: &Arc<rara_channels::telegram::TelegramAdapter>,
+    settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+) {
+    use rara_domain_shared::settings::keys;
 
     let config_handle = adapter.config_handle();
     let mut settings_rx = settings.subscribe();
@@ -1337,15 +1409,13 @@ async fn try_build_telegram(
                 .await
                 .and_then(|v| v.parse().ok());
             let new_group_policy =
-                parse_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
+                parse_telegram_group_policy(settings.get(keys::TELEGRAM_GROUP_POLICY).await);
             let mut cfg = config_handle.write().unwrap_or_else(|e| e.into_inner());
             cfg.primary_chat_id = new_chat_id;
             cfg.allowed_group_chat_id = new_group_id;
             cfg.group_policy = new_group_policy;
         }
     });
-
-    Ok(Some(adapter))
 }
 
 async fn try_build_wechat(
