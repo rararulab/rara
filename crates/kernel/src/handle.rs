@@ -29,8 +29,8 @@ use crate::{
     event::{KernelEventEnvelope, Syscall},
     identity::Principal,
     io::{
-        AgentHandle, Endpoint, EndpointRegistryRef, IOError, IOSubsystem, InboundMessage,
-        PipeReader, PipeWriter, RawPlatformMessage, StreamHubRef,
+        AgentHandle, Endpoint, IOError, IOSubsystem, InboundMessage, PipeReader, PipeWriter,
+        RawPlatformMessage, StreamHubRef,
     },
     kernel::{KernelConfig, SettingsRef},
     kv::KvScope,
@@ -394,10 +394,6 @@ impl KernelHandle {
     /// Access the ephemeral stream hub (WebAdapter needs this for token
     /// deltas).
     pub fn stream_hub(&self) -> &StreamHubRef { self.io.stream_hub() }
-
-    /// Access the endpoint registry (WebAdapter needs this for connection
-    /// tracking).
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { self.io.endpoint_registry() }
 
     /// Access the session index for session and channel binding lookups.
     pub fn session_index(&self) -> &Arc<dyn SessionIndex> { self.io.session_index() }

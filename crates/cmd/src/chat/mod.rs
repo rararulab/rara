@@ -30,10 +30,7 @@ use rara_kernel::{
     },
     handle::KernelHandle,
     identity::UserId,
-    io::{
-        Endpoint, EndpointAddress, InteractionType, RawPlatformMessage,
-        ReplyContext as IoReplyContext, StreamEvent,
-    },
+    io::{InteractionType, RawPlatformMessage, ReplyContext as IoReplyContext, StreamEvent},
     security::ApprovalDecision,
     session::{ChannelBinding, SessionEntry, SessionIndex, SessionKey},
 };
@@ -95,7 +92,6 @@ impl ChatArgs {
             Some(handle) => handle,
             None => whatever!("kernel handle not available"),
         };
-        let endpoint_registry = kernel_handle.endpoint_registry().clone();
         let stream_hub = kernel_handle.stream_hub().clone();
 
         let session_alias = self.session.clone();
@@ -109,19 +105,10 @@ impl ChatArgs {
         } else {
             self.user_id.clone()
         };
-        let resolved_user_id = cli_kernel_user_id(&user_id);
         let resolved_session_id =
             get_or_create_cli_session(kernel_handle.session_index().as_ref(), &session_alias)
                 .await
                 .whatever_context("Failed to resolve CLI chat session")?;
-
-        let cli_endpoint = Endpoint {
-            channel_type: ChannelType::Cli,
-            address:      EndpointAddress::Cli {
-                session_id: session_alias.clone(),
-            },
-        };
-        endpoint_registry.register(&resolved_user_id, cli_endpoint);
 
         let (session_tx, session_rx) = tokio::sync::watch::channel(resolved_session_id);
         spawn_stream_forwarder(adapter, stream_hub, session_rx);

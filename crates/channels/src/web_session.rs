@@ -119,7 +119,7 @@ fn session_ws_keepalive_interval() -> Duration {
 
 use crate::web::{
     WebAdapter, WebAdapterState, WebEvent, bearer_token_from_headers, build_raw_platform_message,
-    register_endpoint, stream_event_to_web_event, transcribe_audio_blocks, unregister_endpoint,
+    stream_event_to_web_event, transcribe_audio_blocks,
 };
 
 /// Query parameters for the persistent session WS endpoint.
@@ -235,13 +235,6 @@ async fn handle_session_ws(
     state: WebAdapterState,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-
-    register_endpoint(
-        &state.endpoint_registry,
-        &state.owner_user_id,
-        &session_key_str,
-    )
-    .await;
 
     let (ws_event_tx, mut ws_event_rx) = mpsc::unbounded_channel::<WebEvent>();
 
@@ -640,12 +633,6 @@ async fn handle_session_ws(
     stream_forwarder.abort();
     notification_forwarder.abort();
 
-    unregister_endpoint(
-        &state.endpoint_registry,
-        &state.owner_user_id,
-        &session_key_str,
-    )
-    .await;
     info!(session_key = %session_key_str, "persistent session WS closed");
 }
 

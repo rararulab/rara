@@ -32,7 +32,7 @@
 //!   ├── NotificationBus
 //!   ├── SecuritySubsystem (auth + authz + approval + guard)
 //!   ├── shared_kv (cross-agent KV)
-//!   ├── StreamHub + IngressPipeline + EndpointRegistry
+//!   ├── StreamHub + IngressPipeline
 //!   └── ShardedEventQueue (single-queue or multi-shard mode)
 //! ```
 //!
@@ -1510,8 +1510,6 @@ impl Kernel {
 
         let user = msg.user.clone();
 
-        self.io.register_stateless_endpoint(&msg);
-
         let origin_endpoint = msg.origin_endpoint();
 
         // ----- Path 1: ID addressing (agent-to-agent) -----
@@ -1748,8 +1746,6 @@ impl Kernel {
                 session.key
             }
         };
-
-        self.io.register_stateless_endpoint(&msg);
 
         // Populate session_key for downstream code.
         let msg = msg.resolve(session_id.clone());

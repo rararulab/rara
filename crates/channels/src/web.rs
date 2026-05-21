@@ -65,10 +65,9 @@ use rara_kernel::{
     },
     error::KernelError,
     handle::KernelHandle,
-    identity::UserId,
     io::{
-        EgressError, Endpoint, EndpointAddress, EndpointRegistry, InteractionType,
-        PlatformOutbound, RawPlatformMessage, ReplyContext, StreamEvent, StreamHub,
+        EgressError, Endpoint, EndpointAddress, InteractionType, PlatformOutbound,
+        RawPlatformMessage, ReplyContext, StreamEvent, StreamHub,
     },
     security::{ApprovalRequest, ApprovalResponse},
     session::SessionKey,
@@ -534,19 +533,17 @@ pub struct WebAdapter {
     /// Phase, outbound replies from `ChannelAdapter::send`). Kernel stream
     /// events bypass this map — they flow directly from
     /// [`StreamHub::subscribe_session_events`] into each WS/SSE task.
-    adapter_events:    Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
+    adapter_events: Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
     /// KernelHandle for dispatching inbound messages (set during `start`).
-    sink:              Arc<RwLock<Option<KernelHandle>>>,
+    sink:           Arc<RwLock<Option<KernelHandle>>>,
     /// StreamHub for subscribing to real-time token deltas.
-    stream_hub:        Arc<RwLock<Option<Arc<StreamHub>>>>,
-    /// EndpointRegistry for tracking connected users (set during startup).
-    endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    stream_hub:     Arc<RwLock<Option<Arc<StreamHub>>>>,
     /// Owner token for verifying WebSocket auth tokens.
     ///
     /// Always present: the boot layer (`rara_app::validate_owner_auth`)
     /// guarantees a non-empty token before constructing the adapter, so
     /// the WS handler always enforces auth.
-    owner_token:       String,
+    owner_token:    String,
     /// Authenticated owner's kernel `user_id`.
     ///
     /// After the owner-token check, this is the identity attached to
@@ -554,20 +551,20 @@ pub struct WebAdapter {
     /// field is ignored — auth establishes "you are the owner", so the
     /// server, not the client, names the identity. Validated at boot by
     /// `rara_app::validate_owner_auth` to match a configured user.
-    owner_user_id:     String,
+    owner_user_id:  String,
     /// Shutdown signal sender.
-    shutdown_tx:       watch::Sender<bool>,
+    shutdown_tx:    watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
-    shutdown_rx:       watch::Receiver<bool>,
+    shutdown_rx:    watch::Receiver<bool>,
     /// Optional STT service for transcribing voice messages to text.
-    stt_service:       Option<rara_stt::SttService>,
+    stt_service:    Option<rara_stt::SttService>,
     /// Per-session ring buffer for "important" `WebEvent`s. Adapter
     /// publishes matching [`ReplyBuffer::should_buffer`] are appended so
     /// that a later WS / SSE reconnect can drain them and recover
     /// task-completion replies that fired while no listener was attached
     /// (issue #1804). The buffer is always wired in production — see the
     /// `web_reply_buffer` module for why this is a mechanism, not a knob.
-    reply_buffer:      Arc<ReplyBuffer>,
+    reply_buffer:   Arc<ReplyBuffer>,
 }
 
 impl WebAdapter {
@@ -589,7 +586,6 @@ impl WebAdapter {
             adapter_events: Arc::new(DashMap::new()),
             sink: Arc::new(RwLock::new(None)),
             stream_hub: Arc::new(RwLock::new(None)),
-            endpoint_registry: Arc::new(RwLock::new(None)),
             owner_token,
             owner_user_id,
             shutdown_tx,
@@ -623,15 +619,14 @@ impl WebAdapter {
     /// ```
     pub fn router(&self) -> Router {
         let state = WebAdapterState {
-            adapter_events:    Arc::clone(&self.adapter_events),
-            sink:              Arc::clone(&self.sink),
-            stream_hub:        Arc::clone(&self.stream_hub),
-            endpoint_registry: Arc::clone(&self.endpoint_registry),
-            owner_token:       self.owner_token.clone(),
-            owner_user_id:     self.owner_user_id.clone(),
-            shutdown_rx:       self.shutdown_rx.clone(),
-            stt_service:       self.stt_service.clone(),
-            reply_buffer:      self.reply_buffer.clone(),
+            adapter_events: Arc::clone(&self.adapter_events),
+            sink:           Arc::clone(&self.sink),
+            stream_hub:     Arc::clone(&self.stream_hub),
+            owner_token:    self.owner_token.clone(),
+            owner_user_id:  self.owner_user_id.clone(),
+            shutdown_rx:    self.shutdown_rx.clone(),
+            stt_service:    self.stt_service.clone(),
+            reply_buffer:   self.reply_buffer.clone(),
         };
 
         Router::new()
@@ -880,19 +875,18 @@ fn decision_str(decision: rara_kernel::security::ApprovalDecision) -> &'static s
 /// handler) can mount on the same state without duplicating fields.
 #[derive(Clone)]
 pub(crate) struct WebAdapterState {
-    pub(crate) adapter_events:    Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
-    pub(crate) sink:              Arc<RwLock<Option<KernelHandle>>>,
-    pub(crate) stream_hub:        Arc<RwLock<Option<Arc<StreamHub>>>>,
-    pub(crate) endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    pub(crate) owner_token:       String,
+    pub(crate) adapter_events: Arc<DashMap<SessionKey, broadcast::Sender<WebEvent>>>,
+    pub(crate) sink:           Arc<RwLock<Option<KernelHandle>>>,
+    pub(crate) stream_hub:     Arc<RwLock<Option<Arc<StreamHub>>>>,
+    pub(crate) owner_token:    String,
     /// Authenticated owner identity — see [`WebAdapter::owner_user_id`].
     /// Used after auth passes to stamp inbound messages with a
     /// server-trusted user id instead of trusting client input.
-    pub(crate) owner_user_id:     String,
-    pub(crate) shutdown_rx:       watch::Receiver<bool>,
-    pub(crate) stt_service:       Option<rara_stt::SttService>,
+    pub(crate) owner_user_id:  String,
+    pub(crate) shutdown_rx:    watch::Receiver<bool>,
+    pub(crate) stt_service:    Option<rara_stt::SttService>,
     /// Always-on per-session ring buffer; see [`WebAdapter::reply_buffer`].
-    pub(crate) reply_buffer:      Arc<ReplyBuffer>,
+    pub(crate) reply_buffer:   Arc<ReplyBuffer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -918,48 +912,6 @@ pub(crate) fn bearer_token_from_headers(headers: &axum::http::HeaderMap) -> Opti
         .strip_prefix("Bearer ")
         .or_else(|| raw.strip_prefix("bearer "))?;
     (!token.is_empty()).then_some(token)
-}
-
-/// Build a Web endpoint and its associated UserId for endpoint registration.
-///
-/// The `UserId` format matches the app identity resolver (`"web:{user_id}"`).
-fn web_endpoint_for(session_key: &str) -> Endpoint {
-    Endpoint {
-        channel_type: ChannelType::Web,
-        address:      EndpointAddress::Web {
-            connection_id: session_key.to_owned(),
-        },
-    }
-}
-
-/// Compute the UserId matching what the identity resolver returns.
-///
-/// For authenticated web users, the `user_id` is the real kernel username
-/// (extracted from JWT), so no prefix is needed.
-fn web_user_id(user_id: &str) -> UserId { UserId(user_id.to_string()) }
-
-/// Register a web endpoint in the registry (if available).
-pub(crate) async fn register_endpoint(
-    registry: &RwLock<Option<Arc<EndpointRegistry>>>,
-    user_id: &str,
-    session_key: &str,
-) {
-    let guard = registry.read().await;
-    if let Some(ref reg) = *guard {
-        reg.register(&web_user_id(user_id), web_endpoint_for(session_key));
-    }
-}
-
-/// Unregister a web endpoint from the registry (if available).
-pub(crate) async fn unregister_endpoint(
-    registry: &RwLock<Option<Arc<EndpointRegistry>>>,
-    user_id: &str,
-    session_key: &str,
-) {
-    let guard = registry.read().await;
-    if let Some(ref reg) = *guard {
-        reg.unregister(&web_user_id(user_id), &web_endpoint_for(session_key));
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1101,7 +1053,6 @@ impl ChannelAdapter for WebAdapter {
 
     async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
         *self.stream_hub.write().await = Some(handle.stream_hub().clone());
-        *self.endpoint_registry.write().await = Some(handle.endpoint_registry().clone());
 
         // Subscribe to approval events and fan them out to the originating
         // session's adapter bus so the browser learns about
