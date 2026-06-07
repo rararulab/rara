@@ -110,3 +110,9 @@ zig/zig-out/
 # mise per-user override (mise.toml is checked in; *.local.toml is opt-in)
 .mise.local.toml
 mise.local.toml
+
+# reversa SDD framework residue (third-party artifacts dropped into the tree)
+.reversa/
+.scratch/
+.agents/
+_reversa_sdd/
