@@ -55,7 +55,7 @@ pub(crate) fn segment(text: &str) -> String {
     let tokens = jieba().cut(text, false);
     tokens
         .into_iter()
-        .map(str::trim)
+        .map(|token| token.word.trim())
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
