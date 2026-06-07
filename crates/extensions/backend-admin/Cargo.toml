@@ -19,7 +19,7 @@ futures = { workspace = true }
 git2 = { workspace = true }
 jiff = { workspace = true }
 
-opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }
 rara-channels = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
@@ -41,7 +41,7 @@ tokio = { workspace = true, features = ["sync", "fs", "rt"] }
 tokio-util = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
-tracing-opentelemetry = "0.32.0"
+tracing-opentelemetry = "0.33.0"
 url = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }

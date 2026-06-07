@@ -21,11 +21,9 @@ use std::collections::HashSet;
 
 use opentelemetry::{
     KeyValue,
-    trace::{
-        Link, SamplingDecision, SamplingResult, SpanKind, TraceContextExt, TraceId, TraceState,
-    },
+    trace::{Link, SpanKind, TraceContextExt, TraceId, TraceState},
 };
-use opentelemetry_sdk::trace::{Sampler, ShouldSample};
+use opentelemetry_sdk::trace::{Sampler, SamplingDecision, SamplingResult, ShouldSample};
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 
