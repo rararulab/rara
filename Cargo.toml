@@ -193,7 +193,7 @@ protobuf = "^3.7"
 pyroscope = "2.0"
 rand = "0.10"
 rapidfuzz = "0.5"
-ratatui = { version = "0.29", features = ["crossterm"] }
+ratatui = { version = "0.30", features = ["crossterm"] }
 regex = "1"
 reqwest = { version = "^0.13", features = ["form", "json", "multipart", "stream"] }
 rustix = "^1.1"
