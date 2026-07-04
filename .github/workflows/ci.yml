@@ -21,8 +21,13 @@ permissions:
 # This workflow routes the merge gate: branch protection requires the
 # `Rust / Rust Success` and `Lint / Lint Success` check contexts produced
 # by the reusable workflows called below. It intentionally has NO
-# workflow-level `paths:` filter — it must trigger on every PR so that
-# skipped gate jobs still report and satisfy the required checks (#2166).
+# workflow-level `paths:` filter, and the `rust:`/`lint:` caller jobs
+# always run: a skipped caller job never materializes the called
+# workflow's check runs, so the required contexts would stay forever
+# pending and the PR would be perma-BLOCKED (#2179). Instead the path
+# filter result is passed down as the `run` input; the called workflows
+# skip their work legs internally and their aggregate jobs report
+# success-via-legitimate-skip when `run` is false (#2166, #2179).
 jobs:
   changes:
     name: Detect Changes
@@ -73,14 +78,16 @@ jobs:
   lint:
     name: Lint
     needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/lint.yml
+    with:
+      run: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
 
   rust:
     name: Rust
     needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
+    with:
+      run: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
 
   # Verifies changed lane-1 Task Contracts: `agent-spec lint` scores the
   # spec, `agent-spec lifecycle` binds its BDD scenarios to real tests.

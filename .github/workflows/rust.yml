@@ -2,6 +2,15 @@ name: Rust
 
 on:
   workflow_call:
+    inputs:
+      # Whether the work legs should actually run. The caller (ci.yml)
+      # always invokes this workflow — even for diffs that touch no rust
+      # paths — because a skipped caller job never materializes the
+      # `Rust / Rust Success` required check (#2179). When false, the
+      # work legs skip and `rust-success` reports success-via-skip.
+      run:
+        required: true
+        type: boolean
 
 concurrency:
   group: rust-${{ github.event.pull_request.number || github.sha }}
@@ -48,6 +57,7 @@ permissions:
 jobs:
   clippy:
     name: Clippy (${{ matrix.arch }})
+    if: ${{ inputs.run }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -80,6 +90,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.arch }})
+    if: ${{ inputs.run }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -126,6 +137,7 @@ jobs:
 
   docs:
     name: Documentation (${{ matrix.arch }})
+    if: ${{ inputs.run }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -175,17 +187,26 @@ jobs:
     steps:
       - name: Check all Rust jobs status
         env:
+          RUN: ${{ inputs.run }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
         run: |
-          if [[ "$CLIPPY_RESULT" != "success" || \
-                "$TEST_RESULT" != "success" || \
-                "$DOCS_RESULT" != "success" ]]; then
-            echo "One or more Rust jobs failed"
-            echo "  clippy: $CLIPPY_RESULT"
-            echo "  test:   $TEST_RESULT"
-            echo "  docs:   $DOCS_RESULT"
+          # A leg satisfies the gate when it succeeded, or when it was
+          # legitimately skipped (invoked with run=false: the diff
+          # touched no rust paths). `failure`, `cancelled`, or a skip
+          # while run=true (broken `if:`, cancelled upstream) must NOT
+          # satisfy the required check (#2166 hard rule, #2179).
+          leg_ok() {
+            [[ "$1" == "success" || ( "$1" == "skipped" && "$RUN" != "true" ) ]]
+          }
+          echo "run:    $RUN"
+          echo "clippy: $CLIPPY_RESULT"
+          echo "test:   $TEST_RESULT"
+          echo "docs:   $DOCS_RESULT"
+          if ! leg_ok "$CLIPPY_RESULT" || ! leg_ok "$TEST_RESULT" || \
+             ! leg_ok "$DOCS_RESULT"; then
+            echo "One or more Rust jobs failed or skipped unexpectedly"
             exit 1
           fi
-          echo "All Rust jobs passed successfully"
+          echo "All Rust jobs passed (or were legitimately skipped)"

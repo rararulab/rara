@@ -2,6 +2,15 @@ name: Lint
 
 on:
   workflow_call:
+    inputs:
+      # Whether the work legs should actually run. The caller (ci.yml)
+      # always invokes this workflow — even for diffs that touch no rust
+      # paths — because a skipped caller job never materializes the
+      # `Lint / Lint Success` required check (#2179). When false, the
+      # work legs skip and `lint-success` reports success-via-skip.
+      run:
+        required: true
+        type: boolean
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.sha }}
@@ -23,6 +32,7 @@ permissions:
 jobs:
   rust-format:
     name: Rust Format
+    if: ${{ inputs.run }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -42,6 +52,7 @@ jobs:
 
   proto-lint:
     name: Protocol Buffer Lint
+    if: ${{ inputs.run }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -63,6 +74,7 @@ jobs:
 
   devtool-checks:
     name: Devtool Checks
+    if: ${{ inputs.run }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -95,14 +107,26 @@ jobs:
     steps:
       - name: Check all lint jobs status
         env:
+          RUN: ${{ inputs.run }}
           RUST_FORMAT_RESULT: ${{ needs.rust-format.result }}
           PROTO_LINT_RESULT: ${{ needs.proto-lint.result }}
           DEVTOOL_CHECKS_RESULT: ${{ needs.devtool-checks.result }}
         run: |
-          if [[ "$RUST_FORMAT_RESULT" != "success" || \
-                "$PROTO_LINT_RESULT" != "success" || \
-                "$DEVTOOL_CHECKS_RESULT" != "success" ]]; then
-            echo "One or more lint jobs failed"
+          # A leg satisfies the gate when it succeeded, or when it was
+          # legitimately skipped (invoked with run=false: the diff
+          # touched no rust paths). `failure`, `cancelled`, or a skip
+          # while run=true (broken `if:`, cancelled upstream) must NOT
+          # satisfy the required check (#2166 hard rule, #2179).
+          leg_ok() {
+            [[ "$1" == "success" || ( "$1" == "skipped" && "$RUN" != "true" ) ]]
+          }
+          echo "run:            $RUN"
+          echo "rust-format:    $RUST_FORMAT_RESULT"
+          echo "proto-lint:     $PROTO_LINT_RESULT"
+          echo "devtool-checks: $DEVTOOL_CHECKS_RESULT"
+          if ! leg_ok "$RUST_FORMAT_RESULT" || ! leg_ok "$PROTO_LINT_RESULT" || \
+             ! leg_ok "$DEVTOOL_CHECKS_RESULT"; then
+            echo "One or more lint jobs failed or skipped unexpectedly"
             exit 1
           fi
-          echo "All lint jobs passed successfully"
+          echo "All lint jobs passed (or were legitimately skipped)"
