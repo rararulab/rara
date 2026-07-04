@@ -31,10 +31,12 @@
 //! - **Layer C — pointers, never embedded payloads**: e.g. [`RARA_LOG_FILE`]
 //!   points to a hourly log file rather than embedding the lines.
 //!
-//! Upstream OTel GenAI semantic conventions are imported via
-//! `opentelemetry_semantic_conventions::attribute::*` — never hardcode the
-//! string form of those keys. Langfuse-specific keys (`langfuse.*`) are not
-//! in the OTel semconv registry and are hardcoded here.
+//! Upstream OTel GenAI semantic-convention keys are pinned here as string
+//! literals: the `opentelemetry_semantic_conventions` crate deprecated its
+//! `GEN_AI_*` constants (the GenAI registry moved to a separate upstream
+//! repository), while the emitted strings remain our public contract.
+//! Langfuse-specific keys (`langfuse.*`) are not in the OTel semconv
+//! registry and are likewise hardcoded here.
 
 /// The semantic-convention version exported by this module. Bumped when
 /// attributes are renamed or removed. Detectors pin against this value.
@@ -231,36 +233,39 @@ pub const LANGFUSE_OBSERVATION_USAGE_DETAILS: &str = "langfuse.observation.usage
 pub const LANGFUSE_OBSERVATION_COST_DETAILS: &str = "langfuse.observation.cost_details";
 
 // ---------------------------------------------------------------------------
-// Convenience re-exports of upstream GenAI keys most commonly used on spans.
+// Upstream GenAI keys most commonly used on spans.
 //
-// These are thin pass-throughs so call sites can import from one place,
-// but the source of truth is `opentelemetry_semantic_conventions`.
+// Formerly re-exported from `opentelemetry_semantic_conventions`, but that
+// crate deprecated all `GEN_AI_*` constants in 0.32.x (the GenAI registry
+// moved to the separate semantic-conventions-genai repository). The emitted
+// strings are our public contract — the detector and Langfuse join on them —
+// so they are pinned here as literals and MUST NOT change (renaming is a
+// major schema bump; see the module docs).
 // ---------------------------------------------------------------------------
 
 /// `gen_ai.request.model` — the model id requested from the provider.
-pub const GEN_AI_REQUEST_MODEL: &str =
-    opentelemetry_semantic_conventions::attribute::GEN_AI_REQUEST_MODEL;
+pub const GEN_AI_REQUEST_MODEL: &str = "gen_ai.request.model";
 
 /// `gen_ai.usage.input_tokens` — prompt tokens consumed.
-pub const GEN_AI_USAGE_INPUT_TOKENS: &str =
-    opentelemetry_semantic_conventions::attribute::GEN_AI_USAGE_INPUT_TOKENS;
+pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 
 /// `gen_ai.usage.output_tokens` — completion tokens produced.
-pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str =
-    opentelemetry_semantic_conventions::attribute::GEN_AI_USAGE_OUTPUT_TOKENS;
+pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
 
 /// `gen_ai.response.finish_reasons` — provider-reported finish reason(s).
-pub const GEN_AI_RESPONSE_FINISH_REASONS: &str =
-    opentelemetry_semantic_conventions::attribute::GEN_AI_RESPONSE_FINISH_REASONS;
+pub const GEN_AI_RESPONSE_FINISH_REASONS: &str = "gen_ai.response.finish_reasons";
 
 /// `gen_ai.system` — provider system identifier (e.g. `openai`, `anthropic`).
-pub const GEN_AI_SYSTEM: &str = opentelemetry_semantic_conventions::attribute::GEN_AI_SYSTEM;
+///
+/// Upstream semconv renamed this attribute to `gen_ai.provider.name`; we keep
+/// emitting `gen_ai.system` because the string is part of the detector /
+/// Langfuse contract (changing it is a major schema bump).
+pub const GEN_AI_SYSTEM: &str = "gen_ai.system";
 
 /// `gen_ai.server.time_to_first_token` — TTFT in seconds. Upstream defines
 /// this only as a metric name; we reuse the same string for the equivalent
 /// span attribute so the detector can join metric and span by key.
-pub const GEN_AI_SERVER_TIME_TO_FIRST_TOKEN: &str =
-    opentelemetry_semantic_conventions::metric::GEN_AI_SERVER_TIME_TO_FIRST_TOKEN;
+pub const GEN_AI_SERVER_TIME_TO_FIRST_TOKEN: &str = "gen_ai.server.time_to_first_token";
 
 #[cfg(test)]
 mod tests {
