@@ -14,17 +14,16 @@
  * limitations under the License.
  */
 
-// Playwright config for the live-backend e2e suite (data-feeds.spec.ts).
-// Kept separate from the harness suite because
-// these tests hit a real rara backend via `npm run dev` and are not
-// safe to run in CI without fixture coordination. Invoke with
-// `npm run test:e2e:live` locally when the backend is already up.
+// Playwright config for the live (dev-server) e2e run. Unlike the
+// harness config it runs every spec under e2e/ against `npm run dev`,
+// so backend-driven specs are allowed here and are not safe to run in
+// CI without fixture coordination. Invoke with `npm run test:e2e:live`
+// locally when the backend is already up.
 
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testIgnore: /harness\/.*/,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
