@@ -402,11 +402,34 @@ spec-init slug:
 spec-lint spec:
     @agent-spec lint {{spec}} --min-score 0.7
 
-# Run lint + verify + report against the current worktree.
+# Run lint + verify + report against the current worktree. Routes through the
+# zero-match guard: a Test selector that resolves to zero tests is a FAIL even
+# when agent-spec itself reports green (issue #2165 / PR #2038 false-green).
 [doc("verify a task spec against this worktree: just spec-lifecycle specs/issue-N-<slug>.spec.md")]
 [group("📝 Spec")]
 spec-lifecycle spec:
-    @agent-spec lifecycle {{spec}} --code . --change-scope worktree --format text
+    @./scripts/spec-lifecycle-guard.sh {{spec}}
+
+# Regression lock for the zero-match false-green: the lifecycle gate must
+# REJECT specs/fixtures/zero-match.spec.md. If this goes red, the false-green
+# class has returned (upstream regression or guard removal).
+[doc("assert the lifecycle gate rejects the zero-match fixture")]
+[group("📝 Spec")]
+spec-selftest:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if ./scripts/spec-lifecycle-guard.sh specs/fixtures/zero-match.spec.md; then
+        echo "spec-selftest: FAIL — zero-match fixture passed the lifecycle gate (false-green is back)"
+        exit 1
+    fi
+    echo "spec-selftest: OK — lifecycle gate rejected the zero-match fixture"
+
+# Check that every Test: selector in specs/issue-*.spec.md still resolves to
+# at least one real test (spec drift). Skips specs/fixtures/ by construction.
+[doc("sweep task specs for Test: selectors that no longer resolve")]
+[group("📝 Spec")]
+spec-drift-sweep:
+    @./scripts/spec-drift-sweep.sh
 
 # Render the agent-facing contract view (Intent + Decisions + Boundaries + Acceptance).
 [doc("render the contract view of a spec: just spec-contract specs/issue-N-<slug>.spec.md")]
