@@ -33,7 +33,7 @@ export const meta = {
     { title: 'Spec', detail: 'spec-author gates against goal.md, prior-art search, splits into independent issues' },
     { title: 'Implement', detail: 'one implementer per issue: worktree + code + quality gate + local commit' },
     { title: 'Verify', detail: 'fresh-context verifier (S3, harness/roles/verifier.md): clean-state gate + cold boot + hostile probes; FAIL -> one repair round -> escalate' },
-    { title: 'Review', detail: 'reviewer <-> implementer loop until APPROVE (max 3 rounds), before push' },
+    { title: 'Review', detail: 'reviewer <-> implementer loop until APPROVE (max 3 rounds), before push; fix commits invalidate the verify verdict and trigger a one-shot re-verify' },
     { title: 'Ship', detail: 'push + gh pr create (verification report path in PR body) + gh signoff (runner down) / gh pr checks --watch; stops before merge' },
   ],
 }
@@ -238,10 +238,11 @@ Do:
 Do NOT claim "verified" — your evidence is self_check_only; the verifier re-verifies from scratch. Return the updated result (committed=true if the gate passes again, with the new commit SHAs appended).` + EMIT
 }
 
-function reviewPrompt(issue, impl, round) {
+function reviewPrompt(issue, impl, round, verify) {
   const lane1 = issue.lane === 'lane-1'
   return `You are rara's reviewer (round ${round}/${MAX_REVIEW_ROUNDS}) for issue #${issue.issueNumber}, BEFORE push.
 Follow your full contract in .claude/agents/reviewer.md. The implementer worked in worktree \`${impl.worktreePath}\` (commits: ${impl.commits.join(', ') || 'see git log'}).
+The S3 verification report (verdict PASS, score_authority: verifier) is at \`${verify?.reportPath ?? '<worktree>/verification/report.md'}\` — a required review input (harness/stages.toml S4); read it alongside the diff.
 
 Do:
 1. Read \`git -C ${impl.worktreePath} diff origin/main..HEAD\`.
@@ -282,6 +283,33 @@ Do:
 Do NOT merge — merge-to-main is human gate (a). Return prNumber, prUrl, ciGreen, and ciSummary.` + EMIT
 }
 
+// Shared S3 runner: one verification plus at most MAX_VERIFY_REPAIR_ROUNDS
+// repair rounds. Used by the verify stage AND by the post-review re-verify —
+// a verify PASS binds to verify.headSha, so any commit landed after it (e.g.
+// review-round fixes) invalidates the verdict (pipeline.md "Parallel-run
+// rules": a new commit moves head_sha; a stale PASS must never ride into S5).
+async function runVerify(issue, impl, labelPrefix) {
+  let verify = await agent(
+    verifyPrompt(issue, impl, 1),
+    { agentType: 'verifier', label: `${labelPrefix}:a1`, phase: 'Verify', schema: VERIFY_SCHEMA },
+  )
+  for (let repair = 1; verify.verdict !== 'PASS' && repair <= MAX_VERIFY_REPAIR_ROUNDS; repair++) {
+    const fixed = await agent(
+      repairPrompt(issue, impl, verify),
+      { agentType: variantType(issue), label: `${labelPrefix}:repair${repair}`, phase: 'Verify', schema: IMPL_SCHEMA },
+    )
+    if (fixed && fixed.committed) impl = fixed
+    verify = await agent(
+      verifyPrompt(issue, impl, repair + 1),
+      { agentType: 'verifier', label: `${labelPrefix}:a${repair + 1}`, phase: 'Verify', schema: VERIFY_SCHEMA },
+    )
+  }
+  if (verify.verdict !== 'PASS') {
+    return { impl, verify, verified: false, escalate: true, reason: `verify FAIL after ${MAX_VERIFY_REPAIR_ROUNDS} repair round(s) — human decision needed: ${verify.summary}` }
+  }
+  return { impl, verify, verified: true }
+}
+
 // ---- orchestration --------------------------------------------------------
 
 phase('Spec')
@@ -319,55 +347,65 @@ const results = await pipeline(
   // authority. FAIL -> ONE structured repair round -> re-verify -> still FAIL ->
   // stop this issue and escalate to human (no second repair round).
   async (prev) => {
-    const { issue } = prev
-    let { impl } = prev
+    const { issue, impl } = prev
     if (!impl || !impl.committed) {
       return { issue, impl, verified: false, reason: `implement failed: ${impl?.blockers || 'no commit'}` }
     }
-    let verify = await agent(
-      verifyPrompt(issue, impl, 1),
-      { agentType: 'verifier', label: `verify:#${issue.issueNumber}:a1`, phase: 'Verify', schema: VERIFY_SCHEMA },
-    )
-    for (let repair = 1; verify.verdict !== 'PASS' && repair <= MAX_VERIFY_REPAIR_ROUNDS; repair++) {
-      const fixed = await agent(
-        repairPrompt(issue, impl, verify),
-        { agentType: variantType(issue), label: `repair:#${issue.issueNumber}:r${repair}`, phase: 'Verify', schema: IMPL_SCHEMA },
-      )
-      if (fixed && fixed.committed) impl = fixed
-      verify = await agent(
-        verifyPrompt(issue, impl, repair + 1),
-        { agentType: 'verifier', label: `verify:#${issue.issueNumber}:a${repair + 1}`, phase: 'Verify', schema: VERIFY_SCHEMA },
-      )
-    }
-    if (verify.verdict !== 'PASS') {
-      return { issue, impl, verify, verified: false, escalate: true, reason: `verify FAIL after ${MAX_VERIFY_REPAIR_ROUNDS} repair round(s) — human decision needed: ${verify.summary}` }
-    }
-    return { issue, impl, verify, verified: true }
+    const v = await runVerify(issue, impl, `verify:#${issue.issueNumber}`)
+    return { issue, ...v }
   },
 
-  // stage 3 — reviewer <-> implementer loop until APPROVE (real loop, capped)
+  // stage 3 — reviewer <-> implementer loop until APPROVE (real loop, capped).
+  // Review-round fix commits move HEAD past verify.headSha, so an APPROVE after
+  // fixes triggers ONE re-verify (same one-repair budget) before ship — a stale
+  // PASS must never ride into S5.
   async (prev) => {
-    const { issue, verify } = prev
-    let { impl } = prev
+    const { issue } = prev
+    let { impl, verify } = prev
     if (!prev.verified) {
       return { issue, impl, verify, approved: false, escalate: prev.escalate ?? false, reason: prev.reason }
     }
+    let approved = false
+    let rounds = 0
+    let lastVerdict = null
+    let changedSinceVerify = false
     for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
       const verdict = await agent(
-        reviewPrompt(issue, impl, round),
+        reviewPrompt(issue, impl, round, verify),
         { agentType: 'reviewer', label: `review:#${issue.issueNumber}:r${round}`, phase: 'Review', schema: VERDICT_SCHEMA },
       )
-      if (verdict.approved) return { issue, impl, verify, approved: true, rounds: round }
-      if (round === MAX_REVIEW_ROUNDS) {
-        return { issue, impl, verify, approved: false, reason: `not APPROVED after ${MAX_REVIEW_ROUNDS} rounds`, verdict }
+      if (verdict.approved) {
+        approved = true
+        rounds = round
+        break
       }
+      lastVerdict = verdict
+      if (round === MAX_REVIEW_ROUNDS) break
       const fixed = await agent(
         fixPrompt(issue, impl, verdict),
         { agentType: variantType(issue), label: `fix:#${issue.issueNumber}:r${round}`, phase: 'Review', schema: IMPL_SCHEMA },
       )
-      if (fixed && fixed.committed) impl = fixed
+      if (fixed && fixed.committed) {
+        impl = fixed
+        changedSinceVerify = true
+      }
     }
-    return { issue, impl, verify, approved: false, reason: 'review loop exhausted' }
+    if (!approved) {
+      return { issue, impl, verify, approved: false, reason: `not APPROVED after ${MAX_REVIEW_ROUNDS} rounds`, verdict: lastVerdict }
+    }
+    if (changedSinceVerify) {
+      const rv = await runVerify(issue, impl, `reverify:#${issue.issueNumber}`)
+      impl = rv.impl
+      verify = rv.verify
+      if (!rv.verified) {
+        return { issue, impl, verify, approved: false, escalate: true, reason: `post-review ${rv.reason}` }
+      }
+      // A re-verify repair round may itself land commits the reviewer has not
+      // seen; those are verifier-mandated regression-test fixes, accepted
+      // without another review round to keep the loop bounded. The PR diff
+      // shows them to the human at the merge gate.
+    }
+    return { issue, impl, verify, approved: true, rounds }
   },
 
   // stage 4 — push + PR (verification report path in body) + CI watch;

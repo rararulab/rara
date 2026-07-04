@@ -76,7 +76,8 @@ hands the user's request (verbatim) to spec-author. Spec-author:
    For lane 1, renames the spec from `issue-TBD-` to `issue-N-` once the
    issue number is assigned, and references the spec path in the issue body.
 
-See `.claude/agents/spec-author.md` for the full contract.
+See `harness/roles/spec-author.md` for the full contract (dispatched
+via the `.claude/agents/spec-author.md` wrapper).
 
 ## Auto-chaining
 
@@ -192,9 +193,10 @@ lane 2 = scripted LLM via `ScriptedLlmDriver`, lane 3 = real LLM in
 `e2e.yml`). If PR-time e2e coverage is infeasible, state in the PR body
 which lane applies and why.
 
-See `.claude/agents/implementer.md` for the shared base contract,
-`.claude/agents/implementer-backend.md` for the Rust gate, and
-`.claude/agents/implementer-frontend.md` for the FE gate.
+See `harness/roles/implementer.md` for the shared base contract,
+`harness/roles/implementer-backend.md` for the Rust gate, and
+`harness/roles/implementer-frontend.md` for the FE gate (each dispatched
+via its `.claude/agents/` wrapper).
 
 ### Pre-commit checks (prek)
 
@@ -278,7 +280,8 @@ Verdict:
   via parent. Implementer does NOT silently fix the spec.
 - **APPROVE**: implementer proceeds to step 5.
 
-See `.claude/agents/reviewer.md` for the full contract.
+See `harness/roles/reviewer.md` for the full contract (dispatched via
+the `.claude/agents/reviewer.md` wrapper).
 
 ## Step 5: Push + Open PR + Watch CI
 

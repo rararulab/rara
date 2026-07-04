@@ -51,6 +51,12 @@ state, review reads the diff for design / style / regression decisions.
 Verify runs first so the reviewer reads code that is already known to
 work, and a verify FAIL never wastes a review round.
 
+The S3 verdict binds to `head_sha`. Review-round fix commits move
+`head_sha` and therefore invalidate a prior PASS — after an APPROVE that
+followed fix commits, the orchestrator re-verifies once (same one-repair
+budget; still FAIL → escalate) before S5. A stale PASS never rides into
+S5.
+
 ## S3 in one paragraph
 
 The verifier receives only the worktree path, the issue number, and the
@@ -114,7 +120,7 @@ Exactly **two routine touchpoints**:
 2. **Merge the PR** (S6) — gate (a) in workflow.md; always confirmed,
    even with green CI, verifier PASS, and reviewer APPROVE.
 
-And exactly **three escalations** that interrupt the chain:
+And exactly **four escalations** that interrupt the chain:
 
 1. **Stuck loops** — S3 still FAIL after its one repair round, or S4
    not APPROVE after 3 rounds. The pipeline stops and reports; it does
@@ -123,6 +129,12 @@ And exactly **three escalations** that interrupt the chain:
    (`reset --hard`, force-push, shared-branch deletion).
 3. **Production intervention** — gate (c) in workflow.md (restarting or
    mutating the shared production instance).
+4. **Outward-facing actions** — anything that leaves the `rararulab/*`
+   org. Agents must NEVER create issues, PRs, or comments on external
+   repositories, even when a dependency bug clearly belongs upstream.
+   When upstream engagement would help, the agent drafts the full
+   report text (title, body, reproducer) and hands it to the human to
+   file.
 
 Everything else default-continues; the gate list is closed (see
 "Auto-chaining" in workflow.md).

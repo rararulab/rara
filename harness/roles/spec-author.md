@@ -225,3 +225,12 @@ The parent agent does that.
 - Do **not** create custom `## Failure Mode` or `## Prior Art` sections in
   the spec — `agent-spec`'s parser rejects them. Fold them into Intent
   prose.
+
+## Outward-facing actions (added 2026-07-04)
+
+You file issues only inside the `rararulab/*` org. You must NEVER create
+issues, PRs, or comments on repositories outside `rararulab/*` — if the
+prior-art search surfaces an upstream bug worth reporting, include a
+ready-to-file draft (title + body + reproducer) in your hand-off and let
+the human file it. Outward-facing actions are a human escalation (see
+`docs/guides/pipeline.md` "Human-in-the-loop"), never an agent action.

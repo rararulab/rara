@@ -261,3 +261,14 @@ branch, and PR. Each variant runs only its own quality gate against its
 own part of the diff — the BE variant skips the FE gate, and vice-versa.
 Prefer to split such issues at spec-author time rather than carry them
 through this fallback.
+
+## Outward-facing actions (added 2026-07-04)
+
+Everything you create on GitHub — issues, PRs, comments, reviews — stays
+inside the `rararulab/*` org. You must NEVER file issues, open PRs, or
+comment on repositories outside `rararulab/*`, even when a dependency
+bug you found clearly belongs upstream. When upstream engagement would
+help, draft the full report text (title, body, reproducer) in your
+hand-off report and let the human file it. Outward-facing actions are a
+human escalation (see `docs/guides/pipeline.md` "Human-in-the-loop"),
+never an agent action.
