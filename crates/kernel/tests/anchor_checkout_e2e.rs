@@ -78,6 +78,8 @@ impl SessionIndex for TestSessionIndex {
         Ok(())
     }
 
+    // Anchor-tree test mock — channel binding is never exercised here.
+    #[expect(clippy::unimplemented)]
     async fn bind_channel(
         &self,
         _binding: &ChannelBinding,
@@ -102,8 +104,10 @@ impl SessionIndex for TestSessionIndex {
 // ---------------------------------------------------------------------------
 
 async fn setup() -> (TapeService, Arc<TestSessionIndex>, tempfile::TempDir) {
-    let tmp = tempfile::tempdir().unwrap();
-    let store = FileTapeStore::new(tmp.path(), tmp.path()).await.unwrap();
+    let tmp = tempfile::tempdir().expect("create temp dir for tape store");
+    let store = FileTapeStore::new(tmp.path(), tmp.path())
+        .await
+        .expect("open file tape store in temp dir");
     let tape = TapeService::new(store);
     let sessions = Arc::new(TestSessionIndex::default());
     (tape, sessions, tmp)
@@ -135,7 +139,7 @@ async fn create_session(
             updated_at: now,
         })
         .await
-        .unwrap();
+        .expect("test session index accepts a fresh session");
 }
 
 // ---------------------------------------------------------------------------

@@ -1140,9 +1140,13 @@ pub async fn start_with_options(
         .whatever_context("REST server failed to report started")?;
 
     // Signal readiness to the gateway supervisor (if present).
-    // The gateway watches our stdout for this marker.
-    // tracing goes to stderr, so this does not interfere.
-    println!("READY");
+    // The gateway watches our stdout for this marker (gateway/supervisor.rs
+    // `read_ready`) — tracing goes to stderr, so stdout is the protocol
+    // channel here, not accidental print.
+    #[expect(clippy::print_stdout)]
+    {
+        println!("READY");
+    }
 
     // Build a shared service client used by both command and callback handlers.
     let bot_client: std::sync::Arc<dyn rara_channels::telegram::commands::BotServiceClient> = {

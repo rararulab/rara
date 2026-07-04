@@ -42,8 +42,8 @@ type Entry struct {
 	Branch     string // empty for detached HEAD
 	IsMain     bool
 	Prunable   bool
-	Locked     bool      // worktree has a lock file
-	IsCurrent  bool      // worktree is the current working directory
+	Locked     bool // worktree has a lock file
+	IsCurrent  bool // worktree is the current working directory
 	Status     Status
 	LastActive time.Time // last modification time of the worktree directory
 	DiskSize   int64     // total disk usage in bytes

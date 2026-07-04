@@ -25,7 +25,7 @@ use rara_kernel::{
 
 /// Create a temp-file-backed SubscriptionRegistry for tests.
 fn test_registry() -> (SubscriptionRegistry, tempfile::TempDir) {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("create temp dir for subscription registry");
     let path = tmp.path().join("subscriptions.json");
     (SubscriptionRegistry::load(path), tmp)
 }
@@ -183,8 +183,10 @@ fn test_notify_action_serde() {
 
 /// Helper: create a TapeService backed by a temp directory.
 async fn setup_tape() -> (TapeService, tempfile::TempDir) {
-    let tmp = tempfile::tempdir().unwrap();
-    let store = FileTapeStore::new(tmp.path(), tmp.path()).await.unwrap();
+    let tmp = tempfile::tempdir().expect("create temp dir for tape store");
+    let store = FileTapeStore::new(tmp.path(), tmp.path())
+        .await
+        .expect("open file tape store in temp dir");
     let tape = TapeService::new(store);
     (tape, tmp)
 }

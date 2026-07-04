@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// CLI crate: stdout IS the user interface (uv pattern — CLI crates print).
+// This also covers the shadow-rs generated module included by build_info.rs.
+#![allow(clippy::print_stdout)]
+
 use clap::{Args, Parser, Subcommand};
 use snafu::{ResultExt, Whatever, whatever};
 

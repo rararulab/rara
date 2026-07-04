@@ -106,6 +106,14 @@ check-ci-runners:
     @cd scripts && go build -o bin/devtool ./cmd/devtool/
     @scripts/bin/devtool check-ci-runners
 
+# Not chained into `lint`: the ratchet's --force-warn flags change the clippy
+# fingerprint, so chaining would force a full rebuild on every `just lint`.
+# CI runs it as its own lint.yml job.
+[doc("lint ratchet: fail when a ratcheted lint count increases (scripts/lint-ratchet.sh)")]
+[group("👆 Code Quality")]
+lint-ratchet:
+    @scripts/lint-ratchet.sh
+
 [doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md, check-deps, check-ci-runners)")]
 [group("👆 Code Quality")]
 lint: check-agent-md check-deps check-ci-runners

@@ -13,7 +13,10 @@ publish = false
 [workspace.lints.rust]
 unsafe_code = "deny"
 rust_2024_compatibility = { level = "warn", priority = -1 }
+# RATCHET: enforced by scripts/lint-ratchet.sh — graduate to "warn" at count 0 (#2174)
 dead_code = "allow"
+# RATCHET: enforced by scripts/lint-ratchet.sh — graduate to "warn" at count 0 (#2174)
+unreachable_pub = "allow"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -21,84 +24,93 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
 
-multiple_crate_versions = "allow"
-doc_markdown = "allow"
-items_after_statements = "allow"
-redundant_pub_crate = "allow"
-significant_drop_tightening = "allow"
-future_not_send = "allow"
-missing_errors_doc = "allow"
-cargo_common_metadata = "allow"
-must_use_candidate = "allow"
-missing_const_for_fn = "allow"
-missing_panics_doc = "allow"
-cast_possible_wrap = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-use_self = "allow"
-needless_pass_by_value = "allow"
-wildcard_imports = "allow"
-or_fun_call = "allow"
-option_if_let_else = "allow"
-unused_async = "allow"
-single_match_else = "allow"
-map_unwrap_or = "allow"
-from_over_into = "allow"
-derivable_impls = "allow"
-cast_lossless = "allow"
-needless_raw_string_hashes = "allow"
-similar_names = "allow"
-iter_on_single_items = "allow"
-collapsible_if = "allow"
-result_large_err = "allow"
-unreadable_literal = "allow"
-trivially_copy_pass_by_ref = "allow"
-manual_let_else = "allow"
-clone_on_copy = "allow"
-default_trait_access = "allow"
-unused_self = "allow"
-match_same_arms = "allow"
-uninlined_format_args = "allow"
-redundant_clone = "allow"
-implicit_clone = "allow"
-needless_continue = "allow"
-format_push_string = "allow"
-redundant_closure_for_method_calls = "allow"
-used_underscore_binding = "allow"
-manual_string_new = "allow"
-new_without_default = "allow"
-unnecessary_literal_bound = "allow"
-unnecessary_wraps = "allow"
-needless_collect = "allow"
-derive_partial_eq_without_eq = "allow"
-unnecessary_lazy_evaluations = "allow"
+# Mechanized style rules from docs/guides/rust-style.md (#2174). "warn" is
+# deny in practice: prek / CI clippy runs with `-D warnings`.
+unwrap_used = "warn"   # rust-style.md: `.expect("context")` over `unwrap()` in non-test code
+todo = "warn"          # unfinished code must not ship; use an error or an issue instead
+unimplemented = "warn" # same as todo; test mocks carry per-site #[expect]
+dbg_macro = "warn"     # dbg! is a local debugging aid, not a logging mechanism
+print_stdout = "warn"  # stdout is for CLI output only; rara-cli opts back in at crate root
+
+# Every allow below carries the reason it survives (#2174). Removing one is
+# welcome but is its own measured change — see the ratchet workflow.
+multiple_crate_versions = "allow"                # transitive deps pin conflicting versions; not actionable per-crate
+doc_markdown = "allow"                           # false-positive-prone on product/domain names even with doc-valid-idents
+items_after_statements = "allow"                 # local helper items next to their use site read fine
+redundant_pub_crate = "allow"                    # conflicts with unreachable_pub ratchet: pub(crate) is the target state
+significant_drop_tightening = "allow"            # nursery; noisy false positives around lock guard lifetimes
+future_not_send = "allow"                        # nursery; fires on futures that are intentionally single-threaded
+missing_errors_doc = "allow"                     # snafu display messages document errors; per-fn # Errors adds noise
+cargo_common_metadata = "allow"                  # internal workspace crates are publish = false
+must_use_candidate = "allow"                     # blanket #[must_use] churn without catching real bugs
+missing_const_for_fn = "allow"                   # nursery; const-ness is not part of these APIs' contract
+missing_panics_doc = "allow"                     # internal APIs: panics are bugs, not documented contract
+cast_possible_wrap = "allow"                     # numeric casts reviewed at call sites; try_from churn not worth it
+cast_possible_truncation = "allow"               # see cast_possible_wrap
+cast_sign_loss = "allow"                         # see cast_possible_wrap
+use_self = "allow"                               # pedantic style churn; explicit type names read fine
+needless_pass_by_value = "allow"                 # by-value signatures often intentional (ownership transfer)
+or_fun_call = "allow"                            # eager or() args are cheap here; rewrite is churn
+option_if_let_else = "allow"                     # nursery; suggested combinators often less readable than match
+unused_async = "allow"                           # async fns kept for trait/API uniformity
+single_match_else = "allow"                      # match over if-let-else is house style for two-way branches
+map_unwrap_or = "allow"                          # map().unwrap_or() reads fine; style churn
+from_over_into = "allow"                         # existing Into impls predate the rule; no behavior change
+derivable_impls = "allow"                        # manual impls document intent for non-trivial defaults
+cast_lossless = "allow"                          # see cast_possible_wrap
+needless_raw_string_hashes = "allow"             # raw strings kept uniform across SQL/regex/JSON literals
+similar_names = "allow"                          # pedantic; flags idiomatic pairs like req/res
+iter_on_single_items = "allow"                   # explicit iterators over once()/empty() read fine
+collapsible_if = "allow"                         # nested ifs often clearer than long && chains
+result_large_err = "allow"                       # snafu error enums are large by design; boxing is churn
+unreadable_literal = "allow"                     # digit separators enforced case-by-case in review
+trivially_copy_pass_by_ref = "allow"             # &T signatures kept for API uniformity
+manual_let_else = "allow"                        # let-else adopted case-by-case, not by blanket rewrite
+clone_on_copy = "allow"                          # mechanical cleanup, not correctness; future sweep
+default_trait_access = "allow"                   # Default::default() vs T::default() is style churn
+unused_self = "allow"                            # methods keep self for trait/API uniformity
+match_same_arms = "allow"                        # merged arms can hide distinct domain cases
+uninlined_format_args = "allow"                  # mass churn across the codebase; no behavior change
+redundant_clone = "allow"                        # nursery; known false positives on borrowed-then-moved values
+implicit_clone = "allow"                         # pedantic style churn (to_owned vs clone)
+needless_continue = "allow"                      # explicit continue documents loop intent
+format_push_string = "allow"                     # perf micro-opt; not on hot paths
+redundant_closure_for_method_calls = "allow"     # closure form often clearer with type inference
+used_underscore_binding = "allow"                # underscore bindings mark intentionally-unused-but-named values
+manual_string_new = "allow"                      # String::from("") vs String::new() is style churn
+new_without_default = "allow"                    # Default is opt-in per type; config structs must not derive it
+unnecessary_literal_bound = "allow"              # false positives on trait impls returning &'static str
+unnecessary_wraps = "allow"                      # Result/Option signatures kept for trait/API uniformity
+needless_collect = "allow"                       # nursery; known false positives on multi-use iterators
+derive_partial_eq_without_eq = "allow"           # Eq derivation left to type authors; churn
+unnecessary_lazy_evaluations = "allow"           # unwrap_or_else kept uniform regardless of arg cost
+# RATCHET: enforced by scripts/lint-ratchet.sh (threshold 150 in clippy.toml) — graduate to "warn" at count 0 (#2174)
 too_many_lines = "allow"
-unnecessary_map_or = "allow"
-too_long_first_doc_paragraph = "allow"
-match_wildcard_for_single_variants = "allow"
-assigning_clones = "allow"
-large_futures = "allow"
-manual_strip = "allow"
-branches_sharing_code = "allow"
-write_with_newline = "allow"
-type_complexity = "allow"
-ignored_unit_patterns = "allow"
-cast_precision_loss = "allow"
-manual_is_multiple_of = "allow"
-stable_sort_primitive = "allow"
-ref_option = "allow"
-unnested_or_patterns = "allow"
-needless_borrows_for_generic_args = "allow"
-question_mark = "allow"
-redundant_closure = "allow"
-literal_string_with_formatting_args = "allow"
-semicolon_if_nothing_returned = "allow"
-float_cmp = "allow"
-needless_update = "allow"
-field_reassign_with_default = "allow"
-option_option = "allow"
-too_many_arguments = "allow"
-needless_for_each = "allow"
+unnecessary_map_or = "allow"                     # style churn from a newer lint; no behavior change
+too_long_first_doc_paragraph = "allow"           # doc style; long lead paragraphs accepted
+match_wildcard_for_single_variants = "allow"     # wildcard arms intentionally guard against enum growth
+assigning_clones = "allow"                       # clone_into micro-opt; not on hot paths
+large_futures = "allow"                          # kernel futures are large by design; boxing is churn
+manual_strip = "allow"                           # mechanical cleanup, not correctness; future sweep
+branches_sharing_code = "allow"                  # nursery; merging shared tails often hurts readability
+write_with_newline = "allow"                     # explicit \n accepted; writeln! conversion is churn
+ignored_unit_patterns = "allow"                  # pedantic style churn (() vs _)
+cast_precision_loss = "allow"                    # see cast_possible_wrap
+manual_is_multiple_of = "allow"                  # % reads fine; churn from a newer lint
+stable_sort_primitive = "allow"                  # sort_unstable micro-opt; not on hot paths
+ref_option = "allow"                             # &Option<T> signatures kept; changing them is API churn
+unnested_or_patterns = "allow"                   # nested or-patterns read fine
+needless_borrows_for_generic_args = "allow"      # known false positives with impl Trait args
+question_mark = "allow"                          # explicit matches kept where ? would hide control flow
+redundant_closure = "allow"                      # closure form often clearer with type inference
+literal_string_with_formatting_args = "allow"    # false positives on strings containing braces (JSON templates)
+semicolon_if_nothing_returned = "allow"          # pedantic style churn
+float_cmp = "allow"                              # float comparisons reviewed at call sites; epsilon wrappers are churn
+needless_update = "allow"                        # ..Default::default() spread kept for forward-compat on struct growth
+field_reassign_with_default = "allow"            # init-then-assign accepted where builders don't apply
+option_option = "allow"                          # Option<Option<T>> distinguishes absent vs explicitly-null
+too_many_arguments = "allow"                     # legacy constructors; the fix is bon migration, tracked separately
+needless_for_each = "allow"                      # for_each kept at the end of iterator pipelines
 
 [workspace]
 resolver = "3"

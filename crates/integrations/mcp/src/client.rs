@@ -564,6 +564,21 @@ pub struct ToolWithConnectorId {
     pub connector_name: Option<String>,
 }
 
+/// Everything [`RmcpClient::start_handshake`] hands back in one go: the boxed
+/// `rmcp` handshake future plus the transport's optional OAuth persistor and
+/// process-group guard.
+type HandshakeParts = (
+    futures::future::BoxFuture<
+        'static,
+        std::result::Result<
+            RunningService<RoleClient, LoggingClientHandler>,
+            ClientInitializeError,
+        >,
+    >,
+    Option<OAuthPersistor>,
+    Option<ProcessGroupGuard>,
+);
+
 // ── RmcpClient: construction helpers ─────────────────────────────────
 
 /// Private helpers used during client construction and the initialization
@@ -751,14 +766,7 @@ impl RmcpClient {
     fn start_handshake(
         transport: Option<PendingTransport>,
         handler: LoggingClientHandler,
-    ) -> Result<(
-        futures::future::BoxFuture<
-            'static,
-            Result<RunningService<RoleClient, LoggingClientHandler>, ClientInitializeError>,
-        >,
-        Option<OAuthPersistor>,
-        Option<ProcessGroupGuard>,
-    )> {
+    ) -> Result<HandshakeParts> {
         match transport {
             Some(PendingTransport::ChildProcess {
                 transport,

@@ -134,7 +134,9 @@ func runNuke() error {
 		fmt.Printf("🗑️  Removing: %s\n", e.Path)
 		if err := Remove(e.Path, true); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠️  %s — cleaning up manually\n", err)
-			os.RemoveAll(e.Path)
+			if rmErr := os.RemoveAll(e.Path); rmErr != nil {
+				fmt.Fprintf(os.Stderr, "  ⚠️  manual cleanup failed: %s\n", rmErr)
+			}
 		}
 		if e.Branch != "" {
 			_ = DeleteBranch(e.Branch, true)

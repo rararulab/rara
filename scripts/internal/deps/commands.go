@@ -53,23 +53,23 @@ var layerMap = map[string]int{
 	"rara-api":           0, // protobuf-generated type definitions, no workspace deps
 
 	// Layer 1 — core primitives (depend only on layer 0)
-	"rara-soul":         1,
-	"rara-skills":       1,
-	"rara-vault":        1,
-	"rara-composio":     1,
+	"rara-soul":          1,
+	"rara-skills":        1,
+	"rara-vault":         1,
+	"rara-composio":      1,
 	"rara-keyring-store": 1,
-	"rara-git":          1,
+	"rara-git":           1,
 
 	// Layer 2 — kernel
 	"rara-kernel": 2,
 
 	// Layer 3 — kernel extensions (depend on kernel)
-	"rara-codex-oauth":          3,
-	"rara-dock":                 3,
-	"rara-sessions":             3,
-	"rara-agents":               3,
-	"rara-mcp":                  3,
-	"rara-pg-credential-store":  3,
+	"rara-codex-oauth":         3,
+	"rara-dock":                3,
+	"rara-sessions":            3,
+	"rara-agents":              3,
+	"rara-mcp":                 3,
+	"rara-pg-credential-store": 3,
 
 	// Layer 4 — integration (depend on layer 3 crates)
 	"rara-channels":      4,

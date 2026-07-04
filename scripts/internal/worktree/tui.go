@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/table"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -55,7 +55,6 @@ var (
 	styleDimPath = lipgloss.NewStyle().Foreground(colorDim)
 
 	styleMessage = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
-	styleError   = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
 	styleBusy    = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
 
 	styleHelpKey  = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
@@ -80,7 +79,7 @@ type deleteResultMsg struct {
 // sizeResultMsg delivers asynchronously computed disk sizes.
 // The generation field prevents stale results from overwriting a newer entry list.
 type sizeResultMsg struct {
-	generation int            // must match tuiModel.generation to apply
+	generation int           // must match tuiModel.generation to apply
 	sizes      map[int]int64 // index → bytes
 }
 
