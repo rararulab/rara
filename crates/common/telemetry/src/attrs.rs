@@ -287,9 +287,15 @@ mod tests {
     }
 
     #[test]
-    fn upstream_keys_match_semconv() {
+    fn gen_ai_keys_have_stable_strings() {
         assert_eq!(GEN_AI_REQUEST_MODEL, "gen_ai.request.model");
         assert_eq!(GEN_AI_USAGE_INPUT_TOKENS, "gen_ai.usage.input_tokens");
+        assert_eq!(GEN_AI_USAGE_OUTPUT_TOKENS, "gen_ai.usage.output_tokens");
+        assert_eq!(
+            GEN_AI_RESPONSE_FINISH_REASONS,
+            "gen_ai.response.finish_reasons"
+        );
+        assert_eq!(GEN_AI_SYSTEM, "gen_ai.system");
         assert_eq!(
             GEN_AI_SERVER_TIME_TO_FIRST_TOKEN,
             "gen_ai.server.time_to_first_token"
