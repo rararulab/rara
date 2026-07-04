@@ -790,7 +790,7 @@ mod tests {
         // Pinning the current resolved value documents the source-of-truth
         // chain end-to-end: change the sandbox tag → Cargo.lock updates →
         // this const updates → this test updates in lockstep.
-        assert_eq!(BOXLITE_VERSION, "v0.9.5");
+        assert_eq!(BOXLITE_VERSION, "v0.9.7");
     }
 
     #[test]

@@ -393,10 +393,10 @@ async fn list_server_resources(
         .resources
         .into_iter()
         .map(|r| McpResourceView {
-            uri:         r.raw.uri,
-            name:        Some(r.raw.name),
-            description: r.raw.description,
-            mime_type:   r.raw.mime_type,
+            uri:         r.uri,
+            name:        Some(r.name),
+            description: r.description,
+            mime_type:   r.mime_type,
         })
         .collect();
 

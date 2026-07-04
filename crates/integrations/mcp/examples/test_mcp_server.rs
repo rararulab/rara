@@ -22,7 +22,7 @@ use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        Annotated, ListResourcesResult, RawResource, ReadResourceRequestParams, ReadResourceResult,
+        ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, Resource,
         ResourceContents, ServerCapabilities, ServerInfo,
     },
     schemars,
@@ -89,14 +89,10 @@ impl ServerHandler for TestServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        Ok(ListResourcesResult {
-            resources:   vec![Annotated {
-                raw:         RawResource::new("test://greeting", "greeting"),
-                annotations: None,
-            }],
-            next_cursor: None,
-            meta:        None,
-        })
+        Ok(ListResourcesResult::with_all_items(vec![Resource::new(
+            "test://greeting",
+            "greeting",
+        )]))
     }
 
     async fn read_resource(

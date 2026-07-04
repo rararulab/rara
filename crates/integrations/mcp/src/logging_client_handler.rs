@@ -15,11 +15,15 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+// MCP is removing the logging capability upstream (SEP-2577) and rmcp
+// deprecates these types with no replacement. Keep consuming them until
+// rmcp deletes them — at that point this import fails to compile loudly.
+#[allow(deprecated)]
+use rmcp::model::{LoggingLevel, LoggingMessageNotificationParam};
 use rmcp::{
     ClientHandler, RoleClient,
     model::{
-        CancelledNotificationParam, ClientInfo, CreateElicitationRequestParams,
-        CreateElicitationResult, LoggingLevel, LoggingMessageNotificationParam,
+        CancelledNotificationParam, ClientInfo, ElicitRequestParams, ElicitResult,
         ProgressNotificationParam, RequestId, ResourceUpdatedNotificationParam,
     },
     service::{NotificationContext, RequestContext},
@@ -31,10 +35,7 @@ use crate::manager::log_buffer::McpLogBuffer;
 /// Interface for sending elicitation requests to the UI and awaiting a
 /// response.
 pub type SendElicitation = Box<
-    dyn Fn(
-            RequestId,
-            CreateElicitationRequestParams,
-        ) -> BoxFuture<'static, anyhow::Result<CreateElicitationResult>>
+    dyn Fn(RequestId, ElicitRequestParams) -> BoxFuture<'static, anyhow::Result<ElicitResult>>
         + Send
         + Sync,
 >;
@@ -66,9 +67,9 @@ impl LoggingClientHandler {
 impl ClientHandler for LoggingClientHandler {
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         context: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, rmcp::ErrorData> {
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
         (self.send_elicitation)(context.id, request)
             .await
             .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))
@@ -79,9 +80,14 @@ impl ClientHandler for LoggingClientHandler {
         params: CancelledNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
+        // `request_id` became optional in rmcp 2.x.
+        let request_id = params
+            .request_id
+            .as_ref()
+            .map_or_else(|| "<none>".to_owned(), ToString::to_string);
         let msg = format!(
-            "cancelled request (request_id: {}, reason: {:?})",
-            params.request_id, params.reason
+            "cancelled request (request_id: {request_id}, reason: {:?})",
+            params.reason
         );
         info!("MCP server {msg}");
         self.log_buffer.push(&self.server_name, "warn", msg).await;
@@ -133,6 +139,8 @@ impl ClientHandler for LoggingClientHandler {
 
     fn get_info(&self) -> ClientInfo { self.client_info.clone() }
 
+    // Deprecated upstream by SEP-2577 (see the import comment above).
+    #[allow(deprecated)]
     async fn on_logging_message(
         &self,
         params: LoggingMessageNotificationParam,
@@ -142,6 +150,7 @@ impl ClientHandler for LoggingClientHandler {
             level,
             logger,
             data,
+            ..
         } = params;
         let logger = logger.as_deref();
         let buf_level = match level {
