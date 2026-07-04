@@ -1000,6 +1000,8 @@ mod tests {
 
             fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
 
+            // Registry-shape test mock — execute is never invoked.
+            #[expect(clippy::unimplemented)]
             async fn execute(
                 &self,
                 _: serde_json::Value,
@@ -1018,6 +1020,8 @@ mod tests {
 
             fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
 
+            // Registry-shape test mock — execute is never invoked.
+            #[expect(clippy::unimplemented)]
             async fn execute(
                 &self,
                 _: serde_json::Value,
@@ -1066,6 +1070,8 @@ mod tests {
 
             fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
 
+            // Registry-shape test mock — execute is never invoked.
+            #[expect(clippy::unimplemented)]
             async fn execute(
                 &self,
                 _: serde_json::Value,
@@ -1084,6 +1090,8 @@ mod tests {
 
             fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
 
+            // Registry-shape test mock — execute is never invoked.
+            #[expect(clippy::unimplemented)]
             async fn execute(
                 &self,
                 _: serde_json::Value,

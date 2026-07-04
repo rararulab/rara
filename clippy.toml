@@ -1,5 +1,11 @@
 # https://doc.rust-lang.org/clippy/configuration.html
 
+# unwrap()/print! stay legal inside #[test] fns and #[cfg(test)] modules;
+# the workspace-level unwrap_used / print_stdout lints (#2174) only bite
+# non-test code.
+allow-unwrap-in-tests = true
+allow-print-in-tests = true
+
 allowed-wildcard-imports = ["prelude"]
 too-many-arguments-threshold = 10
 max-struct-bools = 4

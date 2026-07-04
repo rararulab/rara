@@ -81,7 +81,7 @@ async fn fresh_pools() -> DieselSqlitePools {
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock is after the UNIX epoch")
             .as_nanos(),
         seq
     ));

@@ -1,0 +1,4 @@
+# Minimal golangci-lint config for the Go devtool sources (#2174).
+# Defaults only (errcheck, govet, ineffassign, staticcheck, unused) —
+# tighten incrementally as the Go surface grows.
+version: "2"

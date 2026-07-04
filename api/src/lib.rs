@@ -15,12 +15,15 @@
 pub use serde;
 
 pub mod pb {
+    // tonic/prost codegen (include_proto! below) does not follow our style
+    // rules — wildcard_imports covers the generated `use ...::*` lines.
     #![allow(
         clippy::missing_errors_doc,
         clippy::default_trait_access,
         clippy::similar_names,
         clippy::doc_markdown,
-        clippy::missing_const_for_fn
+        clippy::missing_const_for_fn,
+        clippy::wildcard_imports
     )]
 
     pub const GRPC_DESC: &[u8] = tonic::include_file_descriptor_set!("rara_grpc_desc");

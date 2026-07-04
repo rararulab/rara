@@ -45,7 +45,7 @@ fn main() {
             ],
             &includes
                 .iter()
-                .map(|p| p.to_str().unwrap())
+                .map(|p| p.to_str().expect("proto include path is valid UTF-8"))
                 .collect::<Vec<_>>(),
         )
         .expect("compile proto");

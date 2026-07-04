@@ -25,7 +25,14 @@ use tokio::{
 };
 use tracing::info;
 
-use super::{error::*, ref_map::RefMap, snapshot};
+use super::{
+    error::{
+        BinaryNotFoundSnafu, BrowserResult, CdpSnafu, EvaluationSnafu, FetchFailedSnafu,
+        NoActivePageSnafu, PageLoadTimeoutSnafu, StartupTimeoutSnafu, TabIndexOutOfRangeSnafu,
+    },
+    ref_map::RefMap,
+    snapshot,
+};
 
 /// Configuration for the browser subsystem.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]

@@ -12,6 +12,7 @@
 node = "25"           # web/, desktop/, site/ — site/package.json needs >=22.12
 bun  = "latest"       # web/ dev + build
 go   = "1.26"         # go.work + scripts/
+golangci-lint = "2.12" # scripts/ lint gate (lint.yml devtool job) — local == CI
 just = "latest"       # justfile runner
 gh   = "latest"       # PR + issue workflow
 

@@ -181,5 +181,5 @@ pub async fn create_test_session(
             updated_at: now,
         })
         .await
-        .unwrap();
+        .expect("in-memory session index accepts a fresh test session");
 }

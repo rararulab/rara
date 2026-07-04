@@ -71,7 +71,7 @@ async fn fresh_pools() -> DieselSqlitePools {
         "rara-issue2025-{}.sqlite",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock is after the UNIX epoch")
             .as_nanos()
     ));
     let pools = build_sqlite_pools(
