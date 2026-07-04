@@ -8,7 +8,7 @@ tags: []
 
 This is a **test fixture, not a real task spec**. It exists to prove that
 the spec-lifecycle gate rejects a spec whose `Test:` selector resolves to
-zero test functions (the agent-spec 0.2.7 false-green documented in
+zero test functions (the agent-spec <= 0.3.0 false-green documented in
 PR 2038 and issue 2165: cargo test prints `0 passed; N filtered out` and
 the lifecycle still exits green).
 

@@ -418,11 +418,16 @@ spec-lifecycle spec:
 spec-selftest:
     #!/usr/bin/env bash
     set -uo pipefail
-    if ./scripts/spec-lifecycle-guard.sh specs/fixtures/zero-match.spec.md; then
-        echo "spec-selftest: FAIL — zero-match fixture passed the lifecycle gate (false-green is back)"
-        exit 1
-    fi
-    echo "spec-selftest: OK — lifecycle gate rejected the zero-match fixture"
+    # Only guard exit 1 (verification failure) counts as "fixture rejected".
+    # Exit 0 means the false-green is back; exit 2 means the gate could not
+    # even run (agent-spec/jq missing, malformed report) — both are failures.
+    ./scripts/spec-lifecycle-guard.sh specs/fixtures/zero-match.spec.md
+    rc=$?
+    case "$rc" in
+        1) echo "spec-selftest: OK — lifecycle gate rejected the zero-match fixture (exit 1)" ;;
+        0) echo "spec-selftest: FAIL — zero-match fixture passed the lifecycle gate (false-green is back)"; exit 1 ;;
+        *) echo "spec-selftest: FAIL — guard could not run the gate (infra error, exit ${rc})"; exit 1 ;;
+    esac
 
 # Check that every Test: selector in specs/issue-*.spec.md still resolves to
 # at least one real test (spec drift). Skips specs/fixtures/ by construction.

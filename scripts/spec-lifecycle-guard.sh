@@ -11,9 +11,18 @@
 # runner output captured in each scenario's test evidence. A scenario whose
 # test runs executed zero tests (0 passed AND 0 failed across every
 # `test result:` line) is a FAIL, regardless of agent-spec's own verdict.
+# The guard fails CLOSED: a report it cannot parse, or one carrying no
+# scenario results at all, is never treated as verified.
+#
+# Exit-code contract:
+#   0 — lifecycle passed AND every Test selector executed >= 1 test
+#   1 — verification failure (lifecycle itself failed, or a selector
+#       matched zero tests)
+#   2 — infra/usage error (bad args; agent-spec or jq missing; report is
+#       malformed JSON or missing .verification.results — schema drift)
 #
 # `just spec-lifecycle` routes through this script; `just spec-selftest`
-# asserts it rejects specs/fixtures/zero-match.spec.md.
+# asserts it rejects specs/fixtures/zero-match.spec.md with exit 1.
 #
 # Usage: scripts/spec-lifecycle-guard.sh <spec-file>
 
@@ -44,17 +53,27 @@ jq -r '
   "=== Lifecycle Report (guarded) ===",
   "Spec: \(.verification.spec_name // "unknown")  stage: \(.stage)  passed: \(.passed)",
   (.verification.results[]? | "  [\(.verdict | ascii_upcase)] \(.scenario_name)")
-' "$REPORT" || cat "$REPORT"
+' "$REPORT" 2>/dev/null || cat "$REPORT"
 
 if [ "$LIFECYCLE_EXIT" -ne 0 ]; then
-    echo "spec-lifecycle-guard: agent-spec lifecycle exited $LIFECYCLE_EXIT" >&2
-    exit "$LIFECYCLE_EXIT"
+    echo "spec-lifecycle-guard: FAIL — agent-spec lifecycle exited $LIFECYCLE_EXIT" >&2
+    exit 1
+fi
+
+# Fail closed on malformed JSON or schema drift: a green lifecycle whose
+# report carries no scenario results verified nothing.
+if ! jq -e '.verification.results | type == "array" and length > 0' "$REPORT" >/dev/null 2>&1; then
+    echo "spec-lifecycle-guard: report is malformed JSON or has no scenario results (.verification.results) — refusing to treat it as verified" >&2
+    exit 2
 fi
 
 # Zero-match detection: for every scenario with test evidence, sum executed
 # tests (passed + failed) across all `test result:` lines in the captured
 # runner stdout. Zero executed tests means the selector resolved to nothing.
-ZERO_MATCH=$(jq -r '
+# Scenarios WITHOUT test_output evidence are skipped on purpose: boundary
+# checks carry none, and web specs produce none until the vitest adapter
+# lands (issue #2015) — do not "fix" this skip into a web-spec breaker.
+if ! ZERO_MATCH=$(jq -r '
   [ .verification.results[]?
     | select([.evidence[]? | select(.type == "test_output")] | length > 0)
     | { scenario: .scenario_name,
@@ -67,7 +86,10 @@ ZERO_MATCH=$(jq -r '
     | select(.executed == 0)
     | .scenario
   ] | .[]
-' "$REPORT")
+' "$REPORT"); then
+    echo "spec-lifecycle-guard: failed to scan the lifecycle report for zero-match evidence (jq error)" >&2
+    exit 2
+fi
 
 if [ -n "$ZERO_MATCH" ]; then
     echo "" >&2

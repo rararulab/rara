@@ -11,7 +11,7 @@
 # Exit code: 0 when every checked selector resolves, 1 otherwise.
 
 set -uo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 DRIFTED=0
 CHECKED=0
