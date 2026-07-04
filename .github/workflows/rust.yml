@@ -66,12 +66,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies (diesel + mold linker)
+      - name: Install system dependencies (diesel, protoc, mold linker)
         env:
           MATRIX_ARCH: ${{ matrix.arch }}
         run: |
+          # protobuf-compiler: prost-build (api/build.rs) needs protoc; the
+          # old arc image baked it in, GitHub-hosted images do not (#2166).
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev protobuf-compiler
           if [[ "$MATRIX_ARCH" == "linux-x64" ]]; then
             sudo apt-get install -y --no-install-recommends mold clang
           fi
@@ -102,12 +104,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies (diesel + mold linker)
+      - name: Install system dependencies (diesel, protoc, mold linker)
         env:
           MATRIX_ARCH: ${{ matrix.arch }}
         run: |
+          # protobuf-compiler: prost-build (api/build.rs) needs protoc; the
+          # old arc image baked it in, GitHub-hosted images do not (#2166).
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev protobuf-compiler
           if [[ "$MATRIX_ARCH" == "linux-x64" ]]; then
             sudo apt-get install -y --no-install-recommends mold clang
           fi
@@ -152,12 +156,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies (mold linker)
+      - name: Install system dependencies (diesel, protoc, mold linker)
         env:
           MATRIX_ARCH: ${{ matrix.arch }}
         run: |
+          # protobuf-compiler: prost-build (api/build.rs) needs protoc; the
+          # old arc image baked it in, GitHub-hosted images do not (#2166).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev protobuf-compiler
           if [[ "$MATRIX_ARCH" == "linux-x64" ]]; then
-            sudo apt-get update
             sudo apt-get install -y --no-install-recommends mold clang
           fi
 

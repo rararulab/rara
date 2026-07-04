@@ -101,10 +101,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies (diesel + mold linker)
+      - name: Install system dependencies (diesel, protoc, mold linker)
         run: |
+          # protobuf-compiler: spec-lifecycle runs cargo test selectors,
+          # which build the workspace; prost-build needs protoc (#2166).
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev mold clang
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev mold clang protobuf-compiler
 
       - name: Install just
         uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2

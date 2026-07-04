@@ -81,10 +81,11 @@ jobs:
 
       # mold + clang: `.cargo/config.toml` forces the mold linker for
       # x86_64-unknown-linux-gnu and GitHub-hosted images do not bake it.
-      - name: Install system dependencies (diesel + mold linker)
+      # protobuf-compiler: prost-build (api/build.rs) needs protoc (#2166).
+      - name: Install system dependencies (diesel, protoc, mold linker)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev gettext-base mold clang
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev gettext-base mold clang protobuf-compiler
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
