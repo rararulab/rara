@@ -28,7 +28,7 @@ release-plz.yml triggers (on PR merge with "release" label)
     ▼
 release.yml (cargo-dist)
   • cargo dist plan --tag=vX.Y.Z
-  • builds binaries: aarch64-apple-darwin (macos runner), x86_64-unknown-linux-gnu (linux runner)
+  • builds binaries: aarch64-apple-darwin (macos runner), x86_64-unknown-linux-gnu (ubuntu-latest), aarch64-unknown-linux-gnu (ubuntu-24.04-arm)
   • uploads artifacts to MinIO S3
   • gh release create vX.Y.Z — creates git tag + GitHub Release with binaries attached
   • pushes Homebrew formula (rara-cli.rb) to rararulab/homebrew-tap

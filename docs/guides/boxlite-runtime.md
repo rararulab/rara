@@ -91,9 +91,9 @@ upstream and `setup boxlite` errors loudly on them.
 
 The Linux `clippy` / `test` / `docs` jobs in
 `.github/workflows/rust.yml` build with `BOXLITE_DEPS_STUB="1"` to avoid
-pulling the full native build chain (meson, ninja, patchelf) onto the
-`arc-runner-set` image. Staging itself is exercised in unit tests via a
-hermetic in-process HTTP fixture — no real network access from CI.
+pulling the full native build chain (meson, ninja, patchelf) onto every
+Linux CI runner. Staging itself is exercised in unit tests via a hermetic
+in-process HTTP fixture — no real network access from CI.
 
 There is no CI job that downloads the real upstream tarball today. The
 self-hosted macOS runner introduced in #1842 was removed in #1916

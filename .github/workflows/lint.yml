@@ -17,27 +17,40 @@ defaults:
 permissions:
   contents: read
 
+# GitHub-hosted runners only — see the note in rust.yml: the self-hosted
+# `arc-runner-set` fleet is gone, and it must not appear in any job the
+# `Lint Success` required check depends on (#2166).
 jobs:
   rust-format:
     name: Rust Format
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      # The old arc image baked nightly rustfmt; GitHub-hosted does not.
+      - name: Install nightly toolchain (rustfmt)
+        run: rustup toolchain install nightly --profile minimal --component rustfmt
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
 
   proto-lint:
     name: Protocol Buffer Lint
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      # The old arc image baked buf; GitHub-hosted does not.
+      - name: Install buf
+        uses: bufbuild/buf-action@fd21066df7214747548607aaa45548ba2b9bc1ff # v1.4.0
+        with:
+          setup_only: true
 
       - name: Buf lint
         run: cd api && buf lint
@@ -47,7 +60,7 @@ jobs:
 
   devtool-checks:
     name: Devtool Checks
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -68,9 +81,12 @@ jobs:
       - name: Check crate dependency direction
         run: scripts/bin/devtool check-deps
 
+      - name: Check CI runner coverage
+        run: scripts/bin/devtool check-ci-runners
+
   lint-success:
     name: Lint Success
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     needs: [rust-format, proto-lint, devtool-checks]
     if: always()
     steps:

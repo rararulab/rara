@@ -17,15 +17,16 @@ env:
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
-  # Disable the runner image's preset sccache wrapper — no backend is configured,
-  # so `rustc -vV` probes (notably `cargo +nightly doc`) time out trying to start a server.
+  # Kept "" defensively: no sccache backend is configured, and a preset
+  # wrapper would make `rustc -vV` probes (notably `cargo +nightly doc`)
+  # time out trying to start a server.
   RUSTC_WRAPPER: ""
   # boxlite (rara-sandbox dep) builds bubblewrap + libkrun + libkrunfw natively.
-  # All Linux jobs set `BOXLITE_DEPS_STUB: "1"` per-job because the
-  # `arc-runner-set` image lacks meson/ninja/patchelf and cannot run a full
-  # native boxlite build. Real boxlite builds happen only on developer
-  # macOS machines today — see #1842 for the plan to add a CI job once a
-  # stable macOS (or properly-provisioned Linux) runner is available.
+  # Linux jobs set `BOXLITE_DEPS_STUB: "1"` per-job because CI does not
+  # provision the full native boxlite toolchain (meson/ninja/patchelf).
+  # Real boxlite builds happen only on developer macOS machines today —
+  # see #1842 for the plan to add a CI job once a stable macOS (or
+  # properly-provisioned Linux) runner is available.
 
 defaults:
   run:
@@ -34,13 +35,30 @@ defaults:
 permissions:
   contents: read
 
+# All jobs run on GitHub-hosted runners. The self-hosted `arc-runner-set`
+# fleet no longer exists (gone since ~2026-05-08); jobs targeting it queued
+# for 24h and were cancelled by GitHub, so `arc-runner-set` must NOT appear
+# in any job a required check `needs` (#2166). Re-adding an ARC leg once the
+# fleet returns is a follow-up — keep it out of the gate aggregate.
+#
+# `.cargo/config.toml` forces `linker = "clang"` + `-fuse-ld=mold` for
+# x86_64-unknown-linux-gnu, and GitHub-hosted images do not bake mold
+# (the arc image did, #1942) — so the x64 legs install mold + clang
+# explicitly before any cargo invocation.
 jobs:
   clippy:
-    name: Clippy
-    runs-on: arc-runner-set
+    name: Clippy (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x64
+            runner: ubuntu-latest
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
     env:
-      # See top-of-file note: stub native boxlite build — ARC runners
-      # cannot do the real native build today.
+      # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
     steps:
       - name: Checkout code
@@ -48,20 +66,35 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install diesel system libraries
+      - name: Install system dependencies (diesel + mold linker)
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          if [[ "$MATRIX_ARCH" == "linux-x64" ]]; then
+            sudo apt-get install -y --no-install-recommends mold clang
+          fi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
   test:
-    name: Test
-    runs-on: arc-runner-set
+    name: Test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x64
+            runner: ubuntu-latest
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
     env:
-      # See top-of-file note: stub native boxlite build — ARC runners
-      # cannot do the real native build today.
+      # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
     steps:
       - name: Checkout code
@@ -69,10 +102,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install diesel system libraries
+      - name: Install system dependencies (diesel + mold linker)
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev
+          if [[ "$MATRIX_ARCH" == "linux-x64" ]]; then
+            sudo apt-get install -y --no-install-recommends mold clang
+          fi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+
+      # The old arc image had nextest baked in; GitHub-hosted images do not.
+      # `.config/nextest.toml` profile `ci` exists since #1912.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
+        with:
+          tool: cargo-nextest
 
       - name: Run tests
         run: cargo nextest run --workspace --profile ci
@@ -85,17 +133,39 @@ jobs:
         run: cargo run -p rara-cli -- setup boxlite --check
 
   docs:
-    name: Documentation
-    runs-on: arc-runner-set
+    name: Documentation (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x64
+            runner: ubuntu-latest
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
     env:
-      # See top-of-file note: stub native boxlite build — ARC runners
-      # cannot do the real native build today.
+      # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           persist-credentials: false
+
+      - name: Install system dependencies (mold linker)
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
+        run: |
+          if [[ "$MATRIX_ARCH" == "linux-x64" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends mold clang
+          fi
+
+      - name: Install nightly toolchain (rustdoc)
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       - name: Generate documentation
         run: cargo +nightly doc --workspace --no-deps --document-private-items
@@ -104,7 +174,7 @@ jobs:
 
   rust-success:
     name: Rust Success
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     needs: [clippy, test, docs]
     if: always()
     steps:

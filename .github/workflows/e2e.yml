@@ -36,7 +36,7 @@ permissions:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
     steps:
@@ -68,9 +68,9 @@ jobs:
     # push to main (e.g. docs- or specs-only merges). workflow_dispatch
     # always runs so maintainers can trigger ad-hoc.
     if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     env:
-      # ARC runners can't build native boxlite (meson/ninja/patchelf missing),
+      # CI can't build native boxlite (meson/ninja/patchelf not provisioned),
       # mirroring the rust.yml jobs.
       BOXLITE_DEPS_STUB: "1"
     steps:
@@ -79,10 +79,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install diesel system libraries
+      # mold + clang: `.cargo/config.toml` forces the mold linker for
+      # x86_64-unknown-linux-gnu and GitHub-hosted images do not bake it.
+      - name: Install system dependencies (diesel + mold linker)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev gettext-base
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev gettext-base mold clang
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       - name: Render rara config from template
         env:
@@ -90,10 +95,10 @@ jobs:
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
         run: |
-          # ARC self-hosted runners ship with a read-only $HOME, so render the
-          # config under $RUNNER_TEMP and steer both `dirs::config_dir()` and
-          # `dirs::data_local_dir()` (used by rara_paths::data_dir) there via
-          # the XDG_* env vars for downstream steps.
+          # Render the config under $RUNNER_TEMP and steer both
+          # `dirs::config_dir()` and `dirs::data_local_dir()` (used by
+          # rara_paths::data_dir) there via the XDG_* env vars for
+          # downstream steps — keeps the job independent of runner $HOME.
           mkdir -p "$RUNNER_TEMP/xdg-config/rara" "$RUNNER_TEMP/xdg-data"
           envsubst < ci/config.template.yaml > "$RUNNER_TEMP/xdg-config/rara/config.yaml"
           {

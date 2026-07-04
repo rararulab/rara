@@ -6,9 +6,10 @@
 # Any future RUSTFLAGS additions go here, NOT in `.github/workflows/*.yml`
 # `env:` blocks.
 
-# Linux CI runners (`arc-runner-set`) have `mold` baked into the image
-# (#1942) but rustc was never told to use it — so every link step fell
-# back to GNU ld. This stanza closes that gap.
+# Linux x64 CI jobs install `mold` + `clang` explicitly (GitHub-hosted
+# images do not bake them; the old `arc-runner-set` image did, #1942 —
+# fleet retired, see #2166). This stanza tells rustc to actually link
+# with mold instead of falling back to GNU ld.
 #
 # Target-scoped: macOS dev machines see no change (mold doesn't run on
 # Darwin). `linker = "clang"` is the canonical mold invocation per
@@ -16,3 +17,8 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-D", "warnings"]
+
+# Linux arm64 CI jobs (`ubuntu-24.04-arm`) keep warnings-as-errors but use
+# the default linker — no mold on the arm64 leg today.
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-D", "warnings"]
