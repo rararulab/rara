@@ -3037,18 +3037,21 @@ impl Kernel {
             .with(&session_key, |p| p.manifest.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
+        // Resolved once: consumed by the lifecycle hooks below and by the
+        // failed-turn trace in the Err arm.
+        let model = self
+            .process_table
+            .with(&session_key, |p| {
+                p.manifest.model.clone().unwrap_or_default()
+            })
+            .unwrap_or_default();
+
         // Fire post_turn lifecycle hooks and persist nudge messages.
         {
-            let model = self
-                .process_table
-                .with(&session_key, |p| {
-                    p.manifest.model.clone().unwrap_or_default()
-                })
-                .unwrap_or_default();
             let turn_ctx = crate::lifecycle::TurnContext {
                 session_key,
                 user_text: String::new(),
-                model,
+                model: model.clone(),
             };
             let turn_result = match &result {
                 Ok(turn) => crate::lifecycle::TurnResult {
@@ -3240,6 +3243,34 @@ impl Kernel {
                         success:    false,
                     });
                 });
+
+                // Surface the failure as an information-bearing turn trace so
+                // `get_process_turns` (and the session-turns API behind it)
+                // show the actual provider error instead of nothing. This
+                // complements #1938: that change suppressed the information-
+                // FREE all-zero trace in the agent loop's persistence path;
+                // this trace carries `success=false` plus the error text.
+                // Skipped for user interrupts — the /stop handler already
+                // confirmed, and an error trace would be misleading.
+                if _turn_failed {
+                    self.process_table.push_turn_trace(
+                        session_key,
+                        crate::agent::TurnTrace {
+                            duration_ms:      0,
+                            model:            model.clone(),
+                            input_text:       None,
+                            iterations:       vec![],
+                            final_text_len:   0,
+                            total_tool_calls: 0,
+                            success:          false,
+                            error:            Some(format!(
+                                "{}: {}",
+                                err_details.category, err_details.message
+                            )),
+                            rara_turn_id:     in_reply_to,
+                        },
+                    );
+                }
 
                 // Deliver error — use egress session for routing.
                 // Skip for user-initiated interrupts (the /stop handler
