@@ -60,7 +60,7 @@ jobs:
       - name: Build
         run: bun run build
       # No --pass-with-no-tests: the harness suite is non-empty
-      # (web/e2e/data-feeds.spec.ts) and a silently-empty testDir must
+      # (web/e2e/harness/data-feeds.spec.ts) and a silently-empty testDir must
       # fail loudly, not pass (#2166).
       - name: Run Playwright harness suite
         run: bunx playwright test
