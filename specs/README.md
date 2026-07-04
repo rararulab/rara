@@ -60,10 +60,34 @@ to a real test function that meaningfully verifies the outcome?"**
 If unsure, lane 2 — overhead-on-the-side-of-less. Lane 1's value is the BDD
 binding. Without that binding, lane 1 produces ceremony, not safety.
 
+## Test selectors MUST resolve to real tests
+
+Every lane-1 spec's `Test:` selectors MUST resolve to **at least one real
+test function** in the current codebase. A lifecycle run whose test output
+shows `filtered out` with **0 passed** (cargo ran `0 tests` for that
+selector) is a **FAIL, never a pass** — nothing was executed, so nothing
+was verified.
+
+Background: agent-spec (<= 0.3.0) reports such scenarios as green — the
+zero-match false-green documented in PR #2038 and issue #2165, reported
+upstream. `just spec-lifecycle` therefore routes through
+`scripts/spec-lifecycle-guard.sh`, which inspects the per-scenario runner
+output and exits non-zero on the zero-match signature regardless of
+agent-spec's own verdict. Do not call `agent-spec lifecycle` directly.
+
+Self-check: `just spec-selftest` asserts the gate rejects
+`specs/fixtures/zero-match.spec.md` (a fixture whose selector intentionally
+matches zero tests). If the selftest goes red, the false-green class has
+returned. `just spec-drift-sweep` checks all existing task specs for
+selectors that no longer resolve (spec drift).
+
 ## Naming
 
 - Task spec files: `specs/issue-<N>-<slug>.spec.md`
 - Inherits clause: `inherits: project` (the constraints in `project.spec`)
+- Fixtures for the verification tooling itself: `specs/fixtures/*.spec.md`
+  — intentionally outside the `issue-N-` convention so tooling that globs
+  real task specs never picks them up
 
 ## Project-level constraints
 

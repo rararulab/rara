@@ -60,6 +60,20 @@ else
     fail "prek not found — install: brew install prek"
 fi
 
+# agent-spec powers the lane-1 BDD gate (just spec-lint / spec-lifecycle /
+# spec-selftest). Minimum version pinned here — versions below it carry the
+# zero-match false-green documented in issue #2165 / PR #2038.
+AGENT_SPEC_MIN_VERSION="0.3.0"
+if agent_spec_version=$(agent-spec --version 2>/dev/null | awk '{print $2}') && [ -n "$agent_spec_version" ]; then
+    if [ "$(printf '%s\n%s\n' "$AGENT_SPEC_MIN_VERSION" "$agent_spec_version" | sort -V | head -1)" = "$AGENT_SPEC_MIN_VERSION" ]; then
+        ok "agent-spec: ${agent_spec_version} (>= ${AGENT_SPEC_MIN_VERSION})"
+    else
+        fail "agent-spec ${agent_spec_version} < ${AGENT_SPEC_MIN_VERSION} — upgrade: cargo install agent-spec --version ${AGENT_SPEC_MIN_VERSION} --locked --force"
+    fi
+else
+    fail "agent-spec not found — install: cargo install agent-spec --version ${AGENT_SPEC_MIN_VERSION} --locked"
+fi
+
 # mise is warn-only: it pins the non-Rust toolchain (node/bun/go/just/gh) for
 # parity with CI, but rustup-only contributors working on pure Rust changes
 # can still pass this check. See docs/guides/tooling.md.
