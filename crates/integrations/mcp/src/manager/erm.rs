@@ -15,7 +15,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use futures::future::BoxFuture;
-use rmcp::model::{CreateElicitationResult, RequestId};
+use rmcp::model::{ElicitResult, RequestId};
 use tokio::sync::{Mutex, oneshot};
 
 use crate::logging_client_handler::SendElicitation;
@@ -35,7 +35,7 @@ pub(crate) struct ElicitationRequestManager {
 /// that will unblock the waiting elicitation callback.
 #[derive(Default)]
 struct ElicitationRequestManagerInner {
-    requests: HashMap<(String, RequestId), oneshot::Sender<CreateElicitationResult>>,
+    requests: HashMap<(String, RequestId), oneshot::Sender<ElicitResult>>,
 }
 
 impl ElicitationRequestManager {
@@ -57,7 +57,7 @@ impl ElicitationRequestManager {
                 }
                 rx.await
                     .map_err(|_| anyhow::anyhow!("elicitation response channel closed"))
-            }) as BoxFuture<'static, anyhow::Result<CreateElicitationResult>>
+            }) as BoxFuture<'static, anyhow::Result<ElicitResult>>
         })
     }
 
@@ -67,7 +67,7 @@ impl ElicitationRequestManager {
         &self,
         server_name: &str,
         request_id: RequestId,
-        result: CreateElicitationResult,
+        result: ElicitResult,
     ) -> bool {
         let mut guard = self.inner.lock().await;
         if let Some(tx) = guard

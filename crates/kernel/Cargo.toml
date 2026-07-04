@@ -29,7 +29,7 @@ base64.workspace = true
 bon.workspace = true
 chrono.workspace = true
 common-telemetry.workspace = true
-cron = "0.16"
+cron = "0.17"
 crossbeam-queue.workspace = true
 dashmap = "6"
 derive_more = { workspace = true }
