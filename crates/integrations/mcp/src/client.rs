@@ -291,10 +291,12 @@ impl RmcpClient {
             run_with_timeout(handshake_fut, timeout, "MCP handshake").await?;
 
         // Phase 3: Extract server info from the completed handshake.
+        // rmcp 1.8 returns `Option<Arc<InitializeResult>>` by value; unwrap
+        // through the `Arc` (cloning only if the handshake still holds a ref).
         let initialize_result = service
             .peer()
             .peer_info()
-            .cloned()
+            .map(Arc::unwrap_or_clone)
             .ok_or_else(|| anyhow!("handshake succeeded but server info was missing"))?;
 
         // Phase 4: Transition to the `Ready` state.
