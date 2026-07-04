@@ -57,6 +57,12 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              # lint.yml also gates Go (scripts/**), Zig (zig/**), clippy
+              # config, and the ratchet baseline (scripts/**) — a gate that
+              # skips on Go/Zig-only diffs would defeat #2174.
+              - 'scripts/**'
+              - 'zig/**'
+              - 'clippy.toml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/rust.yml'
               - '.github/workflows/lint.yml'

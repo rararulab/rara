@@ -82,6 +82,28 @@ if [[ ! -f "$baseline_file" ]]; then
     exit 1
 fi
 
+# Fail-closed guard: if the baseline has entries for a lint that produced
+# zero diagnostics in this run, the far more likely cause is a renamed /
+# mistyped lint (RATCHETED_LINTS out of sync with the baseline, or an
+# upstream rename making --force-warn a no-op) than 500+ findings paid off
+# in one hop. Without this check such a breakage reads as an all-decrease
+# pass. If the debt genuinely hit 0, graduate the lint instead: flip it to
+# "warn" in Cargo.toml, drop it from RATCHETED_LINTS and the baseline.
+missing_lints="$(
+    jq -n -r --argjson cur "$current_counts" --slurpfile base_arr "$baseline_file" '
+        ($base_arr[0] | keys | map(split("|")[0]) | unique) as $base_lints
+        | ($cur | keys | map(split("|")[0]) | unique) as $cur_lints
+        | ($base_lints - $cur_lints)[]
+    '
+)"
+if [[ -n "$missing_lints" ]]; then
+    echo "lint-ratchet: FAIL — baseline lints produced no diagnostics at all:" >&2
+    sed 's/^/  /' <<<"$missing_lints" >&2
+    echo "Check RATCHETED_LINTS in scripts/lint-ratchet.sh against the baseline;" >&2
+    echo "if a lint truly reached 0, graduate it (Cargo.toml \"warn\" + remove here)." >&2
+    exit 1
+fi
+
 diff_lines="$(
     jq -n -r --argjson cur "$current_counts" --slurpfile base_arr "$baseline_file" '
         $base_arr[0] as $base
