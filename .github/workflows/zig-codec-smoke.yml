@@ -8,11 +8,12 @@ name: zig-codec-smoke
 # look at recent runs and answer "does Zig still build on Linux?"
 # without spinning up a runner manually.
 #
-# The linux job runs on `arc-runner-set` so it inherits the clang + mold
-# baseline from `rust.yml`'s runner image. `.cargo/config.toml` forces
-# `linker = "clang"` + `-fuse-ld=mold` for `x86_64-unknown-linux-gnu`
-# (see #2010), and GitHub-hosted `ubuntu-latest` lacks mold, so this job
-# was failing on every PR until switched to the self-hosted runner (#2047).
+# The linux job runs on GitHub-hosted `ubuntu-latest` and installs
+# mold + clang explicitly: `.cargo/config.toml` forces `linker = "clang"`
+# + `-fuse-ld=mold` for `x86_64-unknown-linux-gnu` (see #2010). This
+# deliberately reverses #2047 (which moved the job onto `arc-runner-set`
+# for the baked-in mold baseline) — that fleet no longer exists and jobs
+# targeting it queue for 24h and get cancelled (#2166).
 
 on:
   pull_request:
@@ -33,9 +34,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, arc-runner-set]
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install mold linker (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mold clang
 
       - name: Install Zig 0.16
         uses: mlugg/setup-zig@v2

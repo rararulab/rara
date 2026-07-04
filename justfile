@@ -100,9 +100,15 @@ check-agent-md:
     @cd scripts && go build -o bin/devtool ./cmd/devtool/
     @scripts/bin/devtool check-agent-md
 
-[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md, check-deps)")]
+[doc("check CI runner coverage (Linux arm64 target + runner wiring)")]
 [group("👆 Code Quality")]
-lint: check-agent-md check-deps
+check-ci-runners:
+    @cd scripts && go build -o bin/devtool ./cmd/devtool/
+    @scripts/bin/devtool check-ci-runners
+
+[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md, check-deps, check-ci-runners)")]
+[group("👆 Code Quality")]
+lint: check-agent-md check-deps check-ci-runners
     @echo "🔍 Running clippy..."
     cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings
     @echo "📚 Building documentation..."

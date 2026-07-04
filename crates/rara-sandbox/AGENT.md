@@ -83,12 +83,12 @@ Public surface (intentionally minimal, see #1697/#1698):
   that install global subscribers fight the host's `tracing` setup.
 - Do NOT extend `BOXLITE_DEPS_STUB="1"` to the macOS CI job —
   **why:** the stub is scoped to the Linux `clippy` / `test` / `docs`
-  jobs in `.github/workflows/rust.yml` because the `arc-runner-set` image
-  lacks meson/ninja/patchelf. The `sandbox-macos` job intentionally
-  builds boxlite for real so link-time / FFI / `build.rs` regressions in
-  `bubblewrap-sys` and `libkrun-sys` are caught on every PR (#1842). If
-  that job starts failing, fix the underlying build issue — do not
-  re-add the stub on macOS.
+  jobs in `.github/workflows/rust.yml` because CI does not provision the
+  full native boxlite toolchain on every Linux runner. The `sandbox-macos`
+  job intentionally builds boxlite for real so link-time / FFI /
+  `build.rs` regressions in `bubblewrap-sys` and `libkrun-sys` are caught
+  on every PR (#1842). If that job starts failing, fix the underlying
+  build issue — do not re-add the stub on macOS.
 
 ## Network policy fusion
 

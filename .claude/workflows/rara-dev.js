@@ -34,7 +34,7 @@ export const meta = {
     { title: 'Implement', detail: 'one implementer per issue: worktree + code + quality gate + local commit' },
     { title: 'Verify', detail: 'fresh-context verifier (S3, harness/roles/verifier.md): clean-state gate + cold boot + hostile probes; FAIL -> one repair round -> escalate' },
     { title: 'Review', detail: 'reviewer <-> implementer loop until APPROVE (max 3 rounds), before push; fix commits invalidate the verify verdict and trigger a one-shot re-verify' },
-    { title: 'Ship', detail: 'push + gh pr create (verification report path in PR body) + gh signoff (runner down) / gh pr checks --watch; stops before merge' },
+    { title: 'Ship', detail: 'push + gh pr create (verification report path in PR body) + gh pr checks --watch (real CI gate); stops before merge' },
   ],
 }
 
@@ -49,15 +49,29 @@ const MAX_REVIEW_ROUNDS = 3
 // FAIL -> one structured repair dispatch -> re-verify -> still FAIL -> stop and
 // escalate to human. Distinct from the review loop's 3-round cap above.
 const MAX_VERIFY_REPAIR_ROUNDS = 1
-// 'signoff' (default — self-hosted runner is down): ship pushes + opens the PR +
-//   runs `gh signoff`. main's only required check is `signoff`, and the LOCAL
-//   quality gate (prek/cargo/bun) from the implement stage is the green signal,
-//   so signing off makes the PR mergeable without the remote runner.
-// 'watch': self-hosted runner healthy — ship runs `gh pr checks --watch`, requires green CI.
-// 'skip': no GitHub-level gate at all (signoff uninstalled) — ship stops after PR creation;
+// 'watch' (default — real CI on GitHub-hosted runners, #2166): ship runs
+//   `gh pr checks --watch` and requires the required checks (Rust Success /
+//   Lint Success) to go green.
+// 'signoff': EMERGENCY OVERRIDE ONLY (e.g. GitHub-hosted runner outage) —
+//   ship pushes + opens the PR + runs `gh signoff` instead of watching CI.
+//   Requires branch protection to have been temporarily flipped back to
+//   ["signoff"] per the procedure in docs/guides/workflow.md. Explicit
+//   opt-in via args.ci; never the default.
+// 'skip': no GitHub-level gate at all — ship stops after PR creation;
 //   the implement-stage local gate is the only verification.
-// Flip the default back to 'watch' when the self-hosted runner recovers.
-const CI_MODE = (args && typeof args === 'object' && args.ci) ? args.ci : 'signoff'
+const CI_MODE = (args && typeof args === 'object' && args.ci) ? args.ci : 'watch'
+if (!['watch', 'signoff', 'skip'].includes(CI_MODE)) {
+  throw new Error(`rara-dev: unknown ci mode ${JSON.stringify(CI_MODE)} — expected 'watch', 'signoff', or 'skip'.`)
+}
+if (CI_MODE === 'signoff') {
+  log('⚠️  CI_MODE=signoff — EMERGENCY OVERRIDE. Real CI (gh pr checks --watch) is being bypassed; ' +
+      'this is only valid during a GitHub-hosted runner outage with branch protection flipped to ' +
+      '["signoff"] per docs/guides/workflow.md. If CI is healthy, drop the ci arg and use watch.')
+}
+if (CI_MODE === 'skip') {
+  log('⚠️  CI_MODE=skip — NO GitHub-level gate at all (no CI watch, no signoff). The implement-stage ' +
+      "local quality gate is the only verification; merging is entirely the user's call.")
+}
 
 // ---- schemas --------------------------------------------------------------
 
@@ -154,12 +168,13 @@ const SHIP_SCHEMA = {
 
 const VARIANT_TYPE = { backend: 'implementer-backend', frontend: 'implementer-frontend', generic: 'implementer' }
 const VARIANT_MD = { backend: 'implementer-backend', frontend: 'implementer-frontend', generic: 'implementer' }
-// In 'signoff' mode the local gate REPLACES the dead workspace CI, so backend
-// runs the full `cargo nextest run --workspace` (what rust.yml gated) instead of
-// just the touched crate — otherwise cross-crate regressions slip through. When
-// the runner is healthy ('watch'), remote CI covers --workspace, so the local
-// gate stays narrow (`cargo test -p <crate>`). Real-LLM e2e (e2e.yml) and the
-// Linux matrix remain CI-only — uncovered during the outage by design.
+// In 'signoff' mode (emergency override during a CI outage) the local gate
+// REPLACES workspace CI, so backend runs the full `cargo nextest run
+// --workspace` (what rust.yml gates) instead of just the touched crate —
+// otherwise cross-crate regressions slip through. In the default 'watch'
+// mode, remote CI covers --workspace, so the local gate stays narrow
+// (`cargo test -p <crate>`). Real-LLM e2e (e2e.yml) and the Linux matrix
+// remain CI-only — uncovered during an outage by design.
 const BACKEND_TEST = CI_MODE === 'signoff'
   ? 'cargo nextest run --workspace (full workspace — replaces the down CI; if nextest is unavailable, cargo test --workspace)'
   : 'cargo test -p <crate>'
@@ -269,7 +284,7 @@ function shipPrompt(issue, impl, verify) {
     CI_MODE === 'watch'
       ? `\`gh pr checks <PR-number> --watch\`. If a check fails, diagnose the root cause, fix in ${wt}, push again (cap genuine-flake reruns at 1). Do NOT mark tests ignored to go green.\n\nSTOP after CI is green. Set ciGreen=true only when all required checks pass.`
       : CI_MODE === 'signoff'
-        ? `The self-hosted runner is DOWN; main's ONLY required check is \`signoff\`. Do NOT run \`gh pr checks --watch\` (it would hang). The local quality gate already passed in the implement stage, so run \`gh signoff\` to sign off the pushed commit — this satisfies the required check and makes the PR mergeable. signoff binds to the commit: if you pushed again after the last gate run, re-run the gate then \`gh signoff\` again.\n\nSTOP after signoff succeeds. Set ciGreen=true (signoff is the green signal) and put "self-hosted runner down; signed off after local gate" in ciSummary.`
+        ? `EMERGENCY OVERRIDE (CI outage): branch protection has been temporarily flipped so main's only required check is \`signoff\` (see docs/guides/workflow.md). Do NOT run \`gh pr checks --watch\` (it would hang). The local quality gate already passed in the implement stage, so run \`gh signoff\` to sign off the pushed commit — this satisfies the required check and makes the PR mergeable. signoff binds to the commit: if you pushed again after the last gate run, re-run the gate then \`gh signoff\` again.\n\nSTOP after signoff succeeds. Set ciGreen=true (signoff is the green signal) and put "CI outage override; signed off after local gate" in ciSummary.`
         : `GitHub CI is UNAVAILABLE and signoff is not required — do NOT run \`gh pr checks --watch\`. Stop after the PR is created. Set ciGreen=false and put "no GitHub gate; local quality gate passed in implement stage" in ciSummary.`
   return `You are rara's implementer shipping issue #${issue.issueNumber} from worktree \`${wt}\`. The verifier PASSED (S3) and the reviewer APPROVED — push is unlocked.
 
@@ -435,7 +450,7 @@ return {
   ready_to_merge: readyToMerge.map((r) => ({ issue: r.issue, pr: r.prNumber, url: r.prUrl, ci: r.ciSummary, verify_report: r.verifyReport ?? null })),
   blocked: blocked.map((r) => ({ issue: r.issue, pr: r.prNumber ?? null, escalated: r.escalated ?? false, reason: r.reason ?? r.ciSummary ?? 'CI not green' })),
   gate: CI_MODE === 'signoff'
-    ? 'STOPPED before merge. Self-hosted runner is DOWN; each ready PR has been `gh signoff`-ed (local quality gate from the implement stage is the green signal), satisfying main\'s only required check. merge-to-main is human gate (a): the parent confirms each PR with the user, then `gh pr merge --squash --delete-branch`, then cleans up the worktree.'
+    ? 'STOPPED before merge. EMERGENCY OVERRIDE mode: each ready PR has been `gh signoff`-ed (local quality gate from the implement stage is the green signal), satisfying the temporarily-flipped required check. Restore the real required checks per docs/guides/workflow.md once the outage ends. merge-to-main is human gate (a): the parent confirms each PR with the user, then `gh pr merge --squash --delete-branch`, then cleans up the worktree.'
     : CI_MODE === 'skip'
       ? 'STOPPED after PR creation. GitHub CI is UNAVAILABLE and signoff not required — the only verification is the LOCAL quality gate (prek/cargo/bun) from the implement stage. merge-to-main is human gate (a); merging without any GitHub gate is entirely the user\'s call.'
       : 'STOPPED before merge. merge-to-main is human gate (a): the parent confirms each PR with the user, then `gh pr merge --squash --delete-branch`, then cleans up the worktree.',

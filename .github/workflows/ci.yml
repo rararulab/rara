@@ -18,15 +18,22 @@ permissions:
   contents: read
   pull-requests: read
 
+# This workflow routes the merge gate: branch protection requires the
+# `Rust / Rust Success` and `Lint / Lint Success` check contexts produced
+# by the reusable workflows called below. It intentionally has NO
+# workflow-level `paths:` filter — it must trigger on every PR so that
+# skipped gate jobs still report and satisfy the required checks (#2166).
 jobs:
   changes:
     name: Detect Changes
-    runs-on: arc-runner-set
+    runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
       docs: ${{ steps.filter.outputs.docs }}
       specs: ${{ steps.filter.outputs.specs }}
+      specs_files: ${{ steps.filter.outputs.specs_files }}
+      cargo_deps: ${{ steps.filter.outputs.cargo_deps }}
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -37,6 +44,7 @@ jobs:
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
         with:
+          list-files: shell
           filters: |
             rust:
               - 'crates/**'
@@ -57,6 +65,10 @@ jobs:
               - 'README*'
             specs:
               - 'specs/**'
+            cargo_deps:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
 
   lint:
     name: Lint
@@ -69,6 +81,125 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'push' }}
     uses: ./.github/workflows/rust.yml
+
+  # Verifies changed lane-1 Task Contracts: `agent-spec lint` scores the
+  # spec, `agent-spec lifecycle` binds its BDD scenarios to real tests.
+  # `just spec-selftest` (regression lock for the zero-match false-green,
+  # #2165) runs when the target exists — guarded so this job and the
+  # sibling PR that defines the target can land in either order.
+  agent-spec:
+    name: Agent Spec
+    needs: changes
+    if: ${{ needs.changes.outputs.specs == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      # Lifecycle runs cargo test selectors — same stub as rust.yml.
+      BOXLITE_DEPS_STUB: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      # spec-lifecycle runs cargo test selectors, which build the
+      # workspace — same system toolchain as rust.yml (#2166).
+      - name: Setup rara build environment
+        uses: ./.github/actions/setup-rara-build
+
+      - name: Install just
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
+        with:
+          tool: just
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+
+      # Pinned; upstream is https://github.com/ZhangHanDong/agent-spec
+      # (crates.io). Keep in lockstep with the version `just doctor`
+      # enforces locally (#2165).
+      - name: Install agent-spec
+        run: cargo install --locked agent-spec --version 0.3.0
+
+      - name: Lint + lifecycle changed specs
+        env:
+          CHANGED_SPECS: ${{ needs.changes.outputs.specs_files }}
+        run: |
+          ran=0
+          for spec in $CHANGED_SPECS; do
+            case "$spec" in
+              specs/issue-*.spec.md)
+                [ -f "$spec" ] || continue  # deleted in this diff
+                echo "::group::$spec"
+                just spec-lint "$spec"
+                just spec-lifecycle "$spec"
+                echo "::endgroup::"
+                ran=$((ran + 1))
+                ;;
+            esac
+          done
+          echo "verified $ran task spec(s)"
+
+      - name: Spec gate self-test
+        run: |
+          if just --list | grep -q 'spec-selftest'; then
+            just spec-selftest
+          else
+            echo "just spec-selftest not defined yet (lands with #2165); skipping"
+          fi
+
+  # deny.toml was previously only exercised locally via `just lint` —
+  # orphaned in CI (#2166). Advisory/ban/license sweeps only make sense
+  # when the dependency graph changes, hence the cargo_deps filter.
+  #
+  # TODO(#2166 follow-up): continue-on-error because the baseline fails
+  # today (git sources missing from deny.toml allow-git, bzip2-1.0.6
+  # license, unmaintained-crate advisories — all pre-existing, landed
+  # while CI was dead). Fix the drift, then delete continue-on-error to
+  # make this blocking.
+  cargo-deny:
+    name: Cargo Deny
+    needs: changes
+    if: ${{ needs.changes.outputs.cargo_deps == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
+        with:
+          tool: cargo-deny
+
+      - name: Check advisories, bans, licenses, sources
+        run: cargo deny check
+
+  # Detects unused dependencies declared in Cargo.toml files.
+  #
+  # TODO(#2166 follow-up): continue-on-error because the workspace has 87
+  # pre-existing findings (`cargo shear` on main). Burn the baseline down
+  # in crates/**, then delete continue-on-error to make this blocking.
+  cargo-shear:
+    name: Cargo Shear
+    needs: changes
+    if: ${{ needs.changes.outputs.cargo_deps == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
+        with:
+          tool: cargo-shear
+
+      - name: Check for unused dependencies
+        run: cargo shear
 
   release-pr:
     name: Release PR

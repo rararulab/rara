@@ -25,23 +25,24 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      # Node version is pinned via mise.toml at the repo root. See
-      # docs/guides/tooling.md.
+      # Node + bun versions are pinned via mise.toml at the repo root. See
+      # docs/guides/tooling.md. bun is the web/ package manager and script
+      # runner (`web/bun.lock`); never npm — see implementer-frontend.md.
       - uses: jdx/mise-action@v4
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
       - name: Typecheck
-        run: npm run typecheck
+        run: bun run typecheck
       - name: Lint
-        run: npm run lint -- --max-warnings=0
+        run: bun run lint --max-warnings=0
       - name: Lint CSS
-        run: npm run lint:css
+        run: bun run lint:css
       - name: Format check
-        run: npm run format:check
+        run: bun run format:check
       - name: Test
-        run: npm run test
+        run: bun run test
       - name: Build
-        run: npm run build
+        run: bun run build
 
   playwright:
     name: Playwright (harness)
@@ -53,13 +54,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v4
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium webkit
+        run: bunx playwright install --with-deps chromium webkit
       - name: Build
-        run: npm run build
+        run: bun run build
+      # No --pass-with-no-tests: the harness suite is non-empty
+      # (web/e2e/data-feeds.spec.ts) and a silently-empty testDir must
+      # fail loudly, not pass (#2166).
       - name: Run Playwright harness suite
-        run: npx playwright test --pass-with-no-tests
+        run: bunx playwright test
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4

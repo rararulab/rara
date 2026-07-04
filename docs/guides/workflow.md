@@ -310,14 +310,22 @@ still add type + component labels explicitly via `--label`.
 
 Commit message must include `Closes #N` so the issue auto-closes on merge.
 
+CI runs on GitHub-hosted runners (`ubuntu-latest` x64 + `ubuntu-24.04-arm`
+arm64). The required merge-gate checks on `main` are the `ci.yml`-routed
+aggregates **`Rust / Rust Success`** and **`Lint / Lint Success`** — path
+filtering inside `ci.yml` means docs-only PRs satisfy them as `skipped`.
+`web-ci.yml` has a workflow-level `paths:` filter, so its checks are
+deliberately NOT required (they would perma-block non-web PRs).
+
 If a CI check fails: read the failure log, diagnose root cause, fix in
 the worktree, push again. Do not mark tests `#[ignore]` to make CI green.
 For genuine flakes (same test failed recently on `main`):
 `gh run rerun <id> --failed`. Cap reruns at 1.
 
-**Why review-before-push:** CI catches platform issues (Linux ARC runner
-behavior vs your local macOS) and integration regressions. Review catches
-design issues, regression-decision reversals, and scope creep. They don't
+**Why review-before-push:** CI catches platform issues (GitHub-hosted
+Linux runner behavior vs your local macOS) and integration regressions.
+Review catches design issues, regression-decision reversals, and scope
+creep. They don't
 catch the same things, but pushing only after review APPROVE means
 PR-level CI runs on already-reviewed code — no force-pushes after review,
 no PRs lingering with "needs another round of review" comments. The
@@ -337,6 +345,49 @@ Commit subject. `--delete-branch` removes the remote branch; the local
 branch and worktree are removed in step 7.
 
 The parent has standing approval; do not re-ask.
+
+## CI outage: the `signoff` emergency override
+
+`gh signoff` stays installed, but it is **not** part of the normal flow —
+it exists solely as a documented override for a genuine CI outage (e.g.
+GitHub-hosted runners down or the Actions service degraded). Do NOT use
+it because a check is slow or flaky; fix the check instead.
+
+Procedure (requires repo admin):
+
+```bash
+# 0. Confirm the current required checks (should list the real gates):
+gh api repos/rararulab/rara/branches/main/protection/required_status_checks
+
+# 1. OUTAGE: temporarily flip the required checks to signoff-only:
+gh api -X PATCH repos/rararulab/rara/branches/main/protection/required_status_checks \
+  --input - <<'EOF'
+{"checks": [{"context": "signoff"}]}
+EOF
+
+# 2. For each PR: run the full local quality gate, then sign off:
+gh signoff
+
+# 3. RESTORE (mandatory, as soon as CI is healthy again):
+gh api -X PATCH repos/rararulab/rara/branches/main/protection/required_status_checks \
+  --input - <<'EOF'
+{"checks": [{"context": "Rust / Rust Success"}, {"context": "Lint / Lint Success"}]}
+EOF
+```
+
+The gate context strings must match the check-run names GitHub reports
+for `ci.yml` (reusable-workflow checks render as `<caller job> / <job
+name>`). If they ever drift, read the live names off a recent run before
+PATCHing:
+
+```bash
+gh api repos/rararulab/rara/commits/$(git rev-parse origin/main)/check-runs \
+  --jq '.check_runs[].name'
+```
+
+While the override is active, `rara-dev.js` must be invoked with
+`ci: 'signoff'` (explicit opt-in — it logs a loud warning); the default
+`watch` mode would hang waiting for checks that never run.
 
 ## Step 7: Cleanup
 

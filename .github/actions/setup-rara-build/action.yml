@@ -1,0 +1,31 @@
+name: Setup rara build environment
+description: >-
+  System toolchain for building the rara workspace on GitHub-hosted Linux
+  runners. Everything here was either implicitly baked into the retired
+  arc-runner-set image (enumerated from rararulab/github-self-runner's
+  Dockerfile) or arrived as a new build requirement while CI was dead
+  (#2166): diesel headers (libsqlite3-sys / pq-sys), protoc (prost-build
+  via api/build.rs), zig (zlob build.rs — needed unconditionally by
+  crates/app), and mold + clang on x86_64 where `.cargo/config.toml`
+  forces `-fuse-ld=mold`. Use this in every job that compiles the
+  workspace so the tool list cannot drift between copies.
+
+runs:
+  using: composite
+  steps:
+    - name: Install apt packages (diesel, protoc, mold linker)
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev protobuf-compiler
+        # mold is target-scoped to x86_64-unknown-linux-gnu in
+        # .cargo/config.toml; arm64 legs use the default linker.
+        if [[ "$(uname -m)" == "x86_64" ]]; then
+          sudo apt-get install -y --no-install-recommends mold clang
+        fi
+
+    # Version kept in lockstep with zig-codec-smoke.yml.
+    - name: Install Zig (zlob build dependency)
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+      with:
+        version: 0.16.0
