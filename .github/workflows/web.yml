@@ -23,12 +23,16 @@ concurrency:
 jobs:
   web:
     name: Build and deploy site and docs
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           fetch-depth: false
           persist-credentials: false
+      - name: Install mdbook
+        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
+        with:
+          tool: mdbook
       - name: Build mdbook
         run: mdbook build docs
 
@@ -60,7 +64,7 @@ jobs:
 
           git config --global --add safe.directory "$deploy_dir"
 
-          # Publish with git directly so the self-hosted runner does not depend on rsync.
+          # Publish with git directly so the runner does not depend on rsync.
           find "$deploy_dir" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
           cp -R docs/book/. "$deploy_dir"/
           touch "$deploy_dir/.nojekyll"
