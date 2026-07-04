@@ -1,14 +1,20 @@
-# Development Workflow — Spec / Issue → Worktree → Local Commit → Review → Push → PR → Merge
+# Development Workflow — Spec / Issue → Worktree → Local Commit → Verify → Review → Push → PR → Merge
 
 **Every code change — no matter how small — MUST follow this workflow.**
 Single-line fixes, typo corrections, config tweaks, doc updates, and refactors
 all go through the workflow below. The main agent must NEVER directly edit
 source files on the `main` branch.
 
-There are now two **lanes**, and one major change to the old flow:
-**review happens BEFORE push, gating it.** The implementer commits locally,
-the reviewer reads the worktree diff, and only on APPROVE does the code
-leave your machine.
+This workflow is the procedural view of **pipeline v2** — see
+[pipeline.md](pipeline.md) for the normative stage protocol (stages
+S0–S7, request-type routing, parallel-run rules, human gates) and
+`harness/stages.toml` for the machine-readable form.
+
+There are now two **lanes**, and two major changes to the old flow:
+**review happens BEFORE push, gating it**, and an independent **verify
+step (S3)** sits between implement and review — a fresh-context verifier
+runs the artifact from clean state; only it may emit `verified`
+(implementer evidence is `self_check_only`).
 
 ```
 Lane 1 (spec-driven — feature, bugfix, anything with testable behavior):
@@ -18,17 +24,22 @@ Lane 1 (spec-driven — feature, bugfix, anything with testable behavior):
                        and dispatches implementer
   2. IMPLEMENT      →  implementer reads spec; codes; runs prek + lifecycle;
                        commits LOCALLY (does not push)
-  3. REVIEW         →  reviewer reads worktree diff + spec; verdict
+  3. VERIFY         →  fresh-context verifier re-runs the gate from clean
+                       state, cold-boots the build, probes; writes
+                       verification/report.md (FAIL → one repair round
+                       → escalate)
+  4. REVIEW         →  reviewer reads worktree diff + spec; verdict
                        (loop until APPROVE)
-  4. PUSH + PR      →  implementer pushes; gh pr create; gh pr checks --watch
-  5. MERGE          →  gh pr merge --squash --delete-branch (when CI green)
-  6. CLEANUP        →  git worktree remove + git branch -D
+  5. PUSH + PR      →  implementer pushes; gh pr create; gh pr checks --watch
+  6. MERGE          →  gh pr merge --squash --delete-branch (when CI green)
+  7. CLEANUP        →  git worktree remove + git branch -D
 
 Lane 2 (lightweight chore — structural, cleanup, CI, rename, config):
   0. SPEC AUTHOR    →  spec-author writes the GitHub issue body directly
                        (Intent + prior art + decisions + boundaries; no
                        BDD scenarios; no specs/*.spec.md file)
-  1-6. same as lane 1 minus the spec file and minus `agent-spec lifecycle`
+  1-7. same as lane 1 minus the spec file and minus `agent-spec lifecycle`
+       (the verify step runs the issue's `Verify:` commands instead)
 ```
 
 ## Picking the lane
@@ -71,7 +82,7 @@ See `.claude/agents/spec-author.md` for the full contract.
 
 Once the user has acknowledged the proposed plan, the parent agent chains
 through the workflow steps mechanically: spec-author → worktree + implementer
-→ reviewer → push → PR → merge. The rule is structured as a **whitelist**:
+→ verifier → reviewer → push → PR → merge. The rule is structured as a **whitelist**:
 the only times the agent stops to re-ask are the gates enumerated below.
 Anything not on the list runs without re-asking — including, explicitly,
 the cases that have historically tripped the agent into sycophantic
@@ -103,7 +114,7 @@ re-asking; they are the rule, not exceptions:
   步了?". Answer the question; do not restate the plan and end with
   "要继续吗?".
 - **Step transitions inside an already-approved plan** — spec-author →
-  worktree + implementer → reviewer → push → PR. After spec-author
+  worktree + implementer → verifier → reviewer → push → PR. After spec-author
   returns an issue number, the parent dispatches the implementer
   **directly** — do not ask "要不要派 implementer 把它做掉？" / "should
   I dispatch implementer?". The plan was already approved; re-asking is
@@ -211,7 +222,36 @@ just pre-commit
 The **final** commit must pass all checks. Intermediate commits during
 development don't need to pass. Do NOT use `--no-verify` to skip hooks.
 
-## Step 3: Review (BEFORE push — this is the new bit)
+## Step 3: Verify (independent, fresh context — S3)
+
+The parent dispatches the `verifier` subagent against the worktree,
+giving it ONLY the worktree path, issue number, lane, and spec path
+(lane 1) / the issue's `Verify:` commands (lane 2) — never the
+implementer's report or evidence. Only the verifier may emit `verified`;
+implementer evidence is `self_check_only`. The verifier:
+
+1. Re-runs the full quality gate from clean state.
+2. Runs `just spec-lifecycle` (lane 1) or the issue's `Verify:` commands
+   (lane 2).
+3. Cold-boots the candidate build (`just portless-run`, temp data dir —
+   never a running instance) and drives the changed feature end-to-end,
+   including both sides of any write→read wiring.
+4. Runs 2–3 hostile probes (CJK input, empty values, concurrency).
+5. Writes `verification/report.md` in the worktree — `base_sha`,
+   `head_sha`, `score_authority`, raw command outputs, transition
+   matrix, PASS/FAIL verdict.
+
+On FAIL: exactly **one** structured repair round back to the implementer
+(failing probe inputs must land as regression tests), one re-verify,
+then escalate to human. The report path is attached to the PR body at
+step 5.
+
+Verify and review catch disjoint failure classes — verify runs the
+artifact, review reads the diff. That is why both exist and verify runs
+first. See `harness/roles/verifier.md` for the full contract and
+[pipeline.md](pipeline.md) for the stage design.
+
+## Step 4: Review (BEFORE push)
 
 The parent dispatches the `reviewer` subagent against the worktree (not
 the PR — the PR does not exist yet). The reviewer:
@@ -236,11 +276,11 @@ Verdict:
   no amend), re-runs verification, hands back. Loop until APPROVE.
 - **REQUEST_CHANGES on the spec itself (lane 1)**: escalate to spec-author
   via parent. Implementer does NOT silently fix the spec.
-- **APPROVE**: implementer proceeds to step 4.
+- **APPROVE**: implementer proceeds to step 5.
 
 See `.claude/agents/reviewer.md` for the full contract.
 
-## Step 4: Push + Open PR + Watch CI
+## Step 5: Push + Open PR + Watch CI
 
 Only after reviewer APPROVE:
 
@@ -255,7 +295,9 @@ gh pr create --base main \
 gh pr checks {PR-number} --watch
 ```
 
-PR body uses `.github/pull_request_template.md`. Labels:
+PR body uses `.github/pull_request_template.md` and must include the
+step-3 verification report path + verdict (e.g. `Verification: PASS —
+<worktree>/verification/report.md`). Labels:
 
 - **Type** (pick one): `bug`, `enhancement`, `refactor`, `chore`, `documentation`
 - **Component** (pick one): `core`, `backend`, `ui`, `extension`, `ci`
@@ -279,7 +321,7 @@ no PRs lingering with "needs another round of review" comments. The
 trade-off: any platform-only failure is caught after push, which is fine
 because it's typically a one-line fix.
 
-## Step 5: Merge
+## Step 6: Merge
 
 Green CI + already-APPROVE'd review = merge.
 
@@ -289,11 +331,11 @@ gh pr merge {N} --squash --delete-branch
 
 Use `--squash` so the merged commit on `main` matches the Conventional
 Commit subject. `--delete-branch` removes the remote branch; the local
-branch and worktree are removed in step 6.
+branch and worktree are removed in step 7.
 
 The parent has standing approval; do not re-ask.
 
-## Step 6: Cleanup
+## Step 7: Cleanup
 
 ```bash
 git worktree remove .worktrees/issue-{N}-{short-name}
@@ -306,6 +348,9 @@ When user requests involve multiple independent changes, split into
 separate issues at step 0 and dispatch implementer subagents in parallel:
 
 - Each subagent gets its own worktree, branch, and PR.
-- PRs are reviewed and merged independently on GitHub.
-- The reviewer runs per-PR; reviewers do not share context across parallel
-  PRs.
+- PRs are verified, reviewed, and merged independently on GitHub.
+- The verifier and reviewer run per-PR; neither shares context across
+  parallel PRs.
+- Isolation rules for concurrent runs (portless ports, temp data dirs,
+  `base_sha` pinning, Boundaries-glob as lock) are in
+  [pipeline.md](pipeline.md) "Parallel-run rules".

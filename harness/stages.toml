@@ -1,0 +1,60 @@
+# Pipeline v2 stage protocol — minimal, engine-neutral.
+#
+# Normative design: docs/guides/pipeline.md (stages S0–S7, routing,
+# parallel rules, human gates). Role contracts: harness/roles/*.md.
+# The `.claude/agents/*.md` files are thin wrappers over those roles;
+# `.claude/workflows/rara-dev.js` is the current orchestrator.
+#
+# Per stage: `requires` (input artifacts), `role` (contract file, or
+# "human" for gates), `produces` (output artifact), `check` (how the
+# output is validated). S6 (merge) and S7 (retro) are listed for
+# completeness but are not orchestrated: S6 is a human gate, S7 is not
+# yet automated (pipeline v2 phase 3).
+
+[stages.spec] # S0
+requires = ["user request (verbatim)", "goal.md"]
+role = "harness/roles/spec-author.md"
+produces = "GitHub issue (lane 2) or issue + specs/issue-N-<slug>.spec.md (lane 1)"
+check = "gh issue view <N>; lane 1: just spec-lint specs/issue-N-<slug>.spec.md"
+
+[stages.plan-gate] # S1
+requires = ["filed issue(s)"]
+role = "human"
+produces = "acknowledged plan (issue set + lane + variant); auto-chaining unlocked"
+check = "user filed / acknowledged the task — see docs/guides/workflow.md 'Auto-chaining'"
+
+[stages.implement] # S2
+requires = ["issue", "worktree .worktrees/issue-N-<slug>", "spec (lane 1)"]
+role = "harness/roles/implementer.md" # variant: implementer-backend / implementer-frontend
+produces = "local commits + self-check evidence (score_authority: self_check_only)"
+check = "stack quality gate green (prek / cargo / bun); lane 1: just spec-lifecycle"
+
+[stages.verify] # S3
+requires = ["worktree", "issue number", "spec or issue Verify: commands"] # NO implementer context
+role = "harness/roles/verifier.md"
+produces = "verification/report.md (score_authority: verifier) with PASS/FAIL verdict"
+check = "test -f <worktree>/verification/report.md && verdict is PASS; pass_to_fail == 0"
+
+[stages.review] # S4
+requires = ["worktree diff vs origin/main", "spec or issue", "verification report"]
+role = "harness/roles/reviewer.md"
+produces = "verdict APPROVE / REQUEST_CHANGES with P0–P3 findings"
+check = "APPROVE with no P0/P1 findings remaining"
+
+[stages.ship] # S5
+requires = ["reviewer APPROVE", "verifier PASS"]
+role = "harness/roles/implementer.md"
+produces = "pushed branch + PR (verification report path in body) + green required checks"
+check = "gh pr checks <PR> --watch (or gh signoff while the runner is down)"
+
+[stages.merge] # S6 — human gate (a); never automated
+requires = ["PR with green required checks"]
+role = "human"
+produces = "squash-merged commit on main + worktree/branch cleanup"
+check = "gh pr merge <PR> --squash --delete-branch, after explicit user confirmation"
+
+[stages.retro] # S7 — not yet automated (phase 3)
+requires = ["merged PR", "verification report"]
+role = "human"
+produces = "regression tests from failed probes; lessons folded into guides/AGENT.md"
+check = "none (manual)"
