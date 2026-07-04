@@ -31,11 +31,14 @@ jobs:
           persist-credentials: false
 
       # The old arc image baked nightly rustfmt; GitHub-hosted does not.
+      # Date-pinned in lockstep with rust.yml's rustdoc nightly (which is
+      # pinned around a rustc ICE) so both gates use one deterministic
+      # toolchain; unpin together when a fixed nightly ships.
       - name: Install nightly toolchain (rustfmt)
-        run: rustup toolchain install nightly --profile minimal --component rustfmt
+        run: rustup toolchain install nightly-2026-06-19 --profile minimal --component rustfmt
 
       - name: Check formatting
-        run: cargo +nightly fmt --all -- --check
+        run: cargo +nightly-2026-06-19 fmt --all -- --check
 
   proto-lint:
     name: Protocol Buffer Lint

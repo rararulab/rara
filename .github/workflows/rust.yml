@@ -150,14 +150,20 @@ jobs:
       - name: Setup rara build environment
         uses: ./.github/actions/setup-rara-build
 
+      # Pinned: current latest nightly ICEs while documenting
+      # rara-backend-admin (rustc_trait_selection: "DynCompatible(
+      # futures_core::Stream) should have been handled by fulfillment
+      # already"). nightly-2026-06-19 (the known-good local toolchain)
+      # does not. Unpin back to plain `nightly` once a fixed nightly
+      # ships. Keep in lockstep with lint.yml's rustfmt nightly.
       - name: Install nightly toolchain (rustdoc)
-        run: rustup toolchain install nightly --profile minimal
+        run: rustup toolchain install nightly-2026-06-19 --profile minimal
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       - name: Generate documentation
-        run: cargo +nightly doc --workspace --no-deps --document-private-items
+        run: cargo +nightly-2026-06-19 doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
