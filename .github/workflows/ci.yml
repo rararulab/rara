@@ -101,12 +101,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies (diesel, protoc, mold linker)
-        run: |
-          # protobuf-compiler: spec-lifecycle runs cargo test selectors,
-          # which build the workspace; prost-build needs protoc (#2166).
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev mold clang protobuf-compiler
+      # spec-lifecycle runs cargo test selectors, which build the
+      # workspace — same system toolchain as rust.yml (#2166).
+      - name: Setup rara build environment
+        uses: ./.github/actions/setup-rara-build
 
       - name: Install just
         uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2

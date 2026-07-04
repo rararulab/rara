@@ -79,13 +79,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # mold + clang: `.cargo/config.toml` forces the mold linker for
-      # x86_64-unknown-linux-gnu and GitHub-hosted images do not bake it.
-      # protobuf-compiler: prost-build (api/build.rs) needs protoc (#2166).
-      - name: Install system dependencies (diesel, protoc, mold linker)
+      # System toolchain (diesel headers, protoc, zig, mold) — see
+      # .github/actions/setup-rara-build/action.yml (#2166).
+      - name: Setup rara build environment
+        uses: ./.github/actions/setup-rara-build
+
+      - name: Install gettext (envsubst for config templating)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev gettext-base mold clang protobuf-compiler
+          sudo apt-get install -y --no-install-recommends gettext-base
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
