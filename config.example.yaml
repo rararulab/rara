@@ -83,10 +83,6 @@ llm:
       base_url: "https://api.openai.com/v1"
       api_key: "sk-..."
       default_model: "gpt-4o-mini"
-    minimax:
-      base_url: "https://api.minimax.io/v1"
-      api_key: "mm-..."
-      default_model: "MiniMax-M2.7"
 
 # ---------------------------------------------------------------------------
 # Knowledge layer — long-term memory extraction
@@ -122,8 +118,8 @@ knowledge:
 
 agents:
   rara:
-    driver: minimax
-    model: MiniMax-M2.7
+    driver: openrouter
+    model: anthropic/claude-3.5-sonnet
   knowledge_extractor:
     driver: openai
     model: gpt-4o-mini

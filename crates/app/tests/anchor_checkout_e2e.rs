@@ -96,9 +96,14 @@ async fn anchor_checkout_roundtrip() {
     let chat_id = format!("e2e-checkout-{}", uuid::Uuid::new_v4());
     wait_for_turn_count(&handle, session_key, 1).await;
 
-    // Verify turn 1 succeeded
+    // Verify turn 1 succeeded — print the trace on failure so a failed
+    // turn's provider error (carried since #2178) is visible verbatim.
     let traces = handle.get_process_turns(session_key);
-    assert!(traces.last().unwrap().success, "turn 1 should succeed");
+    assert!(
+        traces.last().unwrap().success,
+        "turn 1 should succeed; latest_trace={:?}",
+        traces.last()
+    );
 
     // 3. Send another message to build context
     handle
@@ -232,7 +237,10 @@ async fn anchor_checkout_roundtrip() {
 
     let traces = handle.get_process_turns(session_key);
     let recall_trace = traces.last().unwrap();
-    assert!(recall_trace.success, "recall turn should succeed");
+    assert!(
+        recall_trace.success,
+        "recall turn should succeed; latest_trace={recall_trace:?}"
+    );
     let preview = recall_trace
         .iterations
         .last()

@@ -4,8 +4,10 @@ name: E2E (Real LLM)
 # OpenAI-compatible provider. Triggers on `main` push + manual dispatch only —
 # **not** on pull_request, to avoid burning provider tokens on every push.
 # Maintainer must configure `OPENAI_API_KEY` (secret), `OPENAI_BASE_URL` (var),
-# and `OPENAI_MODEL` (var) in repo settings; without them the job fails fast
-# at config render.
+# and `OPENAI_MODEL` (var) in org/repo settings — OpenRouter as of #2178
+# (base_url https://openrouter.ai/api/v1, no trailing slash). A 1-token
+# provider preflight fails the job fast, before the build, when the key or
+# vars are missing/broken.
 
 on:
   push:
@@ -78,6 +80,31 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      # Fail fast on provider quota/auth errors BEFORE the ~10-minute build:
+      # a 1-token completion ping surfaces the provider's error body in the
+      # step log within a minute (#2178). The response body carries no
+      # secrets; the API key itself is never echoed.
+      - name: Provider preflight (1-token ping)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+        run: |
+          body="$(mktemp)"
+          status=$(curl -sS --max-time 60 -o "$body" -w "%{http_code}" \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"${OPENAI_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" \
+            "${OPENAI_BASE_URL}/chat/completions")
+          if [ "$status" != "200" ]; then
+            echo "::error::provider preflight failed: HTTP $status from ${OPENAI_BASE_URL} (model ${OPENAI_MODEL})"
+            echo "--- provider response body ---"
+            cat "$body"
+            echo
+            exit 1
+          fi
+          echo "provider preflight OK: HTTP 200 from ${OPENAI_BASE_URL} (model ${OPENAI_MODEL})"
 
       # System toolchain (diesel headers, protoc, zig, mold) — see
       # .github/actions/setup-rara-build/action.yml (#2166).
