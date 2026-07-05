@@ -189,8 +189,9 @@ Whichever variant is dispatched, it:
 If the diff touches `crates/{app,kernel,channels,acp,sandbox}/src/`, the
 backend variant adds or extends a Rust e2e test in the corresponding
 `tests/` directory following `docs/guides/e2e-style.md` (lane 1 = no LLM,
-lane 2 = scripted LLM via `ScriptedLlmDriver`, lane 3 = real LLM in
-`e2e.yml`). If PR-time e2e coverage is infeasible, state in the PR body
+lane 2 = scripted LLM via `ScriptedLlmDriver`, lane 3 = mock-provider
+driver-stack e2e (wiremock SSE) in `e2e.yml`). If PR-time e2e coverage is
+infeasible, state in the PR body
 which lane applies and why.
 
 See `harness/roles/implementer.md` for the shared base contract,

@@ -154,7 +154,7 @@ following `docs/guides/e2e-style.md`:
 
 - **Lane 1**: no LLM. Pure-data scenarios.
 - **Lane 2**: scripted LLM via `ScriptedLlmDriver`.
-- **Lane 3**: real LLM in `e2e.yml` (CI-only).
+- **Lane 3**: mock-provider driver-stack e2e (wiremock SSE) in `e2e.yml`.
 
 If PR-time e2e coverage is genuinely infeasible, state in the PR body
 which lane applies and why.
