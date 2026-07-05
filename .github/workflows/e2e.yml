@@ -1,21 +1,21 @@
-name: E2E (Real LLM)
+name: E2E (Mock Provider)
 
-# Real-LLM e2e flows (`anchor_checkout_e2e`) against an
-# OpenAI-compatible provider. Triggers on `main` push + manual dispatch only —
-# **not** on pull_request, to avoid burning provider tokens on every push.
-# Maintainer must configure `OPENAI_API_KEY` (secret), `OPENAI_BASE_URL` (var),
-# and `OPENAI_MODEL` (var) in org/repo settings — OpenRouter as of #2178
-# (base_url https://openrouter.ai/api/v1, no trailing slash). A 1-token
-# provider preflight fails the job fast, before the build, when the key or
-# vars are missing/broken.
+# Full-app e2e (`anchor_checkout_e2e`) driving the REAL openai driver stack
+# (HTTP client + auth + SSE stream parsing) against an in-process wiremock
+# OpenAI fake. Deterministic, zero-cost, secret-free — no provider account,
+# no provider secrets or vars anywhere (#2190, retiring the real-LLM lane
+# from #1941 / #2178). Because runs consume no provider tokens, this gates
+# pull requests as well as `main` pushes.
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: e2e-real-llm-${{ github.run_id }}
+  group: e2e-mock-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -63,12 +63,12 @@ jobs:
               - '.github/workflows/lint.yml'
               - '.github/workflows/e2e.yml'
 
-  real-llm-e2e:
-    name: Real-LLM E2E
+  mock-provider-e2e:
+    name: Mock-Provider E2E
     needs: changes
-    # Skip the real-LLM suite when nothing in the rust bucket changed on a
-    # push to main (e.g. docs- or specs-only merges). workflow_dispatch
-    # always runs so maintainers can trigger ad-hoc.
+    # Skip the e2e suite when nothing in the rust bucket changed (e.g. docs-
+    # or specs-only changes). workflow_dispatch always runs so maintainers
+    # can trigger ad-hoc.
     if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
@@ -81,65 +81,31 @@ jobs:
         with:
           persist-credentials: false
 
-      # Fail fast on provider quota/auth errors BEFORE the ~10-minute build:
-      # a 1-token completion ping surfaces the provider's error body in the
-      # step log within a minute (#2178). The response body carries no
-      # secrets; the API key itself is never echoed.
-      - name: Provider preflight (1-token ping)
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-        run: |
-          body="$(mktemp)"
-          status=$(curl -sS --max-time 60 -o "$body" -w "%{http_code}" \
-            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{\"model\":\"${OPENAI_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1}" \
-            "${OPENAI_BASE_URL}/chat/completions")
-          if [ "$status" != "200" ]; then
-            echo "::error::provider preflight failed: HTTP $status from ${OPENAI_BASE_URL} (model ${OPENAI_MODEL})"
-            echo "--- provider response body ---"
-            cat "$body"
-            echo
-            exit 1
-          fi
-          echo "provider preflight OK: HTTP 200 from ${OPENAI_BASE_URL} (model ${OPENAI_MODEL})"
-
       # System toolchain (diesel headers, protoc, zig, mold) — see
       # .github/actions/setup-rara-build/action.yml (#2166).
       - name: Setup rara build environment
         uses: ./.github/actions/setup-rara-build
 
-      - name: Install gettext (envsubst for config templating)
-        run: |
-          sudo apt-get install -y --no-install-recommends gettext-base
-
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
-      - name: Render rara config from template
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      - name: Stage CI config (XDG steering)
         run: |
-          # Render the config under $RUNNER_TEMP and steer both
+          # Stage the static CI config under $RUNNER_TEMP and steer both
           # `dirs::config_dir()` and `dirs::data_local_dir()` (used by
-          # rara_paths::data_dir) there via the XDG_* env vars for
-          # downstream steps — keeps the job independent of runner $HOME.
+          # rara_paths) there via the XDG_* env vars — keeps the job
+          # independent of runner $HOME. The mock-provider test is itself
+          # hermetic (it writes its own config under a temp
+          # `rara_paths::set_custom_data_dir`); this staging covers any
+          # other e2e test that boots from the XDG config path.
           mkdir -p "$RUNNER_TEMP/xdg-config/rara" "$RUNNER_TEMP/xdg-data"
-          envsubst < ci/config.template.yaml > "$RUNNER_TEMP/xdg-config/rara/config.yaml"
+          cp ci/config.template.yaml "$RUNNER_TEMP/xdg-config/rara/config.yaml"
           {
             echo "XDG_CONFIG_HOME=$RUNNER_TEMP/xdg-config"
             echo "XDG_DATA_HOME=$RUNNER_TEMP/xdg-data"
           } >> "$GITHUB_ENV"
 
-      - name: Run real-LLM e2e tests
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      - name: Run mock-provider e2e tests
         run: |
           cargo test -p rara-app \
             --test anchor_checkout_e2e \

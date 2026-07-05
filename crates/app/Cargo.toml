@@ -89,6 +89,10 @@ rara-kernel = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
+# HTTP-level OpenAI fake for the mock-provider e2e lane ONLY (issue #2190).
+# Do NOT use wiremock in kernel/channels tests — fake the LLM at the trait
+# (`ScriptedLlmDriver`) there; see docs/guides/e2e-style.md "Forbidden".
+wiremock = "0.6"
 
 [lints]
 workspace = true

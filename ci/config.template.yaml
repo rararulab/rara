@@ -1,7 +1,9 @@
-# CI config template — rendered at job start via `envsubst` into
-# `$XDG_CONFIG_HOME/rara/config.yaml`. Only `llm.providers.openai.*` references
-# environment variables; the rest is hardcoded CI-safe values so the
-# real-LLM e2e tests have a complete, valid `AppConfig` to load.
+# CI config — copied verbatim at job start to `$XDG_CONFIG_HOME/rara/config.yaml`
+# (no env substitution; every value is a hardcoded CI-safe dummy). The
+# mock-provider e2e test writes its own hermetic config pointing
+# `llm.providers.openai.base_url` at an in-process wiremock server, so the
+# values below are never dialed by CI — they exist so any e2e test booting
+# from the XDG config path has a complete, valid `AppConfig` to load (#2190).
 #
 # See `config.example.yaml` for the canonical reference and field docs.
 
@@ -29,9 +31,11 @@ llm:
   default_provider: "openai"
   providers:
     openai:
-      base_url: "${OPENAI_BASE_URL}"
-      api_key: "${OPENAI_API_KEY}"
-      default_model: "${OPENAI_MODEL}"
+      # Unroutable dummy — tests that need a live provider endpoint must
+      # bring their own (the mock-provider e2e injects a wiremock URL).
+      base_url: "http://127.0.0.1:9"
+      api_key: "ci-dummy-key-not-a-real-secret"
+      default_model: "mock-model"
 
 knowledge:
   embedding_model: "text-embedding-3-small"

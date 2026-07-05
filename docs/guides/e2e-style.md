@@ -1,9 +1,10 @@
 # E2E Test Style — What rara's End-to-End Tests Look Like
 
 rara is an HTTP-served, in-process Rust agent. Its end-to-end behavior is
-testable in pure Rust — no separate binary, no HTTP fakes, no language
-runtime spin-up. This guide codifies what an e2e test *is* in this repo,
-which lane it belongs in, and what it must (and must not) assert.
+testable in pure Rust — no separate binary, no language runtime spin-up,
+and no HTTP fakes outside the one sanctioned driver-stack lane (lane 3).
+This guide codifies what an e2e test *is* in this repo, which lane it
+belongs in, and what it must (and must not) assert.
 
 If you are touching `crates/{app,kernel,channels,acp,sandbox}/src/`, the
 diff almost certainly needs an e2e in this style. Read the lanes first;
@@ -59,26 +60,47 @@ Anchors:
   contract example: one scripted turn, assert `TurnTrace.iterations`
   has length one and the preview matches.
 
-### Lane 3 — Real LLM flows (runs on `main` push only, never on PRs)
+### Lane 3 — Mock-provider driver-stack e2e (runs on PRs and `main`)
 
-Anything whose assertion depends on a real model's output (instruction
-following, tool selection, reasoning quality) is `#[ignore]`'d by default
-and runs only via `.github/workflows/e2e.yml` on push to `main`. This
-lane is **not** expanded by ordinary feature work. If you find yourself
-wanting to add a real-LLM test from a feature PR, stop — the assertion
-you are writing probably belongs in lane 1 or lane 2 instead.
+Full app boot via `start_with_options()` + the **real openai driver over
+HTTP** against a local in-process wiremock OpenAI fake serving scripted
+SSE chat completions. This is the only lane that exercises what lane 2's
+trait-level DI deliberately skips: HTTP client construction, auth
+headers, URL building (`crates/kernel/src/llm/openai.rs`), and SSE
+stream parsing / idle timeout / stream-close salvage
+(`stream_chat_completions` + `StreamAccumulator`). Assertions are
+rara-owned: `TurnTrace` shape, tape state, and post-hoc assertions on
+the **captured requests** the driver actually sent (context assembly,
+tool-result round-trips, `stream: true`).
 
-Anchors: `crates/app/tests/run_code_session.rs` (real LLM + boxlite
-runtime), the `e2e.yml` workflow, the decision in issue #1941 / PR #1943.
+The tests are `#[ignore]`'d (full-app boot is too heavy for the ordinary
+`cargo nextest run --workspace` gate) and run via
+`.github/workflows/e2e.yml` (`E2E (Mock Provider)`) on pull requests and
+`main` pushes — deterministic, zero-cost, secret-free.
+
+**Real-model-behavior assertions no longer run in CI at all** (#2190,
+user decision: no real provider key, for cost). Tests that need a live
+model (e.g. `crates/app/tests/run_code_session.rs`, real LLM + boxlite)
+stay `#[ignore]`'d and are manual/local only, for humans with their own
+key. If you find yourself wanting to add a real-LLM assertion from a
+feature PR, stop — the assertion you are writing belongs in lane 1 or
+lane 2 instead.
+
+Anchors: `crates/app/tests/anchor_checkout_e2e.rs`, the shared fake in
+`crates/app/tests/common/mock_provider.rs` (modeled on `openai/codex`
+`codex-rs/core/tests/common/responses.rs`), the `e2e.yml` workflow.
+Decision chain: #1930 → #1941 → #2016 → #2178 → #2190.
 
 ## Lane decision rule
 
 > Does the assertion read meaningfully when the LLM returns a
 > deterministic canned response? If yes → lane 1 or 2 (lane 1 if no LLM
-> at all is needed). If the assertion only makes sense with a real
-> model — e.g. "the model picks the read_file tool" or "the response
-> contains an explanation" — that's lane 3, and almost always the wrong
-> assertion to be making in a feature PR.
+> at all is needed); lane 3 only when the **wire itself** is the test
+> target — driver HTTP/SSE behavior or full-app-boot integration. If the
+> assertion only makes sense with a real model — e.g. "the model picks
+> the read_file tool" or "the response contains an explanation" — it has
+> no CI lane at all (#2190): keep it manual/local, and it is almost
+> always the wrong assertion to be making in the first place.
 
 PR #1941 is the cautionary tale: a real-LLM e2e was added whose
 assertions (`saw_anchor`, `read_file_calls >= 9`) tested the model's
@@ -110,9 +132,11 @@ bus.
 ### When `#[ignore]` is allowed
 
 Only when the test depends on an external resource the PR-time runner
-cannot provide:
+cannot provide, or boots the full app:
 
-- A real LLM provider (lane 3).
+- Full app boot via `start_with_options()` (lane 3) — too heavy for the
+  ordinary workspace test gate; runs in `e2e.yml` via `-- --ignored`.
+- A real LLM provider (manual/local only since #2190).
 - The `boxlite` runtime files (see
   `crates/app/tests/run_code_session.rs`).
 
@@ -121,19 +145,32 @@ tests that need a temp directory. Fix the underlying cause.
 
 ## Forbidden
 
-- `wiremock`, `mockito`, or any HTTP-fake crate. The kernel's LLM
-  surface is a Rust trait — fake it at the trait, not at the wire.
-  Decision chain: issue #1930 / PR #1933.
+- `wiremock`, `mockito`, or any HTTP-fake crate **outside the lane-3
+  driver-stack e2e** (`rara-app` dev-dependency, used by
+  `crates/app/tests/anchor_checkout_e2e.rs` + its
+  `tests/common/mock_provider.rs` helper). Everywhere else the kernel's
+  LLM surface is a Rust trait — fake it at the trait, not at the wire.
+
+  **Decision reversal, explicit (#2190):** #1930 / PR #1933 banned
+  wiremock entirely because "CI is gaining a real LLM API key" made
+  HTTP fakes redundant. That premise was revoked on 2026-07-05 (user
+  decision: no real key in CI, for cost) — with no real key, the wire
+  path (`openai.rs` HTTP + SSE parsing) has **zero** CI coverage unless
+  an HTTP fake provides it. The carve-out is narrow: wiremock is
+  sanctioned ONLY where the wire is the test target; kernel/channels
+  tests keep the trait-DI rule. Decision chain:
+  #1930 → #1941 → #2016 → #2178 → #2190.
 - Resurrecting `crates/app/tests/e2e_scripted.rs` or any equivalent
   flow-suite that wires `ScriptedLlmDriver` through the full app stack.
   The keep-list for `ScriptedLlmDriver` is narrow kernel-loop scenarios,
-  not flow suites. Decision chain: issue #1930 / PR #1933.
+  not flow suites. Decision chain: issue #1930 / PR #1933 (unchanged by
+  #2190).
 - New top-level e2e crates or test harnesses. Reuse `KernelTestHarness`
   (`TestKernelBuilder`) and `start_with_options()` exclusively.
-- Asserting on real-model behavior in a PR-time test (the PR #1941
-  pattern). If your assertion only makes sense for a real model, the
-  test belongs in `e2e.yml` and almost certainly should not be added at
-  all.
+- Asserting on real-model behavior in any CI test (the PR #1941
+  pattern). Since #2190 no CI job talks to a real model; such an
+  assertion is deterministic-canned-response-meaningless and almost
+  certainly should not be added at all.
 
 ## Pairing with workflow.md
 
