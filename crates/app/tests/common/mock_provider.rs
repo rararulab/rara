@@ -34,34 +34,34 @@ use wiremock::{
 /// Request path the real openai driver builds (`openai.rs`:
 /// `format!("{}{}", base_url, "/chat/completions")`). Single definition so a
 /// deliberate shape-break (red/green proof) only needs one edit.
-pub const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
+pub(crate) const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
 
 /// A streamed text delta chunk (Chat Completions SSE shape).
-pub fn text_chunk(text: &str) -> Value {
+pub(crate) fn text_chunk(text: &str) -> Value {
     json!({"choices": [{"index": 0, "delta": {"content": text}}]})
 }
 
 /// A streamed reasoning delta chunk (`delta.reasoning_content`).
-pub fn reasoning_chunk(text: &str) -> Value {
+pub(crate) fn reasoning_chunk(text: &str) -> Value {
     json!({"choices": [{"index": 0, "delta": {"reasoning_content": text}}]})
 }
 
 /// First chunk of a streamed tool call: carries id + name (index 0).
-pub fn tool_call_start_chunk(id: &str, name: &str) -> Value {
+pub(crate) fn tool_call_start_chunk(id: &str, name: &str) -> Value {
     json!({"choices": [{"index": 0, "delta": {"tool_calls": [
         {"index": 0, "id": id, "function": {"name": name, "arguments": ""}}
     ]}}]})
 }
 
 /// Follow-up chunk carrying a fragment of the tool call's JSON arguments.
-pub fn tool_call_args_chunk(fragment: &str) -> Value {
+pub(crate) fn tool_call_args_chunk(fragment: &str) -> Value {
     json!({"choices": [{"index": 0, "delta": {"tool_calls": [
         {"index": 0, "function": {"arguments": fragment}}
     ]}}]})
 }
 
 /// Final chunk with a `finish_reason` and usage block.
-pub fn finish_chunk(reason: &str) -> Value {
+pub(crate) fn finish_chunk(reason: &str) -> Value {
     json!({
         "choices": [{"index": 0, "delta": {}, "finish_reason": reason}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
@@ -81,7 +81,7 @@ fn sse_body(chunks: &[Value]) -> String {
 }
 
 /// A 200 `text/event-stream` response streaming the given chunks.
-pub fn sse_response(chunks: &[Value]) -> ResponseTemplate {
+pub(crate) fn sse_response(chunks: &[Value]) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(sse_body(chunks), "text/event-stream")
 }
 
@@ -91,7 +91,12 @@ pub fn sse_response(chunks: &[Value]) -> ResponseTemplate {
 /// Later conversation turns embed earlier turns' text in their request
 /// history, so markers overlap across turns — disambiguate by giving the
 /// LATEST turn the numerically lowest (= highest) `priority`.
-pub async fn mount_chat_sse(server: &MockServer, marker: &str, priority: u8, chunks: &[Value]) {
+pub(crate) async fn mount_chat_sse(
+    server: &MockServer,
+    marker: &str,
+    priority: u8,
+    chunks: &[Value],
+) {
     Mock::given(method("POST"))
         .and(path(CHAT_COMPLETIONS_PATH))
         .and(body_string_contains(marker))
@@ -105,7 +110,7 @@ pub async fn mount_chat_sse(server: &MockServer, marker: &str, priority: u8, chu
 /// background agents (title_gen, knowledge_extractor) and the knowledge
 /// layer's embedder. Mounted at the lowest priority so scripted turn mocks
 /// always win.
-pub async fn mount_fallbacks(server: &MockServer) {
+pub(crate) async fn mount_fallbacks(server: &MockServer) {
     // Streaming chat fallback.
     Mock::given(method("POST"))
         .and(path(CHAT_COMPLETIONS_PATH))
@@ -150,7 +155,7 @@ pub async fn mount_fallbacks(server: &MockServer) {
 
 /// Dimensions served by the embeddings fallback — keep in sync with the
 /// `knowledge.embedding_dimensions` value in the test-authored config.
-pub const EMBEDDING_DIMENSIONS: usize = 8;
+pub(crate) const EMBEDDING_DIMENSIONS: usize = 8;
 
 /// Dynamic responder: echoes one zero-embedding per request input so batch
 /// sizes always line up.
@@ -178,7 +183,7 @@ fn embeddings_response(request: &Request) -> ResponseTemplate {
 
 /// All captured `POST /chat/completions` request bodies, parsed as JSON, in
 /// arrival order.
-pub async fn chat_request_bodies(server: &MockServer) -> Vec<Value> {
+pub(crate) async fn chat_request_bodies(server: &MockServer) -> Vec<Value> {
     server
         .received_requests()
         .await
@@ -195,7 +200,7 @@ pub async fn chat_request_bodies(server: &MockServer) -> Vec<Value> {
 /// (title_gen, knowledge_extractor) embed conversation text inside larger
 /// prompts, and context assembly appends system-reminder user messages after
 /// the real one — neither is byte-equal to the original turn input.
-pub fn user_message_index(body: &Value, text: &str) -> Option<usize> {
+pub(crate) fn user_message_index(body: &Value, text: &str) -> Option<usize> {
     body.get("messages")?.as_array()?.iter().position(|m| {
         m.get("role").and_then(Value::as_str) == Some("user")
             && m.get("content").and_then(Value::as_str) == Some(text)

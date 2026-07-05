@@ -19,4 +19,4 @@
 //! driver-stack e2e tests in this crate — kernel-flow tests fake the LLM at
 //! the trait via `ScriptedLlmDriver` (see `docs/guides/e2e-style.md`).
 
-pub mod mock_provider;
+pub(crate) mod mock_provider;
