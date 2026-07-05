@@ -14,6 +14,17 @@ name: zig-codec-smoke
 # deliberately reverses #2047 (which moved the job onto `arc-runner-set`
 # for the baked-in mold baseline) — that fleet no longer exists and jobs
 # targeting it queue for 24h and get cancelled (#2166).
+#
+# The macos job is pinned to `macos-15` (#2187): the `macos-26-arm64`
+# image (Xcode 26.5 / CLT 26.6) ships a newer ld that hard-errors on
+# zig 0.16's under-padded `compiler_rt.o` archive member ("64-bit
+# mach-o member not 8-byte aligned"), so `macos-latest` fails whenever
+# the alias resolves to macOS 26 (run 28704763601 failed on
+# macos-26-arm64; run 28703902869 passed on macos-15-arm64, 35 minutes
+# apart). Unpin when either a tagged zig release fixes MachO archive
+# member alignment and we adopt it, or the build.rs re-pack of the
+# zig-emitted `.a` (e.g. via `libtool -static`) lands — see the
+# follow-up named in #2187.
 
 on:
   pull_request:
@@ -34,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-15, ubuntu-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
