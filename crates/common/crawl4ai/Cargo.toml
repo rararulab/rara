@@ -18,8 +18,5 @@ snafu.workspace = true
 tracing.workspace = true
 validator = { workspace = true, features = ["derive"] }
 
-[dev-dependencies]
-tokio = { workspace = true }
-
 [lints]
 workspace = true

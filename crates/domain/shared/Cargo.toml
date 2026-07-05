@@ -19,13 +19,8 @@ testing = []
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-derive_more.workspace = true
 jiff.workspace = true
-serde.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tracing.workspace = true
-utoipa.workspace = true
-uuid = { version = "1", features = ["v4", "serde"] }
 
 [lints]
 workspace = true

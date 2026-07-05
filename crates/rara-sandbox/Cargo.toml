@@ -21,7 +21,6 @@ boxlite = { git = "https://github.com/boxlite-ai/boxlite", tag = "v0.9.7" }
 futures = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
-tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

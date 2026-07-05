@@ -11,18 +11,18 @@ keywords.workspace = true
 categories.workspace = true
 description = "API definitions and gRPC stubs for rara"
 
+# prost and tonic-prost are referenced only by the `tonic::include_proto!`
+# generated code in OUT_DIR, which cargo-shear cannot see.
+[package.metadata.cargo-shear]
+ignored = ["prost", "tonic-prost"]
+
 [dependencies]
 prost = { workspace = true }
-prost-types = "0.14"
-protobuf = { workspace = true }
 serde = { workspace = true }
-strum = { workspace = true }
-strum_macros = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 
 [build-dependencies]
-tonic-build = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [lints]

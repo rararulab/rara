@@ -16,15 +16,11 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
-derive_more = { workspace = true }
 http = { workspace = true }
 jiff = { workspace = true }
 moka = { workspace = true }
 smart-default = { workspace = true }
-# fastrace = { workspace = true }
-axum-tracing-opentelemetry = { workspace = true }
 base = { workspace = true }
-common-runtime = { workspace = true }
 futures = { workspace = true }
 opentelemetry = { version = "0.32.0", default-features = false, features = ["metrics", "trace"] }
 tracing-opentelemetry = "0.33.0"
@@ -41,16 +37,12 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-tracing-opentelemetry = { workspace = true }
-tonic-web = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-reqwest = { version = "0.13", features = ["json"] }
 tower = { workspace = true, features = ["util"] }
-http-body-util = "0.1"
 opentelemetry_sdk = { version = "0.32.0", features = ["trace"] }
 tracing-subscriber = { workspace = true }
 

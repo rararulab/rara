@@ -114,7 +114,7 @@ check-ci-runners:
 lint-ratchet:
     @scripts/lint-ratchet.sh
 
-[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, agent-md, check-deps, check-ci-runners)")]
+[doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny, cargo-shear, agent-md, check-deps, check-ci-runners)")]
 [group("👆 Code Quality")]
 lint: check-agent-md check-deps check-ci-runners
     @echo "🔍 Running clippy..."
@@ -129,6 +129,8 @@ lint: check-agent-md check-deps check-ci-runners
     find .github/workflows -name '*.yml' ! -name 'release.yml' -exec zizmor {} +
     @echo "🔍 Checking dependencies (advisories & bans)..."
     cargo deny check
+    @echo "🔍 Checking for unused dependencies..."
+    cargo shear
     @echo "✅ All linting checks passed!"
 
 [doc("run `fmt` `clippy` `check` `test` at once")]
