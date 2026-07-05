@@ -173,7 +173,7 @@ const VARIANT_MD = { backend: 'implementer-backend', frontend: 'implementer-fron
 // --workspace` (what rust.yml gates) instead of just the touched crate —
 // otherwise cross-crate regressions slip through. In the default 'watch'
 // mode, remote CI covers --workspace, so the local gate stays narrow
-// (`cargo test -p <crate>`). Real-LLM e2e (e2e.yml) and the Linux matrix
+// (`cargo test -p <crate>`). Driver-stack e2e (e2e.yml) and the Linux matrix
 // remain CI-only — uncovered during an outage by design.
 const BACKEND_TEST = CI_MODE === 'signoff'
   ? 'cargo nextest run --workspace (full workspace — replaces the down CI; if nextest is unavailable, cargo test --workspace)'
