@@ -9,6 +9,7 @@ Custom React hooks shared across rara web pages.
 Real files in this directory (one line each):
 
 - `loading-hints.ts` — poetic placeholder strings + `randomLoadingHint()`, mirrors the Telegram channel's loading copy so both feel cohesive.
+- `use-fleet-tasks.ts` — react-query poll of `GET /api/v1/fleet/tasks` (10s interval, mechanism constant in the hook) backing the worker-inbox fleet section.
 - `use-local-storage.ts` — typed `useState`-style wrapper over `window.localStorage` with JSON serialization.
 - `use-server-status.ts` — context hook exposing `{ isOnline, isChecking }` for the global server-status banner.
 - `use-session-timeline.ts` — react-query backed timeline state for a kernel session: turns → timeline items, live-state tracking, loading hints.

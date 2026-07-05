@@ -378,9 +378,9 @@ function SessionPickerEmpty({ label, action }: SessionPickerEmptyProps) {
  * falling back to a date for older entries). Pure — no `Intl`
  * RelativeTimeFormat to keep the bundle lean and the output deterministic
  * across locales (the picker is a developer surface, not user-facing
- * copy).
+ * copy). Exported for reuse by the fleet task cards in the same rail.
  */
-function formatRelativeTime(iso: string): string {
+export function formatRelativeTime(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return iso;
   const deltaSec = Math.max(0, Math.round((Date.now() - then) / 1000));
