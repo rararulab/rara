@@ -18,6 +18,7 @@ import { ExternalLink } from 'lucide-react';
 
 import { formatRelativeTime } from './SessionPicker';
 
+import { TERMINAL_STATUSES } from '@/api/fleet';
 import type { FleetTask, FleetTaskStatus } from '@/api/fleet';
 import { cn } from '@/lib/utils';
 
@@ -39,10 +40,27 @@ function truncatePrompt(prompt: string): string {
   return `${points.slice(0, PROMPT_MAX_POINTS).join('')}…`;
 }
 
-/** Compact token count: `842`, `12.5k`. */
+/** Compact token count: `842`, `12.5k`, `1.2M`. */
 function formatTokens(count: number): string {
-  if (count < 1000) return `${count}`;
-  return `${(count / 1000).toFixed(1)}k`;
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  return `${count}`;
+}
+
+/**
+ * Validate a result-contract URL before rendering it as a link. The
+ * callback payload is worker/LLM output — an untrusted trust boundary —
+ * so only well-formed http(s) URLs become anchors; anything else
+ * (`javascript:`, `data:`, malformed) falls back to plain text. Do not
+ * rely on React's `javascript:` warning for this.
+ */
+function safeHttpUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -56,7 +74,10 @@ export function FleetTaskCard({ task }: { task: FleetTask }) {
   const totalTokens = (task.input_tokens ?? 0) + (task.output_tokens ?? 0);
   const hasTokens = task.input_tokens !== null || task.output_tokens !== null;
   const hasResultRow = Boolean(task.branch || task.pr_url) || hasTokens || task.cost_usd !== null;
-  const showError = (task.status === 'failed' || task.status === 'lost') && Boolean(task.error);
+  const prHref = task.pr_url === null ? null : safeHttpUrl(task.pr_url);
+  // Succeeded tasks carry `error: null` per the result contract, so
+  // "terminal with an error" is exactly the failed / lost surface.
+  const showError = TERMINAL_STATUSES.includes(task.status) && Boolean(task.error);
 
   return (
     <div
@@ -79,9 +100,9 @@ export function FleetTaskCard({ task }: { task: FleetTask }) {
               {task.branch}
             </span>
           )}
-          {task.pr_url && (
+          {prHref !== null && (
             <a
-              href={task.pr_url}
+              href={prHref}
               target="_blank"
               rel="noreferrer"
               // Negative margin + padding grows the tap target (#16)
@@ -91,6 +112,12 @@ export function FleetTaskCard({ task }: { task: FleetTask }) {
               PR
               <ExternalLink className="h-2.5 w-2.5" aria-hidden />
             </a>
+          )}
+          {prHref === null && task.pr_url !== null && (
+            // Untrusted / non-http(s) pr_url: show it, never link it.
+            <span className="truncate" title={task.pr_url}>
+              {task.pr_url}
+            </span>
           )}
           {hasTokens && <span className="shrink-0">{formatTokens(totalTokens)} tok</span>}
           {task.cost_usd !== null && <span className="shrink-0">${task.cost_usd.toFixed(2)}</span>}

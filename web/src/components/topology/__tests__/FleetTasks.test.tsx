@@ -154,6 +154,28 @@ describe('FleetTasks — worker-inbox fleet section (issue-2197)', () => {
     expect(screen.getByText('agent exited with code 3: quality gate failed')).toBeInTheDocument();
   });
 
+  // Regression guard beyond the spec scenarios: pr_url comes from the
+  // worker result callback (untrusted LLM/worker output), so non-http(s)
+  // values must never become an anchor.
+  it('unsafe_pr_url_renders_as_plain_text', async () => {
+    apiGetMock.mockResolvedValue([
+      makeTask({
+        id: 't1',
+        status: 'succeeded',
+        pr_url: 'javascript:alert(1)',
+        completed_at: '2026-07-05T01:00:00Z',
+      }),
+    ]);
+
+    renderInbox();
+
+    await waitFor(() => {
+      expect(screen.getByText('javascript:alert(1)')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(document.querySelector('a')).toBeNull();
+  });
+
   it('hides_fleet_section_when_empty', async () => {
     apiGetMock.mockResolvedValue([]);
 
