@@ -160,21 +160,19 @@ jobs:
             echo "just spec-selftest not defined yet (lands with #2165); skipping"
           fi
 
-  # deny.toml was previously only exercised locally via `just lint` —
-  # orphaned in CI (#2166). Advisory/ban/license sweeps only make sense
+  # Advisory/ban/license/source sweeps against deny.toml. Only makes sense
   # when the dependency graph changes, hence the cargo_deps filter.
   #
-  # TODO(#2166 follow-up): continue-on-error because the baseline fails
-  # today (git sources missing from deny.toml allow-git, bzip2-1.0.6
-  # license, unmaintained-crate advisories — all pre-existing, landed
-  # while CI was dead). Fix the drift, then delete continue-on-error to
-  # make this blocking.
+  # Real (red = fix it) since #2175 burned the baseline down: triaged
+  # advisories are ignored in deny.toml with per-RUSTSEC reasons, git
+  # sources are allow-listed, and the bzip2-1.0.6 license has a scoped
+  # exception. New findings mean new debt — triage them in deny.toml,
+  # do not soften this job back to advisory-only.
   cargo-deny:
     name: Cargo Deny
     needs: changes
     if: ${{ needs.changes.outputs.cargo_deps == 'true' }}
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -191,15 +189,15 @@ jobs:
 
   # Detects unused dependencies declared in Cargo.toml files.
   #
-  # TODO(#2166 follow-up): continue-on-error because the workspace has 87
-  # pre-existing findings (`cargo shear` on main). Burn the baseline down
-  # in crates/**, then delete continue-on-error to make this blocking.
+  # Real (red = fix it) since #2175 removed the 80+ finding baseline.
+  # Genuine false positives (codegen-only or pin-activation deps) belong in
+  # a [package.metadata.cargo-shear] ignored list with a justification
+  # comment — see api/Cargo.toml and crates/app/Cargo.toml for the pattern.
   cargo-shear:
     name: Cargo Shear
     needs: changes
     if: ${{ needs.changes.outputs.cargo_deps == 'true' }}
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

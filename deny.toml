@@ -4,10 +4,19 @@ all-features = true
 [advisories]
 version = 2
 ignore = [
-    "RUSTSEC-2025-0012", # backoff (transitive via async-openai)
-    "RUSTSEC-2024-0384", # instant (transitive via backoff)
     "RUSTSEC-2024-0436", # paste (transitive via utoipa-axum)
-    "RUSTSEC-2025-0134", # rustls-pemfile (transitive via testcontainers/bollard)
+    # Unmaintained transitives we cannot upgrade away from our side (#2175):
+    "RUSTSEC-2025-0056", # adler unmaintained (via boxlite -> qcow2-rs -> miniz_oxide 0.7; fix needs upstream boxlite bump)
+    "RUSTSEC-2024-0375", # atty unmaintained (via boxlite -> qcow2-rs -> env_logger 0.9; std IsTerminal replacement is upstream's call)
+    "RUSTSEC-2025-0141", # bincode unmaintained (via fff-search -> heed and boxlite -> qcow2-rs; alternatives: postcard/bitcode, upstream's call)
+    "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained (via teloxide -> aquamarine, jieba-rs -> include-flate, validator)
+    "RUSTSEC-2020-0163", # term_size unmaintained (via boxlite; terminal_size replacement is upstream's call)
+    # Vulnerabilities with no semver-compatible fix reachable from our side (#2175):
+    # opendal 0.57 (latest release) pins quick-xml ^0.39; the fixes landed in
+    # quick-xml 0.41. Drop both ignores when opendal releases against >=0.41.
+    "RUSTSEC-2026-0194", # quick-xml quadratic duplicate-attribute check (via opendal-core)
+    "RUSTSEC-2026-0195", # quick-xml NsReader memory-exhaustion DoS (via opendal-core)
+    "RUSTSEC-2023-0071", # rsa Marvin timing sidechannel (via opendal-core -> reqsign-core; no fixed rsa release exists upstream)
 ]
 
 [licenses]
@@ -30,6 +39,12 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
+
+# bzip2-1.0.6 is the permissive BSD-style bzip2/libbzip2 license. Scoped to
+# the one crate that ships it (via zip -> bzip2) rather than globally allowed.
+exceptions = [
+    { crate = "libbz2-rs-sys", allow = ["bzip2-1.0.6"] },
+]
 
 [licenses.private]
 ignore = true
@@ -91,4 +106,8 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
+    # rara-sandbox microVM backend (#1840); upstream publishes git tags only.
+    "https://github.com/boxlite-ai/boxlite",
+    # fff-search fuzzy file search (#1283); pinned rev, not published to crates.io.
+    "https://github.com/dmtrKovalenko/fff.nvim",
 ]

@@ -23,9 +23,7 @@ zig-codec = ["dep:tape-codec-zig", "tape-codec-zig/zig-codec"]
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true }
-backon.workspace = true
 base.workspace = true
-base64.workspace = true
 bon.workspace = true
 chrono.workspace = true
 common-telemetry.workspace = true
@@ -38,7 +36,6 @@ futures.workspace = true
 hex.workspace = true
 hmac.workspace = true
 image.workspace = true
-indexmap.workspace = true
 jieba-rs.workspace = true
 jiff.workspace = true
 md5.workspace = true
@@ -50,7 +47,6 @@ rara-browser.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
 rara-soul.workspace = true
-rara-stt.workspace = true
 rara-tool-macro.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -73,7 +69,6 @@ subtle.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }
 tracing.workspace = true
-tracing-opentelemetry = "0.33.0"
 ulid.workspace = true
 unicode-normalization.workspace = true
 urlencoding.workspace = true
@@ -85,14 +80,12 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 async-trait.workspace = true
 chrono.workspace = true
 dashmap = "6"
-diesel_migrations.workspace = true
 rara-domain-shared = { workspace = true, features = ["testing"] }
 rara-kernel = { path = ".", features = ["testing"] }
 rara-model.workspace = true
 rara-sessions.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-test-case = "^3"
 tower.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 tracing-subscriber = { workspace = true }
