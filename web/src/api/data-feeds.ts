@@ -23,7 +23,7 @@ import { api } from './client';
 export interface DataFeedConfig {
   id: string;
   name: string;
-  feed_type: 'webhook' | 'websocket' | 'polling';
+  feed_type: FeedType;
   tags: string[];
   transport: Record<string, unknown>;
   auth: AuthConfig | null;
@@ -35,6 +35,8 @@ export interface DataFeedConfig {
 }
 
 export type AuthType = 'header' | 'query' | 'bearer' | 'basic' | 'hmac';
+
+export type FeedType = 'webhook' | 'websocket' | 'polling' | 'rss' | 'market_candle';
 
 export interface AuthConfig {
   type: AuthType;
@@ -58,10 +60,20 @@ export interface FeedEventsResponse {
 
 export interface CreateFeedRequest {
   name: string;
-  feed_type: 'webhook' | 'websocket' | 'polling';
+  feed_type: FeedType;
   tags: string[];
   transport: Record<string, unknown>;
   auth: AuthConfig | null;
+}
+
+export interface FeedCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  feed_type: FeedType;
+  tags: string[];
+  enabled: boolean;
+  feed_id: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +82,8 @@ export interface CreateFeedRequest {
 
 export const dataFeedsApi = {
   list: () => api.get<DataFeedConfig[]>('/api/v1/data-feeds'),
+
+  catalog: () => api.get<FeedCatalogEntry[]>('/api/v1/data-feeds/catalog'),
 
   get: (id: string) => api.get<DataFeedConfig>(`/api/v1/data-feeds/${id}`),
 
@@ -81,6 +95,12 @@ export const dataFeedsApi = {
   delete: (id: string) => api.del(`/api/v1/data-feeds/${id}`),
 
   toggle: (id: string) => api.put<DataFeedConfig>(`/api/v1/data-feeds/${id}/toggle`),
+
+  enableCatalogEntry: (id: string) =>
+    api.post<DataFeedConfig>(`/api/v1/data-feeds/catalog/${id}/enable`),
+
+  disableCatalogEntry: (id: string) =>
+    api.post<DataFeedConfig>(`/api/v1/data-feeds/catalog/${id}/disable`),
 
   events: (id: string, params?: { since?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();

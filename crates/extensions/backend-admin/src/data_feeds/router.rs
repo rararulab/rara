@@ -35,14 +35,18 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use jiff::Timestamp;
 use rara_kernel::data_feed::{
     DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, parse_duration_ago,
     polling::PollingSource,
 };
-use rara_trading::feed::{market_candle::MarketCandleSource, rss::RssSource};
+use rara_trading::feed::{
+    catalog::{DefaultFeedSource, default_finance_feed_sources},
+    market_candle::MarketCandleSource,
+    rss::RssSource,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -67,6 +71,15 @@ pub struct DataFeedRouterState {
 pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
     Router::new()
         .route("/api/v1/data-feeds", get(list_feeds).post(create_feed))
+        .route("/api/v1/data-feeds/catalog", get(list_feed_catalog))
+        .route(
+            "/api/v1/data-feeds/catalog/{id}/enable",
+            post(enable_catalog_feed),
+        )
+        .route(
+            "/api/v1/data-feeds/catalog/{id}/disable",
+            post(disable_catalog_feed),
+        )
         .route(
             "/api/v1/data-feeds/{id}",
             get(get_feed)
@@ -140,6 +153,18 @@ struct EventListResponse {
     has_more: bool,
 }
 
+/// Built-in feed catalog entry plus current materialized state.
+#[derive(Debug, Serialize)]
+struct FeedCatalogEntryResponse {
+    id:          String,
+    name:        String,
+    description: String,
+    feed_type:   FeedType,
+    tags:        Vec<String>,
+    enabled:     bool,
+    feed_id:     Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -150,6 +175,124 @@ async fn list_feeds(
 ) -> Result<Json<Vec<DataFeedConfig>>, ProblemDetails> {
     let feeds = state.svc.list_feeds().await?;
     Ok(Json(feeds))
+}
+
+/// `GET /api/v1/data-feeds/catalog` — list built-in finance feed sources.
+async fn list_feed_catalog(
+    State(state): State<DataFeedRouterState>,
+) -> Result<Json<Vec<FeedCatalogEntryResponse>>, ProblemDetails> {
+    let feeds = state.svc.list_feeds().await?;
+    Ok(Json(catalog_response(&feeds)))
+}
+
+/// `POST /api/v1/data-feeds/catalog/{id}/enable` — materialize a default feed.
+async fn enable_catalog_feed(
+    State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<DataFeedConfig>), ProblemDetails> {
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "enabling data feeds requires admin role",
+        ));
+    }
+
+    let source = find_catalog_source(&id)?;
+    let feed_name = source.feed_name();
+    let existing = state
+        .svc
+        .list_feeds()
+        .await?
+        .into_iter()
+        .find(|feed| feed.name == feed_name);
+
+    let now = Timestamp::now();
+    let (status, config) = if let Some(existing) = existing {
+        let updated = DataFeedConfig::builder()
+            .id(existing.id)
+            .name(feed_name)
+            .feed_type(source.feed_type)
+            .tags(source.tags)
+            .transport(source.transport)
+            .maybe_auth(source.auth)
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(existing.created_at)
+            .updated_at(now)
+            .build();
+        state.svc.update_feed(&updated).await?;
+        (StatusCode::OK, updated)
+    } else {
+        let created = DataFeedConfig::builder()
+            .id(Uuid::new_v4().to_string())
+            .name(feed_name)
+            .feed_type(source.feed_type)
+            .tags(source.tags)
+            .transport(source.transport)
+            .maybe_auth(source.auth)
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        state.svc.create_feed(&created).await?;
+        (StatusCode::CREATED, created)
+    };
+
+    sync_registry_and_maybe_start(&config, &state.registry);
+
+    Ok((status, Json(config)))
+}
+
+/// `POST /api/v1/data-feeds/catalog/{id}/disable` — turn off a materialized
+/// built-in feed without deleting its config row.
+async fn disable_catalog_feed(
+    State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<
+        rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
+    >,
+    Path(id): Path<String>,
+) -> Result<Json<DataFeedConfig>, ProblemDetails> {
+    if !principal.is_admin() {
+        return Err(ProblemDetails::forbidden(
+            "disabling data feeds requires admin role",
+        ));
+    }
+
+    let source = find_catalog_source(&id)?;
+    let feed_name = source.feed_name();
+    let existing = state
+        .svc
+        .list_feeds()
+        .await?
+        .into_iter()
+        .find(|feed| feed.name == feed_name)
+        .ok_or_else(|| {
+            ProblemDetails::not_found(
+                "Feed Not Found",
+                format!("catalog source is not enabled: {id}"),
+            )
+        })?;
+
+    let updated = DataFeedConfig::builder()
+        .id(existing.id)
+        .name(existing.name)
+        .feed_type(existing.feed_type)
+        .tags(existing.tags)
+        .transport(existing.transport)
+        .maybe_auth(existing.auth)
+        .enabled(false)
+        .status(FeedStatus::Idle)
+        .created_at(existing.created_at)
+        .updated_at(Timestamp::now())
+        .build();
+
+    state.svc.update_feed(&updated).await?;
+    sync_registry_and_maybe_start(&updated, &state.registry);
+
+    Ok(Json(updated))
 }
 
 /// `POST /api/v1/data-feeds` — create a new feed, sync registry, start task.
@@ -583,6 +726,47 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
     }
 }
 
+fn catalog_response(feeds: &[DataFeedConfig]) -> Vec<FeedCatalogEntryResponse> {
+    default_finance_feed_sources()
+        .into_iter()
+        .map(|source| {
+            let feed_name = source.feed_name();
+            let feed = feeds.iter().find(|feed| feed.name == feed_name);
+            FeedCatalogEntryResponse {
+                id:          source.id,
+                name:        source.name,
+                description: source.description,
+                feed_type:   source.feed_type,
+                tags:        source.tags,
+                enabled:     feed.is_some_and(|feed| feed.enabled),
+                feed_id:     feed.map(|feed| feed.id.clone()),
+            }
+        })
+        .collect()
+}
+
+fn find_catalog_source(id: &str) -> Result<DefaultFeedSource, ProblemDetails> {
+    default_finance_feed_sources()
+        .into_iter()
+        .find(|source| source.id == id)
+        .ok_or_else(|| {
+            ProblemDetails::not_found(
+                "Catalog Source Not Found",
+                format!("no built-in data feed source with id: {id}"),
+            )
+        })
+}
+
+fn sync_registry_and_maybe_start(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>) {
+    let _ = registry.remove(&config.name);
+    if let Err(e) = registry.register(config.clone()) {
+        warn!(name = %config.name, error = %e, "registry sync failed for catalog feed");
+    }
+    if config.enabled {
+        start_feed_task(config, registry);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
@@ -592,6 +776,7 @@ mod tests {
         http::{Request, StatusCode},
         middleware,
     };
+    use diesel_async::RunQueryDsl;
     use rara_kernel::{
         data_feed::DataFeedRegistry,
         error::Result as KernelResult,
@@ -647,12 +832,50 @@ mod tests {
     /// so the pool is never hit on the 403 path these tests exercise.
     async fn app_with_user(user: KernelUser) -> Router {
         let pools = build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
         let svc = DataFeedSvc::new(pools);
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let registry = Arc::new(DataFeedRegistry::new(event_tx));
         let state = DataFeedRouterState { svc, registry };
         let auth = auth_state_direct(user);
         data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
+    }
+
+    async fn bootstrap_data_feed_schema(pools: &yunara_store::diesel_pool::DieselSqlitePools) {
+        let mut conn = pools.writer.get().await.expect("pool conn");
+        for ddl in [
+            "CREATE TABLE data_feeds (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL UNIQUE,
+                feed_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                transport TEXT NOT NULL DEFAULT '{}',
+                auth TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'idle',
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+            "CREATE INDEX idx_data_feeds_name ON data_feeds(name)",
+            "CREATE INDEX idx_data_feeds_type ON data_feeds(feed_type)",
+            "CREATE TABLE data_feed_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                source_name TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                payload TEXT NOT NULL DEFAULT '{}',
+                received_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+            "CREATE INDEX idx_data_feed_events_source ON data_feed_events(source_name)",
+            "CREATE INDEX idx_data_feed_events_received ON data_feed_events(received_at)",
+        ] {
+            diesel::sql_query(ddl)
+                .execute(&mut *conn)
+                .await
+                .expect("bootstrap data feed schema");
+        }
     }
 
     #[tokio::test]
@@ -713,6 +936,126 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_admin_cannot_enable_catalog_feed() {
+        let app = app_with_user(user_of(Role::User)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/fed-press-releases/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_lists_default_sources() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/catalog")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let entries: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let ids = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&"fed-press-releases"));
+        assert!(ids.contains(&"sec-press-releases"));
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_enable_creates_enabled_feed() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/fed-press-releases/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(feed.name, "finance-fed-press-releases");
+        assert_eq!(feed.feed_type, FeedType::Rss);
+        assert!(feed.enabled);
+        assert!(feed.tags.contains(&"finance".to_owned()));
+        assert!(feed.tags.contains(&"news".to_owned()));
+        assert!(feed.tags.contains(&"fed".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_disable_turns_existing_feed_off() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let enable_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/sec-press-releases/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(enable_res.status(), StatusCode::CREATED);
+
+        let disable_res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/sec-press-releases/disable")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(disable_res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(disable_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(feed.name, "finance-sec-press-releases");
+        assert!(!feed.enabled);
+        assert_eq!(feed.status, FeedStatus::Idle);
     }
 
     #[tokio::test]

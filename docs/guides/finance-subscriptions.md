@@ -12,8 +12,9 @@ generic feed config, lifecycle, event IDs, persistence, and status reporting.
 
 The ingestion path is:
 
-1. An operator creates an authenticated `rss` or `market_candle` data feed
-   through the existing admin data-feed API.
+1. An operator enables a built-in finance RSS source or creates an
+   authenticated `rss` / `market_candle` data feed through the existing admin
+   data-feed API.
 2. The app starts the configured source in the background.
 3. The source emits normalized `FeedEvent`s:
    - `rss_article`
@@ -54,8 +55,22 @@ cargo test -p rara-trading --test timescale_container
 
 ## Operator setup
 
-Create finance feeds through the authenticated admin API. Example payloads are
-also documented in `config.example.yaml`.
+The Settings → Data Feeds panel lists built-in official finance RSS sources
+under "Default finance sources". Enabling one creates or re-enables a
+deterministic data feed named `finance-{catalog_id}`; disabling it turns the
+feed off without deleting the config row. The same catalog is available through
+the authenticated admin API:
+
+- `GET /api/v1/data-feeds/catalog`
+- `POST /api/v1/data-feeds/catalog/{id}/enable`
+- `POST /api/v1/data-feeds/catalog/{id}/disable`
+
+Built-in sources are limited to feeds that can run without operator secrets or
+provider-specific adapters. Market-candle feeds still require an
+operator-managed normalized endpoint.
+
+Custom finance feeds can also be created through the authenticated admin API.
+Example payloads are documented in `config.example.yaml`.
 
 RSS/Atom:
 
@@ -138,7 +153,8 @@ than waking the session.
 
 Use this checklist before considering a deployment ready:
 
-1. Create an authenticated `rss` data feed with tags `["finance", "macro"]`.
+1. Enable a built-in RSS source from Settings → Data Feeds, or create a custom
+   authenticated `rss` data feed with tags `["finance", "macro"]`.
 2. Create an authenticated `market_candle` data feed with tags
    `["finance", "market-data"]`.
 3. Confirm each closed candle is upserted into `market_candles` exactly once

@@ -14,5 +14,6 @@
 
 //! Finance-oriented feed sources.
 
+pub mod catalog;
 pub mod market_candle;
 pub mod rss;
