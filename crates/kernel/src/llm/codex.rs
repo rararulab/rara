@@ -192,7 +192,7 @@ mod tests {
         let body = build_responses_request(&request, ApiFormat::Responses);
         assert!(body.get("max_output_tokens").is_none());
         assert!(body.get("parallel_tool_calls").is_none());
-        assert!(body["tools"].as_array().expect("tools array").len() == 1);
+        assert_eq!(body["tools"].as_array().expect("tools array").len(), 1);
     }
 
     #[test]
