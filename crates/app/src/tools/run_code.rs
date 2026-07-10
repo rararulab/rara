@@ -119,9 +119,10 @@ impl RunCodeTool {
         // The shared per-session VM picks its NetworkPolicy from the fused
         // policy across all sandbox-using tools — see
         // `crates/app/src/sandbox.rs::fused_network_policy`. `run_code`
-        // contributes "Enabled with empty allow-list" (full outbound), so
-        // its historical behavior is preserved when bash is absent or
-        // permissive (#1937, #1946).
+        // contributes its own config-driven, default-deny allow-list
+        // (`SandboxToolConfig::run_code`): no egress unless the operator
+        // enumerates hosts. Full outbound is not expressible from YAML
+        // (#1937, #1946, #2216).
         sandbox_for_session(cfg, &self.sandboxes, session_key).await
     }
 }

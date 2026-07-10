@@ -33,17 +33,23 @@
 //! The fusion rule is the union (most-permissive) across all sandbox-using
 //! tools that may run in the same session:
 //!
-//! - if **every** caller wants `Disabled`, the result is `Disabled`;
-//! - otherwise the result is `Enabled` with the union of allow-lists. An empty
-//!   allow-list under `Enabled` means full outbound (boxlite's own default), so
-//!   a single full-net caller correctly dominates.
+//! - if **every** caller wants `Disabled`, the result is `Disabled` (the
+//!   default-deny ground state — an absent or empty allow-list contributes
+//!   nothing);
+//! - otherwise the result is `Enabled` with the de-duplicated union of the
+//!   callers' allow-lists. That union is always a concrete, host/CIDR-scoped
+//!   list. No config input can produce `Enabled { allow_net: [] }` — the
+//!   empty-list value that boxlite treats as *full outbound* is deliberately
+//!   unreachable, because boxlite v0.9.7 has no "all hosts" token and we do not
+//!   reintroduce one as a rara sentinel (see #2216).
 //!
-//! Today the contributors are:
+//! Both contributors are config-driven and default-deny:
 //!
 //! - `bash` — config at [`SandboxToolConfig::bash`] (`None` ⇒ `Disabled`, empty
 //!   `allow_net` ⇒ `Disabled`, non-empty ⇒ `Enabled` with that list);
-//! - `run_code` — historical full network access, modelled as `Enabled {
-//!   allow_net: [] }`.
+//! - `run_code` — config at [`SandboxToolConfig::run_code`], same semantics.
+//!   Untrusted, LLM-generated code gets **no** egress unless the operator
+//!   explicitly enumerates hosts.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
@@ -112,47 +118,42 @@ pub async fn sandbox_for_session(
 /// most-permissive policy across every sandbox-using tool that may run in
 /// the session.
 ///
-/// See the module-level "Network policy fusion" docs for the rule. Today
-/// the contributors are `bash` (config-driven) and `run_code` (historical
-/// full network).
+/// See the module-level "Network policy fusion" docs for the rule. Both
+/// contributors — `bash` and `run_code` — are config-driven and default-deny:
+/// an absent block or an empty `allow_net` contributes `Disabled`; a non-empty
+/// `allow_net` contributes `Enabled` with that concrete host/CIDR list. When
+/// every contributor is `Disabled` the result is `Disabled`; otherwise it is
+/// `Enabled` with the de-duplicated union of the non-empty lists. No input can
+/// yield `Enabled { allow_net: [] }` (boxlite's full-outbound sentinel) — that
+/// footgun is deliberately unreachable (see #2216).
 pub fn fused_network_policy(config: &SandboxToolConfig) -> NetworkPolicy {
-    // run_code's contribution: historical full outbound access, modelled as
-    // Enabled with an empty allow-list. This always pushes the union to
-    // Enabled — but we still compute the union explicitly so that adding a
-    // future, more restrictive caller (e.g. a CIDR-pinned tool) won't
-    // silently widen its access.
-    let run_code_enabled = true;
-    let run_code_allow: Vec<String> = Vec::new();
+    // Each contributor maps to its allow-list. An absent block or an empty
+    // `allow_net` is a default-deny contributor (empty vec); a non-empty
+    // `allow_net` is a scoped contributor. `run_code` is no longer a
+    // hardcoded full-net floor — its egress is operator config, same as bash.
+    let contributors = [
+        config.run_code.as_ref().map(|c| c.allow_net.as_slice()),
+        config.bash.as_ref().map(|c| c.allow_net.as_slice()),
+    ];
 
-    // bash's contribution.
-    let (bash_enabled, bash_allow): (bool, Vec<String>) = match config.bash.as_ref() {
-        // No `bash:` block → Disabled, empty allow-list.
-        None => (false, Vec::new()),
-        Some(b) if b.allow_net.is_empty() => (false, Vec::new()),
-        Some(b) => (true, b.allow_net.clone()),
-    };
-
-    if !run_code_enabled && !bash_enabled {
-        return NetworkPolicy::Disabled;
+    // Union the non-empty allow-lists, preserving first-seen order and
+    // dropping duplicates. A contributor that is absent or empty adds
+    // nothing, so it can only ever tighten — never widen — the union.
+    let mut allow_net: Vec<String> = Vec::new();
+    for host in contributors.into_iter().flatten().flatten() {
+        if !allow_net.contains(host) {
+            allow_net.push(host.clone());
+        }
     }
 
-    // Union the allow-lists. If any contributor wants full outbound
-    // (Enabled with an empty list), the union must also be full outbound,
-    // so we collapse the result to an empty allow-list in that case.
-    let any_unrestricted =
-        (run_code_enabled && run_code_allow.is_empty()) || (bash_enabled && bash_allow.is_empty());
-    let allow_net = if any_unrestricted {
-        Vec::new()
+    // All contributors default-deny → no network at all. Otherwise the union
+    // is a concrete, host/CIDR-scoped list; it is never empty here, so the
+    // `Enabled { allow_net: [] }` full-outbound sentinel is unreachable.
+    if allow_net.is_empty() {
+        NetworkPolicy::Disabled
     } else {
-        let mut merged: Vec<String> = run_code_allow;
-        for host in bash_allow {
-            if !merged.contains(&host) {
-                merged.push(host);
-            }
-        }
-        merged
-    };
-    NetworkPolicy::Enabled { allow_net }
+        NetworkPolicy::Enabled { allow_net }
+    }
 }
 
 /// Standard "sandbox not configured" error returned by tools that require
@@ -247,7 +248,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use super::*;
-    use crate::BashSandboxConfig;
+    use crate::{BashSandboxConfig, RunCodeSandboxConfig};
 
     /// Payload for the reclamation tests — stands in for `Sandbox` so the
     /// mechanism is exercised without a boxlite dependency.
@@ -358,44 +359,107 @@ mod tests {
         drop(clone);
     }
 
-    fn cfg(bash: Option<BashSandboxConfig>) -> SandboxToolConfig {
+    fn cfg(
+        run_code: Option<RunCodeSandboxConfig>,
+        bash: Option<BashSandboxConfig>,
+    ) -> SandboxToolConfig {
         SandboxToolConfig::builder()
             .default_rootfs_image("alpine:latest".to_owned())
+            .maybe_run_code(run_code)
             .maybe_bash(bash)
             .build()
     }
 
-    /// Even when bash is `None` (Disabled), `run_code` keeps full outbound
-    /// access — so the fused policy is `Enabled { allow_net: [] }`.
+    fn run_code(allow_net: &[&str]) -> RunCodeSandboxConfig {
+        RunCodeSandboxConfig::builder()
+            .allow_net(allow_net.iter().map(|s| (*s).to_owned()).collect())
+            .build()
+    }
+
+    fn bash(allow_net: &[&str]) -> BashSandboxConfig {
+        BashSandboxConfig::builder()
+            .allow_net(allow_net.iter().map(|s| (*s).to_owned()).collect())
+            .build()
+    }
+
+    /// Default-deny: no `bash`, no `run_code` → the fused policy is
+    /// `Disabled`. This inverts the pre-#2216 behavior, where the same input
+    /// returned `Enabled { allow_net: [] }` (full outbound) because
+    /// `run_code` was a hardcoded full-net floor.
     #[test]
-    fn fuses_run_code_full_net_with_disabled_bash() {
-        match fused_network_policy(&cfg(None)) {
-            NetworkPolicy::Enabled { allow_net } => assert!(allow_net.is_empty()),
-            NetworkPolicy::Disabled => panic!("run_code should keep network up"),
+    fn no_config_yields_disabled_network() {
+        assert!(matches!(
+            fused_network_policy(&cfg(None, None)),
+            NetworkPolicy::Disabled
+        ));
+    }
+
+    /// An empty `run_code.allow_net` is a default-deny contributor, not full
+    /// outbound — with bash also absent, the fused policy is `Disabled`.
+    #[test]
+    fn empty_run_code_allowlist_is_disabled() {
+        assert!(matches!(
+            fused_network_policy(&cfg(Some(run_code(&[])), None)),
+            NetworkPolicy::Disabled
+        ));
+    }
+
+    /// The operator's explicit `run_code` allow-list is honored verbatim.
+    #[test]
+    fn run_code_allowlist_is_honored() {
+        let policy = fused_network_policy(&cfg(
+            Some(run_code(&["pypi.org", "files.pythonhosted.org"])),
+            None,
+        ));
+        match policy {
+            NetworkPolicy::Enabled { allow_net } => {
+                assert_eq!(allow_net.len(), 2, "no duplicates expected");
+                assert!(allow_net.contains(&"pypi.org".to_owned()));
+                assert!(allow_net.contains(&"files.pythonhosted.org".to_owned()));
+            }
+            NetworkPolicy::Disabled => panic!("expected Enabled with the operator allow-list"),
         }
     }
 
-    /// A bash allow-list does NOT shrink `run_code`'s full outbound access:
-    /// the union with an unrestricted caller is unrestricted.
+    /// `bash` and `run_code` allow-lists union into one policy: both hosts
+    /// present, neither dropped.
     #[test]
-    fn fuses_run_code_full_net_dominates_bash_allowlist() {
-        let bash = BashSandboxConfig::builder()
-            .allow_net(vec!["github.com".to_owned()])
-            .build();
-        match fused_network_policy(&cfg(Some(bash))) {
-            NetworkPolicy::Enabled { allow_net } => assert!(allow_net.is_empty()),
-            NetworkPolicy::Disabled => panic!("expected Enabled"),
+    fn bash_and_run_code_allowlists_union() {
+        let policy = fused_network_policy(&cfg(
+            Some(run_code(&["pypi.org"])),
+            Some(bash(&["github.com"])),
+        ));
+        match policy {
+            NetworkPolicy::Enabled { allow_net } => {
+                assert_eq!(allow_net.len(), 2, "deduplicated union of both lists");
+                assert!(allow_net.contains(&"pypi.org".to_owned()));
+                assert!(allow_net.contains(&"github.com".to_owned()));
+            }
+            NetworkPolicy::Disabled => panic!("expected Enabled union"),
         }
     }
 
-    /// Empty `allow_net` on bash collapses to Disabled for that caller, but
-    /// `run_code` still pushes the union to Enabled (full outbound).
+    /// No config input can reach the `Enabled { allow_net: [] }` full-outbound
+    /// sentinel. A bare `"*"` and a `"0.0.0.0/0"` entry are passed through as
+    /// ordinary boxlite patterns — each yields a *scoped* `Enabled` carrying
+    /// exactly the operator's entries, never an empty list.
     #[test]
-    fn fuses_empty_bash_allowlist_as_disabled_caller() {
-        let bash = BashSandboxConfig::builder().allow_net(vec![]).build();
-        match fused_network_policy(&cfg(Some(bash))) {
-            NetworkPolicy::Enabled { allow_net } => assert!(allow_net.is_empty()),
-            NetworkPolicy::Disabled => panic!("run_code should keep network up"),
+    fn no_config_input_yields_empty_allowlist_enabled() {
+        for entry in ["*", "0.0.0.0/0"] {
+            match fused_network_policy(&cfg(Some(run_code(&[entry])), None)) {
+                NetworkPolicy::Enabled { allow_net } => {
+                    assert_eq!(
+                        allow_net,
+                        vec![entry.to_owned()],
+                        "entry must pass through verbatim, never expand to all-hosts"
+                    );
+                    assert!(
+                        !allow_net.is_empty(),
+                        "the empty-list full-outbound sentinel must be unreachable"
+                    );
+                }
+                NetworkPolicy::Disabled => panic!("a non-empty allow-list must stay Enabled"),
+            }
         }
     }
 }

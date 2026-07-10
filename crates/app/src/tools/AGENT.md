@@ -42,13 +42,16 @@ isolation.
   `<workspace>/x` → guest `/workspace/x`. Out-of-workspace paths hit a
   hard error rather than silently being routed through approval; the
   guest has no mount for them. See `bash.rs::translate_cwd`.
-- **Network policy is fused, not per-call.** Sandbox-using tools share a
-  single per-session VM, which carries a single network policy. The
-  effective policy is the union (most-permissive) across all
-  sandbox-using tools — see
+- **Network policy is fused, not per-call, and default-deny.**
+  Sandbox-using tools share a single per-session VM carrying a single
+  network policy — the union (most-permissive) across all sandbox-using
+  tools. Both `bash` and `run_code` are config-driven and default-deny:
+  an absent block or empty `allow_net` contributes no network, so untrusted
+  `run_code` gets zero egress unless the operator enumerates hosts. No
+  config input yields full outbound (`Enabled { allow_net: [] }`) — see
   `crates/app/src/sandbox.rs::fused_network_policy` and
-  `crates/rara-sandbox/AGENT.md` (Network policy fusion). Do not pass a
-  per-call `NetworkPolicy` to `sandbox_for_session`.
+  `crates/rara-sandbox/AGENT.md` (Network policy fusion) (#2216). Do not
+  pass a per-call `NetworkPolicy` to `sandbox_for_session`.
 - **`Sandbox` is single-owner; concurrent tool calls in the same session
   serialise on `Arc<tokio::Mutex<Sandbox>>`.** Tools must hold the lock
   for the whole exec; do not split into "lock — drop — re-lock to read

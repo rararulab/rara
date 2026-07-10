@@ -49,9 +49,13 @@ pub struct SandboxConfig {
 
     /// Network policy forwarded to [`boxlite::BoxOptions::network`].
     ///
-    /// Defaults to [`NetworkPolicy::Enabled`] with an empty allow-list, which
-    /// matches boxlite's own default and preserves the historical `run_code`
-    /// behavior of full outbound access.
+    /// Defaults to [`NetworkPolicy::Disabled`] — safe-by-default. This
+    /// deliberately diverges from boxlite's own default (`Enabled` with an
+    /// empty allow-list = full outbound): a `SandboxConfig` that omits
+    /// `network` gets **no** egress, so a future builder that forgets to set
+    /// it cannot silently grant untrusted code full network access (#2216).
+    /// The rara app path always sets this explicitly via
+    /// `crates/app/src/sandbox.rs::fused_network_policy`.
     #[serde(default)]
     #[builder(default)]
     pub network: NetworkPolicy,
@@ -147,15 +151,13 @@ pub enum NetworkPolicy {
 }
 
 impl Default for NetworkPolicy {
-    /// Mirror boxlite's own [`NetworkSpec::default`](boxlite::NetworkSpec) —
-    /// network up, empty allow-list = full outbound. Required so
-    /// `#[serde(default)]` on [`SandboxConfig::network`] works when YAML
-    /// omits the field; preserves `run_code`'s historical behavior.
-    fn default() -> Self {
-        Self::Enabled {
-            allow_net: Vec::new(),
-        }
-    }
+    /// Safe-by-default: no network. This **diverges** from boxlite's own
+    /// [`NetworkSpec::default`](boxlite::NetworkSpec) (`Enabled` with an empty
+    /// allow-list = full outbound) on purpose — a config that omits `network`
+    /// must not silently grant untrusted code egress (#2216). Required so
+    /// `#[serde(default)]` on [`SandboxConfig::network`] works when YAML omits
+    /// the field.
+    fn default() -> Self { Self::Disabled }
 }
 
 #[cfg(test)]
@@ -163,17 +165,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sandbox_config_defaults_match_boxlite() {
+    fn network_policy_default_is_disabled() {
+        // A SandboxConfig that omits `network` is safe-by-default: no egress.
         let cfg = SandboxConfig::builder()
             .rootfs_image("alpine:latest".to_owned())
             .build();
 
         assert!(cfg.volumes.is_empty());
         assert!(cfg.working_dir.is_none());
-        match cfg.network {
-            NetworkPolicy::Enabled { allow_net } => assert!(allow_net.is_empty()),
-            NetworkPolicy::Disabled => panic!("default network must be Enabled"),
-        }
+        assert!(
+            matches!(cfg.network, NetworkPolicy::Disabled),
+            "default network must be Disabled (safe-by-default), not full outbound"
+        );
+
+        // And the Default impl itself diverges from boxlite for safety.
+        assert!(matches!(NetworkPolicy::default(), NetworkPolicy::Disabled));
     }
 
     #[test]
