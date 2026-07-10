@@ -16,7 +16,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, PanelLeft } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
@@ -88,6 +88,10 @@ export default function Chat() {
   // Lazy initializer reads localStorage exactly once on mount; the
   // useEffect below mirrors the React state back to storage on change.
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
+  // Under `prefers-reduced-motion`, collapse the shared spring to an
+  // instant transition — layout still updates, it just does not spring.
+  const reduceMotion = useReducedMotion();
+  const spring = reduceMotion ? { duration: 0 } : SPRING;
 
   useEffect(() => {
     try {
@@ -191,7 +195,7 @@ export default function Chat() {
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: 280, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
-              transition={SPRING}
+              transition={spring}
               className="hidden shrink-0 overflow-hidden border-r border-border md:block"
             >
               <div className="h-full w-[280px]">
@@ -220,7 +224,7 @@ export default function Chat() {
         <motion.main
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ ...SPRING, delay: 0.1 }}
+          transition={{ ...spring, delay: 0.1 }}
           className="flex flex-1 min-w-0 min-h-0 flex-col p-3"
         >
           {sidebarCollapsed && (
@@ -279,7 +283,7 @@ export default function Chat() {
             // sidebar + main per principle #5.
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ ...SPRING, delay: 0.2 }}
+            transition={{ ...spring, delay: 0.2 }}
             className="hidden w-[320px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border p-3 lg:flex"
           >
             <div>

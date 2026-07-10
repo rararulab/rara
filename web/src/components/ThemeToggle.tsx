@@ -15,7 +15,7 @@
  */
 
 import { Monitor, Moon, Sun } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 import { Button } from '@/components/ui/button';
 import { useTheme, type Theme } from '@/hooks/use-theme';
@@ -41,6 +41,9 @@ const LABEL_MAP: Record<Theme, string> = {
 export default function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
   const Icon = ICON_MAP[theme];
+  // Under `prefers-reduced-motion`, suppress (not delay) the icon-swap
+  // spring — the icon still swaps, it just does not scale/blur in.
+  const reduceMotion = useReducedMotion();
 
   return (
     <Button
@@ -61,7 +64,7 @@ export default function ThemeToggle() {
           initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
           animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
           exit={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-          transition={{ type: 'spring', duration: 0.3, bounce: 0 }}
+          transition={reduceMotion ? { duration: 0 } : { type: 'spring', duration: 0.3, bounce: 0 }}
           className="flex"
         >
           <Icon className="h-3.5 w-3.5" />

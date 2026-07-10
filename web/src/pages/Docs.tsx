@@ -32,7 +32,7 @@ function DocsCard({ title, description, href, icon, badge }: DocsCardProps) {
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="group block rounded-2xl border border-border/70 bg-background/55 p-5 transition-all hover:-translate-y-0.5 hover:border-primary/20 hover:bg-background/80 hover:shadow-md md:p-6"
+      className="group block rounded-2xl border border-border/70 bg-background/55 p-5 transition-[transform,border-color,background-color,box-shadow] hover:border-primary/20 hover:bg-background/80 [@media(hover:hover)_and_(pointer:fine)]:hover:-translate-y-0.5 [@media(hover:hover)_and_(pointer:fine)]:hover:shadow-md md:p-6"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/15 bg-primary/8 text-primary">
