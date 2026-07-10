@@ -16,19 +16,16 @@ const (
 	arm64Runner = "ubuntu-24.04-arm"
 	arm64Target = "aarch64-unknown-linux-gnu"
 
-	// The self-hosted ARC fleet is gone (#2166); any job targeting it
-	// queues for 24h and is cancelled by GitHub. It must never appear in
-	// a workflow that a required merge-gate check depends on.
-	retiredRunner = "arc-runner-set"
+	// The self-hosted ARC fleet came back online 2026-07-11 and is the
+	// Rust merge-gate runner again (#2226). #2166 had moved the gate to
+	// GitHub-hosted runners after arc went away ~2026-05-08, but the
+	// GitHub-hosted arm64 pool then hung the gate systematically. Lock
+	// rust.yml to reference this runner so a silent switch back to a hung
+	// GitHub-hosted runner is caught. NOTE: this reverses #2166's earlier
+	// "arc-runner-set is retired, never reference it" invariant on the
+	// deliberate premise correction that the fleet is no longer retired.
+	rustGateRunner = "arc-runner-set"
 )
-
-// gateWorkflows are the workflows whose jobs feed the required
-// branch-protection checks (Rust Success / Lint Success).
-var gateWorkflows = []string{
-	".github/workflows/ci.yml",
-	".github/workflows/rust.yml",
-	".github/workflows/lint.yml",
-}
 
 // Cmd returns the "check-ci-runners" command.
 func Cmd() *cli.Command {
@@ -47,19 +44,21 @@ func runCheck() error {
 		return err
 	}
 
+	// arm64 *release-artifact* invariants — unaffected by the CI merge-gate
+	// runner switch. cargo-dist still cross-builds the aarch64-linux binary
+	// (release.yml, push/tag only) and .cargo/config.toml carries its
+	// warnings-as-errors stanza.
 	if err := checkCargoDist(filepath.Join(root, "Cargo.toml")); err != nil {
-		return err
-	}
-	if err := checkContains(filepath.Join(root, ".github/workflows/rust.yml"), []byte(arm64Runner)); err != nil {
 		return err
 	}
 	if err := checkContains(filepath.Join(root, ".cargo/config.toml"), []byte("[target."+arm64Target+"]")); err != nil {
 		return err
 	}
-	for _, wf := range gateWorkflows {
-		if err := checkNotContains(filepath.Join(root, wf), []byte(retiredRunner)); err != nil {
-			return err
-		}
+	// Merge-gate runner invariant: the Rust gate must run on the restored
+	// self-hosted arc-runner-set fleet (#2226), not a GitHub-hosted runner
+	// whose arm64 pool hung the gate.
+	if err := checkContains(filepath.Join(root, ".github/workflows/rust.yml"), []byte(rustGateRunner)); err != nil {
+		return err
 	}
 
 	fmt.Println("CI runner checks passed.")
@@ -119,26 +118,6 @@ func checkContains(path string, needle []byte) error {
 	}
 	if !bytes.Contains(data, needle) {
 		return fmt.Errorf("%s must contain %q", path, needle)
-	}
-	return nil
-}
-
-// checkNotContains fails when any non-comment line of the file references
-// the needle. YAML comment lines are skipped so workflows can still explain
-// WHY the retired runner must not come back.
-func checkNotContains(path string, needle []byte) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	for _, line := range bytes.Split(data, []byte("\n")) {
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) == 0 || trimmed[0] == '#' {
-			continue
-		}
-		if bytes.Contains(trimmed, needle) {
-			return fmt.Errorf("%s must not reference %q (retired runner fleet, see #2166)", path, needle)
-		}
 	}
 	return nil
 }

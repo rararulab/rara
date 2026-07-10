@@ -40,15 +40,20 @@ func TestCargoDistBuildsLinuxArm64OnArmRunner(t *testing.T) {
 	}
 }
 
-func TestRustWorkflowRunsOnX64AndArm64Linux(t *testing.T) {
+func TestRustGateRunsOnArcRunnerSet(t *testing.T) {
 	data := readRepoFile(t, ".github/workflows/rust.yml")
 
 	text := string(data)
-	if !strings.Contains(text, linuxArm64Runner) {
-		t.Fatalf("rust.yml does not mention runner %q", linuxArm64Runner)
+	// The Rust merge gate returned to the restored self-hosted fleet
+	// (#2226); rust.yml must reference it so a silent switch back to a
+	// GitHub-hosted runner (whose arm64 pool hung the gate) is caught.
+	if !strings.Contains(text, rustGateRunner) {
+		t.Fatalf("rust.yml must run the Rust gate on %q", rustGateRunner)
 	}
-	if !strings.Contains(text, "${{ matrix.runner }}") {
-		t.Fatalf("rust.yml should use matrix.runner for Rust jobs")
+	// The GitHub-hosted x64+arm64 runner matrix (the #2226 hang source) is
+	// gone; the gate is single-runner on arc-runner-set.
+	if strings.Contains(text, "${{ matrix.runner }}") {
+		t.Errorf("rust.yml still uses a runner matrix; the Rust gate must be single-runner on %q (#2226)", rustGateRunner)
 	}
 }
 
@@ -102,19 +107,4 @@ func containsAny(items []any, needle string) bool {
 		}
 	}
 	return false
-}
-
-func TestGateWorkflowsDoNotTargetRetiredRunner(t *testing.T) {
-	for _, wf := range gateWorkflows {
-		data := readRepoFile(t, wf)
-		for _, line := range strings.Split(string(data), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-				continue // comments may explain why the runner is retired
-			}
-			if strings.Contains(trimmed, retiredRunner) {
-				t.Errorf("%s references retired runner %q — gate jobs would queue forever (#2166)", wf, retiredRunner)
-			}
-		}
-	}
 }

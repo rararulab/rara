@@ -26,9 +26,11 @@ defaults:
 permissions:
   contents: read
 
-# GitHub-hosted runners only — see the note in rust.yml: the self-hosted
-# `arc-runner-set` fleet is gone, and it must not appear in any job the
-# `Lint Success` required check depends on (#2166).
+# Lint jobs run on GitHub-hosted runners. Unlike rust.yml's compile-heavy
+# gate, these are light (fmt/proto/go/zig/ratchet) and were never the arm64
+# hang source, so they stay GitHub-hosted even though the Rust gate returned
+# to the restored `arc-runner-set` fleet (#2226). See rust.yml's top note for
+# the runner-policy history.
 jobs:
   rust-format:
     name: Rust Format

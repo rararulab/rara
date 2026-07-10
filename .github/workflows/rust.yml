@@ -44,29 +44,29 @@ defaults:
 permissions:
   contents: read
 
-# All jobs run on GitHub-hosted runners. The self-hosted `arc-runner-set`
-# fleet no longer exists (gone since ~2026-05-08); jobs targeting it queued
-# for 24h and were cancelled by GitHub, so `arc-runner-set` must NOT appear
-# in any job a required check `needs` (#2166). Re-adding an ARC leg once the
-# fleet returns is a follow-up — keep it out of the gate aggregate.
+# The Rust merge gate (clippy/test/docs) runs on the self-hosted
+# `arc-runner-set` fleet again. That fleet went away ~2026-05-08 and #2166
+# moved the gate to GitHub-hosted runners (x64 + `ubuntu-24.04-arm` arm64
+# matrix); on 2026-07-10 the GitHub-hosted arm64 pool hung systematically
+# (`Test (linux-arm64)` stuck 37–51min in `Run tests` on unrelated
+# branches, x64 green in ~6min). `arc-runner-set` came back online
+# 2026-07-11, so the gate returns to it — x64-only, dropping the
+# GitHub-hosted arm64 leg that was the hang source (#2226). `devtool
+# check-ci-runners` now locks this posture (rust.yml MUST reference
+# `arc-runner-set`) so a silent switch back to a hung GitHub-hosted runner
+# is caught. The aarch64-linux *release* artifact (cargo-dist in
+# release.yml) is unaffected and still builds on a GitHub-hosted arm runner.
 #
-# `.cargo/config.toml` forces `linker = "clang"` + `-fuse-ld=mold` for
-# x86_64-unknown-linux-gnu, and GitHub-hosted images do not bake mold
-# (the arc image did, #1942) — so the x64 legs install mold + clang
-# explicitly before any cargo invocation.
+# `setup-rara-build` + the cargo-nextest install are kept defensively: the
+# arc image historically baked diesel headers / protoc / zig / mold /
+# nextest, but rather than assume, we install and let a green arc run
+# confirm redundancy before pruning. `.cargo/config.toml` still forces
+# `linker = "clang"` + `-fuse-ld=mold` for x86_64-unknown-linux-gnu.
 jobs:
   clippy:
-    name: Clippy (${{ matrix.arch }})
+    name: Clippy
     if: ${{ inputs.run }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: linux-x64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            runner: ubuntu-24.04-arm
+    runs-on: arc-runner-set
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
@@ -76,9 +76,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Single source of truth for the system toolchain the retired arc
-      # image implicitly provided (diesel headers, protoc, zig, mold) —
-      # see .github/actions/setup-rara-build/action.yml (#2166).
+      # System toolchain (diesel headers, protoc, zig, mold). Kept
+      # defensively while the gate moves back to arc-runner-set — see
+      # top-of-file note; prune once a green arc run proves it redundant.
       - name: Setup rara build environment
         uses: ./.github/actions/setup-rara-build
 
@@ -89,17 +89,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
   test:
-    name: Test (${{ matrix.arch }})
+    name: Test
     if: ${{ inputs.run }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: linux-x64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            runner: ubuntu-24.04-arm
+    runs-on: arc-runner-set
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
@@ -109,16 +101,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # Single source of truth for the system toolchain the retired arc
-      # image implicitly provided (diesel headers, protoc, zig, mold) —
-      # see .github/actions/setup-rara-build/action.yml (#2166).
+      # System toolchain (diesel headers, protoc, zig, mold). Kept
+      # defensively while the gate moves back to arc-runner-set — see
+      # top-of-file note; prune once a green arc run proves it redundant.
       - name: Setup rara build environment
         uses: ./.github/actions/setup-rara-build
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
-      # The old arc image had nextest baked in; GitHub-hosted images do not.
+      # Kept defensively (the arc image historically baked nextest in).
       # `.config/nextest.toml` profile `ci` exists since #1912.
       - name: Install cargo-nextest
         uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2
@@ -136,17 +128,9 @@ jobs:
         run: cargo run -p rara-cli -- setup boxlite --check
 
   docs:
-    name: Documentation (${{ matrix.arch }})
+    name: Documentation
     if: ${{ inputs.run }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: linux-x64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            runner: ubuntu-24.04-arm
+    runs-on: arc-runner-set
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
@@ -156,9 +140,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Single source of truth for the system toolchain the retired arc
-      # image implicitly provided (diesel headers, protoc, zig, mold) —
-      # see .github/actions/setup-rara-build/action.yml (#2166).
+      # System toolchain (diesel headers, protoc, zig, mold). Kept
+      # defensively while the gate moves back to arc-runner-set — see
+      # top-of-file note; prune once a green arc run proves it redundant.
       - name: Setup rara build environment
         uses: ./.github/actions/setup-rara-build
 
