@@ -1,54 +1,51 @@
-# Verification report — issue #2218 — PASS
+# Verification report — issue #2224 — VERDICT: PASS
 
-- **base_sha:** `b593f58196587cee98fbd5bb025360be81af7fea`
-- **head_sha:** `9958562da3819ca5c8db3134445337c10bac3921`
-- **lane:** 2 (chore, `ui`)
-- **score_authority:** verifier — implementer evidence not read (`self_check_only`)
+chore(site): honor prefers-reduced-motion + motion polish on landing page
+
+- **base_sha:** `682da7b47da16e1fb86b8fdde2e1c674f92c7b07`
+- **head_sha:** `b1aaead8c522a83a5f2a9f05f5c2b44469bd130b`
+- **lane:** 2 (chore)
+- **score_authority:** verifier
+- **implementer_evidence:** self_check_only (not read)
 
 ## Scope check
-`git diff --stat origin/main..HEAD` touches only `web/src/` app code (ThemeToggle.tsx; ui/{alert-dialog,button,command,dialog,select,sheet,tabs}.tsx; index.css; pages/{Chat,Docs}.tsx). No `web/src/vendor/craft-ui/**` modified. No `crates/**`. Working tree clean.
+`git diff --stat origin/main..HEAD`: 3 files, +95/−129 — `site/src/pages/index.astro` (+103/−8), deleted `site/src/components/Features.astro` (−75) + `Typewriter.astro` (−46).
+- Touches ONLY `site/` — no `web/**`, no `crates/**`. PASS.
+- `site/package-lock.json` unchanged; no `site/bun.lock` committed. PASS.
+- `grep -rn "Features\|Typewriter" site/src` → NO REFS. PASS.
 
-## (a) Quality gate from clean state — all green
-- `bun run typecheck` (`tsc -b --noEmit`) → EXIT 0
-- `bun run lint` (`eslint .`) → EXIT 0
-- `bun run build` (`tsc -b && vite build`) → EXIT 0, `✓ built in 10.39s` (only the pre-existing chunk-size warning)
+## (a) Quality gate from clean state
+- `cd site && bun install` → no changes
+- `cd site && bun run build` → astro build: 1 page built, "Complete!" (exit 0)
+- `prek run --all-files` → all hooks Passed
+Only build warning is an upstream `@astrojs/internal-helpers` node_modules notice — unrelated.
 
-## (b) Issue Verify
-`cd web && bun run build` → passed above.
+## (b) Lane-2 Verify command
+`cd site && bun run build` → SUCCESS (orphan deletions did not break the static build).
 
-## Core acceptance — the previously-DEAD plugin is now live
-`index.css` adds `@plugin "tailwindcss-animate";`. The built bundle `dist/assets/index-C_e3-Owx.css` now emits what was absent at base: `@keyframes enter`, `@keyframes exit`, `.animate-in{animation-name:enter}`, `.animate-out[data-state=closed]{animation-name:exit}`.
+## (c)/(d) Cold-boot + real-browser drive
+Cold-booted `bun run preview` (http://localhost:4321/rara). Playwright headless Chromium, `emulateMedia({ reducedMotion })`, viewport 1280×800. "Animating" = differing `canvas.toDataURL()` SHA-256 frame hashes; "static" = identical hashes.
 
-## (c)/(d) Runtime measurement (real Chromium via Playwright, real built CSS + real running app)
+| Surface | Mode | Metric | Observed | Expected | Result |
+|---|---|---|---|---|---|
+| Hero `c0` | normal | distinct/5 (mouse-move) | 5 | >1 | PASS |
+| Kernel `c1` | normal | distinct/5 | 5 | >1 | PASS |
+| `.scroll-hint` | normal | `animation-name` | `bob` | `bob` | PASS |
+| Hero `c0` | reduce | distinct/6 | 1 | 1 | PASS |
+| Kernel `c1` | reduce | distinct/5 | 1 | 1 | PASS |
+| Kernel `c1` | reduce | non-BG ink px | 347 | >0 | PASS |
+| Kernel `c1` | reduce | screenshot | dashed kernel ring + 6 labeled agents at rest on evenly-spaced orbits — deliberate arrangement, not frozen mid-explosion | deliberate + legible | PASS |
+| `.scroll-hint` | reduce | `animation-name` | `none` | `none` | PASS |
+| All 4 panels text | reduce | screenshot | fully legible | legible | PASS |
 
-NORMAL motion (fine pointer):
-
-| Surface | measured | verdict |
-|---|---|---|
-| Button `transition-property` | `color, background-color, box-shadow, transform` (not `all`) | PASS |
-| Button `:active` (CDP forced pseudo) | `scale: 0.97` | PASS |
-| Select | `animation-name: enter`; `transform-origin` consumes `--radix-select-content-transform-origin` | PASS |
-| Dialog open / closed | `enter` @ 0.2s / `exit` @ 0.15s (exit faster) | PASS |
-| AlertDialog | same `duration-200`/`duration-150` split | PASS |
-| Sheet open / closed | `enter` @ 0.25s `cubic-bezier(0.22,1,0.36,1)` (was 0.5s ease-in-out) / `exit` @ 0.15s | PASS |
-| Command palette | `enter` @ 0s (instant) | PASS |
-| Docs card hover (fine) | `translate: 0px -1.875px` (lift applies) | PASS |
-
-Real running app (Vite :51733): first live `<button>` computed `transition-property = color, background-color, box-shadow, transform` @ 0.15s — the primitive change is live in the real app, not just the harness.
-
-## Probes (e)
-
-| Probe | observed | verdict |
-|---|---|---|
-| `prefers-reduced-motion: reduce` | Select/Dialog/Sheet all `animation-name: none`, `0s`; Button transition retained (transition ≠ animation) | PASS |
-| coarse pointer / touch (`hasTouch,isMobile`) | `(hover:hover) and (pointer:fine)` = false; docs hover `translate: none` — no lift, no stuck hover | PASS |
-| CJK dialog body (long 中文 in `max-w-lg`) | scrollWidth 478 == clientWidth 478, `withinViewport: true`, wraps; `animation-name: enter` | PASS |
-
-Interruptibility (rapid open/close) is Radix Presence mount/unmount behavior, untouched by this PR; exit is now faster (0.15s), only shrinking any stuck-state window — no regression introduced.
+### Probes
+1. **Live toggle → reduce, NO reload:** `c1` distinct 4→1 (identical to fresh-reduced static frame); hero also went static. PASS.
+2. **Live toggle back → no-preference, NO reload:** `c1` distinct=5, motion resumed (bi-directional). PASS.
+3. **Orphan deletion + narrow viewport under reduce:** build succeeds, no references remain, copy legible at 420×720. PASS.
 
 ## Transition matrix
-- **fail_to_pass:** at base_sha the Radix Content enter/exit animations emitted no CSS (plugin unregistered → keyframes/utilities absent); at head_sha they emit and play at runtime (measured `animation-name: enter/exit`). Plus: Button `:active` scale 0.97 + explicit transition list; Select honors trigger origin; Dialog/AlertDialog exit < enter; Sheet ease-out sub-300ms; Command instant; reduced-motion suppresses entrances; coarse-pointer suppresses docs lift.
-- **pass_to_fail: 0** — no regressions.
+- **fail_to_pass:** at base_sha the page ignored `prefers-reduced-motion` entirely; at head_sha the hero physics/lens, kernel orbit, scroll-slide, and `bob` are all suppressed under reduce and content stays legible.
+- **pass_to_fail:** 0. Normal-motion behavior fully preserved.
 
 ## Verdict
-PASS — plugin registered and every targeted surface's motion / press / reduced-motion behavior confirmed at runtime by measured computed styles; gate green from clean state; craft-ui boundary respected; no regressions. No repair round needed.
+PASS — build + prek green from clean state; scope confined to `site/`, no stray lockfiles, no orphan imports; real-browser cold-boot proves normal motion animates, reduced motion is static + legible across all four panels, and the live `matchMedia` `change` listener stops and resumes motion bi-directionally without reload. No repair round needed.

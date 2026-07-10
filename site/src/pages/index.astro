@@ -21,7 +21,7 @@ import Base from '../layouts/Base.astro';
 <style>
   .gh-corner {
     position: fixed; top: 1.25rem; right: 1.25rem; z-index: 10;
-    color: var(--green-dim); transition: color 0.2s;
+    color: var(--green-dim); transition: color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .gh-corner:hover { color: var(--rose); }
 
@@ -37,7 +37,7 @@ import Base from '../layouts/Base.astro';
     position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
     color: var(--green-dim); font-size: 1.2rem; z-index: 10;
     animation: bob 2s ease-in-out infinite; opacity: 0.6;
-    transition: opacity 0.4s; pointer-events: none;
+    transition: opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1); pointer-events: none;
   }
   .scroll-hint.hidden { opacity: 0; }
 
@@ -45,13 +45,19 @@ import Base from '../layouts/Base.astro';
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
     text-align: center; padding: 0.6rem; font-size: 0.7rem;
     color: var(--green-dim); pointer-events: none;
-    opacity: 0; transition: opacity 0.4s;
+    opacity: 0; transition: opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .footer.visible { opacity: 1; }
 
   @keyframes bob {
     0%, 100% { transform: translateX(-50%) translateY(0); }
     50% { transform: translateX(-50%) translateY(8px); }
+  }
+
+  /* Vestibular safety: kill the perpetual bob loop under reduced motion.
+     The canvas panels are gated in the render loop (see the `reduced` flag). */
+  @media (prefers-reduced-motion: reduce) {
+    .scroll-hint { animation: none; }
   }
 </style>
 
@@ -343,6 +349,66 @@ import Base from '../layouts/Base.astro';
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   }
 
+  // Reduced-motion counterpart to drawKernelScene: a single intentional still
+  // frame — the kernel ring, faint orbit rings, and the full agent fleet at rest
+  // on evenly-spaced orbit positions. No rotation, no spawn/kill, no syscalls, no
+  // pulses. Reuses KERNEL_R / ORBIT_MIN / ORBIT_MAX / AGENT_LABELS; angular spacing
+  // and dot radius are geometric, not tunable knobs. The `agents`/`syscalls` state
+  // is left untouched (this function only paints).
+  function drawKernelStatic(ctx: CanvasRenderingContext2D, ga: number) {
+    const mid = (ORBIT_MIN + ORBIT_MAX) / 2;
+    const dotR = 6; // mid of the dynamic scene's 5–7 agent radius
+
+    // Kernel loop (dashed ring, fixed angle — no rotation)
+    ctx.globalAlpha = ga * 0.6;
+    ctx.strokeStyle = ROSE;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.arc(kernelCx, kernelCy, KERNEL_R, 0, Math.PI * 1.7);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Kernel label
+    ctx.globalAlpha = ga * 0.5;
+    ctx.fillStyle = ROSE;
+    ctx.font = `10px ${FAM}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('kernel', kernelCx, kernelCy);
+
+    // Orbit rings (faint)
+    ctx.globalAlpha = ga * 0.06;
+    ctx.strokeStyle = GREEN;
+    ctx.lineWidth = 1;
+    for (const d of [ORBIT_MIN, mid, ORBIT_MAX]) {
+      ctx.beginPath(); ctx.arc(kernelCx, kernelCy, d, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // Agents at rest — full fleet, evenly spaced, alternating orbit depth so the
+    // composition reads as layered rather than a flat single ring.
+    const dists = [mid, ORBIT_MAX, ORBIT_MIN];
+    const colors = [ROSE, GREEN, ROSE_DIM];
+    for (let i = 0; i < AGENT_LABELS.length; i++) {
+      const angle = (i / AGENT_LABELS.length) * Math.PI * 2;
+      const dist = dists[i % dists.length]!;
+      const x = kernelCx + Math.cos(angle) * dist;
+      const y = kernelCy + Math.sin(angle) * dist;
+
+      ctx.globalAlpha = ga;
+      ctx.fillStyle = colors[i % colors.length]!;
+      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill();
+
+      ctx.globalAlpha = ga * 0.6;
+      ctx.fillStyle = DIM;
+      ctx.font = `10px ${FAM}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(AGENT_LABELS[i]!, x, y + dotR + 4);
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  }
+
   // ── Build pages (bigger fonts) ──
   function buildP0() {
     const p = pgs[0]!; sizeCanvas(p);
@@ -470,6 +536,15 @@ import Base from '../layouts/Base.astro';
     p.glyphs = gs;
   }
 
+  // ── Reduced motion ──
+  // WCAG 2.1 SC 2.3.3: when the OS "reduce motion" preference is set, suppress
+  // all decorative motion (hero physics, cursor lens, kernel orbit, scroll slide,
+  // scroll-hint bob). The render loop reads `reduced` every frame, and the `change`
+  // listener flips it live so toggling the OS setting takes effect without reload.
+  const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let reduced = motionQuery.matches;
+  motionQuery.addEventListener('change', e => { reduced = e.matches; });
+
   // ── Rendering ──
   const REP_R = 120, REP_F = 8, SPR = 0.08, DMP = 0.75;
   const LENS_R = 110, MAX_SC = 1.5;
@@ -479,6 +554,12 @@ import Base from '../layouts/Base.astro';
     p.ctx.clearRect(0, 0, p.w, p.h);
     p.ctx.fillStyle = BG; p.ctx.fillRect(0, 0, p.w, p.h);
     for (const g of p.glyphs) {
+      // Reduced motion: no repulsion physics — draw each glyph at rest.
+      if (reduced) {
+        p.ctx.font = g.font; p.ctx.fillStyle = g.color; p.ctx.textBaseline = 'middle';
+        p.ctx.fillText(g.ch, g.baseX, g.baseY);
+        continue;
+      }
       const dx = g.x - p.mouse.x, dy = g.y - p.mouse.y;
       const d = Math.sqrt(dx * dx + dy * dy);
       if (d < REP_R && d > 0.1) {
@@ -497,19 +578,24 @@ import Base from '../layouts/Base.astro';
   function tickLens(p: Pg, time: number, showTree: boolean) {
     const tgt = p.reveal;
     const e = tgt * tgt * (3 - 2 * tgt);
-    const sy = (1 - e) * SLIDE;
+    // Reduced motion: opacity may fade, but no slide-in offset.
+    const sy = reduced ? 0 : (1 - e) * SLIDE;
     const a = e;
 
     p.ctx.clearRect(0, 0, p.w, p.h);
     p.ctx.fillStyle = BG; p.ctx.fillRect(0, 0, p.w, p.h);
 
-    if (showTree && kernelEnabled && a > 0.01) drawKernelScene(p.ctx, time, a);
+    if (showTree && kernelEnabled && a > 0.01) {
+      // Reduced motion: one intentional static frame instead of the live orbit.
+      if (reduced) drawKernelStatic(p.ctx, a);
+      else drawKernelScene(p.ctx, time, a);
+    }
     if (a < 0.01) return;
     p.ctx.globalAlpha = a;
 
     const mx = p.mouse.x, my = p.mouse.y;
-    // Cache: only compute lens if mouse is on canvas
-    const hasLens = mx > -999 && my > -999;
+    // Cache: only compute lens if mouse is on canvas (suppressed under reduced motion)
+    const hasLens = !reduced && mx > -999 && my > -999;
     for (const g of p.glyphs) {
       const dy2 = g.baseY + sy;
       let sc = 1, col = g.color;
@@ -556,11 +642,12 @@ import Base from '../layouts/Base.astro';
     prevTs = ts;
     const time = ts - startTime;
 
-    // Update reveals (frame-rate independent lerp)
+    // Update reveals (frame-rate independent lerp; instant under reduced motion)
     const revealRate = 1 - Math.pow(0.00003, dt);
     for (let i = 0; i < pgs.length; i++) {
       const p = pgs[i]!;
       const tgt = scrollIdx >= i - 0.3 ? 1 : 0;
+      if (reduced) { p.reveal = tgt; continue; }
       p.reveal += (tgt - p.reveal) * revealRate;
       if (Math.abs(p.reveal - tgt) < 0.002) p.reveal = tgt;
     }
