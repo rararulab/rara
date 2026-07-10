@@ -74,6 +74,9 @@ export interface FeedCatalogEntry {
   tags: string[];
   enabled: boolean;
   feed_id: string | null;
+  requires_configuration: boolean;
+  setup_hint: string | null;
+  transport_template: Record<string, unknown> | null;
 }
 
 // ---------------------------------------------------------------------------

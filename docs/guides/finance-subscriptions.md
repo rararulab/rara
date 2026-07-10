@@ -55,19 +55,26 @@ cargo test -p rara-trading --test timescale_container
 
 ## Operator setup
 
-The Settings → Data Feeds panel lists built-in official finance RSS sources
-under "Default finance sources". Enabling one creates or re-enables a
-deterministic data feed named `finance-{catalog_id}`; disabling it turns the
-feed off without deleting the config row. The same catalog is available through
-the authenticated admin API:
+The Settings → Data Feeds panel lists built-in finance sources under "Default
+finance sources":
+
+- official RSS feeds that can be enabled immediately;
+- provider presets such as Binance and Longbridge that prefill a
+  `market_candle` configuration but still require an operator-managed endpoint
+  or credentials.
+
+Enabling a ready source creates or re-enables a deterministic data feed named
+`finance-{catalog_id}`; disabling it turns the feed off without deleting the
+config row. The same catalog is available through the authenticated admin API:
 
 - `GET /api/v1/data-feeds/catalog`
 - `POST /api/v1/data-feeds/catalog/{id}/enable`
 - `POST /api/v1/data-feeds/catalog/{id}/disable`
 
-Built-in sources are limited to feeds that can run without operator secrets or
-provider-specific adapters. Market-candle feeds still require an
-operator-managed normalized endpoint.
+Built-in provider presets are not directly enabled by the catalog API. A direct
+enable attempt returns `400 Bad Request` until the operator supplies a complete
+feed configuration. Market-candle feeds still require an operator-managed
+normalized endpoint.
 
 Custom finance feeds can also be created through the authenticated admin API.
 Example payloads are documented in `config.example.yaml`.

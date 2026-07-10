@@ -51,6 +51,9 @@ interface FeedCatalogEntry {
   tags: string[];
   enabled: boolean;
   feed_id: string | null;
+  requires_configuration: boolean;
+  setup_hint: string | null;
+  transport_template: Record<string, unknown> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +408,34 @@ test.describe('Data Feeds Management', () => {
           tags: ['finance', 'news', 'fed'],
           enabled: false,
           feed_id: null,
+          requires_configuration: false,
+          setup_hint: null,
+          transport_template: {
+            url: 'https://www.federalreserve.gov/feeds/press_all.xml',
+            interval_secs: 300,
+            headers: {},
+            max_entries_per_poll: 50,
+          },
+        },
+        {
+          id: 'binance-market-candles',
+          name: 'Binance Market Candles',
+          description: 'Preset for Binance OHLCV ingestion.',
+          feed_type: 'market_candle',
+          tags: ['finance', 'market-data', 'crypto', 'binance'],
+          enabled: false,
+          feed_id: null,
+          requires_configuration: true,
+          setup_hint: 'Connect a normalized Binance candle endpoint before enabling.',
+          transport_template: {
+            url: '',
+            interval_secs: 60,
+            headers: {},
+            venue: 'binance',
+            symbols: [],
+            timeframes: [],
+            max_candles_per_poll: 1000,
+          },
         },
       ],
     });
@@ -417,6 +448,47 @@ test.describe('Data Feeds Management', () => {
 
     await expect(page.getByText('finance-fed-press-releases')).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible();
+  });
+
+  test('provider preset opens a prefilled market candle form', async ({ page }) => {
+    await setupRoutes(page, {
+      feeds: [],
+      events: [],
+      catalog: [
+        {
+          id: 'binance-market-candles',
+          name: 'Binance Market Candles',
+          description: 'Preset for Binance OHLCV ingestion.',
+          feed_type: 'market_candle',
+          tags: ['finance', 'market-data', 'crypto', 'binance'],
+          enabled: false,
+          feed_id: null,
+          requires_configuration: true,
+          setup_hint: 'Connect a normalized Binance candle endpoint before enabling.',
+          transport_template: {
+            url: '',
+            interval_secs: 60,
+            headers: {},
+            venue: 'binance',
+            symbols: [],
+            timeframes: [],
+            max_candles_per_poll: 1000,
+          },
+        },
+      ],
+    });
+    await goToDataFeeds(page);
+
+    await expect(page.getByText(/^Provider presets$/)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Binance Market Candles')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Use template' }).click();
+
+    await expect(page.getByText('New Data Feed')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('input[placeholder="e.g. github-rara"]')).toHaveValue(
+      'finance-binance-market-candles',
+    );
+    await expect(page.locator('input[placeholder="binance"]')).toHaveValue('binance');
   });
 
   // -----------------------------------------------------------------------

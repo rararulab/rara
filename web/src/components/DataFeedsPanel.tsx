@@ -26,7 +26,7 @@ import {
   Radio,
   Trash2,
 } from 'lucide-react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 import {
   dataFeedsApi,
@@ -135,13 +135,15 @@ function StatusBadge({ status, enabled }: { status: DataFeedConfig['status']; en
   switch (status) {
     case 'running':
       return (
-        <Badge className="border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-400">
+        <Badge variant="outline" className="gap-1.5 text-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true" />
           Running
         </Badge>
       );
     case 'idle':
       return (
-        <Badge className="border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-400">
+        <Badge variant="outline" className="gap-1.5 text-muted-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" aria-hidden="true" />
           Idle
         </Badge>
       );
@@ -534,13 +536,17 @@ function FeedFormDialog({
   open,
   onOpenChange,
   editFeed,
+  initialForm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editFeed?: DataFeedConfig | undefined;
+  initialForm?: FeedFormState | undefined;
 }) {
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<FeedFormState>(editFeed ? feedToForm(editFeed) : INITIAL_FORM);
+  const [form, setForm] = useState<FeedFormState>(
+    editFeed ? feedToForm(editFeed) : (initialForm ?? INITIAL_FORM),
+  );
   const [error, setError] = useState<string | null>(null);
 
   const isEdit = !!editFeed;
@@ -581,10 +587,16 @@ function FeedFormDialog({
 
   const saving = createMutation.isPending || updateMutation.isPending;
 
+  useEffect(() => {
+    if (!open) return;
+    setForm(editFeed ? feedToForm(editFeed) : (initialForm ?? INITIAL_FORM));
+    setError(null);
+  }, [open, editFeed, initialForm]);
+
   // Reset form when dialog opens with a new feed
   const handleOpenChange = (next: boolean) => {
     if (next) {
-      setForm(editFeed ? feedToForm(editFeed) : INITIAL_FORM);
+      setForm(editFeed ? feedToForm(editFeed) : (initialForm ?? INITIAL_FORM));
       setError(null);
     }
     onOpenChange(next);
@@ -975,7 +987,13 @@ function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () =
 // Feed List View
 // ---------------------------------------------------------------------------
 
-function FeedCatalogCard({ entries }: { entries: FeedCatalogEntry[] }) {
+function FeedCatalogCard({
+  entries,
+  onUseTemplate,
+}: {
+  entries: FeedCatalogEntry[];
+  onUseTemplate: (entry: FeedCatalogEntry) => void;
+}) {
   const queryClient = useQueryClient();
 
   const refresh = () => {
@@ -995,69 +1013,99 @@ function FeedCatalogCard({ entries }: { entries: FeedCatalogEntry[] }) {
 
   if (entries.length === 0) return null;
 
+  const readyEntries = entries.filter((entry) => !entry.requires_configuration);
+  const providerEntries = entries.filter((entry) => entry.requires_configuration);
+
+  const renderEntry = (entry: FeedCatalogEntry) => {
+    const pending =
+      (enableMutation.isPending && enableMutation.variables === entry.id) ||
+      (disableMutation.isPending && disableMutation.variables === entry.id);
+
+    return (
+      <div
+        key={entry.id}
+        className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{entry.name}</span>
+            <Badge variant="outline" className="text-xs">
+              {typeLabel(entry.feed_type)}
+            </Badge>
+            {entry.enabled && (
+              <Badge variant="secondary" className="text-xs text-foreground">
+                Enabled
+              </Badge>
+            )}
+            {entry.requires_configuration && (
+              <Badge variant="secondary" className="text-xs text-muted-foreground">
+                Requires config
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">{entry.description}</p>
+          {entry.setup_hint && <p className="text-xs text-muted-foreground">{entry.setup_hint}</p>}
+          <p className="text-[11px] text-muted-foreground">Tags: {entry.tags.join(' · ')}</p>
+        </div>
+        {entry.requires_configuration ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => onUseTemplate(entry)}
+          >
+            Use template
+          </Button>
+        ) : entry.enabled ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => disableMutation.mutate(entry.id)}
+            disabled={pending}
+          >
+            {pending ? 'Disabling...' : 'Disable'}
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => enableMutation.mutate(entry.id)}
+            disabled={pending}
+          >
+            {pending ? 'Enabling...' : 'Enable'}
+          </Button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="rounded-lg border bg-card">
       <div className="border-b px-4 py-3">
         <h3 className="text-sm font-semibold">Default finance sources</h3>
         <p className="text-xs text-muted-foreground">
-          Enable built-in official feeds without manually entering source URLs.
+          Official feeds can run immediately. Provider presets need your own endpoint or
+          credentials.
         </p>
       </div>
       <div className="divide-y">
-        {entries.map((entry) => {
-          const pending =
-            (enableMutation.isPending && enableMutation.variables === entry.id) ||
-            (disableMutation.isPending && disableMutation.variables === entry.id);
-
-          return (
-            <div
-              key={entry.id}
-              className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="min-w-0 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium">{entry.name}</span>
-                  <Badge variant="outline" className="text-xs">
-                    {typeLabel(entry.feed_type)}
-                  </Badge>
-                  {entry.enabled && (
-                    <Badge className="border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-400">
-                      Enabled
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">{entry.description}</p>
-                <div className="flex flex-wrap gap-1">
-                  {entry.tags.map((tag) => (
-                    <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-              {entry.enabled ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 shrink-0"
-                  onClick={() => disableMutation.mutate(entry.id)}
-                  disabled={pending}
-                >
-                  {pending ? 'Disabling...' : 'Disable'}
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  className="h-8 shrink-0"
-                  onClick={() => enableMutation.mutate(entry.id)}
-                  disabled={pending}
-                >
-                  {pending ? 'Enabling...' : 'Enable'}
-                </Button>
-              )}
+        {readyEntries.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
+              Ready to enable
             </div>
-          );
-        })}
+            {readyEntries.map(renderEntry)}
+          </div>
+        )}
+        {providerEntries.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
+              Provider presets
+            </div>
+            {providerEntries.map(renderEntry)}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1073,6 +1121,7 @@ function FeedListView({
   const queryClient = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [editFeed, setEditFeed] = useState<DataFeedConfig | undefined>();
+  const [draftForm, setDraftForm] = useState<FeedFormState | undefined>();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const catalogQuery = useQuery({
     queryKey: ['data-feed-catalog'],
@@ -1098,11 +1147,26 @@ function FeedListView({
 
   const handleEdit = (feed: DataFeedConfig) => {
     setEditFeed(feed);
+    setDraftForm(undefined);
     setFormOpen(true);
   };
 
   const handleNew = () => {
     setEditFeed(undefined);
+    setDraftForm(undefined);
+    setFormOpen(true);
+  };
+
+  const handleUseTemplate = (entry: FeedCatalogEntry) => {
+    setEditFeed(undefined);
+    setDraftForm({
+      name: `finance-${entry.id}`,
+      feed_type: entry.feed_type,
+      tags: entry.tags.join(', '),
+      transport: entry.transport_template ?? emptyTransport(entry.feed_type),
+      authType: 'none',
+      authFields: {},
+    });
     setFormOpen(true);
   };
 
@@ -1122,7 +1186,9 @@ function FeedListView({
         </Button>
       </div>
 
-      {catalogQuery.data && <FeedCatalogCard entries={catalogQuery.data} />}
+      {catalogQuery.data && (
+        <FeedCatalogCard entries={catalogQuery.data} onUseTemplate={handleUseTemplate} />
+      )}
 
       {/* Table */}
       {feeds.length === 0 ? (
@@ -1217,7 +1283,12 @@ function FeedListView({
       )}
 
       {/* Create/Edit Dialog */}
-      <FeedFormDialog open={formOpen} onOpenChange={setFormOpen} editFeed={editFeed} />
+      <FeedFormDialog
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        editFeed={editFeed}
+        initialForm={draftForm}
+      />
 
       {/* Delete Confirmation */}
       <Dialog

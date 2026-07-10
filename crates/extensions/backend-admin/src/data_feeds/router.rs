@@ -156,13 +156,16 @@ struct EventListResponse {
 /// Built-in feed catalog entry plus current materialized state.
 #[derive(Debug, Serialize)]
 struct FeedCatalogEntryResponse {
-    id:          String,
-    name:        String,
-    description: String,
-    feed_type:   FeedType,
-    tags:        Vec<String>,
-    enabled:     bool,
-    feed_id:     Option<String>,
+    id:                     String,
+    name:                   String,
+    description:            String,
+    feed_type:              FeedType,
+    tags:                   Vec<String>,
+    enabled:                bool,
+    feed_id:                Option<String>,
+    requires_configuration: bool,
+    setup_hint:             Option<String>,
+    transport_template:     Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +203,15 @@ async fn enable_catalog_feed(
     }
 
     let source = find_catalog_source(&id)?;
+    if !source.can_enable() {
+        return Err(ProblemDetails::bad_request(format!(
+            "catalog source requires configuration before it can be enabled: {id}"
+        )));
+    }
     let feed_name = source.feed_name();
+    let transport = source.transport.clone().ok_or_else(|| {
+        ProblemDetails::bad_request(format!("catalog source has no transport template: {id}"))
+    })?;
     let existing = state
         .svc
         .list_feeds()
@@ -215,7 +226,7 @@ async fn enable_catalog_feed(
             .name(feed_name)
             .feed_type(source.feed_type)
             .tags(source.tags)
-            .transport(source.transport)
+            .transport(transport)
             .maybe_auth(source.auth)
             .enabled(true)
             .status(FeedStatus::Idle)
@@ -230,7 +241,7 @@ async fn enable_catalog_feed(
             .name(feed_name)
             .feed_type(source.feed_type)
             .tags(source.tags)
-            .transport(source.transport)
+            .transport(transport)
             .maybe_auth(source.auth)
             .enabled(true)
             .status(FeedStatus::Idle)
@@ -733,13 +744,16 @@ fn catalog_response(feeds: &[DataFeedConfig]) -> Vec<FeedCatalogEntryResponse> {
             let feed_name = source.feed_name();
             let feed = feeds.iter().find(|feed| feed.name == feed_name);
             FeedCatalogEntryResponse {
-                id:          source.id,
-                name:        source.name,
-                description: source.description,
-                feed_type:   source.feed_type,
-                tags:        source.tags,
-                enabled:     feed.is_some_and(|feed| feed.enabled),
-                feed_id:     feed.map(|feed| feed.id.clone()),
+                id:                     source.id,
+                name:                   source.name,
+                description:            source.description,
+                feed_type:              source.feed_type,
+                tags:                   source.tags,
+                enabled:                feed.is_some_and(|feed| feed.enabled),
+                feed_id:                feed.map(|feed| feed.id.clone()),
+                requires_configuration: source.requires_configuration,
+                setup_hint:             source.setup_hint,
+                transport_template:     source.transport,
             }
         })
         .collect()
@@ -985,6 +999,16 @@ mod tests {
 
         assert!(ids.contains(&"fed-press-releases"));
         assert!(ids.contains(&"sec-press-releases"));
+        assert!(ids.contains(&"binance-market-candles"));
+
+        let binance = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "binance-market-candles")
+            .unwrap();
+        assert_eq!(binance["requires_configuration"], true);
+        assert_eq!(binance["feed_type"], "market_candle");
     }
 
     #[tokio::test]
@@ -1015,6 +1039,24 @@ mod tests {
         assert!(feed.tags.contains(&"finance".to_owned()));
         assert!(feed.tags.contains(&"news".to_owned()));
         assert!(feed.tags.contains(&"fed".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_enable_rejects_provider_preset_without_config() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/binance-market-candles/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
