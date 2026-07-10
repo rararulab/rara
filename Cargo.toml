@@ -184,7 +184,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "hostname",
 ] }
-md5 = "0.7"
+md5 = "0.8"
 moka = { version = "0.12", features = ["future"] }
 notify = "8"
 oauth2 = "5"
