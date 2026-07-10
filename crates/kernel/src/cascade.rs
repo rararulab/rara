@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(trace.summary.tool_call_count, 1);
         // First tick: user + assistant(empty skipped) + action + observation
         // Second tick: assistant thought
-        assert!(trace.ticks[1].entries[0].kind == CascadeEntryKind::Thought);
+        assert_eq!(trace.ticks[1].entries[0].kind, CascadeEntryKind::Thought);
     }
 
     #[test]

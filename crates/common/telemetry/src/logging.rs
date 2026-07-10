@@ -551,7 +551,7 @@ pub fn init_global_logging(
                 .unwrap_or_else(|e| {
                     panic!(
                         "initializing rolling file appender at {} failed: {}",
-                        &opts.dir, e
+                        opts.dir, e
                     )
                 });
             let (writer, guard) = tracing_appender::non_blocking(rolling_appender);
@@ -588,7 +588,7 @@ pub fn init_global_logging(
                 .unwrap_or_else(|e| {
                     panic!(
                         "initializing rolling file appender at {} failed: {}",
-                        &opts.dir, e
+                        opts.dir, e
                     )
                 });
             let (writer, guard) = tracing_appender::non_blocking(rolling_appender);
