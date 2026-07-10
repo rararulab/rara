@@ -95,6 +95,9 @@ use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
+use rara_trading::finance::tools::{
+    FinanceListSubscriptionsTool, FinanceSubscribeTool, FinanceUnsubscribeTool,
+};
 use read_file::ReadFileTool;
 use run_code::RunCodeTool;
 pub use run_code::SandboxCleanupHook;
@@ -161,6 +164,8 @@ pub struct ToolDeps {
     pub sandbox_config:        Option<crate::SandboxToolConfig>,
     /// Shared per-session sandbox map; the cleanup hook holds a clone.
     pub sandbox_map:           SandboxMap,
+    /// Finance information subscription registry.
+    pub finance_registry:      Arc<rara_trading::finance::registry::FinanceSubscriptionRegistry>,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -285,6 +290,10 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(WechatLoginConfirmTool::new()),
         // User interaction
         Arc::new(AskUserTool::new(deps.user_question_manager)),
+        // Finance information subscriptions
+        Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
+        Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
+        Arc::new(FinanceListSubscriptionsTool::new(deps.finance_registry)),
         // Artifacts (rich-content side panel — deferred tier)
         Arc::new(ArtifactsTool::new(deps.tape_service.clone())),
     ];

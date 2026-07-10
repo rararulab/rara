@@ -86,6 +86,12 @@ pub enum FeedType {
     WebSocket,
     /// Periodic HTTP GET — rara polls an external API at fixed intervals.
     Polling,
+    /// Periodic RSS/Atom/JSON Feed fetch — emits one normalised article event
+    /// per item.
+    Rss,
+    /// Periodic market candle fetch — emits one normalised closed-candle event
+    /// per bar.
+    MarketCandle,
 }
 
 // ---------------------------------------------------------------------------

@@ -158,3 +158,41 @@ impl FeedEventRow {
         })
     }
 }
+
+#[cfg(test)]
+#[derive(Default)]
+pub struct InMemoryFeedStore {
+    events: tokio::sync::RwLock<Vec<FeedEvent>>,
+}
+
+#[cfg(test)]
+#[async_trait]
+impl FeedStore for InMemoryFeedStore {
+    async fn append(&self, event: &FeedEvent) -> rara_kernel::Result<()> {
+        let mut events = self.events.write().await;
+        if !events.iter().any(|existing| existing.id == event.id) {
+            events.push(event.clone());
+        }
+        Ok(())
+    }
+
+    async fn query(&self, filter: FeedFilter) -> rara_kernel::Result<Vec<FeedEvent>> {
+        let events = self.events.read().await;
+        Ok(events
+            .iter()
+            .filter(|event| {
+                filter
+                    .source_name
+                    .as_ref()
+                    .is_none_or(|source| source == &event.source_name)
+                    && filter
+                        .since
+                        .as_ref()
+                        .is_none_or(|since| event.received_at >= *since)
+                    && filter.tags.iter().all(|tag| event.tags.contains(tag))
+            })
+            .take(filter.limit)
+            .cloned()
+            .collect())
+    }
+}

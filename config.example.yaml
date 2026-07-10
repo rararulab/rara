@@ -227,6 +227,34 @@ agents:
 #     sample_rate: 100  # Hz
 
 # ---------------------------------------------------------------------------
+# Data feeds — managed through authenticated /api/v1/data-feeds admin API
+# ---------------------------------------------------------------------------
+#
+# Example RSS/Atom finance source payload:
+#
+# feed_type: rss
+# tags: [finance, macro]
+# transport:
+#   url: "https://trusted-publisher.example/feed.xml"
+#   interval_secs: 300
+#   max_entries_per_poll: 20
+#
+# Example batched market-candle source payload:
+#
+# Production OHLCV history is durable only when RARA_MARKET_DATA_DATABASE_URL
+# points at a TimescaleDB/PostgreSQL database with TimescaleDB installed.
+#
+# feed_type: market_candle
+# tags: [finance, market-data, crypto]
+# transport:
+#   url: "https://trusted-market-data.example/candles/latest"
+#   interval_secs: 60
+#   venue: "binance"
+#   symbols: ["BTCUSDT", "ETHUSDT"]
+#   timeframes: ["15m", "1h"]
+#   max_candles_per_poll: 1000
+
+# ---------------------------------------------------------------------------
 # Optional integrations — remove or leave commented out if unused
 # ---------------------------------------------------------------------------
 

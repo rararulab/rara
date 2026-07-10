@@ -1,0 +1,32 @@
+[package]
+name = "rara-trading"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Trading and finance data-feed extension for rara"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+feed-rs = { workspace = true }
+jiff = { workspace = true }
+rara-kernel = { workspace = true }
+reqwest = { workspace = true }
+rust_decimal = { workspace = true }
+schemars = { workspace = true, features = ["uuid1"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx-core = { workspace = true }
+sqlx-postgres = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+rara-tool-macro = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+testcontainers = { workspace = true }

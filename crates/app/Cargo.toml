@@ -56,6 +56,7 @@ rara-stt = { workspace = true }
 rara-tts = { workspace = true }
 rara-skills.workspace = true
 rara-soul.workspace = true
+rara-trading.workspace = true
 rara-tool-macro.workspace = true
 fff-search = { workspace = true }
 fff-query-parser = { workspace = true }
@@ -64,6 +65,7 @@ fff-query-parser = { workspace = true }
 zlob = { workspace = true }
 regex.workspace = true
 reqwest = { workspace = true }
+rust_decimal.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
