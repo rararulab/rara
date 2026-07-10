@@ -57,7 +57,17 @@ type CommandDialogProps = {
 function CommandDialog({ children, open, onOpenChange, ...commandProps }: CommandDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="overflow-hidden p-0 shadow-lg sm:max-w-[640px]">
+      {/*
+       * Keyboard-summoned, high-frequency surface — collapse the inherited
+       * Dialog enter/exit duration to 0 so the palette appears and dismisses
+       * instantly (Emil: keyboard-initiated high-frequency actions get no
+       * animation). Both states must be state-scoped (`data-[state=*]:`)
+       * to match the specificity of the base DialogContent's
+       * `data-[state=open]:animate-in` / `data-[state=closed]:duration-150`
+       * — a bare `duration-0` (lower specificity) would lose and the
+       * palette would still animate at the plugin's 150ms default.
+       */}
+      <DialogContent className="overflow-hidden p-0 shadow-lg data-[state=open]:duration-0 data-[state=closed]:duration-0 sm:max-w-[640px]">
         {/* Visually-hidden title + description satisfy Radix's a11y
             requirement without imposing a visible header — the input
             itself is the label for sighted users. */}

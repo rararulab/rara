@@ -16,6 +16,7 @@
 
 @import 'tailwindcss';
 @plugin "@tailwindcss/typography";
+@plugin "tailwindcss-animate";
 @import 'highlight.js/styles/github.css' layer(base);
 /*
  * Vendored craft-agents-oss design tokens — sole source of truth for
