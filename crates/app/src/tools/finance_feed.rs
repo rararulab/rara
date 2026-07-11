@@ -42,6 +42,41 @@ const DEFAULT_COOLDOWN_SECS: u64 = 900;
 const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceListFeedSourcesParams {}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceEntry {
+    pub id:                     String,
+    pub name:                   String,
+    pub description:            String,
+    pub feed_type:              String,
+    pub tags:                   Vec<String>,
+    pub source_name:            String,
+    pub requires_configuration: bool,
+    pub can_enable:             bool,
+    pub setup_hint:             Option<String>,
+    pub runtime:                FinanceFeedSourceRuntime,
+    pub venue:                  Option<String>,
+    pub configured_symbols:     Vec<String>,
+    pub configured_timeframes:  Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceRuntime {
+    pub persisted:  bool,
+    pub feed_id:    Option<String>,
+    pub enabled:    bool,
+    pub running:    bool,
+    pub status:     Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceListFeedSourcesResult {
+    pub sources: Vec<FinanceFeedSourceEntry>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceEnableFeedSourceParams {
     /// Built-in source id from `finance_list_feed_sources`.
     pub catalog_source_id: String,
@@ -117,6 +152,22 @@ pub(super) enum FeedChange {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_list_feed_sources",
+    description = "List built-in finance data feed source catalog entries with current persisted \
+                   config and runtime status. Use this before enabling or subscribing to default \
+                   feeds such as Fed, SEC, Binance, or Longbridge. This is read-only and never \
+                   places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub(super) struct FinanceListFeedSourcesTool {
+    svc:      DataFeedSvc,
+    registry: Arc<DataFeedRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_enable_feed_source",
     description = "Enable one built-in finance feed source from finance_list_feed_sources. This \
                    persists a DataFeedConfig and optionally starts the runtime feed task. It only \
@@ -145,6 +196,12 @@ pub(super) struct FinanceSubscribeInstrumentsTool {
     finance_registry:   Arc<FinanceSubscriptionRegistry>,
 }
 
+impl FinanceListFeedSourcesTool {
+    pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
+        Self { svc, registry }
+    }
+}
+
 impl FinanceEnableFeedSourceTool {
     pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
         Self { svc, registry }
@@ -162,6 +219,30 @@ impl FinanceSubscribeInstrumentsTool {
             data_feed_registry,
             finance_registry,
         }
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceListFeedSourcesTool {
+    type Output = FinanceListFeedSourcesResult;
+    type Params = FinanceListFeedSourcesParams;
+
+    async fn run(
+        &self,
+        _params: FinanceListFeedSourcesParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceListFeedSourcesResult> {
+        let feeds = self.svc.list_feeds().await?;
+        Ok(FinanceListFeedSourcesResult {
+            sources: default_finance_feed_sources()
+                .into_iter()
+                .map(|source| {
+                    let source_name = source.feed_name();
+                    let persisted = feeds.iter().find(|feed| feed.name == source_name);
+                    feed_source_entry(source, persisted, self.registry.is_running(&source_name))
+                })
+                .collect(),
+        })
     }
 }
 
@@ -618,6 +699,59 @@ fn find_catalog_source(catalog_source_id: &str) -> anyhow::Result<DefaultFeedSou
         })
 }
 
+fn feed_source_entry(
+    source: DefaultFeedSource,
+    persisted: Option<&DataFeedConfig>,
+    running: bool,
+) -> FinanceFeedSourceEntry {
+    let source_name = source.feed_name();
+    let transport = persisted
+        .map(|feed| &feed.transport)
+        .or(source.transport.as_ref());
+    let can_enable = source.can_enable();
+    FinanceFeedSourceEntry {
+        id: source.id,
+        name: source.name,
+        description: source.description,
+        feed_type: source.feed_type.to_string(),
+        tags: source.tags,
+        source_name,
+        requires_configuration: source.requires_configuration,
+        can_enable,
+        setup_hint: source.setup_hint,
+        runtime: FinanceFeedSourceRuntime {
+            persisted: persisted.is_some(),
+            feed_id: persisted.map(|feed| feed.id.clone()),
+            enabled: persisted.is_some_and(|feed| feed.enabled),
+            running,
+            status: persisted.map(|feed| feed.status.to_string()),
+            last_error: persisted.and_then(|feed| feed.last_error.clone()),
+        },
+        venue: transport
+            .and_then(|value| value.get("venue"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        configured_symbols: transport
+            .map_or_else(Vec::new, |value| extract_string_array(value, "symbols")),
+        configured_timeframes: transport
+            .map_or_else(Vec::new, |value| extract_string_array(value, "timeframes")),
+    }
+}
+
+fn extract_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn config_from_source(
     source: &DefaultFeedSource,
     existing: Option<DataFeedConfig>,
@@ -677,6 +811,7 @@ mod tests {
 
     use super::{
         FeedChange, FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool,
+        FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
     };
 
@@ -700,6 +835,7 @@ mod tests {
     }
 
     async fn tool() -> (
+        FinanceListFeedSourcesTool,
         FinanceEnableFeedSourceTool,
         FinanceSubscribeInstrumentsTool,
         rara_backend_admin::data_feeds::DataFeedSvc,
@@ -717,6 +853,7 @@ mod tests {
         ));
         let finance_registry = Arc::new(FinanceSubscriptionRegistry::load(finance_path));
         (
+            FinanceListFeedSourcesTool::new(svc.clone(), registry.clone()),
             FinanceEnableFeedSourceTool::new(svc.clone(), registry.clone()),
             FinanceSubscribeInstrumentsTool::new(
                 svc.clone(),
@@ -756,8 +893,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_feed_sources_reports_catalog_and_absent_runtime_state() {
+        let (tool, _enable, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+
+        let result = tool
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+
+        let fed = result
+            .sources
+            .iter()
+            .find(|source| source.id == "fed-press-releases")
+            .expect("fed source should be listed");
+        assert_eq!(fed.source_name, "finance-fed-press-releases");
+        assert!(fed.can_enable);
+        assert!(!fed.runtime.persisted);
+        assert_eq!(fed.runtime.feed_id, None);
+        assert!(!fed.runtime.enabled);
+        assert!(!fed.runtime.running);
+        assert_eq!(fed.runtime.status, None);
+
+        let binance = result
+            .sources
+            .iter()
+            .find(|source| source.id == "binance-market-candles")
+            .expect("binance source should be listed");
+        assert_eq!(binance.venue.as_deref(), Some("binance"));
+        assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
+        assert_eq!(binance.configured_timeframes, ["1m"]);
+    }
+
+    #[tokio::test]
+    async fn list_feed_sources_reports_persisted_enabled_source_state() {
+        let (list, enable, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let result = list
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+        let fed = result
+            .sources
+            .iter()
+            .find(|source| source.id == "fed-press-releases")
+            .expect("fed source should be listed");
+
+        assert!(fed.runtime.persisted);
+        assert!(
+            fed.runtime
+                .feed_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+        );
+        assert!(fed.runtime.enabled);
+        assert!(!fed.runtime.running);
+        assert_eq!(fed.runtime.status.as_deref(), Some("idle"));
+        assert_eq!(fed.runtime.last_error, None);
+    }
+
+    #[tokio::test]
+    async fn list_feed_sources_reports_subscribed_market_instruments() {
+        let (list, _enable, subscribe, _svc, _registry, _finance_registry) = tool().await;
+        subscribe
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["SOLUSDT".to_owned(), "btcusdt".to_owned()],
+                    timeframes:             vec!["15m".to_owned(), "1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let result = list
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+        let binance = result
+            .sources
+            .iter()
+            .find(|source| source.id == "binance-market-candles")
+            .expect("binance source should be listed");
+
+        assert!(binance.runtime.persisted);
+        assert!(binance.runtime.enabled);
+        assert_eq!(binance.configured_symbols, ["SOLUSDT", "BTCUSDT"]);
+        assert_eq!(binance.configured_timeframes, ["15m", "1m"]);
+    }
+
+    #[tokio::test]
     async fn enable_feed_source_persists_and_registers_config_without_starting() {
-        let (tool, _subscribe, svc, registry, _finance_registry) = tool().await;
+        let (_list, tool, _subscribe, svc, registry, _finance_registry) = tool().await;
         let result = tool
             .run(
                 FinanceEnableFeedSourceParams {
@@ -785,7 +1028,7 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_is_idempotent_for_existing_enabled_source() {
-        let (tool, _subscribe, svc, _registry, _finance_registry) = tool().await;
+        let (_list, tool, _subscribe, svc, _registry, _finance_registry) = tool().await;
         for expected_created in [true, false] {
             let result = tool
                 .run(
@@ -805,7 +1048,7 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_rejects_sources_that_require_configuration() {
-        let (tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
         let err = tool
             .run(
                 FinanceEnableFeedSourceParams {
@@ -822,14 +1065,14 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_is_mutating() {
-        let (tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
 
         assert!(!tool.is_read_only(&serde_json::json!({})));
     }
 
     #[tokio::test]
     async fn subscribe_instruments_creates_market_feed_and_finance_subscription() {
-        let (_enable, tool, svc, registry, finance_registry) = tool().await;
+        let (_list, _enable, tool, svc, registry, finance_registry) = tool().await;
         let ctx = context();
 
         let result = tool
@@ -880,7 +1123,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_extends_existing_feed_transport_idempotently() {
-        let (_enable, tool, svc, _registry, finance_registry) = tool().await;
+        let (_list, _enable, tool, svc, _registry, finance_registry) = tool().await;
         let ctx = context();
 
         let first = tool
@@ -959,7 +1202,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_rejects_non_market_catalog_source() {
-        let (_enable, tool, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, _enable, tool, _svc, _registry, _finance_registry) = tool().await;
         let err = tool
             .run(
                 FinanceSubscribeInstrumentsParams {
@@ -983,7 +1226,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_rejects_ambiguous_source_reference() {
-        let (_enable, tool, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, _enable, tool, _svc, _registry, _finance_registry) = tool().await;
         let err = tool
             .run(
                 FinanceSubscribeInstrumentsParams {
@@ -1010,7 +1253,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_accepts_existing_feed_id() {
-        let (_enable, tool, svc, _registry, finance_registry) = tool().await;
+        let (_list, _enable, tool, svc, _registry, finance_registry) = tool().await;
         let now = jiff::Timestamp::now();
         let config = DataFeedConfig::builder()
             .id("custom-feed".to_owned())
