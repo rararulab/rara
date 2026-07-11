@@ -80,7 +80,9 @@ use fff_find::FffFindTool;
 use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
 use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
-use finance_feed::{FinanceEnableFeedSourceTool, FinanceSubscribeInstrumentsTool};
+use finance_feed::{
+    FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool, FinanceSubscribeInstrumentsTool,
+};
 use find_files::FindFilesTool;
 use grep::GrepTool;
 use http_fetch::HttpFetchTool;
@@ -101,8 +103,7 @@ use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
 use rara_trading::finance::tools::{
-    FinanceListFeedSourcesTool, FinanceListSubscriptionsTool, FinanceSubscribeTool,
-    FinanceUnsubscribeTool,
+    FinanceListSubscriptionsTool, FinanceSubscribeTool, FinanceUnsubscribeTool,
 };
 use read_file::ReadFileTool;
 use run_code::RunCodeTool;
@@ -303,7 +304,10 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // User interaction
         Arc::new(AskUserTool::new(deps.user_question_manager)),
         // Finance information subscriptions
-        Arc::new(FinanceListFeedSourcesTool),
+        Arc::new(FinanceListFeedSourcesTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+        )),
         Arc::new(FinanceEnableFeedSourceTool::new(
             deps.data_feed_svc.clone(),
             deps.data_feed_registry.clone(),
