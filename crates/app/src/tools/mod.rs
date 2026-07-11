@@ -31,6 +31,7 @@ mod edit_file;
 mod fff_find;
 mod fff_grep;
 mod file_stats;
+mod finance_diagnostics;
 mod finance_feed;
 mod find_files;
 mod grep;
@@ -78,6 +79,7 @@ use edit_file::EditFileTool;
 use fff_find::FffFindTool;
 use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
+use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{FinanceEnableFeedSourceTool, FinanceSubscribeInstrumentsTool};
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -307,9 +309,15 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
             deps.data_feed_registry.clone(),
         )),
         Arc::new(FinanceSubscribeInstrumentsTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+            deps.finance_registry.clone(),
+        )),
+        Arc::new(FinanceDiagnoseCandleSubscriptionsTool::new(
             deps.data_feed_svc,
             deps.data_feed_registry,
             deps.finance_registry.clone(),
+            deps.market_data_repo.clone(),
         )),
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
