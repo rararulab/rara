@@ -33,6 +33,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
@@ -121,6 +122,17 @@ struct UpdateFeedRequest {
     /// Pass `null` to clear auth, omit the field to keep existing auth.
     #[serde(default, deserialize_with = "deserialize_optional_field")]
     auth:      Option<Option<serde_json::Value>>,
+}
+
+/// Optional request body for enabling a built-in catalog feed.
+///
+/// Ready sources can still be enabled with an empty body. Provider presets can
+/// be materialized by supplying the operator-owned transport/auth details in
+/// this body.
+#[derive(Debug, Default, Deserialize)]
+struct EnableCatalogFeedRequest {
+    transport: Option<serde_json::Value>,
+    auth:      Option<serde_json::Value>,
 }
 
 /// Deserialize a double-`Option` field so that:
@@ -243,6 +255,7 @@ async fn enable_catalog_feed(
         rara_kernel::identity::Principal<rara_kernel::identity::Resolved>,
     >,
     Path(id): Path<String>,
+    body: Bytes,
 ) -> Result<(StatusCode, Json<DataFeedConfig>), ProblemDetails> {
     if !principal.is_admin() {
         return Err(ProblemDetails::forbidden(
@@ -251,15 +264,27 @@ async fn enable_catalog_feed(
     }
 
     let source = find_catalog_source(&id)?;
-    if !source.can_enable() {
+    let request = parse_enable_catalog_feed_request(&body)?;
+    if !source.can_enable() && request.transport.is_none() {
         return Err(ProblemDetails::bad_request(format!(
             "catalog source requires configuration before it can be enabled: {id}"
         )));
     }
     let feed_name = source.feed_name();
-    let transport = source.transport.clone().ok_or_else(|| {
-        ProblemDetails::bad_request(format!("catalog source has no transport template: {id}"))
-    })?;
+    let transport = catalog_transport(source.transport.clone(), request.transport, &id)?;
+    let auth_value = match request.auth {
+        Some(auth) => Some(auth),
+        None => source
+            .auth
+            .clone()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| ProblemDetails::bad_request(format!("invalid auth config: {e}")))?,
+    };
+    let auth = auth_value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| ProblemDetails::bad_request(format!("invalid auth config: {e}")))?;
     let existing = state
         .svc
         .list_feeds()
@@ -272,30 +297,32 @@ async fn enable_catalog_feed(
         let updated = DataFeedConfig::builder()
             .id(existing.id)
             .name(feed_name)
-            .feed_type(source.feed_type)
-            .tags(source.tags)
-            .transport(transport)
-            .maybe_auth(source.auth)
+            .feed_type(source.feed_type.clone())
+            .tags(source.tags.clone())
+            .transport(transport.clone())
+            .maybe_auth(auth.clone())
             .enabled(true)
             .status(FeedStatus::Idle)
             .created_at(existing.created_at)
             .updated_at(now)
             .build();
+        validate_active_feed_config(&updated)?;
         state.svc.update_feed(&updated).await?;
         (StatusCode::OK, updated)
     } else {
         let created = DataFeedConfig::builder()
             .id(Uuid::new_v4().to_string())
             .name(feed_name)
-            .feed_type(source.feed_type)
-            .tags(source.tags)
+            .feed_type(source.feed_type.clone())
+            .tags(source.tags.clone())
             .transport(transport)
-            .maybe_auth(source.auth)
+            .maybe_auth(auth)
             .enabled(true)
             .status(FeedStatus::Idle)
             .created_at(now)
             .updated_at(now)
             .build();
+        validate_active_feed_config(&created)?;
         state.svc.create_feed(&created).await?;
         (StatusCode::CREATED, created)
     };
@@ -819,6 +846,59 @@ fn find_catalog_source(id: &str) -> Result<DefaultFeedSource, ProblemDetails> {
         })
 }
 
+fn parse_enable_catalog_feed_request(
+    body: &[u8],
+) -> Result<EnableCatalogFeedRequest, ProblemDetails> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(EnableCatalogFeedRequest::default());
+    }
+    serde_json::from_slice(body)
+        .map_err(|e| ProblemDetails::bad_request(format!("invalid catalog enable body: {e}")))
+}
+
+fn catalog_transport(
+    template: Option<serde_json::Value>,
+    override_value: Option<serde_json::Value>,
+    id: &str,
+) -> Result<serde_json::Value, ProblemDetails> {
+    match (template, override_value) {
+        (Some(serde_json::Value::Object(mut base)), Some(serde_json::Value::Object(overrides))) => {
+            for (key, value) in overrides {
+                base.insert(key, value);
+            }
+            Ok(serde_json::Value::Object(base))
+        }
+        (Some(_), Some(override_value @ serde_json::Value::Object(_))) => Ok(override_value),
+        (None, Some(override_value @ serde_json::Value::Object(_))) => Ok(override_value),
+        (Some(template), None) => Ok(template),
+        (None, None) => Err(ProblemDetails::bad_request(format!(
+            "catalog source has no transport template: {id}"
+        ))),
+        (_, Some(_)) => Err(ProblemDetails::bad_request(
+            "catalog enable transport must be a JSON object",
+        )),
+    }
+}
+
+fn validate_active_feed_config(config: &DataFeedConfig) -> Result<(), ProblemDetails> {
+    match config.feed_type {
+        FeedType::Polling => PollingSource::from_config(config)
+            .map(|_| ())
+            .map_err(|e| ProblemDetails::bad_request(format!("invalid polling feed config: {e}"))),
+        FeedType::Rss => RssSource::from_config(config)
+            .map(|_| ())
+            .map_err(|e| ProblemDetails::bad_request(format!("invalid rss feed config: {e}"))),
+        FeedType::MarketCandle => {
+            MarketCandleSource::from_config(config)
+                .map(|_| ())
+                .map_err(|e| {
+                    ProblemDetails::bad_request(format!("invalid market candle feed config: {e}"))
+                })
+        }
+        FeedType::Webhook | FeedType::WebSocket => Ok(()),
+    }
+}
+
 fn sync_registry_and_maybe_start(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>) {
     let _ = registry.remove(&config.name);
     if let Err(e) = registry.register(config.clone()) {
@@ -1155,6 +1235,51 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_enable_accepts_market_preset_configuration() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/longbridge-market-candles/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "transport": {
+                                "url": "https://market-data.local/longbridge/candles/latest",
+                                "interval_secs": 120,
+                                "headers": {},
+                                "venue": "longbridge",
+                                "symbols": ["AAPL.US", "NVDA.US"],
+                                "timeframes": ["1d"],
+                                "max_candles_per_poll": 500
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(feed.name, "finance-longbridge-market-candles");
+        assert_eq!(feed.feed_type, FeedType::MarketCandle);
+        assert_eq!(feed.transport["venue"], "longbridge");
+        assert_eq!(feed.transport["symbols"][0], "AAPL.US");
+        assert_eq!(feed.transport["timeframes"][0], "1d");
+        assert_eq!(feed.transport["interval_secs"], 120);
+        assert!(feed.enabled);
     }
 
     #[tokio::test]
