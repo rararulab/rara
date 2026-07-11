@@ -81,7 +81,8 @@ use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
 use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
-    FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool, FinanceSubscribeInstrumentsTool,
+    FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool,
+    FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -309,6 +310,14 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
             deps.data_feed_registry.clone(),
         )),
         Arc::new(FinanceEnableFeedSourceTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+        )),
+        Arc::new(FinanceDisableFeedSourceTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+        )),
+        Arc::new(FinanceRestartFeedSourceTool::new(
             deps.data_feed_svc.clone(),
             deps.data_feed_registry.clone(),
         )),
