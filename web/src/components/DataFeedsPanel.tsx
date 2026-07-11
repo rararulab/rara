@@ -33,6 +33,7 @@ import {
   type DataFeedConfig,
   type FeedCatalogEntry,
   type FeedEvent,
+  type FeedSummary,
   type CreateFeedRequest,
   type AuthType,
 } from '@/api/data-feeds';
@@ -102,6 +103,23 @@ function payloadSize(payload: unknown): string {
   const bytes = new Blob([JSON.stringify(payload)]).size;
   if (bytes < 1024) return `${bytes}B`;
   return `${(bytes / 1024).toFixed(1)}K`;
+}
+
+function eventCountLabel(count: number): string {
+  return `${count} event${count === 1 ? '' : 's'}`;
+}
+
+function lagLabel(summary: FeedSummary | undefined): string {
+  if (!summary?.last_event_at || summary.lag_seconds == null) return 'No events yet';
+  if (summary.lag_seconds < 60) return `${summary.lag_seconds}s lag`;
+
+  const minutes = Math.floor(summary.lag_seconds / 60);
+  if (minutes < 60) return `${minutes}m lag`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h lag`;
+
+  return `${Math.floor(hours / 24)}d lag`;
 }
 
 /** Format type badge label. */
@@ -556,6 +574,7 @@ function FeedFormDialog({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -566,6 +585,7 @@ function FeedFormDialog({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -1112,9 +1132,11 @@ function FeedCatalogCard({
 
 function FeedListView({
   feeds,
+  summaries,
   onSelectFeed,
 }: {
   feeds: DataFeedConfig[];
+  summaries: FeedSummary[];
   onSelectFeed: (feed: DataFeedConfig) => void;
 }) {
   const queryClient = useQueryClient();
@@ -1140,9 +1162,12 @@ function FeedListView({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
       setDeleteId(null);
     },
   });
+
+  const summariesByFeedId = new Map(summaries.map((summary) => [summary.feed_id, summary]));
 
   const handleEdit = (feed: DataFeedConfig) => {
     setEditFeed(feed);
@@ -1207,76 +1232,94 @@ function FeedListView({
               <TableHead>Name</TableHead>
               <TableHead className="w-24">Type</TableHead>
               <TableHead className="w-24">Status</TableHead>
+              <TableHead className="w-24 text-right">Events</TableHead>
+              <TableHead className="w-28 text-right">Last Event</TableHead>
               <TableHead className="w-24 text-right">Updated</TableHead>
               <TableHead className="w-32 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {feeds.map((feed) => (
-              <TableRow key={feed.id}>
-                <TableCell>
-                  <button
-                    className="font-medium text-primary hover:underline"
-                    onClick={() => onSelectFeed(feed)}
+            {feeds.map((feed) => {
+              const summary = summariesByFeedId.get(feed.id);
+              return (
+                <TableRow key={feed.id}>
+                  <TableCell>
+                    <button
+                      className="font-medium text-primary hover:underline"
+                      onClick={() => onSelectFeed(feed)}
+                    >
+                      {feed.name}
+                    </button>
+                    {feed.tags.length > 0 && (
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {feed.tags.slice(0, 3).map((tag) => (
+                          <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
+                            {tag}
+                          </Badge>
+                        ))}
+                        {feed.tags.length > 3 && (
+                          <span className="text-[10px] text-muted-foreground">
+                            +{feed.tags.length - 3}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs">
+                      {typeLabel(feed.feed_type)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge status={feed.status} enabled={feed.enabled} />
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">
+                    {eventCountLabel(summary?.event_count ?? 0)}
+                  </TableCell>
+                  <TableCell
+                    className="text-right text-xs text-muted-foreground"
+                    title={
+                      summary?.last_event_at
+                        ? new Date(summary.last_event_at).toLocaleString()
+                        : undefined
+                    }
                   >
-                    {feed.name}
-                  </button>
-                  {feed.tags.length > 0 && (
-                    <div className="mt-0.5 flex flex-wrap gap-1">
-                      {feed.tags.slice(0, 3).map((tag) => (
-                        <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                          {tag}
-                        </Badge>
-                      ))}
-                      {feed.tags.length > 3 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          +{feed.tags.length - 3}
-                        </span>
-                      )}
+                    {lagLabel(summary)}
+                  </TableCell>
+                  <TableCell
+                    className="text-right text-xs text-muted-foreground"
+                    title={new Date(feed.updated_at).toLocaleString()}
+                  >
+                    {timeAgo(feed.updated_at)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <Switch
+                        checked={feed.enabled}
+                        onCheckedChange={() => toggleMutation.mutate(feed.id)}
+                        disabled={toggleMutation.isPending}
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleEdit(feed)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                        onClick={() => setDeleteId(feed.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
                     </div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline" className="text-xs">
-                    {typeLabel(feed.feed_type)}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <StatusBadge status={feed.status} enabled={feed.enabled} />
-                </TableCell>
-                <TableCell
-                  className="text-right text-xs text-muted-foreground"
-                  title={new Date(feed.updated_at).toLocaleString()}
-                >
-                  {timeAgo(feed.updated_at)}
-                </TableCell>
-                <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    <Switch
-                      checked={feed.enabled}
-                      onCheckedChange={() => toggleMutation.mutate(feed.id)}
-                      disabled={toggleMutation.isPending}
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => handleEdit(feed)}
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                      onClick={() => setDeleteId(feed.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}
@@ -1335,6 +1378,11 @@ export default function DataFeedsPanel() {
     queryKey: ['data-feeds'],
     queryFn: () => dataFeedsApi.list(),
   });
+  const summariesQuery = useQuery({
+    queryKey: ['data-feed-summaries'],
+    queryFn: () => dataFeedsApi.summaries(),
+    refetchInterval: 30_000,
+  });
 
   if (feedsQuery.isLoading) {
     return (
@@ -1361,6 +1409,7 @@ export default function DataFeedsPanel() {
   }
 
   const feeds = feedsQuery.data ?? [];
+  const summaries = summariesQuery.data ?? [];
 
   if (view.kind === 'events') {
     // When we navigate to events, refresh the feed object from the list
@@ -1369,5 +1418,11 @@ export default function DataFeedsPanel() {
     return <EventHistoryView feed={freshFeed} onBack={() => setView({ kind: 'list' })} />;
   }
 
-  return <FeedListView feeds={feeds} onSelectFeed={(feed) => setView({ kind: 'events', feed })} />;
+  return (
+    <FeedListView
+      feeds={feeds}
+      summaries={summaries}
+      onSelectFeed={(feed) => setView({ kind: 'events', feed })}
+    />
+  );
 }

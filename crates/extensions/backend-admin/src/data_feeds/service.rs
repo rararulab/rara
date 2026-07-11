@@ -20,7 +20,10 @@
 //!
 //! [`DataFeedRegistry`]: rara_kernel::data_feed::DataFeedRegistry
 
-use diesel::{ExpressionMethods, QueryDsl, Queryable, Selectable, SelectableHelper};
+use diesel::{
+    ExpressionMethods, QueryDsl, Queryable, QueryableByName, Selectable, SelectableHelper,
+    sql_types::{BigInt, Nullable, Text},
+};
 use diesel_async::RunQueryDsl;
 use jiff::Timestamp;
 use rara_kernel::data_feed::{
@@ -264,6 +267,27 @@ impl DataFeedSvc {
         })
     }
 
+    /// Return event-count and last-event aggregates keyed by feed source name.
+    ///
+    /// This is intentionally an event-table read model rather than a new
+    /// column on `data_feeds`: it reflects what was actually persisted, not
+    /// what a feed task intended to emit.
+    #[instrument(skip(self))]
+    pub async fn event_summaries(&self) -> Result<Vec<EventSummary>> {
+        let mut conn = self.pools.reader.get().await.context(PoolAcquireSnafu)?;
+        let rows: Vec<EventSummaryRow> = diesel::sql_query(
+            "SELECT source_name, COUNT(*) AS event_count, MAX(received_at) AS last_event_at FROM \
+             data_feed_events GROUP BY source_name",
+        )
+        .load(&mut *conn)
+        .await
+        .context(QuerySnafu)?;
+
+        rows.into_iter()
+            .map(EventSummaryRow::into_summary)
+            .collect()
+    }
+
     /// Get a single event by ID within a feed.
     #[instrument(skip(self))]
     pub async fn get_event(&self, source_name: &str, event_id: &str) -> Result<Option<FeedEvent>> {
@@ -292,6 +316,17 @@ pub struct EventPage {
     pub total:    i64,
     /// Whether more events exist beyond this page.
     pub has_more: bool,
+}
+
+/// Persisted-event aggregate for a single feed source.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EventSummary {
+    /// Feed source name.
+    pub source_name:   String,
+    /// Number of persisted events for this source.
+    pub event_count:   i64,
+    /// Most recent persisted event receive time, if any.
+    pub last_event_at: Option<Timestamp>,
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +402,34 @@ struct EventRow {
     tags:        String,
     payload:     String,
     received_at: String,
+}
+
+#[derive(QueryableByName)]
+struct EventSummaryRow {
+    #[diesel(sql_type = Text)]
+    source_name:   String,
+    #[diesel(sql_type = BigInt)]
+    event_count:   i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_event_at: Option<String>,
+}
+
+impl EventSummaryRow {
+    fn into_summary(self) -> Result<EventSummary> {
+        let decode = |msg: String| DataFeedSvcError::DecodeRow { message: msg };
+        let last_event_at = self
+            .last_event_at
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|e| decode(format!("last_event_at: {e}")))?;
+
+        Ok(EventSummary {
+            source_name: self.source_name,
+            event_count: self.event_count,
+            last_event_at,
+        })
+    }
 }
 
 impl EventRow {

@@ -58,6 +58,14 @@ export interface FeedEventsResponse {
   has_more: boolean;
 }
 
+export interface FeedSummary {
+  feed_id: string;
+  source_name: string;
+  event_count: number;
+  last_event_at: string | null;
+  lag_seconds: number | null;
+}
+
 export interface CreateFeedRequest {
   name: string;
   feed_type: FeedType;
@@ -87,6 +95,8 @@ export const dataFeedsApi = {
   list: () => api.get<DataFeedConfig[]>('/api/v1/data-feeds'),
 
   catalog: () => api.get<FeedCatalogEntry[]>('/api/v1/data-feeds/catalog'),
+
+  summaries: () => api.get<FeedSummary[]>('/api/v1/data-feeds/summary'),
 
   get: (id: string) => api.get<DataFeedConfig>(`/api/v1/data-feeds/${id}`),
 

@@ -43,6 +43,14 @@ interface FeedEvent {
   received_at: string;
 }
 
+interface FeedSummary {
+  feed_id: string;
+  source_name: string;
+  event_count: number;
+  last_event_at: string | null;
+  lag_seconds: number | null;
+}
+
 interface FeedCatalogEntry {
   id: string;
   name: string;
@@ -137,6 +145,30 @@ function makeEvent(overrides: Partial<FeedEvent> = {}): FeedEvent {
   };
 }
 
+function makeSummary(
+  feed: DataFeedConfig,
+  events: FeedEvent[],
+  overrides: Partial<FeedSummary> = {},
+): FeedSummary {
+  const matchingEvents = events.filter((event) => event.source_name === feed.name);
+  const lastEventAt =
+    matchingEvents
+      .map((event) => event.received_at)
+      .sort()
+      .at(-1) ?? null;
+
+  return {
+    feed_id: feed.id,
+    source_name: feed.name,
+    event_count: matchingEvents.length,
+    last_event_at: lastEventAt,
+    lag_seconds: lastEventAt
+      ? Math.max(0, Math.floor((Date.now() - Date.parse(lastEventAt)) / 1000))
+      : null,
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Setup — fetch real Yahoo Finance data once for realistic payloads
 // ---------------------------------------------------------------------------
@@ -177,6 +209,7 @@ async function setupRoutes(
   state: {
     feeds: DataFeedConfig[];
     events: FeedEvent[];
+    summaries?: FeedSummary[];
     catalog?: FeedCatalogEntry[];
   },
 ) {
@@ -210,6 +243,12 @@ async function setupRoutes(
   // Default feed source catalog.
   await page.route('**/api/v1/data-feeds/catalog', async (route) => {
     await route.fulfill({ json: state.catalog ?? [] });
+  });
+
+  await page.route('**/api/v1/data-feeds/summary', async (route) => {
+    await route.fulfill({
+      json: state.summaries ?? state.feeds.map((feed) => makeSummary(feed, state.events)),
+    });
   });
 
   await page.route('**/api/v1/data-feeds/catalog/*/enable', async (route, request) => {
@@ -324,7 +363,7 @@ async function setupRoutes(
   });
 
   // Single feed operations (GET/PUT/DELETE by id).
-  await page.route(/\/api\/v1\/data-feeds\/(?!catalog$)[^/]+$/, async (route, request) => {
+  await page.route(/\/api\/v1\/data-feeds\/(?!catalog$|summary$)[^/]+$/, async (route, request) => {
     const method = request.method();
     const url = request.url();
     const idMatch = url.match(/data-feeds\/([^/]+)$/);
@@ -551,6 +590,10 @@ test.describe('Data Feeds Management', () => {
 
     // Status badge.
     await expect(page.getByText('Running')).toBeVisible();
+
+    // Runtime summary columns.
+    await expect(page.getByText('0 events')).toBeVisible();
+    await expect(page.getByText('No events yet')).toBeVisible();
 
     // Tags.
     await expect(page.getByText('stock')).toBeVisible();
