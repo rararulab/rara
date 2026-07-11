@@ -251,6 +251,8 @@ pub(crate) async fn boot(
     sandbox_config: Option<crate::SandboxToolConfig>,
     sandbox_map: crate::tools::SandboxMap,
     finance_registry: Arc<rara_trading::finance::registry::FinanceSubscriptionRegistry>,
+    data_feed_svc: rara_backend_admin::data_feeds::DataFeedSvc,
+    data_feed_registry: Arc<rara_kernel::data_feed::DataFeedRegistry>,
     market_data_repo: rara_trading::market_data::MarketDataRepositoryRef,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
@@ -404,6 +406,8 @@ pub(crate) async fn boot(
             sandbox_config,
             sandbox_map,
             finance_registry,
+            data_feed_svc,
+            data_feed_registry,
             market_data_repo,
         },
     );

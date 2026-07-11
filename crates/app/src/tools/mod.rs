@@ -31,6 +31,7 @@ mod edit_file;
 mod fff_find;
 mod fff_grep;
 mod file_stats;
+mod finance_feed;
 mod find_files;
 mod grep;
 mod http_fetch;
@@ -77,6 +78,7 @@ use edit_file::EditFileTool;
 use fff_find::FffFindTool;
 use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
+use finance_feed::FinanceEnableFeedSourceTool;
 use find_files::FindFilesTool;
 use grep::GrepTool;
 use http_fetch::HttpFetchTool;
@@ -168,6 +170,10 @@ pub struct ToolDeps {
     pub sandbox_map:           SandboxMap,
     /// Finance information subscription registry.
     pub finance_registry:      Arc<rara_trading::finance::registry::FinanceSubscriptionRegistry>,
+    /// Persistent data-feed service for finance feed source enabling.
+    pub data_feed_svc:         rara_backend_admin::data_feeds::DataFeedSvc,
+    /// Runtime data-feed registry for finance feed source enabling.
+    pub data_feed_registry:    Arc<rara_kernel::data_feed::DataFeedRegistry>,
     /// Shared market-data repository for closed OHLCV candles.
     pub market_data_repo:      rara_trading::market_data::MarketDataRepositoryRef,
 }
@@ -296,6 +302,10 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(AskUserTool::new(deps.user_question_manager)),
         // Finance information subscriptions
         Arc::new(FinanceListFeedSourcesTool),
+        Arc::new(FinanceEnableFeedSourceTool::new(
+            deps.data_feed_svc,
+            deps.data_feed_registry,
+        )),
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceListSubscriptionsTool::new(deps.finance_registry)),
