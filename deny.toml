@@ -33,8 +33,6 @@ allow = [
     "BSL-1.0",
     "MPL-2.0",
     "ISC",
-    "OpenSSL",
-    "PostgreSQL",
     "0BSD",
     "CDLA-Permissive-2.0",
 ]
@@ -66,9 +64,6 @@ skip = [
     { crate = "darling@0.20.11", reason = "croner -> derive_builder uses older version" },
     { crate = "darling_core@0.20.11", reason = "transitive from darling 0.20" },
     { crate = "darling_macro@0.20.11", reason = "transitive from darling 0.20" },
-    # fixedbitset/petgraph: parking_lot_core (v0.4/v0.6) vs prost-build (v0.5/v0.8)
-    { crate = "fixedbitset@0.4.2", reason = "parking_lot_core -> petgraph uses older version" },
-    { crate = "petgraph@0.6.5", reason = "parking_lot_core uses older version" },
     # hashbrown: petgraph 0.8 (v0.15) vs indexmap (v0.16)
     { crate = "hashbrown@0.15.5", reason = "petgraph 0.8 uses older version" },
     # linux-raw-sys/rustix: procfs (v0.38/v0.4) vs tempfile (v1.x/v0.11)
@@ -90,10 +85,6 @@ skip = [
     { crate = "windows_x86_64_gnu@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
     { crate = "windows_x86_64_gnullvm@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
     { crate = "windows_x86_64_msvc@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
-    { crate = "windows-core@0.61.2", reason = "sysinfo uses older version" },
-    { crate = "windows-link@0.1.3", reason = "windows-core 0.61 uses older version" },
-    { crate = "windows-result@0.3.4", reason = "windows-core 0.61 uses older version" },
-    { crate = "windows-strings@0.4.2", reason = "windows-core 0.61 uses older version" },
     { crate = "windows-sys@0.60.2", reason = "socket2 uses intermediate version" },
     { crate = "windows-targets@0.52.6", reason = "windows-sys 0.52 uses older version" },
 

@@ -186,7 +186,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "builder",
     "hostname",
 ] }
-md5 = "0.7"
+md5 = "0.8"
 moka = { version = "0.12", features = ["future"] }
 notify = "8"
 oauth2 = "5"
@@ -290,9 +290,9 @@ fff-query-parser = { git = "https://github.com/dmtrKovalenko/fff.nvim", rev = "e
 # pins the version across the workspace because `Cargo.lock` is gitignored.
 # zlob's bundled `build.zig` targets zig 0.16's `Build.Step.Compile` API
 # (the `linkLibC()` method call was removed upstream); releases before 1.3.2
-# only compile on zig 0.15. 1.5.0 still builds against the zig 0.16 toolchain.
+# only compile on zig 0.15. 1.6.1 still builds against the zig 0.16 toolchain.
 # Bump this in lockstep with the CI runner's zig toolchain.
-zlob = "=1.5.0"
+zlob = "=1.6.1"
 
 rara-tool-macro = { path = "crates/common/tool-macro" }
 tape-codec-zig = { path = "crates/tape-codec-zig", default-features = false }
