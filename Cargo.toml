@@ -140,6 +140,7 @@ members = [
     "crates/channels",
     "crates/kernel",
     "crates/extensions/backend-admin",
+    "crates/extensions/rara-trading",
     "crates/extensions/rara-git",
     "crates/soul",
     "crates/rara-sandbox",
@@ -170,6 +171,7 @@ diesel-async = { version = "0.9", features = ["sqlite", "bb8"] }
 diesel_migrations = { version = "2.3", features = ["sqlite"] }
 dirs = "^6"
 eventsource-stream = "0.2"
+feed-rs = "2.3.1"
 futures = "^0.3"
 hex = "0.4"
 hmac = "0.13"
@@ -200,6 +202,7 @@ ratatui = { version = "0.30", features = ["crossterm"] }
 regex = "1"
 reqwest = { version = "^0.13", features = ["form", "json", "multipart", "stream"] }
 rustix = "^1.1"
+rust_decimal = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 schemars = "^1.2"
 serde = { version = "^1.0", features = ["derive"] }
@@ -207,6 +210,8 @@ serde_json = "1.0.143"
 serde_yaml = "0.9"
 sha2 = "0.11"
 shadow-rs = "2.0"
+sqlx-core = { version = "0.8.6", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "uuid"] }
+sqlx-postgres = { version = "0.8.6", default-features = false, features = ["uuid"] }
 smart-default = "0.7"
 snafu = "^0.9"
 strum = "^0.27"
@@ -238,6 +243,7 @@ validator = "^0.20"
 # Testing
 git2 = "0.21"
 tempfile = "3"
+testcontainers = "0.27.3"
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
 base = { path = "crates/common/base" }
@@ -266,6 +272,7 @@ rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
 rara-soul = { path = "crates/soul" }
+rara-trading = { path = "crates/extensions/rara-trading" }
 rara-sandbox = { path = "crates/rara-sandbox" }
 
 # fff (Fast File Finder) — Cargo git dependencies (not vendored).

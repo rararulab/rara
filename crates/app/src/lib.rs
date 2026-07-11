@@ -15,6 +15,7 @@
 mod boot;
 pub use boot::TapeReconciler;
 pub mod config_sync;
+mod finance_event;
 pub mod flatten;
 pub mod gateway;
 // Re-export `rara_kernel::tool` so the `ToolDef` proc macro can resolve
@@ -710,6 +711,11 @@ pub async fn start_with_options(
     // and the `SandboxCleanupHook` registered below removes them when the
     // owning session ends.
     let sandbox_map: crate::tools::SandboxMap = std::sync::Arc::new(dashmap::DashMap::new());
+    let finance_registry = Arc::new(
+        rara_trading::finance::registry::FinanceSubscriptionRegistry::load(
+            rara_paths::data_dir().join("trading/finance-subscriptions.json"),
+        ),
+    );
 
     let rara = crate::boot::boot(
         diesel_pools.clone(),
@@ -719,6 +725,7 @@ pub async fn start_with_options(
         browser_manager,
         config.sandbox.clone(),
         sandbox_map.clone(),
+        finance_registry.clone(),
     )
     .await
     .whatever_context("Failed to boot kernel dependencies")?;
@@ -734,24 +741,6 @@ pub async fn start_with_options(
         crate::feed_store::SqliteFeedStore::new(diesel_pools.clone()),
     );
     let feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(diesel_pools.clone());
-
-    // Install the status reporter so runtime transitions (running / idle /
-    // error + last_error) persist back to the `data_feeds` table.
-    feed_registry.set_reporter(Arc::new(
-        rara_backend_admin::data_feeds::SvcStatusReporter::new(feed_svc.clone()),
-    ));
-
-    // Install the status reporter so runtime transitions (running / idle /
-    // error + last_error) persist back to the `data_feeds` table.
-    feed_registry.set_reporter(Arc::new(
-        rara_backend_admin::data_feeds::SvcStatusReporter::new(feed_svc.clone()),
-    ));
-
-    // Install the status reporter so runtime transitions (running / idle /
-    // error + last_error) persist back to the `data_feeds` table.
-    feed_registry.set_reporter(Arc::new(
-        rara_backend_admin::data_feeds::SvcStatusReporter::new(feed_svc.clone()),
-    ));
 
     // Install the status reporter so runtime transitions (running / idle /
     // error + last_error) persist back to the `data_feeds` table.
@@ -980,103 +969,75 @@ pub async fn start_with_options(
         .session_service
         .set_kernel_handle(kernel_handle.clone());
 
+    let market_data_repo: Arc<dyn rara_trading::market_data::MarketDataRepository> =
+        match std::env::var("RARA_MARKET_DATA_DATABASE_URL") {
+            Ok(database_url) if !database_url.trim().is_empty() => {
+                match rara_trading::market_data::TimescaleMarketDataRepository::connect(
+                    &database_url,
+                )
+                .await
+                {
+                    Ok(repo) => {
+                        if let Err(e) = repo.apply_schema().await {
+                            warn!(error = %e, "failed to apply market-data Timescale schema");
+                        }
+                        Arc::new(repo)
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "market-data Timescale connection failed; using in-memory repository"
+                        );
+                        Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default())
+                    }
+                }
+            }
+            _ => {
+                warn!(
+                    "RARA_MARKET_DATA_DATABASE_URL not set; using in-memory market-data repository"
+                );
+                Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default())
+            }
+        };
+
     // Spawn the feed dispatch task — consumes events from all transports,
-    // persists them to the data_feed_events table, and routes matching events
-    // to subscribing sessions via SubscriptionRegistry.
+    // persists them to the data_feed_events table, upserts closed market
+    // candles, and routes matching generic/finance subscriptions.
     {
         let store = feed_store.clone();
-        let handle = kernel_handle.clone();
+        let sink = crate::finance_event::KernelFeedDispatchSink::new(kernel_handle.clone());
+        let market_data_repo = market_data_repo.clone();
+        let finance_registry = finance_registry.clone();
+        let feed_registry = feed_registry.clone();
         tokio::spawn(async move {
             while let Some(event) = feed_event_rx.recv().await {
-                if let Err(e) = store.append(&event).await {
-                    warn!(
-                        source = %event.source_name,
-                        error = %e,
-                        "failed to persist feed event"
-                    );
+                match crate::finance_event::dispatch_feed_event(
+                    &event,
+                    store.as_ref(),
+                    market_data_repo.as_ref(),
+                    finance_registry.as_ref(),
+                    &sink,
+                )
+                .await
+                {
+                    Ok(outcome) => {
+                        info!(
+                            source = %event.source_name,
+                            event_type = %event.event_type,
+                            finance_decisions = outcome.finance_decisions,
+                            "feed event dispatched"
+                        );
+                    }
+                    Err(e) => {
+                        feed_registry.report_error(&event.source_name, e.to_string());
+                        warn!(
+                            source = %event.source_name,
+                            event_type = %event.event_type,
+                            error = %e,
+                            "failed to dispatch feed event"
+                        );
+                    }
                 }
-
-                // Route to subscribers whose tags overlap with the event.
-                let matched = handle
-                    .subscription_registry()
-                    .match_tags_any_owner(&event.tags)
-                    .await;
-                if matched.is_empty() {
-                    continue;
-                }
-
-                let event_json = serde_json::to_value(&event).unwrap_or_default();
-                let payload_pretty =
-                    serde_json::to_string_pretty(&event.payload).unwrap_or_default();
-
-                use rara_kernel::notification::NotifyAction;
-
-                let futs: Vec<_> = matched
-                    .into_iter()
-                    .map(|sub| {
-                        let handle = handle.clone();
-                        let event_json = event_json.clone();
-                        let payload_pretty = payload_pretty.clone();
-                        let source_name = event.source_name.clone();
-                        let event_type = event.event_type.clone();
-                        let tags = event.tags.clone();
-                        async move {
-                            match sub.on_receive {
-                                NotifyAction::ProactiveTurn => {
-                                    if !handle.process_table().contains(&sub.subscriber) {
-                                        warn!(
-                                            subscriber = %sub.subscriber,
-                                            "feed ProactiveTurn downgraded to SilentAppend: \
-                                             subscriber session not in process table"
-                                        );
-                                        let sub_tape = sub.subscriber.to_string();
-                                        let _ = handle
-                                            .tape()
-                                            .store()
-                                            .append(
-                                                &sub_tape,
-                                                rara_kernel::memory::TapEntryKind::FeedEvent,
-                                                event_json,
-                                                None,
-                                            )
-                                            .await;
-                                        return;
-                                    }
-                                    let directive = format!(
-                                        "[FeedEvent] source={source_name} type={event_type} \
-                                         tags={tags:?}\n{payload_pretty}",
-                                    );
-                                    let msg = rara_kernel::io::InboundMessage::synthetic(
-                                        directive,
-                                        sub.owner.clone(),
-                                        sub.subscriber,
-                                    );
-                                    handle.deliver_internal(msg).await;
-                                }
-                                NotifyAction::SilentAppend => {
-                                    let sub_tape = sub.subscriber.to_string();
-                                    let _ = handle
-                                        .tape()
-                                        .store()
-                                        .append(
-                                            &sub_tape,
-                                            rara_kernel::memory::TapEntryKind::FeedEvent,
-                                            event_json,
-                                            None,
-                                        )
-                                        .await;
-                                }
-                            }
-                        }
-                    })
-                    .collect();
-                futures::future::join_all(futs).await;
-
-                info!(
-                    source = %event.source_name,
-                    event_type = %event.event_type,
-                    "feed event dispatched to subscribers"
-                );
             }
             info!("feed dispatch task stopped (channel closed)");
         });

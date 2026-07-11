@@ -31,13 +31,13 @@ use yunara_store::diesel_pool::DieselSqlitePools;
 ///
 /// Implements [`FeedStore`] using the `data_feed_events` table. Reads use
 /// the reader pool; appends use the single-writer pool.
-pub struct SqliteFeedStore {
+pub(crate) struct SqliteFeedStore {
     pools: DieselSqlitePools,
 }
 
 impl SqliteFeedStore {
     /// Create a new store backed by the given pool bundle.
-    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
+    pub(crate) fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 }
 
 #[async_trait]
@@ -156,5 +156,43 @@ impl FeedEventRow {
             payload,
             received_at,
         })
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct InMemoryFeedStore {
+    events: tokio::sync::RwLock<Vec<FeedEvent>>,
+}
+
+#[cfg(test)]
+#[async_trait]
+impl FeedStore for InMemoryFeedStore {
+    async fn append(&self, event: &FeedEvent) -> rara_kernel::Result<()> {
+        let mut events = self.events.write().await;
+        if !events.iter().any(|existing| existing.id == event.id) {
+            events.push(event.clone());
+        }
+        Ok(())
+    }
+
+    async fn query(&self, filter: FeedFilter) -> rara_kernel::Result<Vec<FeedEvent>> {
+        let events = self.events.read().await;
+        Ok(events
+            .iter()
+            .filter(|event| {
+                filter
+                    .source_name
+                    .as_ref()
+                    .is_none_or(|source| source == &event.source_name)
+                    && filter
+                        .since
+                        .as_ref()
+                        .is_none_or(|since| event.received_at >= *since)
+                    && filter.tags.iter().all(|tag| event.tags.contains(tag))
+            })
+            .take(filter.limit)
+            .cloned()
+            .collect())
     }
 }

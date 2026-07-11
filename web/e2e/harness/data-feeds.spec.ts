@@ -23,7 +23,7 @@ import { test, expect } from '@playwright/test';
 interface DataFeedConfig {
   id: string;
   name: string;
-  feed_type: 'webhook' | 'websocket' | 'polling';
+  feed_type: 'webhook' | 'websocket' | 'polling' | 'rss' | 'market_candle';
   tags: string[];
   transport: Record<string, unknown>;
   auth: { type: string; [key: string]: unknown } | null;
@@ -41,6 +41,19 @@ interface FeedEvent {
   tags: string[];
   payload: unknown;
   received_at: string;
+}
+
+interface FeedCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  feed_type: DataFeedConfig['feed_type'];
+  tags: string[];
+  enabled: boolean;
+  feed_id: string | null;
+  requires_configuration: boolean;
+  setup_hint: string | null;
+  transport_template: Record<string, unknown> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +177,7 @@ async function setupRoutes(
   state: {
     feeds: DataFeedConfig[];
     events: FeedEvent[];
+    catalog?: FeedCatalogEntry[];
   },
 ) {
   // Suppress onboarding & connection dialogs via localStorage.
@@ -192,6 +206,64 @@ async function setupRoutes(
   await page.route('**/api/v1/settings', (route) =>
     route.fulfill({ status: 200, json: MOCK_SETTINGS }),
   );
+
+  // Default feed source catalog.
+  await page.route('**/api/v1/data-feeds/catalog', async (route) => {
+    await route.fulfill({ json: state.catalog ?? [] });
+  });
+
+  await page.route('**/api/v1/data-feeds/catalog/*/enable', async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+
+    const id = request.url().match(/catalog\/([^/]+)\/enable/)?.[1];
+    const entry = state.catalog?.find((item) => item.id === id);
+    if (!entry) {
+      await route.fulfill({ status: 404, json: { error: 'not found' } });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const feed: DataFeedConfig = {
+      id: entry.feed_id ?? `feed-${entry.id}`,
+      name: `finance-${entry.id}`,
+      feed_type: entry.feed_type,
+      tags: entry.tags,
+      transport: {},
+      auth: null,
+      enabled: true,
+      status: 'running',
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    };
+    state.feeds.push(feed);
+    entry.enabled = true;
+    entry.feed_id = feed.id;
+    await route.fulfill({ status: 201, json: feed });
+  });
+
+  await page.route('**/api/v1/data-feeds/catalog/*/disable', async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+
+    const id = request.url().match(/catalog\/([^/]+)\/disable/)?.[1];
+    const entry = state.catalog?.find((item) => item.id === id);
+    const feed = state.feeds.find((item) => item.id === entry?.feed_id);
+    if (!entry || !feed) {
+      await route.fulfill({ status: 404, json: { error: 'not found' } });
+      return;
+    }
+
+    feed.enabled = false;
+    feed.status = 'idle';
+    entry.enabled = false;
+    await route.fulfill({ json: feed });
+  });
 
   // Data feeds list + create.
   await page.route('**/api/v1/data-feeds', async (route, request) => {
@@ -252,7 +324,7 @@ async function setupRoutes(
   });
 
   // Single feed operations (GET/PUT/DELETE by id).
-  await page.route(/\/api\/v1\/data-feeds\/[^/]+$/, async (route, request) => {
+  await page.route(/\/api\/v1\/data-feeds\/(?!catalog$)[^/]+$/, async (route, request) => {
     const method = request.method();
     const url = request.url();
     const idMatch = url.match(/data-feeds\/([^/]+)$/);
@@ -321,6 +393,102 @@ test.describe('Data Feeds Management', () => {
 
     await expect(page.getByText('No data feeds configured')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('Create Feed')).toBeVisible();
+  });
+
+  test('shows default finance sources and enables one', async ({ page }) => {
+    await setupRoutes(page, {
+      feeds: [],
+      events: [],
+      catalog: [
+        {
+          id: 'fed-press-releases',
+          name: 'Federal Reserve Press Releases',
+          description: 'Official Federal Reserve press releases.',
+          feed_type: 'rss',
+          tags: ['finance', 'news', 'fed'],
+          enabled: false,
+          feed_id: null,
+          requires_configuration: false,
+          setup_hint: null,
+          transport_template: {
+            url: 'https://www.federalreserve.gov/feeds/press_all.xml',
+            interval_secs: 300,
+            headers: {},
+            max_entries_per_poll: 50,
+          },
+        },
+        {
+          id: 'binance-market-candles',
+          name: 'Binance Market Candles',
+          description: 'Preset for Binance OHLCV ingestion.',
+          feed_type: 'market_candle',
+          tags: ['finance', 'market-data', 'crypto', 'binance'],
+          enabled: false,
+          feed_id: null,
+          requires_configuration: true,
+          setup_hint: 'Connect a normalized Binance candle endpoint before enabling.',
+          transport_template: {
+            url: '',
+            interval_secs: 60,
+            headers: {},
+            venue: 'binance',
+            symbols: [],
+            timeframes: [],
+            max_candles_per_poll: 1000,
+          },
+        },
+      ],
+    });
+    await goToDataFeeds(page);
+
+    await expect(page.getByText('Default finance sources')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Federal Reserve Press Releases', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Enable' }).click();
+
+    await expect(page.getByText('finance-fed-press-releases')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible();
+  });
+
+  test('provider preset opens a prefilled market candle form', async ({ page }) => {
+    await setupRoutes(page, {
+      feeds: [],
+      events: [],
+      catalog: [
+        {
+          id: 'binance-market-candles',
+          name: 'Binance Market Candles',
+          description: 'Preset for Binance OHLCV ingestion.',
+          feed_type: 'market_candle',
+          tags: ['finance', 'market-data', 'crypto', 'binance'],
+          enabled: false,
+          feed_id: null,
+          requires_configuration: true,
+          setup_hint: 'Connect a normalized Binance candle endpoint before enabling.',
+          transport_template: {
+            url: '',
+            interval_secs: 60,
+            headers: {},
+            venue: 'binance',
+            symbols: [],
+            timeframes: [],
+            max_candles_per_poll: 1000,
+          },
+        },
+      ],
+    });
+    await goToDataFeeds(page);
+
+    await expect(page.getByText(/^Provider presets$/)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Binance Market Candles')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Use template' }).click();
+
+    await expect(page.getByText('New Data Feed')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('input[placeholder="e.g. github-rara"]')).toHaveValue(
+      'finance-binance-market-candles',
+    );
+    await expect(page.locator('input[placeholder="binance"]')).toHaveValue('binance');
   });
 
   // -----------------------------------------------------------------------

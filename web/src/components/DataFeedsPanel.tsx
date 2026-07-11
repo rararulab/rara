@@ -26,11 +26,12 @@ import {
   Radio,
   Trash2,
 } from 'lucide-react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 import {
   dataFeedsApi,
   type DataFeedConfig,
+  type FeedCatalogEntry,
   type FeedEvent,
   type CreateFeedRequest,
   type AuthType,
@@ -112,6 +113,10 @@ function typeLabel(t: DataFeedConfig['feed_type']): string {
       return 'Webhook';
     case 'websocket':
       return 'WebSocket';
+    case 'rss':
+      return 'RSS';
+    case 'market_candle':
+      return 'Market Candle';
   }
 }
 
@@ -130,13 +135,15 @@ function StatusBadge({ status, enabled }: { status: DataFeedConfig['status']; en
   switch (status) {
     case 'running':
       return (
-        <Badge className="border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-400">
+        <Badge variant="outline" className="gap-1.5 text-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true" />
           Running
         </Badge>
       );
     case 'idle':
       return (
-        <Badge className="border-yellow-200 bg-yellow-50 text-yellow-700 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-400">
+        <Badge variant="outline" className="gap-1.5 text-muted-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" aria-hidden="true" />
           Idle
         </Badge>
       );
@@ -171,6 +178,18 @@ function emptyTransport(feedType: CreateFeedRequest['feed_type']): Record<string
         url: '',
         reconnect_backoff: [5, 10, 30, 60],
         heartbeat_secs: 30,
+      };
+    case 'rss':
+      return { url: '', interval_secs: 300, headers: {}, max_entries_per_poll: 50 };
+    case 'market_candle':
+      return {
+        url: '',
+        interval_secs: 60,
+        headers: {},
+        venue: '',
+        symbols: [],
+        timeframes: [],
+        max_candles_per_poll: 1000,
       };
   }
 }
@@ -289,6 +308,102 @@ function TransportFields({
               placeholder="wss://stream.example.com/ws"
               className="h-9 font-mono text-sm"
             />
+          </div>
+        </div>
+      );
+    case 'rss':
+      return (
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">RSS/Atom URL</Label>
+            <Input
+              value={String(transport.url ?? '')}
+              onChange={(e) => set('url', e.target.value)}
+              placeholder="https://example.com/feed.xml"
+              className="h-9 font-mono text-sm"
+            />
+          </div>
+          <div className="flex gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Interval (seconds)</Label>
+              <Input
+                type="number"
+                min={1}
+                value={String(transport.interval_secs ?? 300)}
+                onChange={(e) => set('interval_secs', Number(e.target.value))}
+                className="h-9 w-32 text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Max entries</Label>
+              <Input
+                type="number"
+                min={1}
+                value={String(transport.max_entries_per_poll ?? 50)}
+                onChange={(e) => set('max_entries_per_poll', Number(e.target.value))}
+                className="h-9 w-32 text-sm"
+              />
+            </div>
+          </div>
+        </div>
+      );
+    case 'market_candle':
+      return (
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Normalized candle endpoint</Label>
+            <Input
+              value={String(transport.url ?? '')}
+              onChange={(e) => set('url', e.target.value)}
+              placeholder="https://market-data.example/candles/latest"
+              className="h-9 font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Venue</Label>
+            <Input
+              value={String(transport.venue ?? '')}
+              onChange={(e) => set('venue', e.target.value)}
+              placeholder="binance"
+              className="h-9 text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Symbols</Label>
+            <Input
+              value={Array.isArray(transport.symbols) ? transport.symbols.join(', ') : ''}
+              onChange={(e) =>
+                set(
+                  'symbols',
+                  e.target.value
+                    .split(',')
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                )
+              }
+              placeholder="BTCUSDT, ETHUSDT"
+              className="h-9 font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Timeframes</Label>
+            <Input
+              value={Array.isArray(transport.timeframes) ? transport.timeframes.join(', ') : ''}
+              onChange={(e) =>
+                set(
+                  'timeframes',
+                  e.target.value
+                    .split(',')
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                )
+              }
+              placeholder="1m, 15m, 1h"
+              className="h-9 font-mono text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              Endpoint must return rara's normalized candle batch JSON.
+            </p>
           </div>
         </div>
       );
@@ -421,13 +536,17 @@ function FeedFormDialog({
   open,
   onOpenChange,
   editFeed,
+  initialForm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editFeed?: DataFeedConfig | undefined;
+  initialForm?: FeedFormState | undefined;
 }) {
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<FeedFormState>(editFeed ? feedToForm(editFeed) : INITIAL_FORM);
+  const [form, setForm] = useState<FeedFormState>(
+    editFeed ? feedToForm(editFeed) : (initialForm ?? INITIAL_FORM),
+  );
   const [error, setError] = useState<string | null>(null);
 
   const isEdit = !!editFeed;
@@ -436,6 +555,7 @@ function FeedFormDialog({
     mutationFn: (req: CreateFeedRequest) => dataFeedsApi.create(req),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -445,6 +565,7 @@ function FeedFormDialog({
     mutationFn: (req: Partial<CreateFeedRequest>) => dataFeedsApi.update(editFeed!.id, req),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -466,10 +587,16 @@ function FeedFormDialog({
 
   const saving = createMutation.isPending || updateMutation.isPending;
 
+  useEffect(() => {
+    if (!open) return;
+    setForm(editFeed ? feedToForm(editFeed) : (initialForm ?? INITIAL_FORM));
+    setError(null);
+  }, [open, editFeed, initialForm]);
+
   // Reset form when dialog opens with a new feed
   const handleOpenChange = (next: boolean) => {
     if (next) {
-      setForm(editFeed ? feedToForm(editFeed) : INITIAL_FORM);
+      setForm(editFeed ? feedToForm(editFeed) : (initialForm ?? INITIAL_FORM));
       setError(null);
     }
     onOpenChange(next);
@@ -522,6 +649,8 @@ function FeedFormDialog({
                 <SelectItem value="polling">Polling</SelectItem>
                 <SelectItem value="webhook">Webhook</SelectItem>
                 <SelectItem value="websocket">WebSocket</SelectItem>
+                <SelectItem value="rss">RSS</SelectItem>
+                <SelectItem value="market_candle">Market Candle</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -858,6 +987,130 @@ function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () =
 // Feed List View
 // ---------------------------------------------------------------------------
 
+function FeedCatalogCard({
+  entries,
+  onUseTemplate,
+}: {
+  entries: FeedCatalogEntry[];
+  onUseTemplate: (entry: FeedCatalogEntry) => void;
+}) {
+  const queryClient = useQueryClient();
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+    void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+  };
+
+  const enableMutation = useMutation({
+    mutationFn: (id: string) => dataFeedsApi.enableCatalogEntry(id),
+    onSuccess: refresh,
+  });
+
+  const disableMutation = useMutation({
+    mutationFn: (id: string) => dataFeedsApi.disableCatalogEntry(id),
+    onSuccess: refresh,
+  });
+
+  if (entries.length === 0) return null;
+
+  const readyEntries = entries.filter((entry) => !entry.requires_configuration);
+  const providerEntries = entries.filter((entry) => entry.requires_configuration);
+
+  const renderEntry = (entry: FeedCatalogEntry) => {
+    const pending =
+      (enableMutation.isPending && enableMutation.variables === entry.id) ||
+      (disableMutation.isPending && disableMutation.variables === entry.id);
+
+    return (
+      <div
+        key={entry.id}
+        className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{entry.name}</span>
+            <Badge variant="outline" className="text-xs">
+              {typeLabel(entry.feed_type)}
+            </Badge>
+            {entry.enabled && (
+              <Badge variant="secondary" className="text-xs text-foreground">
+                Enabled
+              </Badge>
+            )}
+            {entry.requires_configuration && (
+              <Badge variant="secondary" className="text-xs text-muted-foreground">
+                Requires config
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">{entry.description}</p>
+          {entry.setup_hint && <p className="text-xs text-muted-foreground">{entry.setup_hint}</p>}
+          <p className="text-[11px] text-muted-foreground">Tags: {entry.tags.join(' · ')}</p>
+        </div>
+        {entry.requires_configuration ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => onUseTemplate(entry)}
+          >
+            Use template
+          </Button>
+        ) : entry.enabled ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => disableMutation.mutate(entry.id)}
+            disabled={pending}
+          >
+            {pending ? 'Disabling...' : 'Disable'}
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => enableMutation.mutate(entry.id)}
+            disabled={pending}
+          >
+            {pending ? 'Enabling...' : 'Enable'}
+          </Button>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h3 className="text-sm font-semibold">Default finance sources</h3>
+        <p className="text-xs text-muted-foreground">
+          Official feeds can run immediately. Provider presets need your own endpoint or
+          credentials.
+        </p>
+      </div>
+      <div className="divide-y">
+        {readyEntries.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
+              Ready to enable
+            </div>
+            {readyEntries.map(renderEntry)}
+          </div>
+        )}
+        {providerEntries.length > 0 && (
+          <div>
+            <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
+              Provider presets
+            </div>
+            {providerEntries.map(renderEntry)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FeedListView({
   feeds,
   onSelectFeed,
@@ -868,33 +1121,57 @@ function FeedListView({
   const queryClient = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [editFeed, setEditFeed] = useState<DataFeedConfig | undefined>();
+  const [draftForm, setDraftForm] = useState<FeedFormState | undefined>();
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const catalogQuery = useQuery({
+    queryKey: ['data-feed-catalog'],
+    queryFn: () => dataFeedsApi.catalog(),
+  });
 
   const toggleMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.toggle(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['data-feeds'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.delete(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       setDeleteId(null);
     },
   });
 
   const handleEdit = (feed: DataFeedConfig) => {
     setEditFeed(feed);
+    setDraftForm(undefined);
     setFormOpen(true);
   };
 
   const handleNew = () => {
     setEditFeed(undefined);
+    setDraftForm(undefined);
+    setFormOpen(true);
+  };
+
+  const handleUseTemplate = (entry: FeedCatalogEntry) => {
+    setEditFeed(undefined);
+    setDraftForm({
+      name: `finance-${entry.id}`,
+      feed_type: entry.feed_type,
+      tags: entry.tags.join(', '),
+      transport: entry.transport_template ?? emptyTransport(entry.feed_type),
+      authType: 'none',
+      authFields: {},
+    });
     setFormOpen(true);
   };
 
   return (
-    <>
+    <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <div>
@@ -908,6 +1185,10 @@ function FeedListView({
           New Feed
         </Button>
       </div>
+
+      {catalogQuery.data && (
+        <FeedCatalogCard entries={catalogQuery.data} onUseTemplate={handleUseTemplate} />
+      )}
 
       {/* Table */}
       {feeds.length === 0 ? (
@@ -1002,7 +1283,12 @@ function FeedListView({
       )}
 
       {/* Create/Edit Dialog */}
-      <FeedFormDialog open={formOpen} onOpenChange={setFormOpen} editFeed={editFeed} />
+      <FeedFormDialog
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        editFeed={editFeed}
+        initialForm={draftForm}
+      />
 
       {/* Delete Confirmation */}
       <Dialog
@@ -1033,7 +1319,7 @@ function FeedListView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }
 
