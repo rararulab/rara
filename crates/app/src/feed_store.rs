@@ -31,13 +31,13 @@ use yunara_store::diesel_pool::DieselSqlitePools;
 ///
 /// Implements [`FeedStore`] using the `data_feed_events` table. Reads use
 /// the reader pool; appends use the single-writer pool.
-pub struct SqliteFeedStore {
+pub(crate) struct SqliteFeedStore {
     pools: DieselSqlitePools,
 }
 
 impl SqliteFeedStore {
     /// Create a new store backed by the given pool bundle.
-    pub fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
+    pub(crate) fn new(pools: DieselSqlitePools) -> Self { Self { pools } }
 }
 
 #[async_trait]
@@ -161,7 +161,7 @@ impl FeedEventRow {
 
 #[cfg(test)]
 #[derive(Default)]
-pub struct InMemoryFeedStore {
+pub(crate) struct InMemoryFeedStore {
     events: tokio::sync::RwLock<Vec<FeedEvent>>,
 }
 

@@ -29,13 +29,13 @@ use rust_decimal::Decimal;
 
 /// Outcome counters for feed dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FeedDispatchOutcome {
-    pub persisted:         bool,
-    pub finance_decisions: usize,
+pub(crate) struct FeedDispatchOutcome {
+    pub(crate) persisted:         bool,
+    pub(crate) finance_decisions: usize,
 }
 
 #[async_trait]
-pub trait FeedDispatchSink: Send + Sync {
+pub(crate) trait FeedDispatchSink: Send + Sync {
     async fn session_active(&self, session: &SessionKey) -> bool;
     async fn deliver_synthetic(&self, owner: UserId, session: SessionKey, directive: String);
     async fn append_feed_event(&self, session: SessionKey, payload: serde_json::Value);
@@ -43,13 +43,13 @@ pub trait FeedDispatchSink: Send + Sync {
 }
 
 /// Production sink backed by a kernel handle.
-pub struct KernelFeedDispatchSink {
+pub(crate) struct KernelFeedDispatchSink {
     handle: rara_kernel::handle::KernelHandle,
 }
 
 impl KernelFeedDispatchSink {
     #[must_use]
-    pub fn new(handle: rara_kernel::handle::KernelHandle) -> Self { Self { handle } }
+    pub(crate) fn new(handle: rara_kernel::handle::KernelHandle) -> Self { Self { handle } }
 }
 
 #[async_trait]
@@ -86,7 +86,7 @@ impl FeedDispatchSink for KernelFeedDispatchSink {
 }
 
 /// Persist, optionally upsert market data, and dispatch matching subscriptions.
-pub async fn dispatch_feed_event(
+pub(crate) async fn dispatch_feed_event(
     event: &FeedEvent,
     feed_store: &dyn FeedStore,
     market_repo: &dyn MarketDataRepository,
@@ -222,7 +222,7 @@ fn required_str<'a>(event: &'a FeedEvent, field: &str) -> anyhow::Result<&'a str
 }
 
 #[cfg(test)]
-pub struct TestFeedDispatchSink {
+struct TestFeedDispatchSink {
     active:    std::collections::HashSet<SessionKey>,
     synthetic: tokio::sync::RwLock<Vec<String>>,
     silent:    tokio::sync::RwLock<Vec<serde_json::Value>>,
@@ -230,7 +230,7 @@ pub struct TestFeedDispatchSink {
 
 #[cfg(test)]
 impl TestFeedDispatchSink {
-    pub fn new(sessions: impl IntoIterator<Item = SessionKey>) -> Self {
+    fn new(sessions: impl IntoIterator<Item = SessionKey>) -> Self {
         Self {
             active:    sessions.into_iter().collect(),
             synthetic: tokio::sync::RwLock::new(Vec::new()),
@@ -238,11 +238,9 @@ impl TestFeedDispatchSink {
         }
     }
 
-    pub async fn synthetic_turns(&self) -> Vec<String> { self.synthetic.read().await.clone() }
+    async fn synthetic_turns(&self) -> Vec<String> { self.synthetic.read().await.clone() }
 
-    pub async fn silent_appends(&self) -> Vec<serde_json::Value> {
-        self.silent.read().await.clone()
-    }
+    async fn silent_appends(&self) -> Vec<serde_json::Value> { self.silent.read().await.clone() }
 }
 
 #[cfg(test)]

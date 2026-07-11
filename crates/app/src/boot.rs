@@ -1029,7 +1029,7 @@ pub(crate) struct McpDynamicToolProvider {
 }
 
 impl McpDynamicToolProvider {
-    pub fn new(manager: rara_mcp::manager::mgr::McpManager) -> Self { Self { manager } }
+    pub(crate) fn new(manager: rara_mcp::manager::mgr::McpManager) -> Self { Self { manager } }
 }
 
 #[async_trait]
