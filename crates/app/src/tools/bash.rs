@@ -59,11 +59,12 @@ use rara_kernel::{
 use rara_sandbox::ExecRequest;
 use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     SandboxToolConfig,
     sandbox::{GUEST_WORKSPACE, SandboxMap, sandbox_for_session, sandbox_not_configured_error},
+    tools::timeout::deserialize_timeout,
 };
 
 /// Maximum output size in bytes (50 KB).
@@ -89,87 +90,6 @@ pub struct BashParams {
     /// are translated to the guest mount; paths outside the workspace are
     /// rejected.
     cwd:     Option<String>,
-}
-
-/// Accept `30` (integer), `"30"` (stringified integer), or `"30s"` /
-/// `"2m"` (humantime duration) for the timeout field.
-fn deserialize_timeout<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use std::fmt;
-
-    use serde::de::{self, Visitor};
-
-    struct TimeoutVisitor;
-
-    impl<'de> Visitor<'de> for TimeoutVisitor {
-        type Value = Option<Duration>;
-
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("an integer, stringified integer, or humantime duration")
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-
-        fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
-            d.deserialize_any(DurationVisitor).map(Some)
-        }
-    }
-
-    struct DurationVisitor;
-
-    impl<'de> Visitor<'de> for DurationVisitor {
-        type Value = Duration;
-
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str(
-                "an integer (seconds), stringified integer, humantime duration, or {\"secs\": N, \
-                 \"nanos\": N} map",
-            )
-        }
-
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Duration, E> {
-            Ok(Duration::from_secs(v))
-        }
-
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Duration, E> {
-            let secs = u64::try_from(v).map_err(|_| E::custom(format!("negative timeout: {v}")))?;
-            Ok(Duration::from_secs(secs))
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Duration, E> {
-            let s = v.trim();
-            // Try bare integer first ("30" → 30 seconds).
-            if let Ok(secs) = s.parse::<u64>() {
-                return Ok(Duration::from_secs(secs));
-            }
-            // Fall back to humantime ("30s", "2m").
-            humantime::parse_duration(s).map_err(|_| E::custom(format!("invalid timeout: {v:?}")))
-        }
-
-        /// Accept `{"secs": 30, "nanos": 0}` — the Duration struct layout
-        /// that some LLMs (e.g. GPT-5.4) emit when they see the JSON schema.
-        fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Duration, A::Error> {
-            let mut secs: Option<u64> = None;
-            let mut nanos: Option<u32> = None;
-
-            while let Some(key) = map.next_key::<String>()? {
-                match key.as_str() {
-                    "secs" => secs = Some(map.next_value()?),
-                    "nanos" => nanos = Some(map.next_value()?),
-                    _ => {
-                        let _ = map.next_value::<de::IgnoredAny>()?;
-                    }
-                }
-            }
-
-            let secs = secs.ok_or_else(|| de::Error::missing_field("secs"))?;
-            Ok(Duration::new(secs, nanos.unwrap_or(0)))
-        }
-    }
-
-    deserializer.deserialize_option(TimeoutVisitor)
 }
 
 /// Typed result returned by the bash tool.
