@@ -581,6 +581,7 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
         anyhow::ensure!(!venue.is_empty(), "market candle venue is required");
 
         let was_enabled = config.enabled;
+        let was_running = self.data_feed_registry.is_running(&config.name);
         let transport_changed = apply_market_candle_selection(
             &mut config.transport,
             &symbols,
@@ -602,13 +603,19 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
                 "failed to update market candle feed source: {}",
                 config.name
             );
-            replace_registry_config(&self.data_feed_registry, config.clone())?;
+            if start_now && was_running {
+                replace_registry_config(&self.data_feed_registry, config.clone())?;
+            } else {
+                replace_registry_config_preserving_runtime(
+                    &self.data_feed_registry,
+                    config.clone(),
+                )?;
+            }
             true
         } else {
             false
         };
 
-        let was_running = self.data_feed_registry.is_running(&config.name);
         let feed_restarted = start_now && (created || transport_changed || !was_running);
         if feed_restarted {
             if self.data_feed_registry.get(&config.name).is_none() {
@@ -1061,6 +1068,18 @@ fn replace_registry_config(
         registry.remove(&config.name)?;
     }
     registry.register(config)?;
+    Ok(())
+}
+
+fn replace_registry_config_preserving_runtime(
+    registry: &Arc<DataFeedRegistry>,
+    config: DataFeedConfig,
+) -> anyhow::Result<()> {
+    if registry.get(&config.name).is_some() {
+        registry.replace_config(config)?;
+    } else {
+        registry.register(config)?;
+    }
     Ok(())
 }
 
@@ -1744,6 +1763,75 @@ mod tests {
                 .await
                 .len(),
             2
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_start_now_false_preserves_running_feed_task() {
+        let (_list, _enable, _disable, _restart, tool, svc, registry, _finance_registry) =
+            tool().await;
+        let ctx = context();
+        let first = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let token = tokio_util::sync::CancellationToken::new();
+        let token_clone = token.clone();
+        registry.set_running(first.source_name.clone(), token);
+
+        let second = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["ETHUSDT".to_owned()],
+                    timeframes:             vec!["15m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(second.feed_change, FeedChange::Updated);
+        assert!(!second.feed_restarted);
+        assert!(!token_clone.is_cancelled());
+        assert!(second.running);
+        assert!(registry.is_running(&first.source_name));
+
+        let feed = svc.get_feed(&first.feed_id).await.unwrap().unwrap();
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            feed.transport["timeframes"],
+            serde_json::json!(["1m", "15m"])
+        );
+        assert_eq!(
+            registry.get(&first.source_name).unwrap().transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            registry.get(&first.source_name).unwrap().transport["timeframes"],
+            serde_json::json!(["1m", "15m"])
         );
     }
 
