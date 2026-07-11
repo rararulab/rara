@@ -43,7 +43,10 @@ use tokio::sync::Mutex;
 pub use crate::sandbox::SandboxMap;
 use crate::{
     SandboxToolConfig,
-    sandbox::{sandbox_for_session, sandbox_not_configured_error},
+    sandbox::{
+        RECLAIM_BACKOFF, RECLAIM_MAX_ATTEMPTS, ReclaimOutcome, reclaim_when_idle,
+        sandbox_for_session, sandbox_not_configured_error,
+    },
 };
 
 /// Input parameters for the `run_code` tool.
@@ -221,29 +224,35 @@ impl LifecycleHook for SandboxCleanupHook {
         };
         let session_key = ctx.session_key;
         // The lifecycle pipeline times each hook out at 5s. `Sandbox::destroy`
-        // can take longer (boxlite tears down the VM), so spawn it
-        // detached — the map entry is already removed, and a leaked box
-        // is preferable to blocking subsequent session teardown.
+        // plus the reclamation retry budget can exceed that, so run it
+        // detached — the map entry is already removed above.
+        //
+        // `destroy` consumes `self`, so the reaper must own the `Sandbox`.
+        // When a session ends with an `exec` still in flight, that exec holds
+        // a clone of the `Arc` for the whole call; the kernel signal pipeline
+        // cancels the turn, dropping the clone moments later. Rather than give
+        // up on the first `try_unwrap` (the leak in #1866), retry acquiring
+        // ownership with a bounded backoff until the clone clears, then
+        // destroy. The loop is bounded, so this task always terminates.
         tokio::spawn(async move {
-            // `destroy` consumes `self`; pull the inner Sandbox out of
-            // the Arc<Mutex<…>>. If another task is still mid-exec we
-            // cannot reclaim ownership — the kernel signal pipeline has
-            // already cancelled the turn but the in-flight clone is
-            // still live, so the VM gets leaked until process exit.
-            // Tracked in #1866.
-            let inner = match Arc::try_unwrap(sandbox) {
-                Ok(mutex) => mutex.into_inner(),
-                Err(arc) => {
-                    tracing::warn!(
-                        session_key = %session_key,
-                        strong_count = Arc::strong_count(&arc),
-                        "sandbox still in use at session end; leaking VM until process exit (see #1866)"
-                    );
-                    return;
-                }
-            };
-            if let Err(e) = inner.destroy().await {
-                tracing::warn!(error = %e, "failed to destroy sandbox on session end");
+            let outcome = reclaim_when_idle(
+                sandbox,
+                RECLAIM_MAX_ATTEMPTS,
+                RECLAIM_BACKOFF,
+                |inner: Sandbox| async move {
+                    if let Err(e) = inner.destroy().await {
+                        tracing::warn!(error = %e, "failed to destroy sandbox on session end");
+                    }
+                },
+            )
+            .await;
+            if let ReclaimOutcome::Exhausted { strong_count } = outcome {
+                tracing::warn!(
+                    session_key = %session_key,
+                    strong_count,
+                    "sandbox still in use after reclaim budget exhausted; VM not reclaimed \
+                     until process exit (see #1866)"
+                );
             }
         });
     }

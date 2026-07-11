@@ -45,7 +45,7 @@
 //! - `run_code` — historical full network access, modelled as `Enabled {
 //!   allow_net: [] }`.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use rara_kernel::session::SessionKey;
@@ -164,10 +164,199 @@ pub fn sandbox_not_configured_error(tool: &str) -> anyhow::Error {
     )
 }
 
+/// Maximum ownership-reacquisition attempts before the reaper gives up.
+///
+/// Mechanism-tuning constant (not YAML — see `docs/guides/anti-patterns.md`
+/// "mechanism-tuning constants are Rust `const`"). Sized, together with
+/// [`RECLAIM_BACKOFF`], to comfortably outlast turn-cancellation propagation:
+/// when a session ends with an exec still in flight, turn cancellation drops
+/// the in-flight `Arc` clone within milliseconds, so a sub-second budget is
+/// ample. See [`reclaim_when_idle`] and #1866.
+pub(crate) const RECLAIM_MAX_ATTEMPTS: u32 = 10;
+
+/// Delay between ownership-reacquisition attempts. See
+/// [`RECLAIM_MAX_ATTEMPTS`].
+pub(crate) const RECLAIM_BACKOFF: Duration = Duration::from_millis(150);
+
+/// Outcome of a [`reclaim_when_idle`] run.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReclaimOutcome {
+    /// The last outstanding clone dropped, ownership was reacquired, and the
+    /// `reclaim` callback was invoked exactly once.
+    Reclaimed,
+    /// The retry budget was exhausted while a clone was still outstanding;
+    /// `reclaim` was never invoked. Carries the final observed strong count
+    /// so the caller can escalate (warn) with the residual contention.
+    Exhausted { strong_count: usize },
+}
+
+/// Reacquire sole ownership of an `Arc<Mutex<T>>` once its last outstanding
+/// clone drops, then hand the owned `T` to `reclaim`.
+///
+/// This is the mechanism behind [`SandboxCleanupHook`](crate::tools::run_code)
+/// reclaiming a per-session microVM at session end. `Sandbox::destroy`
+/// consumes `self`, so the reaper must own the `Sandbox` — but when a session
+/// ends with an `exec` still in flight, that exec holds a clone of the `Arc`
+/// for the duration of the call. Turn cancellation drops the in-flight future
+/// (and its clone) moments later, so instead of giving up on the first
+/// `Arc::try_unwrap` we retry with a bounded backoff until the clone clears.
+///
+/// The loop is generic over the payload `T` purely so it can be unit-tested
+/// with a probe type and **no boxlite dependency** (CI has no boxlite runtime).
+/// It never blocks the caller's own progress guarantees: callers run it inside
+/// a detached task so the lifecycle pipeline's per-hook timeout is unaffected.
+///
+/// Returns [`ReclaimOutcome::Reclaimed`] once `reclaim` runs, or
+/// [`ReclaimOutcome::Exhausted`] if the budget runs out while a clone is still
+/// live (a genuinely wedged exec — not the timing window this targets). The
+/// task therefore always terminates.
+pub(crate) async fn reclaim_when_idle<T, F, Fut>(
+    arc: Arc<Mutex<T>>,
+    max_attempts: u32,
+    backoff: Duration,
+    reclaim: F,
+) -> ReclaimOutcome
+where
+    F: FnOnce(T) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let mut arc = arc;
+    for attempt in 1..=max_attempts {
+        match Arc::try_unwrap(arc) {
+            Ok(mutex) => {
+                reclaim(mutex.into_inner()).await;
+                return ReclaimOutcome::Reclaimed;
+            }
+            Err(returned) => {
+                arc = returned;
+                // Sleep between attempts, but not after the final one — there
+                // is no point waiting once the budget is spent.
+                if attempt < max_attempts {
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+    ReclaimOutcome::Exhausted {
+        strong_count: Arc::strong_count(&arc),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex as StdMutex;
+
     use super::*;
     use crate::BashSandboxConfig;
+
+    /// Payload for the reclamation tests — stands in for `Sandbox` so the
+    /// mechanism is exercised without a boxlite dependency.
+    struct Probe {
+        id: u32,
+    }
+
+    /// Scenario: reclamation waits for an outstanding clone, then reclaims
+    /// exactly once. Core falsifier for #1866 — the single-shot `try_unwrap`
+    /// would give up here and leak.
+    #[tokio::test]
+    async fn reclaim_waits_for_outstanding_clone_then_reclaims_once() {
+        let arc = Arc::new(Mutex::new(Probe { id: 42 }));
+        let clone = Arc::clone(&arc); // simulated in-flight exec's clone
+        let reclaimed: Arc<StdMutex<Vec<u32>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        // The in-flight task holds its clone across a couple of backoff
+        // cycles, asserts the reaper has NOT reclaimed while contended, then
+        // drops the clone so ownership can be reacquired.
+        let seen = Arc::clone(&reclaimed);
+        let holder = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            assert!(
+                seen.lock().unwrap().is_empty(),
+                "reclaim must not fire while a clone is outstanding"
+            );
+            drop(clone);
+        });
+
+        let record = Arc::clone(&reclaimed);
+        let outcome = reclaim_when_idle(
+            arc,
+            50,
+            Duration::from_millis(10),
+            move |probe: Probe| async move {
+                record.lock().unwrap().push(probe.id);
+            },
+        )
+        .await;
+
+        holder.await.expect("holder task");
+        assert_eq!(outcome, ReclaimOutcome::Reclaimed);
+        assert_eq!(
+            *reclaimed.lock().unwrap(),
+            vec![42],
+            "reclaim must fire exactly once with owned ownership of the Probe"
+        );
+    }
+
+    /// Scenario: reclamation fires promptly (first attempt, no sleeping) when
+    /// no clone is outstanding — the common fast path.
+    #[tokio::test]
+    async fn reclaim_fires_immediately_when_idle() {
+        let arc = Arc::new(Mutex::new(Probe { id: 7 }));
+        let reclaimed: Arc<StdMutex<Vec<u32>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        let record = Arc::clone(&reclaimed);
+        let started = std::time::Instant::now();
+        // A huge backoff is only reachable if the reaper retried — so a fast
+        // return proves it reclaimed on the first attempt without sleeping.
+        let outcome = reclaim_when_idle(
+            arc,
+            3,
+            Duration::from_secs(30),
+            move |probe: Probe| async move {
+                record.lock().unwrap().push(probe.id);
+            },
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(outcome, ReclaimOutcome::Reclaimed);
+        assert_eq!(*reclaimed.lock().unwrap(), vec![7]);
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "must reclaim on the first attempt without exhausting the retry budget (elapsed \
+             {elapsed:?})"
+        );
+    }
+
+    /// Scenario: reclamation is bounded when the outstanding clone never
+    /// drops — proves the detached task always terminates and surfaces the
+    /// residual rather than spinning forever or leaking silently.
+    #[tokio::test]
+    async fn reclaim_bounded_when_clone_never_drops() {
+        let arc = Arc::new(Mutex::new(Probe { id: 1 }));
+        let clone = Arc::clone(&arc); // held for the entire run, never dropped
+        let reclaimed: Arc<StdMutex<Vec<u32>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        let record = Arc::clone(&reclaimed);
+        let outcome = reclaim_when_idle(
+            arc,
+            3,
+            Duration::from_millis(5),
+            move |probe: Probe| async move {
+                record.lock().unwrap().push(probe.id);
+            },
+        )
+        .await;
+
+        // Bounded termination with the exhaustion surfaced (the caller warns
+        // on this variant), not a silent swallow or a forever-spin.
+        assert_eq!(outcome, ReclaimOutcome::Exhausted { strong_count: 2 });
+        assert!(
+            reclaimed.lock().unwrap().is_empty(),
+            "reclaim must never fire while the clone is still held"
+        );
+        drop(clone);
+    }
 
     fn cfg(bash: Option<BashSandboxConfig>) -> SandboxToolConfig {
         SandboxToolConfig::builder()
