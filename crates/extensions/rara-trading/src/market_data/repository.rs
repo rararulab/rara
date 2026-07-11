@@ -18,7 +18,9 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use tokio::sync::RwLock;
 
-use super::model::{CandleLatestQuery, CandleRangeQuery, MarketCandle};
+use super::model::{
+    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary, MarketCandle,
+};
 
 /// Result of upserting a closed candle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,12 @@ pub trait MarketDataRepository: Send + Sync {
         &self,
         query: CandleLatestQuery,
     ) -> anyhow::Result<Option<MarketCandle>>;
+
+    /// List stored candle streams with their latest watermarks.
+    async fn candle_streams(
+        &self,
+        query: CandleStreamListQuery,
+    ) -> anyhow::Result<Vec<CandleStreamSummary>>;
 
     /// Return missing open times in `[start, end)` based on the query
     /// timeframe.
@@ -160,6 +168,48 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
             .cloned())
     }
 
+    async fn candle_streams(
+        &self,
+        query: CandleStreamListQuery,
+    ) -> anyhow::Result<Vec<CandleStreamSummary>> {
+        let candles = self.candles.read().await;
+        let mut streams = BTreeMap::<StreamKey, CandleStreamSummary>::new();
+
+        for candle in candles
+            .values()
+            .filter(|candle| matches_stream_query(candle, &query))
+        {
+            let key = StreamKey::from(candle);
+            streams
+                .entry(key)
+                .and_modify(|summary| update_stream_summary(summary, candle))
+                .or_insert_with(|| CandleStreamSummary {
+                    source_name:        candle.source_name.clone(),
+                    venue:              candle.venue.clone(),
+                    symbol:             candle.symbol.clone(),
+                    timeframe:          candle.timeframe.clone(),
+                    candle_count:       1,
+                    first_open_time:    candle.open_time,
+                    latest_open_time:   candle.open_time,
+                    latest_close_time:  candle.close_time,
+                    latest_ingested_at: candle.ingested_at,
+                });
+        }
+
+        let mut rows: Vec<_> = streams.into_values().collect();
+        rows.sort_by(|left, right| {
+            right
+                .latest_open_time
+                .cmp(&left.latest_open_time)
+                .then_with(|| left.venue.cmp(&right.venue))
+                .then_with(|| left.symbol.cmp(&right.symbol))
+                .then_with(|| left.timeframe.cmp(&right.timeframe))
+                .then_with(|| left.source_name.cmp(&right.source_name))
+        });
+        rows.truncate(query.limit.min(10_000));
+        Ok(rows)
+    }
+
     async fn missing_open_times(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<Timestamp>> {
         let rows = self.candles(query.clone()).await?;
         let present: std::collections::HashSet<Timestamp> =
@@ -178,6 +228,38 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
         }
 
         Ok(missing)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct StreamKey {
+    source_name: String,
+    venue:       String,
+    symbol:      String,
+    timeframe:   String,
+}
+
+impl From<&MarketCandle> for StreamKey {
+    fn from(candle: &MarketCandle) -> Self {
+        Self {
+            source_name: candle.source_name.clone(),
+            venue:       candle.venue.clone(),
+            symbol:      candle.symbol.clone(),
+            timeframe:   candle.timeframe.to_string(),
+        }
+    }
+}
+
+fn update_stream_summary(summary: &mut CandleStreamSummary, candle: &MarketCandle) {
+    summary.candle_count = summary.candle_count.saturating_add(1);
+    summary.first_open_time = summary.first_open_time.min(candle.open_time);
+    if candle.open_time > summary.latest_open_time
+        || (candle.open_time == summary.latest_open_time
+            && candle.ingested_at > summary.latest_ingested_at)
+    {
+        summary.latest_open_time = candle.open_time;
+        summary.latest_close_time = candle.close_time;
+        summary.latest_ingested_at = candle.ingested_at;
     }
 }
 
@@ -203,12 +285,33 @@ fn matches_latest_query(candle: &MarketCandle, query: &CandleLatestQuery) -> boo
         && candle.timeframe == query.timeframe
 }
 
+fn matches_stream_query(candle: &MarketCandle, query: &CandleStreamListQuery) -> bool {
+    query
+        .source_name
+        .as_ref()
+        .is_none_or(|source| source == &candle.source_name)
+        && query
+            .venue
+            .as_ref()
+            .is_none_or(|venue| venue == &candle.venue)
+        && query
+            .symbol
+            .as_ref()
+            .is_none_or(|symbol| symbol == &candle.symbol)
+        && query
+            .timeframe
+            .as_ref()
+            .is_none_or(|timeframe| timeframe == &candle.timeframe)
+}
+
 #[cfg(test)]
 mod tests {
     use rust_decimal::Decimal;
 
     use super::{InMemoryMarketDataRepository, MarketDataRepository, UpsertOutcome};
-    use crate::market_data::{CandleLatestQuery, CandleRangeQuery, MarketCandle, Timeframe};
+    use crate::market_data::{
+        CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, MarketCandle, Timeframe,
+    };
 
     fn ts(value: &str) -> jiff::Timestamp { value.parse().expect("timestamp fixture should parse") }
 
@@ -350,5 +453,46 @@ mod tests {
 
         assert_eq!(latest.open_time, ts("2026-07-10T08:30:00Z"));
         assert_eq!(latest.close, dec("61700.00"));
+    }
+
+    #[tokio::test]
+    async fn candle_streams_returns_latest_watermarks_per_stream() {
+        let repo = InMemoryMarketDataRepository::default();
+        repo.upsert_closed_candle(candle("2026-07-10T08:00:00Z", "61500.00"))
+            .await
+            .unwrap();
+        repo.upsert_closed_candle(candle("2026-07-10T08:30:00Z", "61700.00"))
+            .await
+            .unwrap();
+        repo.upsert_closed_candle(MarketCandle {
+            symbol: "ETHUSDT".to_owned(),
+            open_time: ts("2026-07-10T08:45:00Z"),
+            close_time: ts("2026-07-10T09:00:00Z"),
+            close: dec("3200.00"),
+            ..candle("2026-07-10T08:45:00Z", "3200.00")
+        })
+        .await
+        .unwrap();
+
+        let streams = repo
+            .candle_streams(CandleStreamListQuery {
+                source_name: Some("binance-spot".to_owned()),
+                venue:       Some("binance".to_owned()),
+                symbol:      None,
+                timeframe:   Some(Timeframe::parse("15m").unwrap()),
+                limit:       10,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].symbol, "ETHUSDT");
+        assert_eq!(streams[0].candle_count, 1);
+        assert_eq!(streams[0].latest_open_time, ts("2026-07-10T08:45:00Z"));
+        assert_eq!(streams[0].latest_close_time, ts("2026-07-10T09:00:00Z"));
+        assert_eq!(streams[1].symbol, "BTCUSDT");
+        assert_eq!(streams[1].candle_count, 2);
+        assert_eq!(streams[1].first_open_time, ts("2026-07-10T08:00:00Z"));
+        assert_eq!(streams[1].latest_open_time, ts("2026-07-10T08:30:00Z"));
     }
 }

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use rara_trading::market_data::{
-    CandleLatestQuery, CandleRangeQuery, MarketCandle, MarketDataRepository, Timeframe,
-    TimescaleMarketDataRepository, UpsertOutcome,
+    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, MarketCandle, MarketDataRepository,
+    Timeframe, TimescaleMarketDataRepository, UpsertOutcome,
 };
 use rust_decimal::Decimal;
 use sqlx_core::row::Row;
@@ -87,6 +87,36 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
         .expect("latest candle should exist");
     assert_eq!(latest.open_time, ts("2026-07-10T08:30:00Z"));
     assert_eq!(latest.close, dec("61700.00"));
+
+    assert_eq!(
+        repo.upsert_closed_candle(MarketCandle {
+            symbol: "ETHUSDT".to_owned(),
+            open_time: ts("2026-07-10T08:45:00Z"),
+            close_time: ts("2026-07-10T09:00:00Z"),
+            close: dec("3200.00"),
+            ..candle("2026-07-10T08:45:00Z", "3200.00")
+        })
+        .await?,
+        UpsertOutcome::Inserted
+    );
+    let streams = repo
+        .candle_streams(CandleStreamListQuery {
+            source_name: Some("timescale-container-contract".to_owned()),
+            venue:       Some("binance".to_owned()),
+            symbol:      None,
+            timeframe:   Some(Timeframe::parse("15m")?),
+            limit:       10,
+        })
+        .await?;
+    assert_eq!(streams.len(), 2);
+    assert_eq!(streams[0].symbol, "ETHUSDT");
+    assert_eq!(streams[0].candle_count, 1);
+    assert_eq!(streams[0].latest_open_time, ts("2026-07-10T08:45:00Z"));
+    assert_eq!(streams[0].latest_close_time, ts("2026-07-10T09:00:00Z"));
+    assert_eq!(streams[1].symbol, "BTCUSDT");
+    assert_eq!(streams[1].candle_count, 2);
+    assert_eq!(streams[1].first_open_time, ts("2026-07-10T08:15:00Z"));
+    assert_eq!(streams[1].latest_open_time, ts("2026-07-10T08:30:00Z"));
 
     let missing = repo
         .missing_open_times(CandleRangeQuery {

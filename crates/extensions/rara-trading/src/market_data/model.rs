@@ -141,3 +141,28 @@ pub struct CandleLatestQuery {
     pub symbol:      String,
     pub timeframe:   Timeframe,
 }
+
+/// Stream inventory query for stored candle data.
+#[derive(Debug, Clone)]
+pub struct CandleStreamListQuery {
+    pub source_name: Option<String>,
+    pub venue:       Option<String>,
+    pub symbol:      Option<String>,
+    pub timeframe:   Option<Timeframe>,
+    pub limit:       usize,
+}
+
+/// Aggregated summary for one `(source, venue, symbol, timeframe)` candle
+/// stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandleStreamSummary {
+    pub source_name:        String,
+    pub venue:              String,
+    pub symbol:             String,
+    pub timeframe:          Timeframe,
+    pub candle_count:       usize,
+    pub first_open_time:    Timestamp,
+    pub latest_open_time:   Timestamp,
+    pub latest_close_time:  Timestamp,
+    pub latest_ingested_at: Timestamp,
+}

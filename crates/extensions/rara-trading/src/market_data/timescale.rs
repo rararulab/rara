@@ -20,7 +20,10 @@ use sqlx_postgres::{PgPool, Postgres};
 use uuid::Uuid;
 
 use super::{
-    model::{CandleLatestQuery, CandleRangeQuery, MarketCandle, Timeframe},
+    model::{
+        CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary,
+        MarketCandle, Timeframe,
+    },
     repository::{MarketDataRepository, UpsertOutcome},
 };
 
@@ -179,6 +182,65 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
         row.map(row_to_candle).transpose()
     }
 
+    async fn candle_streams(
+        &self,
+        query: CandleStreamListQuery,
+    ) -> anyhow::Result<Vec<CandleStreamSummary>> {
+        let limit = i64::try_from(query.limit.min(10_000))?;
+        let rows = sqlx_core::query::query(
+            r#"
+            WITH grouped AS (
+              SELECT
+                source_name,
+                venue,
+                symbol,
+                timeframe,
+                COUNT(*)::bigint AS candle_count,
+                MIN(open_time)::text AS first_open_time,
+                MAX(open_time)::text AS latest_open_time
+              FROM market_candles
+              WHERE ($1::text IS NULL OR source_name = $1)
+                AND ($2::text IS NULL OR venue = $2)
+                AND ($3::text IS NULL OR symbol = $3)
+                AND ($4::text IS NULL OR timeframe = $4)
+              GROUP BY source_name, venue, symbol, timeframe
+            )
+            SELECT
+              grouped.source_name,
+              grouped.venue,
+              grouped.symbol,
+              grouped.timeframe,
+              grouped.candle_count,
+              grouped.first_open_time,
+              grouped.latest_open_time,
+              candles.close_time::text AS latest_close_time,
+              candles.ingested_at::text AS latest_ingested_at
+            FROM grouped
+            JOIN market_candles candles
+              ON candles.source_name = grouped.source_name
+             AND candles.venue = grouped.venue
+             AND candles.symbol = grouped.symbol
+             AND candles.timeframe = grouped.timeframe
+             AND candles.open_time = grouped.latest_open_time::timestamptz
+            ORDER BY grouped.latest_open_time::timestamptz DESC,
+                     grouped.venue ASC,
+                     grouped.symbol ASC,
+                     grouped.timeframe ASC,
+                     grouped.source_name ASC
+            LIMIT $5
+            "#,
+        )
+        .bind(query.source_name.as_deref())
+        .bind(query.venue.as_deref())
+        .bind(query.symbol.as_deref())
+        .bind(query.timeframe.as_ref().map(Timeframe::as_str))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_stream_summary).collect()
+    }
+
     async fn missing_open_times(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<Timestamp>> {
         let rows = self.candles(query.clone()).await?;
         let present: std::collections::HashSet<Timestamp> =
@@ -326,5 +388,20 @@ fn row_to_candle(row: sqlx_postgres::PgRow) -> anyhow::Result<MarketCandle> {
         volume:            Decimal::from_str_exact(&row.try_get::<String, _>("volume")?)?,
         ingested_at:       row.try_get::<String, _>("ingested_at")?.parse()?,
         provider_sequence: row.try_get("provider_sequence")?,
+    })
+}
+
+fn row_to_stream_summary(row: sqlx_postgres::PgRow) -> anyhow::Result<CandleStreamSummary> {
+    let candle_count: i64 = row.try_get("candle_count")?;
+    Ok(CandleStreamSummary {
+        source_name:        row.try_get("source_name")?,
+        venue:              row.try_get("venue")?,
+        symbol:             row.try_get("symbol")?,
+        timeframe:          Timeframe::parse(row.try_get::<String, _>("timeframe")?)?,
+        candle_count:       usize::try_from(candle_count)?,
+        first_open_time:    row.try_get::<String, _>("first_open_time")?.parse()?,
+        latest_open_time:   row.try_get::<String, _>("latest_open_time")?.parse()?,
+        latest_close_time:  row.try_get::<String, _>("latest_close_time")?.parse()?,
+        latest_ingested_at: row.try_get::<String, _>("latest_ingested_at")?.parse()?,
     })
 }
