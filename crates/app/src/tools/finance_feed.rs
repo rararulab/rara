@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use jiff::Timestamp;
@@ -63,12 +66,15 @@ pub(super) struct FinanceFeedSourceEntry {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedSourceRuntime {
-    pub persisted:  bool,
-    pub feed_id:    Option<String>,
-    pub enabled:    bool,
-    pub running:    bool,
-    pub status:     Option<String>,
-    pub last_error: Option<String>,
+    pub persisted:     bool,
+    pub feed_id:       Option<String>,
+    pub enabled:       bool,
+    pub running:       bool,
+    pub status:        Option<String>,
+    pub last_error:    Option<String>,
+    pub event_count:   i64,
+    pub last_event_at: Option<String>,
+    pub lag_seconds:   Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,13 +321,33 @@ impl ToolExecute for FinanceListFeedSourcesTool {
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceListFeedSourcesResult> {
         let feeds = self.svc.list_feeds().await?;
+        let summaries = self
+            .svc
+            .event_summaries()
+            .await?
+            .into_iter()
+            .map(|summary| (summary.source_name.clone(), summary))
+            .collect::<HashMap<_, _>>();
+        let now = Timestamp::now();
+
         Ok(FinanceListFeedSourcesResult {
             sources: default_finance_feed_sources()
                 .into_iter()
                 .map(|source| {
                     let source_name = source.feed_name();
                     let persisted = feeds.iter().find(|feed| feed.name == source_name);
-                    feed_source_entry(source, persisted, self.registry.is_running(&source_name))
+                    let summary = summaries.get(&source_name);
+                    let last_event_at = summary.and_then(|summary| summary.last_event_at);
+                    let lag_seconds = last_event_at
+                        .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+                    feed_source_entry(
+                        source,
+                        persisted,
+                        self.registry.is_running(&source_name),
+                        summary.map_or(0, |summary| summary.event_count),
+                        last_event_at.map(|timestamp| timestamp.to_string()),
+                        lag_seconds,
+                    )
                 })
                 .collect(),
         })
@@ -942,6 +968,9 @@ fn feed_source_entry(
     source: DefaultFeedSource,
     persisted: Option<&DataFeedConfig>,
     running: bool,
+    event_count: i64,
+    last_event_at: Option<String>,
+    lag_seconds: Option<i64>,
 ) -> FinanceFeedSourceEntry {
     let source_name = source.feed_name();
     let transport = persisted
@@ -965,6 +994,9 @@ fn feed_source_entry(
             running,
             status: persisted.map(|feed| feed.status.to_string()),
             last_error: persisted.and_then(|feed| feed.last_error.clone()),
+            event_count,
+            last_event_at,
+            lag_seconds,
         },
         venue: transport
             .and_then(|value| value.get("venue"))
@@ -1038,7 +1070,7 @@ mod tests {
 
     use diesel_async::RunQueryDsl;
     use rara_kernel::{
-        data_feed::{DataFeedConfig, FeedStatus, FeedType},
+        data_feed::{DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedStore, FeedType},
         io::MessageId,
         queue::{ShardedEventQueue, ShardedEventQueueConfig},
         session::SessionKey,
@@ -1128,6 +1160,17 @@ mod tests {
             )",
             "CREATE INDEX idx_data_feeds_name ON data_feeds(name)",
             "CREATE INDEX idx_data_feeds_type ON data_feeds(feed_type)",
+            "CREATE TABLE data_feed_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                source_name TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                payload TEXT NOT NULL DEFAULT '{}',
+                received_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+            "CREATE INDEX idx_data_feed_events_source ON data_feed_events(source_name)",
+            "CREATE INDEX idx_data_feed_events_received ON data_feed_events(received_at)",
         ] {
             diesel::sql_query(ddl)
                 .execute(&mut *conn)
@@ -1158,6 +1201,9 @@ mod tests {
         assert!(!fed.runtime.enabled);
         assert!(!fed.runtime.running);
         assert_eq!(fed.runtime.status, None);
+        assert_eq!(fed.runtime.event_count, 0);
+        assert_eq!(fed.runtime.last_event_at, None);
+        assert_eq!(fed.runtime.lag_seconds, None);
 
         let binance = result
             .sources
@@ -1205,6 +1251,56 @@ mod tests {
         assert!(!fed.runtime.running);
         assert_eq!(fed.runtime.status.as_deref(), Some("idle"));
         assert_eq!(fed.runtime.last_error, None);
+        assert_eq!(fed.runtime.event_count, 0);
+    }
+
+    #[tokio::test]
+    async fn list_feed_sources_reports_persisted_event_summary() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools.clone());
+        let store = crate::feed_store::SqliteFeedStore::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let list = FinanceListFeedSourcesTool::new(svc.clone(), registry.clone());
+        let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let received_at = jiff::Timestamp::now();
+        let event = FeedEvent::builder()
+            .id(FeedEventId::deterministic("fed-event"))
+            .source_name("finance-fed-press-releases".to_owned())
+            .event_type("rss_article".to_owned())
+            .tags(vec!["finance".to_owned(), "fed".to_owned()])
+            .payload(serde_json::json!({
+                "title": "Fed update",
+                "url": "https://www.federalreserve.gov/example"
+            }))
+            .received_at(received_at)
+            .build();
+        store.append(&event).await.unwrap();
+
+        let result = list
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+        let fed = result
+            .sources
+            .iter()
+            .find(|source| source.id == "fed-press-releases")
+            .expect("fed source should be listed");
+
+        assert_eq!(fed.runtime.event_count, 1);
+        assert_eq!(fed.runtime.last_event_at, Some(received_at.to_string()));
+        assert!(fed.runtime.lag_seconds.is_some_and(|lag| lag >= 0));
     }
 
     #[tokio::test]
