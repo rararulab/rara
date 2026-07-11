@@ -59,9 +59,10 @@ The Settings → Data Feeds panel lists built-in finance sources under "Default
 finance sources":
 
 - official RSS feeds that can be enabled immediately;
-- provider presets such as Binance and Longbridge that prefill a
-  `market_candle` configuration but still require an operator-managed endpoint
-  or credentials.
+- ready public market-data feeds such as Binance spot candles;
+- provider presets such as Longbridge that prefill a `market_candle`
+  configuration but still require an operator-managed normalized endpoint or
+  credentials.
 
 Enabling a ready source creates or re-enables a deterministic data feed named
 `finance-{catalog_id}`; disabling it turns the feed off without deleting the
@@ -71,10 +72,12 @@ config row. The same catalog is available through the authenticated admin API:
 - `POST /api/v1/data-feeds/catalog/{id}/enable`
 - `POST /api/v1/data-feeds/catalog/{id}/disable`
 
-Built-in provider presets are not directly enabled by the catalog API. A direct
-enable attempt returns `400 Bad Request` until the operator supplies a complete
-feed configuration. Market-candle feeds still require an operator-managed
-normalized endpoint.
+Ready catalog entries can be enabled with an empty body. Provider presets that
+require setup return `400 Bad Request` without operator configuration, but can
+be materialized by supplying a complete `transport` and optional `auth` body to
+`POST /api/v1/data-feeds/catalog/{id}/enable`. The body is merged over the
+catalog template, so a Longbridge preset can keep its default symbols/timeframe
+while the operator supplies the normalized endpoint and credentials.
 
 Custom finance feeds can also be created through the authenticated admin API.
 Example payloads are documented in `config.example.yaml`.
@@ -95,7 +98,7 @@ RSS/Atom:
 }
 ```
 
-Latest closed candles:
+Latest closed candles through an operator-managed normalized endpoint:
 
 ```json
 {
@@ -116,6 +119,10 @@ Latest closed candles:
 
 The market-candle endpoint must return normalized JSON with decimal strings.
 Only `closed: true` bars are emitted. In-progress bars are ignored in the MVP.
+
+Ready Binance catalog entries use Binance's public spot kline API directly and
+do not require rara to hold exchange credentials. They still emit only
+`market_candle_closed` feed events.
 
 ## Conversation tools
 
