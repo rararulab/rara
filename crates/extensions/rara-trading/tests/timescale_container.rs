@@ -88,6 +88,19 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
     assert_eq!(latest.open_time, ts("2026-07-10T08:30:00Z"));
     assert_eq!(latest.close, dec("61700.00"));
 
+    let missing = repo
+        .missing_open_times(CandleRangeQuery {
+            source_name: Some("timescale-container-contract".to_owned()),
+            venue:       "binance".to_owned(),
+            symbol:      "BTCUSDT".to_owned(),
+            timeframe:   Timeframe::parse("15m")?,
+            start:       ts("2026-07-10T08:00:00Z"),
+            end:         ts("2026-07-10T08:45:00Z"),
+            limit:       3,
+        })
+        .await?;
+    assert_eq!(missing, vec![ts("2026-07-10T08:00:00Z")]);
+
     let audit_pool = sqlx_postgres::PgPool::connect(&database_url).await?;
     let correction_count: i64 =
         sqlx_core::query::query("SELECT COUNT(*)::bigint AS count FROM market_candle_corrections")
