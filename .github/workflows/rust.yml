@@ -26,13 +26,15 @@ env:
   CARGO_INCREMENTAL: false
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
-  # arc-runner-set reuses ~/.cargo/git across jobs. libgit2 chokes checking
-  # out the boxlite git dependency's nested e2fsprogs submodule when a prior
-  # run left residual files ("could not create symlink RELEASE-NOTES: File
-  # exists"). Fetch git deps via the system `git` CLI instead of libgit2 —
-  # `git submodule update` is robust to residual state. Paired with the
-  # per-job stale-checkout clean below. GitHub-hosted runners never hit this
-  # (fresh ~/.cargo each run); arc's persistent cache does. See #2226.
+  # The three Rust jobs run concurrently on arc pods that share one
+  # /home/runner/.cargo volume, so they raced on the boxlite git dependency's
+  # checkout (nested e2fsprogs submodule): one job's fetch/checkout against
+  # another's, giving "could not create symlink RELEASE-NOTES: File exists" /
+  # "failed to remove directory .../apps" / ".git/index.lock: No such file".
+  # The primary fix is a per-job CARGO_HOME (see each job's env), which drops
+  # the shared state entirely. This stays as hardening: fetch git deps via the
+  # system `git` CLI (robust `git submodule update`) rather than libgit2.
+  # GitHub-hosted runners never hit this (fresh ~/.cargo each run). See #2226.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # Kept "" defensively: no sccache backend is configured, and a preset
   # wrapper would make `rustc -vV` probes (notably `cargo +nightly doc`)
@@ -78,6 +80,11 @@ jobs:
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
+      # Isolate CARGO_HOME per job: arc schedules these three Rust jobs
+      # concurrently on pods sharing one /home/runner/.cargo, and they raced
+      # on the boxlite git checkout. runner.temp is wiped per job, so each
+      # gets a clean, private cargo home. See top-of-file note + #2226.
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -92,13 +99,16 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          # Per-job key: the jobs use isolated CARGO_HOME paths and share one
+          # arc OS/arch (no matrix), so give each its own cache entry (#2226).
+          key: ${{ github.job }}
 
-      # arc-runner-set is a persistent runner (~/.cargo/git reused across
-      # jobs). Drop any residual boxlite git checkout so cargo re-fetches it
-      # clean before the first cargo invocation — see the top-of-file
-      # CARGO_NET_GIT_FETCH_WITH_CLI note and #2226. Runs after the cache
-      # restore so a restored-but-stale entry is cleaned too.
-      - name: Clear stale boxlite git checkout (persistent arc cache)
+      # Defensive: with per-job CARGO_HOME (see env) this only touches THIS
+      # job's cargo home — no cross-job race — and normally matches nothing on
+      # a wiped runner.temp. Kept to clear any boxlite checkout a restored
+      # rust-cache git/db entry might reconstruct stale. See #2226.
+      - name: Clear any stale boxlite git checkout (defensive)
         run: rm -rf "${CARGO_HOME:-$HOME/.cargo}/git/checkouts/boxlite-"* "${CARGO_HOME:-$HOME/.cargo}/git/db/boxlite-"*
 
       - name: Run clippy
@@ -111,6 +121,11 @@ jobs:
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
+      # Isolate CARGO_HOME per job: arc schedules these three Rust jobs
+      # concurrently on pods sharing one /home/runner/.cargo, and they raced
+      # on the boxlite git checkout. runner.temp is wiped per job, so each
+      # gets a clean, private cargo home. See top-of-file note + #2226.
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -125,10 +140,14 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          # Per-job key: the jobs use isolated CARGO_HOME paths and share one
+          # arc OS/arch (no matrix), so give each its own cache entry (#2226).
+          key: ${{ github.job }}
 
-      # See the clippy job: clear the residual boxlite git checkout the
-      # persistent arc runner reuses across jobs, before any cargo call (#2226).
-      - name: Clear stale boxlite git checkout (persistent arc cache)
+      # See the clippy job: defensive clear within this job's isolated
+      # CARGO_HOME before any cargo call (#2226).
+      - name: Clear any stale boxlite git checkout (defensive)
         run: rm -rf "${CARGO_HOME:-$HOME/.cargo}/git/checkouts/boxlite-"* "${CARGO_HOME:-$HOME/.cargo}/git/db/boxlite-"*
 
       # Kept defensively (the arc image historically baked nextest in).
@@ -155,6 +174,11 @@ jobs:
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
+      # Isolate CARGO_HOME per job: arc schedules these three Rust jobs
+      # concurrently on pods sharing one /home/runner/.cargo, and they raced
+      # on the boxlite git checkout. runner.temp is wiped per job, so each
+      # gets a clean, private cargo home. See top-of-file note + #2226.
+      CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -178,10 +202,14 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          # Per-job key: the jobs use isolated CARGO_HOME paths and share one
+          # arc OS/arch (no matrix), so give each its own cache entry (#2226).
+          key: ${{ github.job }}
 
-      # See the clippy job: clear the residual boxlite git checkout the
-      # persistent arc runner reuses across jobs, before any cargo call (#2226).
-      - name: Clear stale boxlite git checkout (persistent arc cache)
+      # See the clippy job: defensive clear within this job's isolated
+      # CARGO_HOME before any cargo call (#2226).
+      - name: Clear any stale boxlite git checkout (defensive)
         run: rm -rf "${CARGO_HOME:-$HOME/.cargo}/git/checkouts/boxlite-"* "${CARGO_HOME:-$HOME/.cargo}/git/db/boxlite-"*
 
       - name: Generate documentation
