@@ -305,7 +305,19 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
             ),
         ),
         Arc::new(
-            rara_trading::market_data::tools::FinanceQueryCandlesTool::new(deps.market_data_repo),
+            rara_trading::market_data::tools::FinanceQueryCandlesTool::new(
+                deps.market_data_repo.clone(),
+            ),
+        ),
+        Arc::new(
+            rara_trading::market_data::tools::FinanceFindCandleGapsTool::new(
+                deps.market_data_repo.clone(),
+            ),
+        ),
+        Arc::new(
+            rara_trading::market_data::tools::FinanceGetCandleFreshnessTool::new(
+                deps.market_data_repo,
+            ),
         ),
         // Artifacts (rich-content side panel — deferred tier)
         Arc::new(ArtifactsTool::new(deps.tape_service.clone())),

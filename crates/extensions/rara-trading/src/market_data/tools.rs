@@ -65,6 +65,52 @@ pub struct FinanceQueryCandlesResult {
     pub query_limit: usize,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinanceFindCandleGapsParams {
+    #[serde(default)]
+    pub source_name: Option<String>,
+    pub venue:       String,
+    pub symbol:      String,
+    pub timeframe:   String,
+    /// Inclusive candle open time, as an RFC3339 timestamp.
+    pub start:       String,
+    /// Exclusive candle open time, as an RFC3339 timestamp.
+    pub end:         String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceFindCandleGapsResult {
+    pub missing_open_times: Vec<String>,
+    pub missing_count:      usize,
+    pub expected_count:     usize,
+    pub complete:           bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinanceGetCandleFreshnessParams {
+    #[serde(default)]
+    pub source_name:      Option<String>,
+    pub venue:            String,
+    pub symbol:           String,
+    pub timeframe:        String,
+    /// Comparison timestamp. Defaults to server now.
+    #[serde(default)]
+    pub as_of:            Option<String>,
+    /// Stale threshold in seconds. Defaults to 2x the timeframe step.
+    #[serde(default)]
+    pub stale_after_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceGetCandleFreshnessResult {
+    pub latest:           Option<FinanceCandle>,
+    pub as_of:            String,
+    pub stale_after_secs: u64,
+    pub lag_secs:         Option<i64>,
+    pub is_stale:         bool,
+    pub status:           String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceCandle {
     pub source_name:       String,
@@ -180,6 +226,145 @@ impl ToolExecute for FinanceQueryCandlesTool {
     }
 }
 
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_find_candle_gaps",
+    description = "Find missing closed-candle open times for a venue, symbol, timeframe, and \
+                   open-time range in the market-data TSDB. The range is capped to 10,000 \
+                   expected candles to keep quality checks bounded. This is read-only and never \
+                   places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub struct FinanceFindCandleGapsTool {
+    repository: MarketDataRepositoryRef,
+}
+
+impl FinanceFindCandleGapsTool {
+    pub fn new(repository: MarketDataRepositoryRef) -> Self { Self { repository } }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceFindCandleGapsTool {
+    type Output = FinanceFindCandleGapsResult;
+    type Params = FinanceFindCandleGapsParams;
+
+    async fn run(
+        &self,
+        params: FinanceFindCandleGapsParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceFindCandleGapsResult> {
+        let timeframe = Timeframe::parse(params.timeframe)?;
+        let start = parse_timestamp("start", &params.start)?;
+        let end = parse_timestamp("end", &params.end)?;
+        anyhow::ensure!(start < end, "start must be before end");
+        let expected_count = expected_open_time_count(&timeframe, start, end)?;
+
+        let query = CandleRangeQuery {
+            source_name: normalize_optional_selector("source_name", params.source_name)?,
+            venue: normalize_required_selector("venue", params.venue)?,
+            symbol: normalize_required_selector("symbol", params.symbol)?,
+            timeframe,
+            start,
+            end,
+            limit: expected_count,
+        };
+        let missing = self.repository.missing_open_times(query).await?;
+        let missing_count = missing.len();
+
+        Ok(FinanceFindCandleGapsResult {
+            missing_open_times: missing.into_iter().map(|ts| ts.to_string()).collect(),
+            missing_count,
+            expected_count,
+            complete: missing_count == 0,
+        })
+    }
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_get_candle_freshness",
+    description = "Report whether the latest closed candle for a venue, symbol, and timeframe is \
+                   fresh or stale compared with an as_of timestamp. Defaults stale_after_secs to \
+                   2x the timeframe step. This is read-only and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub struct FinanceGetCandleFreshnessTool {
+    repository: MarketDataRepositoryRef,
+}
+
+impl FinanceGetCandleFreshnessTool {
+    pub fn new(repository: MarketDataRepositoryRef) -> Self { Self { repository } }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceGetCandleFreshnessTool {
+    type Output = FinanceGetCandleFreshnessResult;
+    type Params = FinanceGetCandleFreshnessParams;
+
+    async fn run(
+        &self,
+        params: FinanceGetCandleFreshnessParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceGetCandleFreshnessResult> {
+        let timeframe = Timeframe::parse(params.timeframe)?;
+        let default_stale_after_secs =
+            u64::try_from(timeframe.step()?.as_secs())?.saturating_mul(2);
+        let stale_after_secs = params.stale_after_secs.unwrap_or(default_stale_after_secs);
+        anyhow::ensure!(stale_after_secs > 0, "stale_after_secs must be positive");
+        anyhow::ensure!(
+            stale_after_secs <= 31_536_000,
+            "stale_after_secs must be <= 31536000"
+        );
+        let as_of = params
+            .as_of
+            .as_deref()
+            .map(|value| parse_timestamp("as_of", value))
+            .transpose()?
+            .unwrap_or_else(Timestamp::now);
+
+        let query = CandleLatestQuery {
+            source_name: normalize_optional_selector("source_name", params.source_name)?,
+            venue: normalize_required_selector("venue", params.venue)?,
+            symbol: normalize_required_selector("symbol", params.symbol)?,
+            timeframe,
+        };
+        let latest = self.repository.latest_closed_candle(query).await?;
+        let Some(candle) = latest else {
+            return Ok(FinanceGetCandleFreshnessResult {
+                latest: None,
+                as_of: as_of.to_string(),
+                stale_after_secs,
+                lag_secs: None,
+                is_stale: true,
+                status: "missing".to_owned(),
+            });
+        };
+
+        let lag_secs = as_of.as_second() - candle.close_time.as_second();
+        let is_stale = lag_secs >= 0 && lag_secs as u64 > stale_after_secs;
+        let status = if lag_secs < 0 {
+            "future"
+        } else if is_stale {
+            "stale"
+        } else {
+            "fresh"
+        };
+
+        Ok(FinanceGetCandleFreshnessResult {
+            latest: Some(FinanceCandle::from(candle)),
+            as_of: as_of.to_string(),
+            stale_after_secs,
+            lag_secs: Some(lag_secs),
+            is_stale,
+            status: status.to_owned(),
+        })
+    }
+}
+
 impl From<MarketCandle> for FinanceCandle {
     fn from(candle: MarketCandle) -> Self {
         Self {
@@ -225,6 +410,27 @@ fn parse_timestamp(name: &str, value: &str) -> anyhow::Result<Timestamp> {
         .map_err(|err| anyhow::anyhow!("{name} must be an RFC3339 timestamp: {err}"))
 }
 
+fn expected_open_time_count(
+    timeframe: &Timeframe,
+    start: Timestamp,
+    end: Timestamp,
+) -> anyhow::Result<usize> {
+    let step = timeframe.step()?;
+    let mut cursor = start;
+    let mut count = 0usize;
+    while cursor < end {
+        count = count.saturating_add(1);
+        anyhow::ensure!(
+            count <= MAX_CANDLE_LIMIT,
+            "range contains more than {MAX_CANDLE_LIMIT} expected candles"
+        );
+        cursor = cursor
+            .checked_add(step)
+            .map_err(|err| anyhow::anyhow!("timeframe addition overflowed: {err}"))?;
+    }
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -238,8 +444,9 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::{
-        FinanceGetLatestCandleParams, FinanceGetLatestCandleTool, FinanceQueryCandlesParams,
-        FinanceQueryCandlesTool,
+        FinanceFindCandleGapsParams, FinanceFindCandleGapsTool, FinanceGetCandleFreshnessParams,
+        FinanceGetCandleFreshnessTool, FinanceGetLatestCandleParams, FinanceGetLatestCandleTool,
+        FinanceQueryCandlesParams, FinanceQueryCandlesTool,
     };
     use crate::market_data::{
         InMemoryMarketDataRepository, MarketCandle, MarketDataRepository, Timeframe,
@@ -294,6 +501,19 @@ mod tests {
             .unwrap();
         repository
             .upsert_closed_candle(candle("2026-07-10T08:01:00Z", "61520.00"))
+            .await
+            .unwrap();
+        repository
+    }
+
+    async fn repository_with_gap() -> Arc<InMemoryMarketDataRepository> {
+        let repository = Arc::new(InMemoryMarketDataRepository::default());
+        repository
+            .upsert_closed_candle(candle("2026-07-10T08:00:00Z", "61510.00"))
+            .await
+            .unwrap();
+        repository
+            .upsert_closed_candle(candle("2026-07-10T08:02:00Z", "61530.00"))
             .await
             .unwrap();
         repository
@@ -376,13 +596,83 @@ mod tests {
         assert!(err.to_string().contains("start must be before end"));
     }
 
+    #[tokio::test]
+    async fn find_candle_gaps_tool_reports_missing_open_times() {
+        let tool = FinanceFindCandleGapsTool::new(repository_with_gap().await);
+        let result = tool
+            .run(
+                FinanceFindCandleGapsParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       "binance".to_owned(),
+                    symbol:      "BTCUSDT".to_owned(),
+                    timeframe:   "1m".to_owned(),
+                    start:       "2026-07-10T08:00:00Z".to_owned(),
+                    end:         "2026-07-10T08:03:00Z".to_owned(),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.expected_count, 3);
+        assert_eq!(result.missing_count, 1);
+        assert!(!result.complete);
+        assert_eq!(result.missing_open_times, vec!["2026-07-10T08:01:00Z"]);
+    }
+
+    #[tokio::test]
+    async fn freshness_tool_reports_fresh_and_stale_status() {
+        let repository = repository().await;
+        let tool = FinanceGetCandleFreshnessTool::new(repository);
+
+        let fresh = tool
+            .run(
+                FinanceGetCandleFreshnessParams {
+                    source_name:      Some("binance-spot".to_owned()),
+                    venue:            "binance".to_owned(),
+                    symbol:           "BTCUSDT".to_owned(),
+                    timeframe:        "1m".to_owned(),
+                    as_of:            Some("2026-07-10T08:02:30Z".to_owned()),
+                    stale_after_secs: Some(120),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fresh.status, "fresh");
+        assert!(!fresh.is_stale);
+        assert_eq!(fresh.lag_secs, Some(90));
+
+        let stale = tool
+            .run(
+                FinanceGetCandleFreshnessParams {
+                    source_name:      Some("binance-spot".to_owned()),
+                    venue:            "binance".to_owned(),
+                    symbol:           "BTCUSDT".to_owned(),
+                    timeframe:        "1m".to_owned(),
+                    as_of:            Some("2026-07-10T08:10:00Z".to_owned()),
+                    stale_after_secs: Some(120),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status, "stale");
+        assert!(stale.is_stale);
+        assert_eq!(stale.lag_secs, Some(540));
+    }
+
     #[test]
     fn candle_query_tools_are_read_only() {
         let repository = Arc::new(InMemoryMarketDataRepository::default());
         let latest = FinanceGetLatestCandleTool::new(repository.clone());
-        let query = FinanceQueryCandlesTool::new(repository);
+        let query = FinanceQueryCandlesTool::new(repository.clone());
+        let gaps = FinanceFindCandleGapsTool::new(repository.clone());
+        let freshness = FinanceGetCandleFreshnessTool::new(repository);
 
         assert!(latest.is_read_only(&serde_json::json!({})));
         assert!(query.is_read_only(&serde_json::json!({})));
+        assert!(gaps.is_read_only(&serde_json::json!({})));
+        assert!(freshness.is_read_only(&serde_json::json!({})));
     }
 }
