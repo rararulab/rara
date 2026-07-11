@@ -44,6 +44,15 @@ defaults:
 permissions:
   contents: read
 
+# The merge-gate legs (clippy / test / docs) run x64-only, on GitHub-hosted
+# `ubuntu-latest`. The Linux arm64 test leg (`ubuntu-24.04-arm`) was removed
+# (#2228): it took ~18min and was the dominant driver of CI latency, tripling
+# turnaround for no proportional signal. arm64 coverage now comes from two
+# cheaper places — the `aarch64-unknown-linux-gnu` release build in
+# `[workspace.metadata.dist]` (Cargo.toml) and day-to-day local dev on
+# macOS-arm64 machines. The `.cargo/config.toml` arm64 stanza stays for that
+# release build. Re-adding an arm64 test leg is a follow-up if signal warrants.
+#
 # All jobs run on GitHub-hosted runners. The self-hosted `arc-runner-set`
 # fleet no longer exists (gone since ~2026-05-08); jobs targeting it queued
 # for 24h and were cancelled by GitHub, so `arc-runner-set` must NOT appear
@@ -56,17 +65,9 @@ permissions:
 # explicitly before any cargo invocation.
 jobs:
   clippy:
-    name: Clippy (${{ matrix.arch }})
+    name: Clippy (linux-x64)
     if: ${{ inputs.run }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: linux-x64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            runner: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
@@ -89,17 +90,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
   test:
-    name: Test (${{ matrix.arch }})
+    name: Test (linux-x64)
     if: ${{ inputs.run }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: linux-x64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            runner: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"
@@ -136,17 +129,9 @@ jobs:
         run: cargo run -p rara-cli -- setup boxlite --check
 
   docs:
-    name: Documentation (${{ matrix.arch }})
+    name: Documentation (linux-x64)
     if: ${{ inputs.run }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: linux-x64
-            runner: ubuntu-latest
-          - arch: linux-arm64
-            runner: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     env:
       # See top-of-file note: stub native boxlite build in CI.
       BOXLITE_DEPS_STUB: "1"

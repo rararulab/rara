@@ -40,15 +40,26 @@ func TestCargoDistBuildsLinuxArm64OnArmRunner(t *testing.T) {
 	}
 }
 
-func TestRustWorkflowRunsOnX64AndArm64Linux(t *testing.T) {
+// TestRustWorkflowRunsX64Only guards the #2228 decision: the merge-gate Rust
+// workflow runs x64-only on GitHub-hosted ubuntu-latest. The arm64 test leg was
+// removed for CI latency; arm64 coverage lives in the release build + local dev.
+// Comment lines may still explain the removal, so only non-comment lines are
+// checked for a lingering arm64 runner reference.
+func TestRustWorkflowRunsX64Only(t *testing.T) {
 	data := readRepoFile(t, ".github/workflows/rust.yml")
 
 	text := string(data)
-	if !strings.Contains(text, linuxArm64Runner) {
-		t.Fatalf("rust.yml does not mention runner %q", linuxArm64Runner)
+	if !strings.Contains(text, "ubuntu-latest") {
+		t.Fatalf("rust.yml should run its jobs on ubuntu-latest (x64)")
 	}
-	if !strings.Contains(text, "${{ matrix.runner }}") {
-		t.Fatalf("rust.yml should use matrix.runner for Rust jobs")
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue // comments may explain why the arm64 leg was removed
+		}
+		if strings.Contains(trimmed, linuxArm64Runner) {
+			t.Errorf("rust.yml schedules an arm64 leg (%q) — removed for CI latency (#2228)", linuxArm64Runner)
+		}
 	}
 }
 

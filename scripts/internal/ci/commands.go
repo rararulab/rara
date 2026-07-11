@@ -50,9 +50,11 @@ func runCheck() error {
 	if err := checkCargoDist(filepath.Join(root, "Cargo.toml")); err != nil {
 		return err
 	}
-	if err := checkContains(filepath.Join(root, ".github/workflows/rust.yml"), []byte(arm64Runner)); err != nil {
-		return err
-	}
+	// The merge-gate Rust workflow runs x64-only since #2228; the arm64 test
+	// leg was removed for CI latency. arm64 coverage now comes from the
+	// release build (checkCargoDist above) + the .cargo/config.toml arm64
+	// stanza below, so rust.yml is no longer required to mention the arm64
+	// runner.
 	if err := checkContains(filepath.Join(root, ".cargo/config.toml"), []byte("[target."+arm64Target+"]")); err != nil {
 		return err
 	}
