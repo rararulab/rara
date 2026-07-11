@@ -12,22 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use jiff::Timestamp;
 use rara_backend_admin::data_feeds::{DataFeedSvc, start_feed_task};
 use rara_kernel::{
-    data_feed::{DataFeedConfig, DataFeedRegistry, FeedStatus},
+    data_feed::{DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType},
+    identity::UserId,
     tool::{ToolContext, ToolExecute},
 };
 use rara_tool_macro::ToolDef;
-use rara_trading::feed::catalog::{DefaultFeedSource, default_finance_feed_sources};
+use rara_trading::{
+    feed::catalog::{DefaultFeedSource, default_finance_feed_sources},
+    finance::registry::{
+        FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
+    },
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_CATALOG_SOURCE_ID_LEN: usize = 128;
+const MAX_FEED_ID_LEN: usize = 128;
+const MAX_SYMBOLS: usize = 500;
+const MAX_TIMEFRAMES: usize = 32;
+const MAX_INSTRUMENT_SELECTOR_LEN: usize = 64;
+const DEFAULT_COOLDOWN_SECS: u64 = 900;
+const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceEnableFeedSourceParams {
@@ -51,6 +63,58 @@ pub(super) struct FinanceEnableFeedSourceResult {
     pub running:           bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceSubscribeInstrumentsParams {
+    /// Built-in market-candle source id from `finance_list_feed_sources`.
+    #[serde(default)]
+    pub catalog_source_id:      Option<String>,
+    /// Existing persisted DataFeedConfig id. Use this for custom market-candle
+    /// feeds.
+    #[serde(default)]
+    pub feed_id:                Option<String>,
+    /// Venue selector used for candle event matching, e.g. "binance".
+    #[serde(default)]
+    pub venue:                  Option<String>,
+    /// Instrument symbols to fetch and subscribe to, for example `BTCUSDT`.
+    pub symbols:                Vec<String>,
+    /// Candle intervals to fetch and subscribe to, for example `1m` or `5m`.
+    pub timeframes:             Vec<String>,
+    /// Whether to start or restart the runtime feed task immediately. Defaults
+    /// to true.
+    #[serde(default)]
+    pub start_now:              Option<bool>,
+    /// Delivery policy for matched closed-candle events. Defaults to silent.
+    #[serde(default)]
+    pub delivery:               Option<FinanceDelivery>,
+    #[serde(default)]
+    pub cooldown_secs:          Option<u64>,
+    #[serde(default)]
+    pub max_immediate_per_hour: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscribeInstrumentsResult {
+    pub subscription_id:      Uuid,
+    pub subscription_created: bool,
+    pub feed_id:              String,
+    pub source_name:          String,
+    pub catalog_source_id:    Option<String>,
+    pub venue:                String,
+    pub symbols:              Vec<String>,
+    pub timeframes:           Vec<String>,
+    pub feed_change:          FeedChange,
+    pub feed_restarted:       bool,
+    pub running:              bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FeedChange {
+    Created,
+    Updated,
+    Unchanged,
+}
+
 #[derive(ToolDef)]
 #[tool(
     name = "finance_enable_feed_source",
@@ -65,9 +129,39 @@ pub(super) struct FinanceEnableFeedSourceTool {
     registry: Arc<DataFeedRegistry>,
 }
 
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_subscribe_instruments",
+    description = "Subscribe the current conversation to closed market-candle updates for \
+                   specific instruments. This ensures the selected market-candle feed source is \
+                   enabled, persists requested symbols/timeframes into the DataFeedConfig, and \
+                   optionally starts or restarts the runtime feed task. Identity and session are \
+                   always taken from tool context. This never places trades.",
+    tier = "deferred"
+)]
+pub(super) struct FinanceSubscribeInstrumentsTool {
+    data_feed_svc:      DataFeedSvc,
+    data_feed_registry: Arc<DataFeedRegistry>,
+    finance_registry:   Arc<FinanceSubscriptionRegistry>,
+}
+
 impl FinanceEnableFeedSourceTool {
     pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
         Self { svc, registry }
+    }
+}
+
+impl FinanceSubscribeInstrumentsTool {
+    pub(super) fn new(
+        data_feed_svc: DataFeedSvc,
+        data_feed_registry: Arc<DataFeedRegistry>,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+    ) -> Self {
+        Self {
+            data_feed_svc,
+            data_feed_registry,
+            finance_registry,
+        }
     }
 }
 
@@ -143,6 +237,254 @@ impl ToolExecute for FinanceEnableFeedSourceTool {
     }
 }
 
+#[async_trait]
+impl ToolExecute for FinanceSubscribeInstrumentsTool {
+    type Output = FinanceSubscribeInstrumentsResult;
+    type Params = FinanceSubscribeInstrumentsParams;
+
+    async fn run(
+        &self,
+        params: FinanceSubscribeInstrumentsParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceSubscribeInstrumentsResult> {
+        let start_now = params.start_now.unwrap_or(true);
+        let symbols = normalize_instrument_values("symbols", params.symbols, true, MAX_SYMBOLS)?;
+        let timeframes =
+            normalize_instrument_values("timeframes", params.timeframes, false, MAX_TIMEFRAMES)?;
+        let delivery = params.delivery.unwrap_or(FinanceDelivery::Silent);
+        let cooldown_secs = params.cooldown_secs.unwrap_or(DEFAULT_COOLDOWN_SECS);
+        anyhow::ensure!(cooldown_secs <= 86_400, "cooldown_secs must be <= 86400");
+        let max_immediate_per_hour = params
+            .max_immediate_per_hour
+            .unwrap_or(DEFAULT_MAX_IMMEDIATE_PER_HOUR);
+        anyhow::ensure!(
+            max_immediate_per_hour <= 60,
+            "max_immediate_per_hour must be <= 60"
+        );
+
+        let source_ref = SourceRef::from_params(params.catalog_source_id, params.feed_id)?;
+        let FeedResolution {
+            mut config,
+            catalog_source_id,
+            created,
+            replace_existing_instruments,
+        } = self.resolve_feed(source_ref).await?;
+        anyhow::ensure!(
+            config.feed_type == FeedType::MarketCandle,
+            "finance_subscribe_instruments requires a market_candle feed source"
+        );
+
+        let requested_venue = params.venue.map(normalize_venue).transpose()?;
+        let venue = requested_venue.unwrap_or_else(|| {
+            config
+                .transport
+                .get("venue")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        });
+        anyhow::ensure!(!venue.is_empty(), "market candle venue is required");
+
+        let was_enabled = config.enabled;
+        let transport_changed = apply_market_candle_selection(
+            &mut config.transport,
+            &symbols,
+            &timeframes,
+            replace_existing_instruments,
+        )?;
+        config.enabled = true;
+        config.status = FeedStatus::Idle;
+        config.last_error = None;
+        config.updated_at = Timestamp::now();
+
+        let feed_updated = if created {
+            self.data_feed_svc.create_feed(&config).await?;
+            self.data_feed_registry.register(config.clone())?;
+            true
+        } else if transport_changed || !was_enabled {
+            anyhow::ensure!(
+                self.data_feed_svc.update_feed(&config).await?,
+                "failed to update market candle feed source: {}",
+                config.name
+            );
+            replace_registry_config(&self.data_feed_registry, config.clone())?;
+            true
+        } else {
+            false
+        };
+
+        let was_running = self.data_feed_registry.is_running(&config.name);
+        let feed_restarted = start_now && (created || transport_changed || !was_running);
+        if feed_restarted {
+            if self.data_feed_registry.get(&config.name).is_none() {
+                self.data_feed_registry.register(config.clone())?;
+            }
+            start_feed_task(&config, &self.data_feed_registry);
+        }
+
+        let (subscription_id, subscription_created) = self
+            .upsert_finance_subscription(
+                context,
+                &config.name,
+                &venue,
+                &symbols,
+                &timeframes,
+                delivery,
+                cooldown_secs,
+                max_immediate_per_hour,
+            )
+            .await?;
+
+        Ok(FinanceSubscribeInstrumentsResult {
+            subscription_id,
+            subscription_created,
+            feed_id: config.id,
+            source_name: config.name.clone(),
+            catalog_source_id,
+            venue,
+            symbols,
+            timeframes,
+            feed_change: if created {
+                FeedChange::Created
+            } else if feed_updated {
+                FeedChange::Updated
+            } else {
+                FeedChange::Unchanged
+            },
+            feed_restarted,
+            running: self.data_feed_registry.is_running(&config.name),
+        })
+    }
+}
+
+impl FinanceSubscribeInstrumentsTool {
+    async fn resolve_feed(&self, source_ref: SourceRef) -> anyhow::Result<FeedResolution> {
+        match source_ref {
+            SourceRef::Catalog(catalog_source_id) => {
+                let source = find_catalog_source(&catalog_source_id)?;
+                anyhow::ensure!(
+                    source.can_enable(),
+                    "finance feed source {catalog_source_id} requires configuration: {}",
+                    source
+                        .setup_hint
+                        .as_deref()
+                        .unwrap_or("configure this provider before enabling it")
+                );
+                anyhow::ensure!(
+                    source.feed_type == FeedType::MarketCandle,
+                    "catalog source {catalog_source_id} is not a market_candle source"
+                );
+                let source_name = source.feed_name();
+                let existing = self
+                    .data_feed_svc
+                    .list_feeds()
+                    .await?
+                    .into_iter()
+                    .find(|feed| feed.name == source_name);
+                let created = existing.is_none();
+                let config = config_from_source(&source, existing)?;
+                Ok(FeedResolution {
+                    config,
+                    catalog_source_id: Some(catalog_source_id),
+                    created,
+                    replace_existing_instruments: created,
+                })
+            }
+            SourceRef::FeedId(feed_id) => {
+                let config = self
+                    .data_feed_svc
+                    .get_feed(&feed_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
+                Ok(FeedResolution {
+                    config,
+                    catalog_source_id: None,
+                    created: false,
+                    replace_existing_instruments: false,
+                })
+            }
+        }
+    }
+
+    async fn upsert_finance_subscription(
+        &self,
+        context: &ToolContext,
+        source_name: &str,
+        venue: &str,
+        symbols: &[String],
+        timeframes: &[String],
+        delivery: FinanceDelivery,
+        cooldown_secs: u64,
+        max_immediate_per_hour: u16,
+    ) -> anyhow::Result<(Uuid, bool)> {
+        let owner = UserId(context.user_id.clone());
+        let existing = self
+            .finance_registry
+            .list_for_owner(&owner)
+            .await
+            .into_iter()
+            .find(|subscription| {
+                subscription.session_key == context.session_key
+                    && set_eq(&subscription.source_names, &[source_name.to_owned()])
+                    && set_eq(&subscription.venues, &[venue.to_owned()])
+                    && set_eq(&subscription.symbols, symbols)
+                    && set_eq(&subscription.timeframes, timeframes)
+                    && set_eq(
+                        &subscription.event_kinds,
+                        &[FinanceEventKind::MarketCandleClosed],
+                    )
+            });
+        let id = existing.as_ref().map_or_else(Uuid::new_v4, |sub| sub.id);
+        let subscription = FinanceSubscription {
+            id,
+            owner,
+            session_key: context.session_key,
+            event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+            source_names: vec![source_name.to_owned()],
+            category_tags: Vec::new(),
+            watch_terms: Vec::new(),
+            venues: vec![venue.to_owned()],
+            symbols: symbols.to_vec(),
+            timeframes: timeframes.to_vec(),
+            delivery,
+            cooldown_secs,
+            max_immediate_per_hour,
+        };
+        let id = self.finance_registry.upsert(subscription).await?;
+        Ok((id, existing.is_none()))
+    }
+}
+
+enum SourceRef {
+    Catalog(String),
+    FeedId(String),
+}
+
+impl SourceRef {
+    fn from_params(
+        catalog_source_id: Option<String>,
+        feed_id: Option<String>,
+    ) -> anyhow::Result<Self> {
+        match (catalog_source_id, feed_id) {
+            (Some(catalog_source_id), None) => Ok(Self::Catalog(normalize_catalog_source_id(
+                catalog_source_id,
+            )?)),
+            (None, Some(feed_id)) => Ok(Self::FeedId(normalize_feed_id(feed_id)?)),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("provide either catalog_source_id or feed_id, not both")
+            }
+            (None, None) => anyhow::bail!("catalog_source_id or feed_id is required"),
+        }
+    }
+}
+
+struct FeedResolution {
+    config: DataFeedConfig,
+    catalog_source_id: Option<String>,
+    created: bool,
+    replace_existing_instruments: bool,
+}
+
 fn normalize_catalog_source_id(value: String) -> anyhow::Result<String> {
     let value = value.trim();
     anyhow::ensure!(!value.is_empty(), "catalog_source_id must not be empty");
@@ -151,6 +493,120 @@ fn normalize_catalog_source_id(value: String) -> anyhow::Result<String> {
         "catalog_source_id is too long"
     );
     Ok(value.to_owned())
+}
+
+fn normalize_feed_id(value: String) -> anyhow::Result<String> {
+    let value = value.trim();
+    anyhow::ensure!(!value.is_empty(), "feed_id must not be empty");
+    anyhow::ensure!(
+        value.chars().count() <= MAX_FEED_ID_LEN,
+        "feed_id is too long"
+    );
+    Ok(value.to_owned())
+}
+
+fn normalize_venue(value: String) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    anyhow::ensure!(!value.is_empty(), "venue must not be empty");
+    anyhow::ensure!(
+        value.chars().count() <= MAX_INSTRUMENT_SELECTOR_LEN,
+        "venue is too long"
+    );
+    Ok(value)
+}
+
+fn normalize_instrument_values(
+    name: &str,
+    values: Vec<String>,
+    uppercase: bool,
+    max_values: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(!values.is_empty(), "{name} must not be empty");
+    anyhow::ensure!(values.len() <= max_values, "{name} has too many values");
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let value = value.trim();
+        anyhow::ensure!(!value.is_empty(), "{name} contains an empty value");
+        anyhow::ensure!(
+            value.chars().count() <= MAX_INSTRUMENT_SELECTOR_LEN,
+            "{name} value is too long"
+        );
+        let normalized = if uppercase {
+            value.to_ascii_uppercase()
+        } else {
+            value.to_ascii_lowercase()
+        };
+        if !out.contains(&normalized) {
+            out.push(normalized);
+        }
+    }
+    Ok(out)
+}
+
+fn apply_market_candle_selection(
+    transport: &mut serde_json::Value,
+    symbols: &[String],
+    timeframes: &[String],
+    replace_existing: bool,
+) -> anyhow::Result<bool> {
+    let before = transport.clone();
+    let object = transport
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("market candle transport must be a JSON object"))?;
+    object.insert(
+        "symbols".to_owned(),
+        serde_json::Value::Array(
+            merge_json_string_array(object.get("symbols"), symbols, replace_existing)?
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+    object.insert(
+        "timeframes".to_owned(),
+        serde_json::Value::Array(
+            merge_json_string_array(object.get("timeframes"), timeframes, replace_existing)?
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+    Ok(*transport != before)
+}
+
+fn merge_json_string_array(
+    current: Option<&serde_json::Value>,
+    requested: &[String],
+    replace_existing: bool,
+) -> anyhow::Result<Vec<String>> {
+    if replace_existing {
+        return Ok(requested.to_vec());
+    }
+    let mut out = match current {
+        Some(serde_json::Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    anyhow::anyhow!("market candle transport arrays must be strings")
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        Some(_) => anyhow::bail!("market candle transport arrays must be arrays"),
+        None => Vec::new(),
+    };
+    for value in requested {
+        if !out.contains(value) {
+            out.push(value.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn set_eq<T>(left: &[T], right: &[T]) -> bool
+where
+    T: Eq + std::hash::Hash,
+{
+    left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
 }
 
 fn find_catalog_source(catalog_source_id: &str) -> anyhow::Result<DefaultFeedSource> {
@@ -209,13 +665,20 @@ mod tests {
 
     use diesel_async::RunQueryDsl;
     use rara_kernel::{
+        data_feed::{DataFeedConfig, FeedStatus, FeedType},
         io::MessageId,
         queue::{ShardedEventQueue, ShardedEventQueueConfig},
         session::SessionKey,
         tool::{AgentTool, ToolContext, ToolExecute},
     };
+    use rara_trading::finance::registry::{
+        FinanceDelivery, FinanceEventKind, FinanceSubscriptionRegistry,
+    };
 
-    use super::{FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool};
+    use super::{
+        FeedChange, FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool,
+        FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
+    };
 
     fn context() -> ToolContext {
         ToolContext {
@@ -238,18 +701,31 @@ mod tests {
 
     async fn tool() -> (
         FinanceEnableFeedSourceTool,
+        FinanceSubscribeInstrumentsTool,
         rara_backend_admin::data_feeds::DataFeedSvc,
         Arc<rara_kernel::data_feed::DataFeedRegistry>,
+        Arc<FinanceSubscriptionRegistry>,
     ) {
         let pools = rara_kernel::testing::build_memory_diesel_pools().await;
         bootstrap_data_feed_schema(&pools).await;
         let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let finance_path = std::env::temp_dir().join(format!(
+            "rara-finance-subscriptions-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let finance_registry = Arc::new(FinanceSubscriptionRegistry::load(finance_path));
         (
             FinanceEnableFeedSourceTool::new(svc.clone(), registry.clone()),
+            FinanceSubscribeInstrumentsTool::new(
+                svc.clone(),
+                registry.clone(),
+                finance_registry.clone(),
+            ),
             svc,
             registry,
+            finance_registry,
         )
     }
 
@@ -281,7 +757,7 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_persists_and_registers_config_without_starting() {
-        let (tool, svc, registry) = tool().await;
+        let (tool, _subscribe, svc, registry, _finance_registry) = tool().await;
         let result = tool
             .run(
                 FinanceEnableFeedSourceParams {
@@ -309,7 +785,7 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_is_idempotent_for_existing_enabled_source() {
-        let (tool, svc, _registry) = tool().await;
+        let (tool, _subscribe, svc, _registry, _finance_registry) = tool().await;
         for expected_created in [true, false] {
             let result = tool
                 .run(
@@ -329,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_rejects_sources_that_require_configuration() {
-        let (tool, _svc, _registry) = tool().await;
+        let (tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
         let err = tool
             .run(
                 FinanceEnableFeedSourceParams {
@@ -346,8 +822,249 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_is_mutating() {
-        let (tool, _svc, _registry) = tool().await;
+        let (tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
 
         assert!(!tool.is_read_only(&serde_json::json!({})));
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_creates_market_feed_and_finance_subscription() {
+        let (_enable, tool, svc, registry, finance_registry) = tool().await;
+        let ctx = context();
+
+        let result = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["btcusdt".to_owned(), "SOLUSDT".to_owned()],
+                    timeframes:             vec!["1M".to_owned(), "5m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               Some(FinanceDelivery::Silent),
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.feed_change, FeedChange::Created);
+        assert!(!result.feed_restarted);
+        assert!(!result.running);
+        assert_eq!(result.source_name, "finance-binance-market-candles");
+        assert_eq!(result.venue, "binance");
+        assert_eq!(result.symbols, ["BTCUSDT", "SOLUSDT"]);
+        assert_eq!(result.timeframes, ["1m", "5m"]);
+        assert!(registry.get("finance-binance-market-candles").is_some());
+
+        let feeds = svc.list_feeds().await.unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].transport["symbols"][0], "BTCUSDT");
+        assert_eq!(feeds[0].transport["symbols"][1], "SOLUSDT");
+        assert_eq!(feeds[0].transport["timeframes"][0], "1m");
+        assert_eq!(feeds[0].transport["timeframes"][1], "5m");
+
+        let subs = finance_registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].id, result.subscription_id);
+        assert_eq!(subs[0].event_kinds, [FinanceEventKind::MarketCandleClosed]);
+        assert_eq!(subs[0].source_names, ["finance-binance-market-candles"]);
+        assert_eq!(subs[0].venues, ["binance"]);
+        assert_eq!(subs[0].symbols, ["BTCUSDT", "SOLUSDT"]);
+        assert_eq!(subs[0].timeframes, ["1m", "5m"]);
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_extends_existing_feed_transport_idempotently() {
+        let (_enable, tool, svc, _registry, finance_registry) = tool().await;
+        let ctx = context();
+
+        let first = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let second = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["BTCUSDT".to_owned(), "ETHUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned(), "15m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert!(first.subscription_created);
+        assert!(second.subscription_created);
+
+        let feeds = svc.list_feeds().await.unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].transport["symbols"][0], "BTCUSDT");
+        assert_eq!(feeds[0].transport["symbols"][1], "ETHUSDT");
+        assert_eq!(feeds[0].transport["timeframes"][0], "1m");
+        assert_eq!(feeds[0].transport["timeframes"][1], "15m");
+
+        let repeat = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["ETHUSDT".to_owned(), "BTCUSDT".to_owned()],
+                    timeframes:             vec!["15m".to_owned(), "1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(repeat.subscription_id, second.subscription_id);
+        assert!(!repeat.subscription_created);
+        assert_eq!(
+            finance_registry
+                .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+                .await
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_rejects_non_market_catalog_source() {
+        let (_enable, tool, _svc, _registry, _finance_registry) = tool().await;
+        let err = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("fed-press-releases".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not a market_candle source"));
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_rejects_ambiguous_source_reference() {
+        let (_enable, tool, _svc, _registry, _finance_registry) = tool().await;
+        let err = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                Some("feed-1".to_owned()),
+                    venue:                  None,
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("provide either catalog_source_id or feed_id")
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_accepts_existing_feed_id() {
+        let (_enable, tool, svc, _registry, finance_registry) = tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("custom-feed".to_owned())
+            .name("custom-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let result = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      None,
+                    feed_id:                Some("custom-feed".to_owned()),
+                    venue:                  None,
+                    symbols:                vec!["ETHUSDT".to_owned()],
+                    timeframes:             vec!["5m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.feed_id, "custom-feed");
+        assert_eq!(result.feed_change, FeedChange::Updated);
+        let feeds = svc.list_feeds().await.unwrap();
+        assert!(feeds[0].enabled);
+        assert_eq!(feeds[0].transport["symbols"][0], "BTCUSDT");
+        assert_eq!(feeds[0].transport["symbols"][1], "ETHUSDT");
+
+        assert_eq!(
+            finance_registry
+                .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+                .await
+                .len(),
+            1
+        );
     }
 }

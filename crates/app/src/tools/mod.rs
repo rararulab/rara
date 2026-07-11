@@ -78,7 +78,7 @@ use edit_file::EditFileTool;
 use fff_find::FffFindTool;
 use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
-use finance_feed::FinanceEnableFeedSourceTool;
+use finance_feed::{FinanceEnableFeedSourceTool, FinanceSubscribeInstrumentsTool};
 use find_files::FindFilesTool;
 use grep::GrepTool;
 use http_fetch::HttpFetchTool;
@@ -303,8 +303,13 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // Finance information subscriptions
         Arc::new(FinanceListFeedSourcesTool),
         Arc::new(FinanceEnableFeedSourceTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+        )),
+        Arc::new(FinanceSubscribeInstrumentsTool::new(
             deps.data_feed_svc,
             deps.data_feed_registry,
+            deps.finance_registry.clone(),
         )),
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
