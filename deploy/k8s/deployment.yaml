@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rara-server
+  labels:
+    app.kubernetes.io/name: rara
+    app.kubernetes.io/component: server
+spec:
+  # Single writer only — rara's SQLite DB has one writer, and the RWO PVC
+  # can only be mounted by one pod. Never scale beyond 1.
+  replicas: 1
+  # Recreate (not RollingUpdate): a rolling update would briefly run two pods
+  # both mounting the RWO volume / writing the DB → corruption.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rara
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rara
+        app.kubernetes.io/component: server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # fsGroup makes the RWO state volume group-writable by the rara user
+        # (uid/gid 10001) so the config dir, migrations, and the DB can be
+        # created on boot.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # rara needs ONE complete, WRITABLE config.yaml: its config sync
+      # (ConfigFileSync) reads a single file as a full AppConfig and writes it
+      # back (KV → File), and the config dir holds writable runtime state
+      # (workspace/, settings.json, skills/). So the Secret (read-only) cannot
+      # BE the config file. This init container copies the complete config from
+      # the Secret into the writable, persistent config dir on the state
+      # volume, re-copying on every start so Secret edits take effect on the
+      # next pod restart.
+      initContainers:
+        - name: seed-config
+          image: rara-server:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - "mkdir -p /state/config/rara && cp /secret-src/config.yaml /state/config/rara/config.yaml"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: secret
+              mountPath: /secret-src
+              readOnly: true
+            - name: state
+              mountPath: /state
+      containers:
+        - name: rara-server
+          # Built from docker/Dockerfile (linux/amd64). Replace with your
+          # registry ref once a publish pipeline exists (out of scope here).
+          image: rara-server:latest
+          imagePullPolicy: IfNotPresent
+          args: ["server"]
+          # config dir ($XDG_CONFIG_HOME/rara) -> /state/config/rara (writable)
+          # data dir   ($XDG_DATA_HOME/rara)   -> /state/data/rara   (writable)
+          env:
+            - name: XDG_CONFIG_HOME
+              value: /state/config
+            - name: XDG_DATA_HOME
+              value: /state/data
+          ports:
+            - name: http
+              containerPort: 25555
+            - name: grpc
+              containerPort: 50051
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # rara writes to $HOME/.cache and the config/data dirs (mounted
+            # writable below); a read-only root FS would need extra emptyDir
+            # mounts for /home/rara. Left writable for MVP — future hardening.
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          # startupProbe covers first-boot migration time; liveness/readiness
+          # take over once the server answers. All three hit /api/health,
+          # which is why the config MUST bind 0.0.0.0 (see the Secret's
+          # config.yaml).
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            # Persistent, writable config + data dirs (single RWO volume).
+            - name: state
+              mountPath: /state
+      volumes:
+        # Complete config.yaml (incl. secrets) — consumed only by the init
+        # container, which copies it into the writable config dir. See
+        # secret.example.yaml.
+        - name: secret
+          secret:
+            secretName: rara-secrets
+        # Persistent, writable state: SQLite DB + sessions + memory (data dir)
+        # AND the config dir (config.yaml, settings.json, skills, workspace).
+        # ReadWriteOnce, single writer — see pvc.yaml.
+        - name: state
+          persistentVolumeClaim:
+            claimName: rara-data

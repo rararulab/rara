@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rara-data
+  labels:
+    app.kubernetes.io/name: rara
+    app.kubernetes.io/component: server
+spec:
+  # ReadWriteOnce: this single volume holds BOTH the writable config dir
+  # (config.yaml, settings.json, skills, workspace) and the data dir (the
+  # single-writer SQLite DB, sessions, memory). The Deployment is pinned to
+  # replicas=1 with strategy Recreate so it is never double-mounted / written
+  # by two pods at once — that would corrupt the DB. This also matches
+  # "rara is NOT multi-user".
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName intentionally omitted → uses the cluster default class.
+  # An operator may set it, or swap this PVC for an external/managed volume.
+  # NEVER back a real deployment with emptyDir — memory would not survive a
+  # restart (goal signal #5).

@@ -1,0 +1,155 @@
+name: container-smoke
+
+# Build the server-only rara image (docker/Dockerfile) and prove it boots
+# and serves /api/health → healthy. This is the canonical, executable Verify
+# for the containerization work (issue #2239).
+#
+# It does NOT push to any registry — publishing is deliberately out of scope
+# (decision #9; it must not re-introduce the publish pipeline #443 removed).
+# The image is built and loaded locally, run, and probed.
+#
+# Gated behind a paths filter so it only runs on PRs touching the
+# container / deploy files. Not a required merge gate.
+
+on:
+  pull_request:
+    paths:
+      - "docker/**"
+      - ".dockerignore"
+      - "deploy/k8s/**"
+      - ".github/workflows/container-smoke.yml"
+      # A workspace-wide dependency/lock change can break the release build
+      # this job smokes.
+      - "Cargo.lock"
+  workflow_dispatch:
+
+concurrency:
+  group: container-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only token: this job builds and loads locally, it never pushes.
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: build + boot + health
+    runs-on: ubuntu-latest
+    # First cold build is a full-workspace `cargo build --release`. Native
+    # amd64 on the x64 runner, but still slow; cache-from/to keeps reruns fast.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build image (linux/amd64, load locally — no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: rara-server:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Assert image runs as non-root
+        run: |
+          user="$(docker inspect -f '{{.Config.User}}' rara-server:smoke)"
+          echo "image User = '${user}'"
+          if [ -z "${user}" ] || [ "${user}" = "root" ] || [ "${user}" = "0" ]; then
+            echo "FAIL: image must run as a non-root user"
+            exit 1
+          fi
+
+      - name: Assert shipped config has no sandbox block and binds 0.0.0.0
+        run: |
+          cfg=deploy/k8s/secret.example.yaml
+          grep -q '0.0.0.0:25555' "$cfg" || { echo "FAIL: config must bind 0.0.0.0:25555"; exit 1; }
+          if grep -qE '^\s*sandbox:' "$cfg"; then
+            echo "FAIL: sandbox block must be absent (sandbox disabled in this image)"
+            exit 1
+          fi
+          echo "OK: 0.0.0.0 bind present, no sandbox block"
+
+      - name: Boot container and assert /api/health → healthy
+        run: |
+          # Self-contained smoke config: dummy secrets, 0.0.0.0 bind, no
+          # sandbox block. Placeholder for the health smoke, NOT a real
+          # deployment config (real secrets come from the rara-secrets Secret).
+          cat > smoke-config.yaml <<'YAML'
+          http:
+            bind_address: "0.0.0.0:25555"
+            cors_allowed_origins:
+              - "http://localhost:*"
+          grpc:
+            bind_address: "0.0.0.0:50051"
+            server_address: "127.0.0.1:50051"
+          owner_token: "smoke-placeholder-token"
+          owner_user_id: "you"
+          users:
+            - name: "you"
+              role: root
+              platforms: []
+          mita:
+            heartbeat_interval: "30m"
+          llm:
+            default_provider: "openrouter"
+            providers:
+              openrouter:
+                base_url: "https://openrouter.ai/api/v1"
+                default_model: "anthropic/claude-3.5-sonnet"
+                api_key: "smoke-placeholder-key"
+          knowledge:
+            embedding_model: "text-embedding-3-small"
+            embedding_dimensions: 1536
+            search_top_k: 10
+            similarity_threshold: 0.85
+          YAML
+
+          # Mirror the k8s deployment's init container: COPY the config into a
+          # writable config dir, then boot from there. rara's config dir must
+          # be writable — it creates workspace/, settings.json,
+          # mcp-servers.json there, and ConfigFileSync writes config.yaml back
+          # (KV → File). A read-only mount would log a spurious
+          # "Read-only file system" writeback error. A fresh named volume is
+          # seeded from the image's non-root-owned /config, so the copied file
+          # is owned by (and writable by) the rara user.
+          docker volume create rara-cfg >/dev/null
+          docker run --rm --entrypoint sh \
+            -v rara-cfg:/config \
+            -v "$PWD/smoke-config.yaml":/tmp/config.yaml:ro \
+            rara-server:smoke \
+            -c "cp /tmp/config.yaml /config/rara/config.yaml"
+
+          docker run -d --name rara-smoke -p 25555:25555 \
+            -v rara-cfg:/config \
+            rara-server:smoke
+
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -sf --max-time 4 http://127.0.0.1:25555/api/health | grep -q healthy; then
+              echo "healthy after ~$((i * 3))s"
+              curl -s http://127.0.0.1:25555/api/health
+              ok=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "FAIL: /api/health did not report healthy in time"
+            exit 1
+          fi
+
+      - name: Container logs (always)
+        if: always()
+        run: docker logs rara-smoke || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f rara-smoke || true; docker volume rm rara-cfg || true
