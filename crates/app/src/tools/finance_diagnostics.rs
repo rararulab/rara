@@ -1,0 +1,750 @@
+// Copyright 2026 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{collections::HashMap, sync::Arc};
+
+use async_trait::async_trait;
+use jiff::Timestamp;
+use rara_backend_admin::data_feeds::DataFeedSvc;
+use rara_kernel::{
+    data_feed::{DataFeedConfig, DataFeedRegistry},
+    identity::UserId,
+    tool::{ToolContext, ToolExecute},
+};
+use rara_tool_macro::ToolDef;
+use rara_trading::{
+    finance::registry::{FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry},
+    market_data::{CandleLatestQuery, MarketDataRepositoryRef, Timeframe, tools::FinanceCandle},
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+const MAX_STALE_AFTER_SECS: u64 = 31_536_000;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceDiagnoseCandleSubscriptionsParams {
+    /// Optional current-user subscription id filter.
+    #[serde(default)]
+    pub subscription_id:  Option<Uuid>,
+    /// Comparison timestamp. Defaults to server now.
+    #[serde(default)]
+    pub as_of:            Option<String>,
+    /// Stale threshold in seconds. Defaults to 2x each timeframe step.
+    #[serde(default)]
+    pub stale_after_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceDiagnoseCandleSubscriptionsResult {
+    pub as_of:         String,
+    pub subscriptions: Vec<CandleSubscriptionDiagnostic>,
+    pub count:         usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct CandleSubscriptionDiagnostic {
+    pub subscription_id: Uuid,
+    pub source_names:    Vec<String>,
+    pub venues:          Vec<String>,
+    pub symbols:         Vec<String>,
+    pub timeframes:      Vec<String>,
+    pub delivery:        String,
+    pub status:          SubscriptionHealth,
+    pub feed_sources:    Vec<FeedSourceDiagnostic>,
+    pub streams:         Vec<CandleStreamDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FeedSourceDiagnostic {
+    pub source_name:       String,
+    pub feed_id:           Option<String>,
+    pub feed_type:         Option<String>,
+    pub enabled:           Option<bool>,
+    pub configured_status: Option<String>,
+    pub runtime_state:     FeedRuntimeState,
+    pub last_error:        Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct CandleStreamDiagnostic {
+    pub source_name:      Option<String>,
+    pub venue:            String,
+    pub symbol:           String,
+    pub timeframe:        String,
+    pub latest:           Option<FinanceCandle>,
+    pub stale_after_secs: Option<u64>,
+    pub lag_secs:         Option<i64>,
+    pub status:           CandleStreamStatus,
+    pub diagnostic:       Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SubscriptionHealth {
+    Ok,
+    NeedsData,
+    NeedsRuntime,
+    Unconfigured,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FeedRuntimeState {
+    Running,
+    Stopped,
+    NotRegistered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CandleStreamStatus {
+    Fresh,
+    Stale,
+    Missing,
+    Future,
+    InvalidSelector,
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_diagnose_candle_subscriptions",
+    description = "Diagnose current-user finance candle subscriptions by combining subscription \
+                   selectors, feed config/runtime status, and latest stored candle freshness. Use \
+                   this after finance_subscribe_instruments to verify that data is actually \
+                   flowing. This is read-only and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub(super) struct FinanceDiagnoseCandleSubscriptionsTool {
+    data_feed_svc:      DataFeedSvc,
+    data_feed_registry: Arc<DataFeedRegistry>,
+    finance_registry:   Arc<FinanceSubscriptionRegistry>,
+    market_data_repo:   MarketDataRepositoryRef,
+}
+
+impl FinanceDiagnoseCandleSubscriptionsTool {
+    pub(super) fn new(
+        data_feed_svc: DataFeedSvc,
+        data_feed_registry: Arc<DataFeedRegistry>,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+        market_data_repo: MarketDataRepositoryRef,
+    ) -> Self {
+        Self {
+            data_feed_svc,
+            data_feed_registry,
+            finance_registry,
+            market_data_repo,
+        }
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
+    type Output = FinanceDiagnoseCandleSubscriptionsResult;
+    type Params = FinanceDiagnoseCandleSubscriptionsParams;
+
+    async fn run(
+        &self,
+        params: FinanceDiagnoseCandleSubscriptionsParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceDiagnoseCandleSubscriptionsResult> {
+        let as_of = parse_as_of(params.as_of)?;
+        let stale_after_secs = params.stale_after_secs;
+        validate_stale_after(stale_after_secs)?;
+        let owner = UserId(context.user_id.clone());
+        let feed_configs = self.data_feed_svc.list_feeds().await?;
+        let feeds_by_name = feed_configs
+            .into_iter()
+            .map(|feed| (feed.name.clone(), feed))
+            .collect::<HashMap<_, _>>();
+
+        let subscriptions = self
+            .finance_registry
+            .list_for_owner(&owner)
+            .await
+            .into_iter()
+            .filter(is_candle_subscription)
+            .filter(|subscription| {
+                params
+                    .subscription_id
+                    .is_none_or(|id| id == subscription.id)
+            })
+            .collect::<Vec<_>>();
+
+        let mut diagnostics = Vec::with_capacity(subscriptions.len());
+        for subscription in subscriptions {
+            diagnostics.push(
+                self.diagnose_subscription(subscription, &feeds_by_name, as_of, stale_after_secs)
+                    .await?,
+            );
+        }
+
+        let count = diagnostics.len();
+        Ok(FinanceDiagnoseCandleSubscriptionsResult {
+            as_of: as_of.to_string(),
+            subscriptions: diagnostics,
+            count,
+        })
+    }
+}
+
+impl FinanceDiagnoseCandleSubscriptionsTool {
+    async fn diagnose_subscription(
+        &self,
+        subscription: FinanceSubscription,
+        feeds_by_name: &HashMap<String, DataFeedConfig>,
+        as_of: Timestamp,
+        stale_after_secs: Option<u64>,
+    ) -> anyhow::Result<CandleSubscriptionDiagnostic> {
+        let feed_sources = self.feed_diagnostics(&subscription.source_names, feeds_by_name);
+        let streams = self
+            .stream_diagnostics(&subscription, as_of, stale_after_secs)
+            .await?;
+        let status = subscription_health(&subscription, &feed_sources, &streams);
+
+        Ok(CandleSubscriptionDiagnostic {
+            subscription_id: subscription.id,
+            source_names: subscription.source_names,
+            venues: subscription.venues,
+            symbols: subscription.symbols,
+            timeframes: subscription.timeframes,
+            delivery: format!("{:?}", subscription.delivery),
+            status,
+            feed_sources,
+            streams,
+        })
+    }
+
+    fn feed_diagnostics(
+        &self,
+        source_names: &[String],
+        feeds_by_name: &HashMap<String, DataFeedConfig>,
+    ) -> Vec<FeedSourceDiagnostic> {
+        source_names
+            .iter()
+            .map(|source_name| {
+                let feed = feeds_by_name.get(source_name);
+                FeedSourceDiagnostic {
+                    source_name:       source_name.clone(),
+                    feed_id:           feed.map(|feed| feed.id.clone()),
+                    feed_type:         feed.map(|feed| feed.feed_type.to_string()),
+                    enabled:           feed.map(|feed| feed.enabled),
+                    configured_status: feed.map(|feed| feed.status.to_string()),
+                    runtime_state:     runtime_state(
+                        feed,
+                        self.data_feed_registry.is_running(source_name),
+                    ),
+                    last_error:        feed.and_then(|feed| feed.last_error.clone()),
+                }
+            })
+            .collect()
+    }
+
+    async fn stream_diagnostics(
+        &self,
+        subscription: &FinanceSubscription,
+        as_of: Timestamp,
+        stale_after_secs: Option<u64>,
+    ) -> anyhow::Result<Vec<CandleStreamDiagnostic>> {
+        let source_names = optional_source_names(&subscription.source_names);
+        let mut rows = Vec::new();
+        for source_name in source_names {
+            for venue in &subscription.venues {
+                for symbol in &subscription.symbols {
+                    for timeframe in &subscription.timeframes {
+                        rows.push(
+                            self.stream_diagnostic(
+                                source_name.clone(),
+                                venue,
+                                symbol,
+                                timeframe,
+                                as_of,
+                                stale_after_secs,
+                            )
+                            .await?,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(rows)
+    }
+
+    async fn stream_diagnostic(
+        &self,
+        source_name: Option<String>,
+        venue: &str,
+        symbol: &str,
+        timeframe: &str,
+        as_of: Timestamp,
+        stale_after_secs: Option<u64>,
+    ) -> anyhow::Result<CandleStreamDiagnostic> {
+        let Ok(timeframe_value) = Timeframe::parse(timeframe) else {
+            return Ok(invalid_stream(source_name, venue, symbol, timeframe));
+        };
+        let stale_after_secs = match stale_after_secs {
+            Some(value) => value,
+            None => u64::try_from(timeframe_value.step()?.as_secs())?.saturating_mul(2),
+        };
+        let latest = self
+            .market_data_repo
+            .latest_closed_candle(CandleLatestQuery {
+                source_name: source_name.clone(),
+                venue:       venue.to_owned(),
+                symbol:      symbol.to_owned(),
+                timeframe:   timeframe_value,
+            })
+            .await?;
+        Ok(stream_with_latest(
+            source_name,
+            venue,
+            symbol,
+            timeframe,
+            latest,
+            as_of,
+            stale_after_secs,
+        ))
+    }
+}
+
+fn is_candle_subscription(subscription: &FinanceSubscription) -> bool {
+    subscription.event_kinds.is_empty()
+        || subscription
+            .event_kinds
+            .contains(&FinanceEventKind::MarketCandleClosed)
+}
+
+fn parse_as_of(value: Option<String>) -> anyhow::Result<Timestamp> {
+    value
+        .as_deref()
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|err| anyhow::anyhow!("as_of must be an RFC3339 timestamp: {err}"))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or_else(Timestamp::now))
+}
+
+fn validate_stale_after(value: Option<u64>) -> anyhow::Result<()> {
+    if let Some(value) = value {
+        anyhow::ensure!(value > 0, "stale_after_secs must be positive");
+        anyhow::ensure!(
+            value <= MAX_STALE_AFTER_SECS,
+            "stale_after_secs must be <= {MAX_STALE_AFTER_SECS}"
+        );
+    }
+    Ok(())
+}
+
+fn runtime_state(feed: Option<&DataFeedConfig>, running: bool) -> FeedRuntimeState {
+    match (feed, running) {
+        (None, _) => FeedRuntimeState::NotRegistered,
+        (Some(_), true) => FeedRuntimeState::Running,
+        (Some(_), false) => FeedRuntimeState::Stopped,
+    }
+}
+
+fn optional_source_names(source_names: &[String]) -> Vec<Option<String>> {
+    if source_names.is_empty() {
+        vec![None]
+    } else {
+        source_names.iter().cloned().map(Some).collect()
+    }
+}
+
+fn invalid_stream(
+    source_name: Option<String>,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> CandleStreamDiagnostic {
+    CandleStreamDiagnostic {
+        source_name,
+        venue: venue.to_owned(),
+        symbol: symbol.to_owned(),
+        timeframe: timeframe.to_owned(),
+        latest: None,
+        stale_after_secs: None,
+        lag_secs: None,
+        status: CandleStreamStatus::InvalidSelector,
+        diagnostic: Some("invalid timeframe".to_owned()),
+    }
+}
+
+fn stream_with_latest(
+    source_name: Option<String>,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+    latest: Option<rara_trading::market_data::MarketCandle>,
+    as_of: Timestamp,
+    stale_after_secs: u64,
+) -> CandleStreamDiagnostic {
+    let Some(candle) = latest else {
+        return CandleStreamDiagnostic {
+            source_name,
+            venue: venue.to_owned(),
+            symbol: symbol.to_owned(),
+            timeframe: timeframe.to_owned(),
+            latest: None,
+            stale_after_secs: Some(stale_after_secs),
+            lag_secs: None,
+            status: CandleStreamStatus::Missing,
+            diagnostic: Some("no stored closed candle matched this stream".to_owned()),
+        };
+    };
+    let lag_secs = as_of.as_second() - candle.close_time.as_second();
+    let status = if lag_secs < 0 {
+        CandleStreamStatus::Future
+    } else if lag_secs as u64 > stale_after_secs {
+        CandleStreamStatus::Stale
+    } else {
+        CandleStreamStatus::Fresh
+    };
+    CandleStreamDiagnostic {
+        source_name,
+        venue: venue.to_owned(),
+        symbol: symbol.to_owned(),
+        timeframe: timeframe.to_owned(),
+        latest: Some(FinanceCandle::from(candle)),
+        stale_after_secs: Some(stale_after_secs),
+        lag_secs: Some(lag_secs),
+        status,
+        diagnostic: None,
+    }
+}
+
+fn subscription_health(
+    subscription: &FinanceSubscription,
+    feed_sources: &[FeedSourceDiagnostic],
+    streams: &[CandleStreamDiagnostic],
+) -> SubscriptionHealth {
+    if subscription.venues.is_empty()
+        || subscription.symbols.is_empty()
+        || subscription.timeframes.is_empty()
+    {
+        return SubscriptionHealth::Unconfigured;
+    }
+    if feed_sources
+        .iter()
+        .any(|feed| feed.runtime_state != FeedRuntimeState::Running)
+    {
+        return SubscriptionHealth::NeedsRuntime;
+    }
+    if streams.is_empty()
+        || streams
+            .iter()
+            .any(|stream| stream.status != CandleStreamStatus::Fresh)
+    {
+        return SubscriptionHealth::NeedsData;
+    }
+    SubscriptionHealth::Ok
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use diesel_async::RunQueryDsl;
+    use jiff::Timestamp;
+    use rara_backend_admin::data_feeds::DataFeedSvc;
+    use rara_kernel::{
+        data_feed::{DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType},
+        identity::UserId,
+        io::MessageId,
+        queue::{ShardedEventQueue, ShardedEventQueueConfig},
+        session::SessionKey,
+        tool::{AgentTool, ToolContext, ToolExecute},
+    };
+    use rara_trading::{
+        finance::registry::{
+            FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
+        },
+        market_data::{
+            InMemoryMarketDataRepository, MarketCandle, MarketDataRepository, Timeframe,
+        },
+    };
+    use rust_decimal::Decimal;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{
+        CandleStreamStatus, FeedRuntimeState, FinanceDiagnoseCandleSubscriptionsParams,
+        FinanceDiagnoseCandleSubscriptionsTool, SubscriptionHealth,
+    };
+
+    fn context() -> ToolContext {
+        ToolContext {
+            user_id:               "alice".to_owned(),
+            session_key:           SessionKey::new(),
+            origin_endpoint:       None,
+            origin_user_id:        None,
+            event_queue:           Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+                num_shards:      0,
+                shard_capacity:  1,
+                global_capacity: 16,
+            })),
+            rara_turn_id:          MessageId::new(),
+            context_window_tokens: 0,
+            tool_registry:         None,
+            stream_handle:         None,
+            tool_call_id:          None,
+        }
+    }
+
+    async fn bootstrap_data_feed_schema(pools: &yunara_store::diesel_pool::DieselSqlitePools) {
+        let mut conn = pools.writer.get().await.expect("pool conn");
+        for ddl in [
+            "CREATE TABLE data_feeds (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL UNIQUE,
+                feed_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                transport TEXT NOT NULL DEFAULT '{}',
+                auth TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'idle',
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+            "CREATE INDEX idx_data_feeds_name ON data_feeds(name)",
+        ] {
+            diesel::sql_query(ddl)
+                .execute(&mut *conn)
+                .await
+                .expect("bootstrap data feed schema");
+        }
+    }
+
+    fn ts(value: &str) -> Timestamp { value.parse().expect("timestamp fixture should parse") }
+
+    fn dec(value: &str) -> Decimal { value.parse().expect("decimal fixture should parse") }
+
+    fn candle(open_time: &str, close_time: &str) -> MarketCandle {
+        MarketCandle {
+            source_name:       "finance-binance-market-candles".to_owned(),
+            venue:             "binance".to_owned(),
+            symbol:            "BTCUSDT".to_owned(),
+            timeframe:         Timeframe::parse("1m").expect("timeframe fixture should parse"),
+            open_time:         ts(open_time),
+            close_time:        ts(close_time),
+            open:              dec("61500.12"),
+            high:              dec("61640.00"),
+            low:               dec("61480.50"),
+            close:             dec("61610.30"),
+            volume:            dec("124.551"),
+            ingested_at:       ts(close_time),
+            provider_sequence: None,
+        }
+    }
+
+    fn feed_config() -> DataFeedConfig {
+        let now = ts("2026-07-10T08:30:00Z");
+        DataFeedConfig::builder()
+            .id("feed-1".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Running)
+            .created_at(now)
+            .updated_at(now)
+            .build()
+    }
+
+    async fn fixture() -> (
+        FinanceDiagnoseCandleSubscriptionsTool,
+        Arc<FinanceSubscriptionRegistry>,
+        Arc<DataFeedRegistry>,
+        Arc<InMemoryMarketDataRepository>,
+        ToolContext,
+    ) {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = DataFeedSvc::new(pools);
+        svc.create_feed(&feed_config()).await.unwrap();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let data_feed_registry = Arc::new(DataFeedRegistry::new(event_tx));
+        data_feed_registry.register(feed_config()).unwrap();
+        let finance_path = std::env::temp_dir().join(format!(
+            "rara-finance-diagnostics-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let finance_registry = Arc::new(FinanceSubscriptionRegistry::load(finance_path));
+        let market_repo = Arc::new(InMemoryMarketDataRepository::default());
+        let tool = FinanceDiagnoseCandleSubscriptionsTool::new(
+            svc,
+            data_feed_registry.clone(),
+            finance_registry.clone(),
+            market_repo.clone(),
+        );
+        (
+            tool,
+            finance_registry,
+            data_feed_registry,
+            market_repo,
+            context(),
+        )
+    }
+
+    async fn insert_subscription(
+        registry: &FinanceSubscriptionRegistry,
+        ctx: &ToolContext,
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        registry
+            .upsert(FinanceSubscription {
+                id,
+                owner: UserId(ctx.user_id.clone()),
+                session_key: ctx.session_key,
+                event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+                source_names: vec!["finance-binance-market-candles".to_owned()],
+                category_tags: Vec::new(),
+                watch_terms: Vec::new(),
+                venues: vec!["binance".to_owned()],
+                symbols: vec!["BTCUSDT".to_owned()],
+                timeframes: vec!["1m".to_owned()],
+                delivery: FinanceDelivery::Silent,
+                cooldown_secs: 900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_running_fresh_subscription() {
+        let (tool, finance_registry, data_feed_registry, market_repo, ctx) = fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        data_feed_registry.set_running(
+            "finance-binance-market-candles".to_owned(),
+            CancellationToken::new(),
+        );
+        market_repo
+            .upsert_closed_candle(candle("2026-07-10T08:29:00Z", "2026-07-10T08:30:00Z"))
+            .await
+            .unwrap();
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  None,
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: Some(120),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::Ok);
+        assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
+        assert_eq!(sub.streams[0].status, CandleStreamStatus::Fresh);
+        assert_eq!(sub.streams[0].lag_secs, Some(60));
+        assert_eq!(
+            sub.streams[0]
+                .latest
+                .as_ref()
+                .map(|candle| candle.close.as_str()),
+            Some("61610.30")
+        );
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_missing_data_when_feed_is_stopped() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, ctx) = fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  None,
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::NeedsRuntime);
+        assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Stopped);
+        assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
+        assert!(sub.streams[0].latest.is_none());
+    }
+
+    #[tokio::test]
+    async fn diagnose_filters_by_subscription_id_for_current_user() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, ctx) = fixture().await;
+        let id = insert_subscription(&finance_registry, &ctx).await;
+        let other_id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id:                     other_id,
+                owner:                  UserId("bob".to_owned()),
+                session_key:            ctx.session_key,
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           vec!["finance-binance-market-candles".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["binance".to_owned()],
+                symbols:                vec!["ETHUSDT".to_owned()],
+                timeframes:             vec!["1m".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  Some(id),
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.subscriptions[0].subscription_id, id);
+    }
+
+    #[tokio::test]
+    async fn diagnose_tool_is_read_only() {
+        let (tool, _finance_registry, _data_feed_registry, _market_repo, _ctx) = fixture().await;
+
+        assert!(tool.is_read_only(&serde_json::json!({})));
+    }
+}
