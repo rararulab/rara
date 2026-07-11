@@ -99,6 +99,48 @@ pub(super) struct FinanceEnableFeedSourceResult {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceDisableFeedSourceParams {
+    /// Built-in source id from `finance_list_feed_sources`.
+    #[serde(default)]
+    pub catalog_source_id: Option<String>,
+    /// Existing persisted finance DataFeedConfig id.
+    #[serde(default)]
+    pub feed_id:           Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceDisableFeedSourceResult {
+    pub feed_id:           String,
+    pub source_name:       String,
+    pub catalog_source_id: Option<String>,
+    pub feed_type:         String,
+    pub changed:           bool,
+    pub enabled:           bool,
+    pub running:           bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceRestartFeedSourceParams {
+    /// Built-in source id from `finance_list_feed_sources`.
+    #[serde(default)]
+    pub catalog_source_id: Option<String>,
+    /// Existing persisted finance DataFeedConfig id.
+    #[serde(default)]
+    pub feed_id:           Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceRestartFeedSourceResult {
+    pub feed_id:           String,
+    pub source_name:       String,
+    pub catalog_source_id: Option<String>,
+    pub feed_type:         String,
+    pub was_running:       bool,
+    pub started:           bool,
+    pub running:           bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceSubscribeInstrumentsParams {
     /// Built-in market-candle source id from `finance_list_feed_sources`.
     #[serde(default)]
@@ -182,6 +224,34 @@ pub(super) struct FinanceEnableFeedSourceTool {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_disable_feed_source",
+    description = "Disable one persisted finance feed source by catalog_source_id or feed_id. \
+                   This stops any running feed task, persists enabled=false and clears runtime \
+                   error state. It only operates on finance-scoped RSS or market-candle feeds and \
+                   never places trades.",
+    tier = "deferred"
+)]
+pub(super) struct FinanceDisableFeedSourceTool {
+    svc:      DataFeedSvc,
+    registry: Arc<DataFeedRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_restart_feed_source",
+    description = "Restart one enabled persisted finance feed source by catalog_source_id or \
+                   feed_id. This cancels the current runtime task if present, refreshes the \
+                   registry config, and starts a new RSS or market-candle feed task. It never \
+                   places trades.",
+    tier = "deferred"
+)]
+pub(super) struct FinanceRestartFeedSourceTool {
+    svc:      DataFeedSvc,
+    registry: Arc<DataFeedRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_subscribe_instruments",
     description = "Subscribe the current conversation to closed market-candle updates for \
                    specific instruments. This ensures the selected market-candle feed source is \
@@ -203,6 +273,18 @@ impl FinanceListFeedSourcesTool {
 }
 
 impl FinanceEnableFeedSourceTool {
+    pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
+        Self { svc, registry }
+    }
+}
+
+impl FinanceDisableFeedSourceTool {
+    pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
+        Self { svc, registry }
+    }
+}
+
+impl FinanceRestartFeedSourceTool {
     pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
         Self { svc, registry }
     }
@@ -315,6 +397,112 @@ impl ToolExecute for FinanceEnableFeedSourceTool {
             started,
             running: self.registry.is_running(&source_name),
         })
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceDisableFeedSourceTool {
+    type Output = FinanceDisableFeedSourceResult;
+    type Params = FinanceDisableFeedSourceParams;
+
+    async fn run(
+        &self,
+        params: FinanceDisableFeedSourceParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceDisableFeedSourceResult> {
+        let source_ref = SourceRef::from_params(params.catalog_source_id, params.feed_id)?;
+        let (mut config, catalog_source_id) =
+            self.resolve_existing_finance_feed(source_ref).await?;
+        let was_running = self.registry.is_running(&config.name);
+        let changed = config.enabled
+            || was_running
+            || config.status != FeedStatus::Idle
+            || config.last_error.is_some();
+
+        if changed {
+            config.enabled = false;
+            config.status = FeedStatus::Idle;
+            config.last_error = None;
+            config.updated_at = Timestamp::now();
+            anyhow::ensure!(
+                self.svc.update_feed(&config).await?,
+                "failed to disable finance feed source: {}",
+                config.name
+            );
+            replace_registry_config(&self.registry, config.clone())?;
+        }
+
+        Ok(FinanceDisableFeedSourceResult {
+            feed_id: config.id,
+            source_name: config.name.clone(),
+            catalog_source_id,
+            feed_type: config.feed_type.to_string(),
+            changed,
+            enabled: config.enabled,
+            running: self.registry.is_running(&config.name),
+        })
+    }
+}
+
+impl FinanceDisableFeedSourceTool {
+    async fn resolve_existing_finance_feed(
+        &self,
+        source_ref: SourceRef,
+    ) -> anyhow::Result<(DataFeedConfig, Option<String>)> {
+        resolve_existing_finance_feed(&self.svc, source_ref).await
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceRestartFeedSourceTool {
+    type Output = FinanceRestartFeedSourceResult;
+    type Params = FinanceRestartFeedSourceParams;
+
+    async fn run(
+        &self,
+        params: FinanceRestartFeedSourceParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceRestartFeedSourceResult> {
+        let source_ref = SourceRef::from_params(params.catalog_source_id, params.feed_id)?;
+        let (mut config, catalog_source_id) =
+            self.resolve_existing_finance_feed(source_ref).await?;
+        anyhow::ensure!(
+            config.enabled,
+            "finance feed source {} is disabled; enable it before restarting",
+            config.name
+        );
+        let was_running = self.registry.is_running(&config.name);
+
+        config.status = FeedStatus::Idle;
+        config.last_error = None;
+        config.updated_at = Timestamp::now();
+        anyhow::ensure!(
+            self.svc.update_feed(&config).await?,
+            "failed to refresh finance feed source before restart: {}",
+            config.name
+        );
+        replace_registry_config(&self.registry, config.clone())?;
+        start_feed_task(&config, &self.registry);
+        let running = self.registry.is_running(&config.name);
+
+        Ok(FinanceRestartFeedSourceResult {
+            feed_id: config.id,
+            source_name: config.name,
+            catalog_source_id,
+            feed_type: config.feed_type.to_string(),
+            was_running,
+            started: running,
+            running,
+        })
+    }
+}
+
+impl FinanceRestartFeedSourceTool {
+    async fn resolve_existing_finance_feed(
+        &self,
+        source_ref: SourceRef,
+    ) -> anyhow::Result<(DataFeedConfig, Option<String>)> {
+        resolve_existing_finance_feed(&self.svc, source_ref).await
     }
 }
 
@@ -699,6 +887,57 @@ fn find_catalog_source(catalog_source_id: &str) -> anyhow::Result<DefaultFeedSou
         })
 }
 
+async fn resolve_existing_finance_feed(
+    svc: &DataFeedSvc,
+    source_ref: SourceRef,
+) -> anyhow::Result<(DataFeedConfig, Option<String>)> {
+    match source_ref {
+        SourceRef::Catalog(catalog_source_id) => {
+            let source = find_catalog_source(&catalog_source_id)?;
+            let source_name = source.feed_name();
+            let config = svc
+                .list_feeds()
+                .await?
+                .into_iter()
+                .find(|feed| feed.name == source_name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("finance feed source {catalog_source_id} is not enabled yet")
+                })?;
+            ensure_finance_feed_source(&config)?;
+            Ok((config, Some(catalog_source_id)))
+        }
+        SourceRef::FeedId(feed_id) => {
+            let config = svc
+                .get_feed(&feed_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
+            ensure_finance_feed_source(&config)?;
+            Ok((config, None))
+        }
+    }
+}
+
+fn ensure_finance_feed_source(config: &DataFeedConfig) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        matches!(config.feed_type, FeedType::Rss | FeedType::MarketCandle),
+        "data feed {} is not a finance RSS or market-candle source",
+        config.name
+    );
+    anyhow::ensure!(
+        is_finance_feed_source(config),
+        "data feed {} is not finance-scoped",
+        config.name
+    );
+    Ok(())
+}
+
+fn is_finance_feed_source(config: &DataFeedConfig) -> bool {
+    config.tags.iter().any(|tag| tag == "finance")
+        || default_finance_feed_sources()
+            .into_iter()
+            .any(|source| source.feed_name() == config.name)
+}
+
 fn feed_source_entry(
     source: DefaultFeedSource,
     persisted: Option<&DataFeedConfig>,
@@ -810,8 +1049,9 @@ mod tests {
     };
 
     use super::{
-        FeedChange, FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool,
-        FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
+        FeedChange, FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
+        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedSourcesParams,
+        FinanceListFeedSourcesTool, FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
     };
 
@@ -837,6 +1077,8 @@ mod tests {
     async fn tool() -> (
         FinanceListFeedSourcesTool,
         FinanceEnableFeedSourceTool,
+        FinanceDisableFeedSourceTool,
+        FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsTool,
         rara_backend_admin::data_feeds::DataFeedSvc,
         Arc<rara_kernel::data_feed::DataFeedRegistry>,
@@ -855,6 +1097,8 @@ mod tests {
         (
             FinanceListFeedSourcesTool::new(svc.clone(), registry.clone()),
             FinanceEnableFeedSourceTool::new(svc.clone(), registry.clone()),
+            FinanceDisableFeedSourceTool::new(svc.clone(), registry.clone()),
+            FinanceRestartFeedSourceTool::new(svc.clone(), registry.clone()),
             FinanceSubscribeInstrumentsTool::new(
                 svc.clone(),
                 registry.clone(),
@@ -894,7 +1138,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_feed_sources_reports_catalog_and_absent_runtime_state() {
-        let (tool, _enable, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (tool, _enable, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
+            tool().await;
 
         let result = tool
             .run(FinanceListFeedSourcesParams {}, &context())
@@ -926,7 +1171,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_feed_sources_reports_persisted_enabled_source_state() {
-        let (list, enable, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (list, enable, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
+            tool().await;
         enable
             .run(
                 FinanceEnableFeedSourceParams {
@@ -963,7 +1209,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_feed_sources_reports_subscribed_market_instruments() {
-        let (list, _enable, subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (list, _enable, _disable, _restart, subscribe, _svc, _registry, _finance_registry) =
+            tool().await;
         subscribe
             .run(
                 FinanceSubscribeInstrumentsParams {
@@ -1000,7 +1247,8 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_persists_and_registers_config_without_starting() {
-        let (_list, tool, _subscribe, svc, registry, _finance_registry) = tool().await;
+        let (_list, tool, _disable, _restart, _subscribe, svc, registry, _finance_registry) =
+            tool().await;
         let result = tool
             .run(
                 FinanceEnableFeedSourceParams {
@@ -1028,7 +1276,8 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_is_idempotent_for_existing_enabled_source() {
-        let (_list, tool, _subscribe, svc, _registry, _finance_registry) = tool().await;
+        let (_list, tool, _disable, _restart, _subscribe, svc, _registry, _finance_registry) =
+            tool().await;
         for expected_created in [true, false] {
             let result = tool
                 .run(
@@ -1048,7 +1297,8 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_rejects_sources_that_require_configuration() {
-        let (_list, tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, tool, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
+            tool().await;
         let err = tool
             .run(
                 FinanceEnableFeedSourceParams {
@@ -1065,14 +1315,214 @@ mod tests {
 
     #[tokio::test]
     async fn enable_feed_source_is_mutating() {
-        let (_list, tool, _subscribe, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, tool, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
+            tool().await;
 
         assert!(!tool.is_read_only(&serde_json::json!({})));
     }
 
     #[tokio::test]
+    async fn disable_feed_source_turns_off_enabled_catalog_source() {
+        let (list, enable, disable, _restart, _subscribe, svc, registry, _finance_registry) =
+            tool().await;
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let result = disable
+            .run(
+                FinanceDisableFeedSourceParams {
+                    catalog_source_id: Some("fed-press-releases".to_owned()),
+                    feed_id:           None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.changed);
+        assert!(!result.enabled);
+        assert!(!result.running);
+        assert_eq!(result.source_name, "finance-fed-press-releases");
+        assert_eq!(
+            result.catalog_source_id.as_deref(),
+            Some("fed-press-releases")
+        );
+
+        let feeds = svc.list_feeds().await.unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert!(!feeds[0].enabled);
+        assert_eq!(feeds[0].status, FeedStatus::Idle);
+        assert!(feeds[0].last_error.is_none());
+        assert!(registry.get("finance-fed-press-releases").is_some());
+        assert!(!registry.is_running("finance-fed-press-releases"));
+
+        let listed = list
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+        let fed = listed
+            .sources
+            .iter()
+            .find(|source| source.id == "fed-press-releases")
+            .unwrap();
+        assert!(fed.runtime.persisted);
+        assert!(!fed.runtime.enabled);
+    }
+
+    #[tokio::test]
+    async fn restart_feed_source_starts_enabled_finance_feed_by_feed_id() {
+        let (_list, _enable, disable, restart, _subscribe, svc, registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("rss-feed".to_owned())
+            .name("custom-finance-rss".to_owned())
+            .feed_type(FeedType::Rss)
+            .tags(vec!["finance".to_owned(), "news".to_owned()])
+            .transport(serde_json::json!({
+                "url": "https://example.invalid/feed.xml",
+                "interval_secs": 3600,
+                "headers": {},
+                "max_entries_per_poll": 5
+            }))
+            .enabled(true)
+            .status(FeedStatus::Error)
+            .maybe_last_error(Some("previous failure".to_owned()))
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let result = restart
+            .run(
+                FinanceRestartFeedSourceParams {
+                    catalog_source_id: None,
+                    feed_id:           Some("rss-feed".to_owned()),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.feed_id, "rss-feed");
+        assert!(!result.was_running);
+        assert!(result.started);
+        assert!(result.running);
+        assert!(registry.is_running("custom-finance-rss"));
+        let feeds = svc.list_feeds().await.unwrap();
+        assert_eq!(feeds[0].status, FeedStatus::Idle);
+        assert_eq!(feeds[0].last_error, None);
+
+        disable
+            .run(
+                FinanceDisableFeedSourceParams {
+                    catalog_source_id: None,
+                    feed_id:           Some("rss-feed".to_owned()),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert!(!registry.is_running("custom-finance-rss"));
+    }
+
+    #[tokio::test]
+    async fn feed_source_controls_reject_non_finance_feed_id() {
+        let (_list, _enable, disable, restart, _subscribe, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("plain-rss".to_owned())
+            .name("plain-rss".to_owned())
+            .feed_type(FeedType::Rss)
+            .tags(vec!["news".to_owned()])
+            .transport(serde_json::json!({
+                "url": "https://example.invalid/feed.xml",
+                "interval_secs": 3600,
+                "headers": {},
+                "max_entries_per_poll": 5
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let disable_err = disable
+            .run(
+                FinanceDisableFeedSourceParams {
+                    catalog_source_id: None,
+                    feed_id:           Some("plain-rss".to_owned()),
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+        assert!(disable_err.to_string().contains("not finance-scoped"));
+
+        let restart_err = restart
+            .run(
+                FinanceRestartFeedSourceParams {
+                    catalog_source_id: None,
+                    feed_id:           Some("plain-rss".to_owned()),
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+        assert!(restart_err.to_string().contains("not finance-scoped"));
+    }
+
+    #[tokio::test]
+    async fn restart_feed_source_rejects_disabled_feed() {
+        let (_list, _enable, _disable, restart, _subscribe, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("disabled-rss".to_owned())
+            .name("disabled-finance-rss".to_owned())
+            .feed_type(FeedType::Rss)
+            .tags(vec!["finance".to_owned()])
+            .transport(serde_json::json!({
+                "url": "https://example.invalid/feed.xml",
+                "interval_secs": 3600,
+                "headers": {},
+                "max_entries_per_poll": 5
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let err = restart
+            .run(
+                FinanceRestartFeedSourceParams {
+                    catalog_source_id: None,
+                    feed_id:           Some("disabled-rss".to_owned()),
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("is disabled"));
+    }
+
+    #[tokio::test]
     async fn subscribe_instruments_creates_market_feed_and_finance_subscription() {
-        let (_list, _enable, tool, svc, registry, finance_registry) = tool().await;
+        let (_list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
+            tool().await;
         let ctx = context();
 
         let result = tool
@@ -1123,7 +1573,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_extends_existing_feed_transport_idempotently() {
-        let (_list, _enable, tool, svc, _registry, finance_registry) = tool().await;
+        let (_list, _enable, _disable, _restart, tool, svc, _registry, finance_registry) =
+            tool().await;
         let ctx = context();
 
         let first = tool
@@ -1202,7 +1653,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_rejects_non_market_catalog_source() {
-        let (_list, _enable, tool, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, _enable, _disable, _restart, tool, _svc, _registry, _finance_registry) =
+            tool().await;
         let err = tool
             .run(
                 FinanceSubscribeInstrumentsParams {
@@ -1226,7 +1678,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_rejects_ambiguous_source_reference() {
-        let (_list, _enable, tool, _svc, _registry, _finance_registry) = tool().await;
+        let (_list, _enable, _disable, _restart, tool, _svc, _registry, _finance_registry) =
+            tool().await;
         let err = tool
             .run(
                 FinanceSubscribeInstrumentsParams {
@@ -1253,7 +1706,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_accepts_existing_feed_id() {
-        let (_list, _enable, tool, svc, _registry, finance_registry) = tool().await;
+        let (_list, _enable, _disable, _restart, tool, svc, _registry, finance_registry) =
+            tool().await;
         let now = jiff::Timestamp::now();
         let config = DataFeedConfig::builder()
             .id("custom-feed".to_owned())
