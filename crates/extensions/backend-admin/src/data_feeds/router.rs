@@ -29,7 +29,7 @@
 //! in-memory [`DataFeedRegistry`]. When an active feed is created and
 //! enabled, a background task is spawned automatically.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -71,6 +71,7 @@ pub struct DataFeedRouterState {
 pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
     Router::new()
         .route("/api/v1/data-feeds", get(list_feeds).post(create_feed))
+        .route("/api/v1/data-feeds/summary", get(list_feed_summaries))
         .route("/api/v1/data-feeds/catalog", get(list_feed_catalog))
         .route(
             "/api/v1/data-feeds/catalog/{id}/enable",
@@ -153,6 +154,16 @@ struct EventListResponse {
     has_more: bool,
 }
 
+/// Runtime read-model for a feed's persisted event stream.
+#[derive(Debug, Serialize)]
+struct FeedSummaryResponse {
+    feed_id:       String,
+    source_name:   String,
+    event_count:   i64,
+    last_event_at: Option<Timestamp>,
+    lag_seconds:   Option<i64>,
+}
+
 /// Built-in feed catalog entry plus current materialized state.
 #[derive(Debug, Serialize)]
 struct FeedCatalogEntryResponse {
@@ -186,6 +197,43 @@ async fn list_feed_catalog(
 ) -> Result<Json<Vec<FeedCatalogEntryResponse>>, ProblemDetails> {
     let feeds = state.svc.list_feeds().await?;
     Ok(Json(catalog_response(&feeds)))
+}
+
+/// `GET /api/v1/data-feeds/summary` — list per-feed persisted-event health.
+async fn list_feed_summaries(
+    State(state): State<DataFeedRouterState>,
+) -> Result<Json<Vec<FeedSummaryResponse>>, ProblemDetails> {
+    let feeds = state.svc.list_feeds().await?;
+    let summaries = state
+        .svc
+        .event_summaries()
+        .await?
+        .into_iter()
+        .map(|summary| (summary.source_name.clone(), summary))
+        .collect::<HashMap<_, _>>();
+    let now = Timestamp::now();
+
+    Ok(Json(
+        feeds
+            .into_iter()
+            .map(|feed| {
+                let summary = summaries.get(&feed.name);
+                let last_event_at = summary.and_then(|summary| summary.last_event_at);
+                let lag_seconds = last_event_at.map(|last_event_at| {
+                    let lag = now.duration_since(last_event_at);
+                    lag.as_secs().max(0)
+                });
+
+                FeedSummaryResponse {
+                    feed_id: feed.id,
+                    source_name: feed.name,
+                    event_count: summary.map_or(0, |summary| summary.event_count),
+                    last_event_at,
+                    lag_seconds,
+                }
+            })
+            .collect(),
+    ))
 }
 
 /// `POST /api/v1/data-feeds/catalog/{id}/enable` — materialize a default feed.
@@ -855,6 +903,22 @@ mod tests {
         data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
     }
 
+    async fn app_with_user_and_pools(
+        user: KernelUser,
+    ) -> (Router, yunara_store::diesel_pool::DieselSqlitePools) {
+        let pools = build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = DataFeedSvc::new(pools.clone());
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(DataFeedRegistry::new(event_tx));
+        let state = DataFeedRouterState { svc, registry };
+        let auth = auth_state_direct(user);
+        (
+            data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer)),
+            pools,
+        )
+    }
+
     async fn bootstrap_data_feed_schema(pools: &yunara_store::diesel_pool::DieselSqlitePools) {
         let mut conn = pools.writer.get().await.expect("pool conn");
         for ddl in [
@@ -1132,6 +1196,149 @@ mod tests {
         assert_eq!(feed.name, "finance-sec-press-releases");
         assert!(!feed.enabled);
         assert_eq!(feed.status, FeedStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn feed_summary_reports_event_count_and_lag() {
+        let (app, pools) = app_with_user_and_pools(user_of(Role::Admin)).await;
+        let create_body = serde_json::json!({
+            "name": "summary-feed",
+            "feed_type": "polling",
+            "tags": ["finance"],
+            "transport": {
+                "url": "https://example.com/feed",
+                "interval_secs": 60,
+                "headers": {},
+                "method": "GET"
+            },
+        });
+        let create_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(create_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+        let event_at = Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_secs(60))
+            .unwrap();
+        let event_id = rara_kernel::data_feed::FeedEventId::deterministic("summary-feed:event");
+
+        let mut conn = pools.writer.get().await.expect("pool conn");
+        diesel::sql_query(
+            "INSERT INTO data_feed_events (id, source_name, event_type, tags, payload, \
+             received_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind::<diesel::sql_types::Text, _>(event_id.to_string())
+        .bind::<diesel::sql_types::Text, _>("summary-feed")
+        .bind::<diesel::sql_types::Text, _>("poll_response")
+        .bind::<diesel::sql_types::Text, _>("[\"finance\"]")
+        .bind::<diesel::sql_types::Text, _>("{\"ok\":true}")
+        .bind::<diesel::sql_types::Text, _>(event_at.to_string())
+        .execute(&mut *conn)
+        .await
+        .expect("insert event");
+        drop(conn);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/summary")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let summary = summaries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|summary| summary["feed_id"] == feed.id)
+            .unwrap();
+
+        assert_eq!(summary["source_name"], "summary-feed");
+        assert_eq!(summary["event_count"], 1);
+        assert_eq!(summary["last_event_at"], event_at.to_string());
+        let lag_seconds = summary["lag_seconds"].as_i64().unwrap();
+        assert!((58..=62).contains(&lag_seconds), "lag={lag_seconds}");
+    }
+
+    #[tokio::test]
+    async fn feed_summary_includes_zero_event_feeds() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let create_body = serde_json::json!({
+            "name": "empty-feed",
+            "feed_type": "polling",
+            "tags": [],
+            "transport": {
+                "url": "https://example.com/feed",
+                "interval_secs": 60,
+                "headers": {},
+                "method": "GET"
+            },
+        });
+        let create_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_res.status(), StatusCode::CREATED);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/summary")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summaries: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let summary = summaries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|summary| summary["source_name"] == "empty-feed")
+            .unwrap();
+
+        assert_eq!(summary["event_count"], 0);
+        assert!(summary["last_event_at"].is_null());
+        assert!(summary["lag_seconds"].is_null());
     }
 
     #[tokio::test]
