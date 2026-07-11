@@ -20,7 +20,7 @@ use sqlx_postgres::{PgPool, Postgres};
 use uuid::Uuid;
 
 use super::{
-    model::{CandleRangeQuery, MarketCandle, Timeframe},
+    model::{CandleLatestQuery, CandleRangeQuery, MarketCandle, Timeframe},
     repository::{MarketDataRepository, UpsertOutcome},
 };
 
@@ -141,6 +141,42 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
         .await?;
 
         rows.into_iter().map(row_to_candle).collect()
+    }
+
+    async fn latest_closed_candle(
+        &self,
+        query: CandleLatestQuery,
+    ) -> anyhow::Result<Option<MarketCandle>> {
+        let row = sqlx_core::query::query(
+            r#"
+            SELECT
+              source_name, venue, symbol, timeframe,
+              open_time::text AS open_time,
+              close_time::text AS close_time,
+              open::text AS open,
+              high::text AS high,
+              low::text AS low,
+              close::text AS close,
+              volume::text AS volume,
+              ingested_at::text AS ingested_at,
+              provider_sequence
+            FROM market_candles
+            WHERE ($1::text IS NULL OR source_name = $1)
+              AND venue = $2
+              AND symbol = $3
+              AND timeframe = $4
+            ORDER BY open_time DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(query.source_name.as_deref())
+        .bind(&query.venue)
+        .bind(&query.symbol)
+        .bind(query.timeframe.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(row_to_candle).transpose()
     }
 
     async fn missing_open_times(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<Timestamp>> {

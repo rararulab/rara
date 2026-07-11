@@ -251,6 +251,7 @@ pub(crate) async fn boot(
     sandbox_config: Option<crate::SandboxToolConfig>,
     sandbox_map: crate::tools::SandboxMap,
     finance_registry: Arc<rara_trading::finance::registry::FinanceSubscriptionRegistry>,
+    market_data_repo: rara_trading::market_data::MarketDataRepositoryRef,
 ) -> Result<BootResult, Whatever> {
     // -- credential store --------------------------------------------------
     let credential_store: rara_keyring_store::KeyringStoreRef =
@@ -403,6 +404,7 @@ pub(crate) async fn boot(
             sandbox_config,
             sandbox_map,
             finance_registry,
+            market_data_repo,
         },
     );
 

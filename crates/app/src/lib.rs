@@ -716,6 +716,36 @@ pub async fn start_with_options(
             rara_paths::data_dir().join("trading/finance-subscriptions.json"),
         ),
     );
+    let market_data_repo: rara_trading::market_data::MarketDataRepositoryRef =
+        match std::env::var("RARA_MARKET_DATA_DATABASE_URL") {
+            Ok(database_url) if !database_url.trim().is_empty() => {
+                match rara_trading::market_data::TimescaleMarketDataRepository::connect(
+                    &database_url,
+                )
+                .await
+                {
+                    Ok(repo) => {
+                        if let Err(e) = repo.apply_schema().await {
+                            warn!(error = %e, "failed to apply market-data Timescale schema");
+                        }
+                        Arc::new(repo)
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "market-data Timescale connection failed; using in-memory repository"
+                        );
+                        Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default())
+                    }
+                }
+            }
+            _ => {
+                warn!(
+                    "RARA_MARKET_DATA_DATABASE_URL not set; using in-memory market-data repository"
+                );
+                Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default())
+            }
+        };
 
     let rara = crate::boot::boot(
         diesel_pools.clone(),
@@ -726,6 +756,7 @@ pub async fn start_with_options(
         config.sandbox.clone(),
         sandbox_map.clone(),
         finance_registry.clone(),
+        market_data_repo.clone(),
     )
     .await
     .whatever_context("Failed to boot kernel dependencies")?;
@@ -968,37 +999,6 @@ pub async fn start_with_options(
     backend
         .session_service
         .set_kernel_handle(kernel_handle.clone());
-
-    let market_data_repo: Arc<dyn rara_trading::market_data::MarketDataRepository> =
-        match std::env::var("RARA_MARKET_DATA_DATABASE_URL") {
-            Ok(database_url) if !database_url.trim().is_empty() => {
-                match rara_trading::market_data::TimescaleMarketDataRepository::connect(
-                    &database_url,
-                )
-                .await
-                {
-                    Ok(repo) => {
-                        if let Err(e) = repo.apply_schema().await {
-                            warn!(error = %e, "failed to apply market-data Timescale schema");
-                        }
-                        Arc::new(repo)
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            "market-data Timescale connection failed; using in-memory repository"
-                        );
-                        Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default())
-                    }
-                }
-            }
-            _ => {
-                warn!(
-                    "RARA_MARKET_DATA_DATABASE_URL not set; using in-memory market-data repository"
-                );
-                Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default())
-            }
-        };
 
     // Spawn the feed dispatch task — consumes events from all transports,
     // persists them to the data_feed_events table, upserts closed market

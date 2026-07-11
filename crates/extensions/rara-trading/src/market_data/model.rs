@@ -132,3 +132,12 @@ pub struct CandleRangeQuery {
     pub end:         Timestamp,
     pub limit:       usize,
 }
+
+/// Latest-candle query for a venue/symbol/timeframe stream.
+#[derive(Debug, Clone)]
+pub struct CandleLatestQuery {
+    pub source_name: Option<String>,
+    pub venue:       String,
+    pub symbol:      String,
+    pub timeframe:   Timeframe,
+}
