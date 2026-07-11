@@ -300,6 +300,11 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceListSubscriptionsTool::new(deps.finance_registry)),
         Arc::new(
+            rara_trading::market_data::tools::FinanceListCandleStreamsTool::new(
+                deps.market_data_repo.clone(),
+            ),
+        ),
+        Arc::new(
             rara_trading::market_data::tools::FinanceGetLatestCandleTool::new(
                 deps.market_data_repo.clone(),
             ),

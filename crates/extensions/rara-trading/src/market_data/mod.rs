@@ -19,7 +19,10 @@ pub mod repository;
 pub mod timescale;
 pub mod tools;
 
-pub use model::{CandleLatestQuery, CandleRangeQuery, MarketCandle, Timeframe};
+pub use model::{
+    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary, MarketCandle,
+    Timeframe,
+};
 pub use repository::{
     InMemoryMarketDataRepository, MarketDataRepository, MarketDataRepositoryRef, UpsertOutcome,
 };

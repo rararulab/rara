@@ -22,7 +22,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CandleLatestQuery, CandleRangeQuery, MarketCandle, MarketDataRepositoryRef, Timeframe,
+    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary, MarketCandle,
+    MarketDataRepositoryRef, Timeframe,
 };
 
 const DEFAULT_CANDLE_LIMIT: usize = 500;
@@ -111,6 +112,40 @@ pub struct FinanceGetCandleFreshnessResult {
     pub status:           String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinanceListCandleStreamsParams {
+    #[serde(default)]
+    pub source_name: Option<String>,
+    #[serde(default)]
+    pub venue:       Option<String>,
+    #[serde(default)]
+    pub symbol:      Option<String>,
+    #[serde(default)]
+    pub timeframe:   Option<String>,
+    #[serde(default)]
+    pub limit:       Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceListCandleStreamsResult {
+    pub streams:     Vec<FinanceCandleStream>,
+    pub count:       usize,
+    pub query_limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceCandleStream {
+    pub source_name:        String,
+    pub venue:              String,
+    pub symbol:             String,
+    pub timeframe:          String,
+    pub candle_count:       usize,
+    pub first_open_time:    String,
+    pub latest_open_time:   String,
+    pub latest_close_time:  String,
+    pub latest_ingested_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceCandle {
     pub source_name:       String,
@@ -126,6 +161,55 @@ pub struct FinanceCandle {
     pub volume:            String,
     pub ingested_at:       String,
     pub provider_sequence: Option<String>,
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_list_candle_streams",
+    description = "List stored OHLCV candle streams and their latest watermarks from the \
+                   market-data TSDB. Use this to discover available source/venue/symbol/timeframe \
+                   combinations before querying candles, freshness, or gaps. This is read-only \
+                   and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub struct FinanceListCandleStreamsTool {
+    repository: MarketDataRepositoryRef,
+}
+
+impl FinanceListCandleStreamsTool {
+    pub fn new(repository: MarketDataRepositoryRef) -> Self { Self { repository } }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceListCandleStreamsTool {
+    type Output = FinanceListCandleStreamsResult;
+    type Params = FinanceListCandleStreamsParams;
+
+    async fn run(
+        &self,
+        params: FinanceListCandleStreamsParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceListCandleStreamsResult> {
+        let limit = validate_limit(params.limit)?;
+        let query = CandleStreamListQuery {
+            source_name: normalize_optional_selector("source_name", params.source_name)?,
+            venue: normalize_optional_selector("venue", params.venue)?,
+            symbol: normalize_optional_selector("symbol", params.symbol)?,
+            timeframe: normalize_optional_selector("timeframe", params.timeframe)?
+                .map(Timeframe::parse)
+                .transpose()?,
+            limit,
+        };
+        let streams = self.repository.candle_streams(query).await?;
+        let count = streams.len();
+        Ok(FinanceListCandleStreamsResult {
+            streams: streams.into_iter().map(FinanceCandleStream::from).collect(),
+            count,
+            query_limit: limit,
+        })
+    }
 }
 
 #[derive(ToolDef)]
@@ -197,12 +281,7 @@ impl ToolExecute for FinanceQueryCandlesTool {
         params: FinanceQueryCandlesParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceQueryCandlesResult> {
-        let limit = params.limit.unwrap_or(DEFAULT_CANDLE_LIMIT);
-        anyhow::ensure!(limit > 0, "limit must be positive");
-        anyhow::ensure!(
-            limit <= MAX_CANDLE_LIMIT,
-            "limit must be <= {MAX_CANDLE_LIMIT}"
-        );
+        let limit = validate_limit(params.limit)?;
         let start = parse_timestamp("start", &params.start)?;
         let end = parse_timestamp("end", &params.end)?;
         anyhow::ensure!(start < end, "start must be before end");
@@ -365,6 +444,22 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
     }
 }
 
+impl From<CandleStreamSummary> for FinanceCandleStream {
+    fn from(summary: CandleStreamSummary) -> Self {
+        Self {
+            source_name:        summary.source_name,
+            venue:              summary.venue,
+            symbol:             summary.symbol,
+            timeframe:          summary.timeframe.to_string(),
+            candle_count:       summary.candle_count,
+            first_open_time:    summary.first_open_time.to_string(),
+            latest_open_time:   summary.latest_open_time.to_string(),
+            latest_close_time:  summary.latest_close_time.to_string(),
+            latest_ingested_at: summary.latest_ingested_at.to_string(),
+        }
+    }
+}
+
 impl From<MarketCandle> for FinanceCandle {
     fn from(candle: MarketCandle) -> Self {
         Self {
@@ -402,6 +497,16 @@ fn normalize_optional_selector(
     value
         .map(|value| normalize_required_selector(name, value))
         .transpose()
+}
+
+fn validate_limit(limit: Option<usize>) -> anyhow::Result<usize> {
+    let limit = limit.unwrap_or(DEFAULT_CANDLE_LIMIT);
+    anyhow::ensure!(limit > 0, "limit must be positive");
+    anyhow::ensure!(
+        limit <= MAX_CANDLE_LIMIT,
+        "limit must be <= {MAX_CANDLE_LIMIT}"
+    );
+    Ok(limit)
 }
 
 fn parse_timestamp(name: &str, value: &str) -> anyhow::Result<Timestamp> {
@@ -446,7 +551,8 @@ mod tests {
     use super::{
         FinanceFindCandleGapsParams, FinanceFindCandleGapsTool, FinanceGetCandleFreshnessParams,
         FinanceGetCandleFreshnessTool, FinanceGetLatestCandleParams, FinanceGetLatestCandleTool,
-        FinanceQueryCandlesParams, FinanceQueryCandlesTool,
+        FinanceListCandleStreamsParams, FinanceListCandleStreamsTool, FinanceQueryCandlesParams,
+        FinanceQueryCandlesTool,
     };
     use crate::market_data::{
         InMemoryMarketDataRepository, MarketCandle, MarketDataRepository, Timeframe,
@@ -517,6 +623,73 @@ mod tests {
             .await
             .unwrap();
         repository
+    }
+
+    async fn repository_with_multiple_streams() -> Arc<InMemoryMarketDataRepository> {
+        let repository = repository().await;
+        repository
+            .upsert_closed_candle(MarketCandle {
+                symbol: "ETHUSDT".to_owned(),
+                open_time: ts("2026-07-10T08:03:00Z"),
+                close_time: ts("2026-07-10T08:04:00Z"),
+                close: dec("3200.00"),
+                provider_sequence: Some("eth".to_owned()),
+                ..candle("2026-07-10T08:03:00Z", "3200.00")
+            })
+            .await
+            .unwrap();
+        repository
+    }
+
+    #[tokio::test]
+    async fn list_candle_streams_tool_returns_available_stream_watermarks() {
+        let repository = repository_with_multiple_streams().await;
+        let tool = FinanceListCandleStreamsTool::new(repository);
+        let result = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       Some("binance".to_owned()),
+                    symbol:      None,
+                    timeframe:   Some("1m".to_owned()),
+                    limit:       Some(10),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 2);
+        assert_eq!(result.query_limit, 10);
+        assert_eq!(result.streams[0].symbol, "ETHUSDT");
+        assert_eq!(result.streams[0].candle_count, 1);
+        assert_eq!(result.streams[0].latest_open_time, "2026-07-10T08:03:00Z");
+        assert_eq!(result.streams[1].symbol, "BTCUSDT");
+        assert_eq!(result.streams[1].candle_count, 2);
+        assert_eq!(result.streams[1].first_open_time, "2026-07-10T08:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn list_candle_streams_tool_filters_by_symbol() {
+        let repository = repository_with_multiple_streams().await;
+        let tool = FinanceListCandleStreamsTool::new(repository);
+        let result = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: None,
+                    venue:       Some("binance".to_owned()),
+                    symbol:      Some("BTCUSDT".to_owned()),
+                    timeframe:   Some("1m".to_owned()),
+                    limit:       None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.streams[0].symbol, "BTCUSDT");
+        assert_eq!(result.streams[0].candle_count, 2);
     }
 
     #[tokio::test]
@@ -665,11 +838,13 @@ mod tests {
     #[test]
     fn candle_query_tools_are_read_only() {
         let repository = Arc::new(InMemoryMarketDataRepository::default());
+        let streams = FinanceListCandleStreamsTool::new(repository.clone());
         let latest = FinanceGetLatestCandleTool::new(repository.clone());
         let query = FinanceQueryCandlesTool::new(repository.clone());
         let gaps = FinanceFindCandleGapsTool::new(repository.clone());
         let freshness = FinanceGetCandleFreshnessTool::new(repository);
 
+        assert!(streams.is_read_only(&serde_json::json!({})));
         assert!(latest.is_read_only(&serde_json::json!({})));
         assert!(query.is_read_only(&serde_json::json!({})));
         assert!(gaps.is_read_only(&serde_json::json!({})));
