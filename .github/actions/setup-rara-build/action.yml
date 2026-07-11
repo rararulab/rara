@@ -17,7 +17,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev protobuf-compiler
+        sudo apt-get install -y --no-install-recommends libsqlite3-dev libpq-dev protobuf-compiler zlib1g-dev
         # mold is target-scoped to x86_64-unknown-linux-gnu in
         # .cargo/config.toml; arm64 legs use the default linker.
         if [[ "$(uname -m)" == "x86_64" ]]; then
