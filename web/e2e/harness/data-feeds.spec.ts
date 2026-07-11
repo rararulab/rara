@@ -211,6 +211,7 @@ async function setupRoutes(
     events: FeedEvent[];
     summaries?: FeedSummary[];
     catalog?: FeedCatalogEntry[];
+    lastCatalogEnableBody?: unknown;
   },
 ) {
   // Suppress onboarding & connection dialogs via localStorage.
@@ -264,14 +265,22 @@ async function setupRoutes(
       return;
     }
 
+    const body = request.postData()
+      ? (request.postDataJSON() as {
+          transport?: Record<string, unknown>;
+          auth?: { type: string; [key: string]: unknown } | null;
+        })
+      : {};
+    state.lastCatalogEnableBody = body;
+
     const now = new Date().toISOString();
     const feed: DataFeedConfig = {
       id: entry.feed_id ?? `feed-${entry.id}`,
       name: `finance-${entry.id}`,
       feed_type: entry.feed_type,
       tags: entry.tags,
-      transport: entry.transport_template ?? {},
-      auth: null,
+      transport: { ...(entry.transport_template ?? {}), ...(body.transport ?? {}) },
+      auth: body.auth ?? null,
       enabled: true,
       status: 'running',
       last_error: null,
@@ -532,6 +541,62 @@ test.describe('Data Feeds Management', () => {
       'finance-longbridge-market-candles',
     );
     await expect(page.locator('input[placeholder="binance"]')).toHaveValue('longbridge');
+  });
+
+  test('provider preset can be configured and enabled from the catalog', async ({ page }) => {
+    const state = {
+      feeds: [] as DataFeedConfig[],
+      events: [] as FeedEvent[],
+      lastCatalogEnableBody: null as unknown,
+      catalog: [
+        {
+          id: 'longbridge-market-candles',
+          name: 'Longbridge Market Data',
+          description: 'Preset for Longbridge equities market data.',
+          feed_type: 'market_candle' as const,
+          tags: ['finance', 'market-data', 'equities', 'longbridge'],
+          enabled: false,
+          feed_id: null,
+          requires_configuration: true,
+          setup_hint: 'Connect Longbridge credentials behind a normalized candle endpoint.',
+          transport_template: {
+            url: '',
+            interval_secs: 60,
+            headers: {},
+            venue: 'longbridge',
+            symbols: [],
+            timeframes: [],
+            max_candles_per_poll: 1000,
+          },
+        },
+      ],
+    };
+    await setupRoutes(page, state);
+    await goToDataFeeds(page);
+
+    await page.getByRole('button', { name: 'Configure' }).click();
+
+    await expect(page.getByText('Configure Longbridge Market Data')).toBeVisible({
+      timeout: 5_000,
+    });
+    await page
+      .locator('input[placeholder="https://market-data.example/candles/latest"]')
+      .fill('https://market-data.local/longbridge/candles/latest');
+    await page.locator('input[placeholder="BTCUSDT, ETHUSDT"]').fill('AAPL.US, NVDA.US');
+    await page.locator('input[placeholder="1m, 15m, 1h"]').fill('1d');
+    await page.getByRole('button', { name: 'Enable source' }).click();
+
+    await expect(page.getByText('finance-longbridge-market-candles')).toBeVisible({
+      timeout: 5_000,
+    });
+    expect(state.lastCatalogEnableBody).toMatchObject({
+      transport: {
+        url: 'https://market-data.local/longbridge/candles/latest',
+        venue: 'longbridge',
+        symbols: ['AAPL.US', 'NVDA.US'],
+        timeframes: ['1d'],
+      },
+    });
   });
 
   // -----------------------------------------------------------------------

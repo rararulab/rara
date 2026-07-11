@@ -87,6 +87,11 @@ export interface FeedCatalogEntry {
   transport_template: Record<string, unknown> | null;
 }
 
+export interface EnableCatalogEntryRequest {
+  transport?: Record<string, unknown>;
+  auth?: AuthConfig | null;
+}
+
 // ---------------------------------------------------------------------------
 // API client
 // ---------------------------------------------------------------------------
@@ -109,8 +114,8 @@ export const dataFeedsApi = {
 
   toggle: (id: string) => api.put<DataFeedConfig>(`/api/v1/data-feeds/${id}/toggle`),
 
-  enableCatalogEntry: (id: string) =>
-    api.post<DataFeedConfig>(`/api/v1/data-feeds/catalog/${id}/enable`),
+  enableCatalogEntry: (id: string, body?: EnableCatalogEntryRequest) =>
+    api.post<DataFeedConfig>(`/api/v1/data-feeds/catalog/${id}/enable`, body),
 
   disableCatalogEntry: (id: string) =>
     api.post<DataFeedConfig>(`/api/v1/data-feeds/catalog/${id}/disable`),

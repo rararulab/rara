@@ -35,6 +35,7 @@ import {
   type FeedEvent,
   type FeedSummary,
   type CreateFeedRequest,
+  type EnableCatalogEntryRequest,
   type AuthType,
 } from '@/api/data-feeds';
 import { JsonTree } from '@/components/JsonTree';
@@ -1007,6 +1008,151 @@ function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () =
 // Feed List View
 // ---------------------------------------------------------------------------
 
+function catalogEntryToForm(entry: FeedCatalogEntry): FeedFormState {
+  return {
+    name: `finance-${entry.id}`,
+    feed_type: entry.feed_type,
+    tags: entry.tags.join(', '),
+    transport: entry.transport_template ?? emptyTransport(entry.feed_type),
+    authType: 'none',
+    authFields: {},
+  };
+}
+
+function buildCatalogEnableRequest(form: FeedFormState): EnableCatalogEntryRequest {
+  const req = formToRequest(form);
+  return {
+    transport: req.transport,
+    auth: req.auth,
+  };
+}
+
+function validateCatalogEnableForm(form: FeedFormState): string | null {
+  if (form.feed_type !== 'market_candle') return null;
+
+  const provider = String(form.transport.provider ?? 'normalized');
+  const url = String(form.transport.url ?? '').trim();
+  if (provider === 'normalized' && !url) return 'Normalized candle endpoint is required';
+
+  if (!Array.isArray(form.transport.symbols) || form.transport.symbols.length === 0) {
+    return 'At least one symbol is required';
+  }
+
+  if (!Array.isArray(form.transport.timeframes) || form.transport.timeframes.length === 0) {
+    return 'At least one timeframe is required';
+  }
+
+  return null;
+}
+
+function CatalogConfigureDialog({
+  entry,
+  onOpenChange,
+  onSubmit,
+  saving,
+  serverError,
+}: {
+  entry: FeedCatalogEntry | null;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (body: EnableCatalogEntryRequest) => void;
+  saving: boolean;
+  serverError: string | null;
+}) {
+  const [form, setForm] = useState<FeedFormState>(entry ? catalogEntryToForm(entry) : INITIAL_FORM);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!entry) return;
+    setForm(catalogEntryToForm(entry));
+    setError(null);
+  }, [entry]);
+
+  const handleSubmit = () => {
+    const validationError = validateCatalogEnableForm(form);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setError(null);
+    onSubmit(buildCatalogEnableRequest(form));
+  };
+
+  return (
+    <Dialog open={!!entry} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{entry ? `Configure ${entry.name}` : 'Configure source'}</DialogTitle>
+          <DialogDescription>
+            Fill the operator-owned feed settings, then materialize this built-in source.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Transport</Label>
+            <TransportFields
+              feedType={form.feed_type}
+              transport={form.transport}
+              onChange={(transport) => setForm({ ...form, transport })}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Authentication</Label>
+            <Select
+              value={form.authType}
+              onValueChange={(v) => {
+                setForm({
+                  ...form,
+                  authType: v as FeedFormState['authType'],
+                  authFields: {},
+                });
+              }}
+            >
+              <SelectTrigger className="h-9 w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                <SelectItem value="header">API Key (Header)</SelectItem>
+                <SelectItem value="query">API Key (Query)</SelectItem>
+                <SelectItem value="bearer">Bearer Token</SelectItem>
+                <SelectItem value="basic">Basic Auth</SelectItem>
+                <SelectItem value="hmac">HMAC Signature</SelectItem>
+              </SelectContent>
+            </Select>
+            {form.authType !== 'none' && (
+              <div className="mt-3">
+                <AuthFields
+                  authType={form.authType}
+                  fields={form.authFields}
+                  onChange={(authFields) => setForm({ ...form, authFields })}
+                />
+              </div>
+            )}
+          </div>
+
+          {(error || serverError) && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {error ?? serverError}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={saving}>
+            {saving ? 'Enabling...' : 'Enable source'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function FeedCatalogCard({
   entries,
   onUseTemplate,
@@ -1015,14 +1161,17 @@ function FeedCatalogCard({
   onUseTemplate: (entry: FeedCatalogEntry) => void;
 }) {
   const queryClient = useQueryClient();
+  const [configureEntry, setConfigureEntry] = useState<FeedCatalogEntry | null>(null);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
     void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+    void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
   };
 
   const enableMutation = useMutation({
-    mutationFn: (id: string) => dataFeedsApi.enableCatalogEntry(id),
+    mutationFn: ({ id, body }: { id: string; body?: EnableCatalogEntryRequest }) =>
+      dataFeedsApi.enableCatalogEntry(id, body),
     onSuccess: refresh,
   });
 
@@ -1038,7 +1187,7 @@ function FeedCatalogCard({
 
   const renderEntry = (entry: FeedCatalogEntry) => {
     const pending =
-      (enableMutation.isPending && enableMutation.variables === entry.id) ||
+      (enableMutation.isPending && enableMutation.variables?.id === entry.id) ||
       (disableMutation.isPending && disableMutation.variables === entry.id);
 
     return (
@@ -1068,14 +1217,24 @@ function FeedCatalogCard({
           <p className="text-[11px] text-muted-foreground">Tags: {entry.tags.join(' · ')}</p>
         </div>
         {entry.requires_configuration ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0"
-            onClick={() => onUseTemplate(entry)}
-          >
-            Use template
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            <Button
+              size="sm"
+              className="h-8"
+              onClick={() => setConfigureEntry(entry)}
+              disabled={pending}
+            >
+              Configure
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8"
+              onClick={() => onUseTemplate(entry)}
+            >
+              Use template
+            </Button>
+          </div>
         ) : entry.enabled ? (
           <Button
             variant="outline"
@@ -1090,7 +1249,7 @@ function FeedCatalogCard({
           <Button
             size="sm"
             className="h-8 shrink-0"
-            onClick={() => enableMutation.mutate(entry.id)}
+            onClick={() => enableMutation.mutate({ id: entry.id })}
             disabled={pending}
           >
             {pending ? 'Enabling...' : 'Enable'}
@@ -1101,32 +1260,56 @@ function FeedCatalogCard({
   };
 
   return (
-    <div className="rounded-lg border bg-card">
-      <div className="border-b px-4 py-3">
-        <h3 className="text-sm font-semibold">Default finance sources</h3>
-        <p className="text-xs text-muted-foreground">
-          Ready sources can run immediately. Provider presets need your own endpoint or credentials.
-        </p>
-      </div>
-      <div className="divide-y">
-        {readyEntries.length > 0 && (
-          <div>
-            <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
-              Ready to enable
+    <>
+      <div className="rounded-lg border bg-card">
+        <div className="border-b px-4 py-3">
+          <h3 className="text-sm font-semibold">Default finance sources</h3>
+          <p className="text-xs text-muted-foreground">
+            Ready sources can run immediately. Provider presets need your own endpoint or
+            credentials.
+          </p>
+        </div>
+        <div className="divide-y">
+          {readyEntries.length > 0 && (
+            <div>
+              <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
+                Ready to enable
+              </div>
+              {readyEntries.map(renderEntry)}
             </div>
-            {readyEntries.map(renderEntry)}
-          </div>
-        )}
-        {providerEntries.length > 0 && (
-          <div>
-            <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
-              Provider presets
+          )}
+          {providerEntries.length > 0 && (
+            <div>
+              <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
+                Provider presets
+              </div>
+              {providerEntries.map(renderEntry)}
             </div>
-            {providerEntries.map(renderEntry)}
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
+      <CatalogConfigureDialog
+        entry={configureEntry}
+        onOpenChange={(open) => {
+          if (!open) setConfigureEntry(null);
+        }}
+        onSubmit={(body) => {
+          if (!configureEntry) return;
+          enableMutation.mutate(
+            { id: configureEntry.id, body },
+            {
+              onSuccess: () => setConfigureEntry(null),
+            },
+          );
+        }}
+        saving={enableMutation.isPending && enableMutation.variables?.id === configureEntry?.id}
+        serverError={
+          enableMutation.isError && enableMutation.variables?.id === configureEntry?.id
+            ? enableMutation.error.message
+            : null
+        }
+      />
+    </>
   );
 }
 
