@@ -99,6 +99,22 @@ impl DataFeedRegistry {
         Ok(())
     }
 
+    /// Replace a registered data feed configuration without touching runtime
+    /// state.
+    ///
+    /// This updates the in-memory config map only. It intentionally does not
+    /// cancel or restart a running task, so callers can persist a new config
+    /// for a later manual restart without silently stopping the current feed.
+    pub fn replace_config(&self, config: DataFeedConfig) -> crate::Result<()> {
+        let mut configs = self.configs.lock();
+        if !configs.contains_key(&config.name) {
+            whatever!("data feed not found: {}", config.name);
+        }
+        info!(name = %config.name, feed_type = %config.feed_type, "replaced data feed config");
+        configs.insert(config.name.clone(), config);
+        Ok(())
+    }
+
     /// Remove a registered data feed by name.
     ///
     /// If the feed has a running task, its cancellation token is triggered
@@ -271,6 +287,29 @@ mod tests {
         // Token should have been cancelled.
         assert!(token_clone.is_cancelled());
         assert!(!registry.is_running("alpha"));
+    }
+
+    #[test]
+    fn replace_config_preserves_running_task() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+
+        registry.register(make_config("alpha")).unwrap();
+
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+        registry.set_running("alpha".to_owned(), token);
+
+        let mut config = make_config("alpha");
+        config.tags.push("updated".to_owned());
+        registry.replace_config(config).unwrap();
+
+        assert!(!token_clone.is_cancelled());
+        assert!(registry.is_running("alpha"));
+        assert_eq!(
+            registry.get("alpha").unwrap().tags,
+            ["test".to_owned(), "updated".to_owned()]
+        );
     }
 
     #[test]
