@@ -185,6 +185,13 @@ pub struct SandboxToolConfig {
     /// `Disabled` and an empty allow-list — the safe ground state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bash:                 Option<BashSandboxConfig>,
+    /// Per-tool sandbox tuning for `run_code`. `None` (the YAML default
+    /// when the `run_code:` block is absent) means `run_code` contributes
+    /// network `Disabled` and an empty allow-list — the safe, default-deny
+    /// ground state. Untrusted, LLM-generated code therefore has **no**
+    /// outbound network unless the operator explicitly enumerates hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_code:             Option<RunCodeSandboxConfig>,
 }
 
 /// Network and runtime policy for the sandboxed `bash` tool.
@@ -200,6 +207,32 @@ pub struct BashSandboxConfig {
     ///
     /// Note: when `run_code` is also configured, the per-session VM uses
     /// the **fused** policy across all callers — see
+    /// `crates/app/src/sandbox.rs` for the union rule.
+    #[serde(default)]
+    #[builder(default)]
+    pub allow_net: Vec<String>,
+}
+
+/// Network policy for the sandboxed `run_code` tool.
+///
+/// Structural twin of [`BashSandboxConfig`]: a separate per-tool struct so
+/// each tool may grow independent knobs later without coupling. Per
+/// `docs/guides/rust-style.md`, it does NOT derive `Default` — the absent
+/// state is `Option<RunCodeSandboxConfig>` on [`SandboxToolConfig::run_code`],
+/// not a Rust-side default value.
+#[derive(Debug, Clone, bon::Builder, Serialize, Deserialize)]
+pub struct RunCodeSandboxConfig {
+    /// Hosts the sandboxed `run_code` may reach over network. An empty list
+    /// means no network access (the default-deny ground state for
+    /// untrusted, LLM-generated code). A non-empty list is forwarded to
+    /// boxlite as [`rara_sandbox::NetworkPolicy::Enabled`]; entries are
+    /// ordinary boxlite host/CIDR/subdomain-wildcard patterns (e.g.
+    /// `"pypi.org"`, `"*.crates.io"`, `"10.0.0.0/8"`), passed through
+    /// verbatim. There is no "all hosts" token — boxlite v0.9.7 has none,
+    /// so full outbound is deliberately not expressible.
+    ///
+    /// Note: when `bash` is also configured, the per-session VM uses the
+    /// **fused** policy across all callers — see
     /// `crates/app/src/sandbox.rs` for the union rule.
     #[serde(default)]
     #[builder(default)]

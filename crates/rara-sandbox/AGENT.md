@@ -40,11 +40,13 @@ Public surface (intentionally minimal, see #1697/#1698):
 - **No hardcoded rootfs image / paths.** The image reference is a required
   `SandboxConfig` field; the application layer reads it from YAML and
   passes it through. Do not add an `impl Default for SandboxConfig`.
-  `NetworkPolicy` *does* implement `Default` — the value mirrors
-  `boxlite::NetworkSpec::default` (`Enabled { allow_net: [] }`) so a YAML
-  config that omits `network` keeps the historical `run_code` behavior.
-  This is the only `Default` impl in the crate and exists solely to make
-  `#[serde(default)]` on `SandboxConfig::network` legal.
+  `NetworkPolicy` *does* implement `Default` — the value is
+  `Disabled` (safe-by-default). This **deliberately diverges** from
+  `boxlite::NetworkSpec::default` (`Enabled { allow_net: [] }` = full
+  outbound): a config that omits `network` must not silently grant
+  untrusted code egress (#2216). This is the only `Default` impl in the
+  crate and exists solely to make `#[serde(default)]` on
+  `SandboxConfig::network` legal.
 - **No noop impls, no mock backend.** `docs/guides/anti-patterns.md`
   forbids silent `Ok(())` trait impls. If you need to test a caller
   without a real VM, fake it at the caller boundary — not inside this
@@ -100,10 +102,15 @@ restrictive setting from the first caller forward.
 
 The fusion rule lives at `crates/app/src/sandbox.rs::fused_network_policy`:
 
-- if **every** sandbox-using tool wants `Disabled`, the result is `Disabled`;
-- otherwise the result is `Enabled` with the union of allow-lists. An empty
-  allow-list under `Enabled` means full outbound (boxlite's own default), so
-  a single full-net contributor (today `run_code`) dominates the union.
+- if **every** sandbox-using tool wants `Disabled` (absent block or empty
+  `allow_net`), the result is `Disabled` — the default-deny ground state;
+- otherwise the result is `Enabled` with the de-duplicated union of the
+  callers' non-empty allow-lists. That union is always a concrete,
+  host/CIDR-scoped list. No config input can produce `Enabled { allow_net:
+  [] }` (boxlite's empty-list = full-outbound sentinel): boxlite v0.9.7 has
+  no "all hosts" token, and rara does not reintroduce one, so full outbound
+  is deliberately not expressible from YAML (#2216). Both `bash` and
+  `run_code` are config-driven and default-deny.
 
 When you add a new sandbox-using tool, extend `fused_network_policy` so the
 union accounts for the tool's policy. Do **not** add a per-call

@@ -138,21 +138,26 @@ agents:
 # registered but every call returns a clear "sandbox not configured" error
 # so the LLM can react.
 #
-# `bash.allow_net` is the only tunable specific to the `bash` tool today:
-# - omitted block / empty list → bash by itself wants **no network**
-# - non-empty list → boxlite allow-list (host patterns or CIDRs)
+# Network is DEFAULT-DENY. `bash` and `run_code` each take their own
+# `allow_net` list, and both default to no network:
+# - omitted `bash:` / `run_code:` block, or empty `allow_net` → that tool
+#   wants **no network** (the safe ground state; untrusted, LLM-generated
+#   `run_code` gets zero egress)
+# - non-empty list → boxlite allow-list of host patterns / CIDRs /
+#   subdomain wildcards (e.g. "pypi.org", "*.crates.io", "10.0.0.0/8")
 #
-# Important: `bash` and `run_code` share a single per-session VM, which
-# carries a single network policy. The effective policy is the **union**
-# (most-permissive) across both tools, computed once at VM creation and
-# fixed for the session — see `crates/app/src/sandbox.rs`. Because
-# `run_code` is registered with full outbound access (its historical
-# behavior), the session VM's network is effectively "full outbound" as
-# long as `run_code` is registered, regardless of the value of
-# `bash.allow_net`. The `allow_net` knob is therefore primarily a hook
-# for future tools that may want to tighten the union; it cannot
-# unilaterally disable network for the bash tool while `run_code` is
-# also present.
+# `bash` and `run_code` share a single per-session VM, which carries a
+# single network policy: the **union** (most-permissive) of the two
+# `allow_net` lists, de-duplicated, computed once at VM creation and fixed
+# for the session — see `crates/app/src/sandbox.rs`. If both lists are
+# empty/absent, the VM has no network at all.
+#
+# There is no "allow all hosts" switch. boxlite v0.9.7 has no wildcard
+# token that means every host (a bare "*" matches no real host; "0.0.0.0/0"
+# leaves DNS sinkholed), and rara does not add a sentinel for it. To grant
+# broad reach, enumerate the domains you trust — subdomain wildcards
+# ("*.example.com") cover host families. This is the OpenAI Codex /
+# Claude-sandbox baseline: default-deny egress, explicit allow-list only.
 #
 # Pre-flight: `rara setup boxlite` must have staged the runtime files (see
 # docs/guides/boxlite-runtime.md).
@@ -163,6 +168,10 @@ agents:
 #     allow_net:
 #       - "github.com"
 #       - "*.crates.io"
+#   run_code:
+#     allow_net:
+#       - "pypi.org"
+#       - "files.pythonhosted.org"
 
 # ---------------------------------------------------------------------------
 # Telemetry — optional OTLP traces, Pyroscope profiling, and Layer B payload
