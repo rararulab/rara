@@ -231,7 +231,7 @@ async function setupRoutes(
       name: `finance-${entry.id}`,
       feed_type: entry.feed_type,
       tags: entry.tags,
-      transport: {},
+      transport: entry.transport_template ?? {},
       auth: null,
       enabled: true,
       status: 'running',
@@ -420,20 +420,21 @@ test.describe('Data Feeds Management', () => {
         {
           id: 'binance-market-candles',
           name: 'Binance Market Candles',
-          description: 'Preset for Binance OHLCV ingestion.',
+          description: 'Public Binance spot OHLCV feed.',
           feed_type: 'market_candle',
           tags: ['finance', 'market-data', 'crypto', 'binance'],
           enabled: false,
           feed_id: null,
-          requires_configuration: true,
-          setup_hint: 'Connect a normalized Binance candle endpoint before enabling.',
+          requires_configuration: false,
+          setup_hint: null,
           transport_template: {
-            url: '',
+            provider: 'binance',
+            base_url: 'https://api.binance.com',
             interval_secs: 60,
             headers: {},
             venue: 'binance',
-            symbols: [],
-            timeframes: [],
+            symbols: ['BTCUSDT', 'ETHUSDT'],
+            timeframes: ['1m'],
             max_candles_per_poll: 1000,
           },
         },
@@ -444,7 +445,10 @@ test.describe('Data Feeds Management', () => {
     await expect(page.getByText('Default finance sources')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('Federal Reserve Press Releases', { exact: true })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Enable' }).click();
+    const fedEntry = page
+      .getByText('Federal Reserve Press Releases', { exact: true })
+      .locator('xpath=ancestor::div[contains(@class, "justify-between")][1]');
+    await fedEntry.getByRole('button', { name: 'Enable' }).click();
 
     await expect(page.getByText('finance-fed-press-releases')).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible();
@@ -456,20 +460,20 @@ test.describe('Data Feeds Management', () => {
       events: [],
       catalog: [
         {
-          id: 'binance-market-candles',
-          name: 'Binance Market Candles',
-          description: 'Preset for Binance OHLCV ingestion.',
+          id: 'longbridge-market-candles',
+          name: 'Longbridge Market Data',
+          description: 'Preset for Longbridge equities market data.',
           feed_type: 'market_candle',
-          tags: ['finance', 'market-data', 'crypto', 'binance'],
+          tags: ['finance', 'market-data', 'equities', 'longbridge'],
           enabled: false,
           feed_id: null,
           requires_configuration: true,
-          setup_hint: 'Connect a normalized Binance candle endpoint before enabling.',
+          setup_hint: 'Connect Longbridge credentials behind a normalized candle endpoint.',
           transport_template: {
             url: '',
             interval_secs: 60,
             headers: {},
-            venue: 'binance',
+            venue: 'longbridge',
             symbols: [],
             timeframes: [],
             max_candles_per_poll: 1000,
@@ -480,15 +484,15 @@ test.describe('Data Feeds Management', () => {
     await goToDataFeeds(page);
 
     await expect(page.getByText(/^Provider presets$/)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('Binance Market Candles')).toBeVisible();
+    await expect(page.getByText('Longbridge Market Data')).toBeVisible();
 
     await page.getByRole('button', { name: 'Use template' }).click();
 
     await expect(page.getByText('New Data Feed')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('input[placeholder="e.g. github-rara"]')).toHaveValue(
-      'finance-binance-market-candles',
+      'finance-longbridge-market-candles',
     );
-    await expect(page.locator('input[placeholder="binance"]')).toHaveValue('binance');
+    await expect(page.locator('input[placeholder="binance"]')).toHaveValue('longbridge');
   });
 
   // -----------------------------------------------------------------------

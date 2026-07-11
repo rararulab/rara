@@ -1085,8 +1085,7 @@ function FeedCatalogCard({
       <div className="border-b px-4 py-3">
         <h3 className="text-sm font-semibold">Default finance sources</h3>
         <p className="text-xs text-muted-foreground">
-          Official feeds can run immediately. Provider presets need your own endpoint or
-          credentials.
+          Ready sources can run immediately. Provider presets need your own endpoint or credentials.
         </p>
       </div>
       <div className="divide-y">

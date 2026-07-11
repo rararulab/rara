@@ -14,8 +14,9 @@
 
 //! Config-driven latest market candle data feed.
 //!
-//! This transport fetches an operator-managed normalized candle endpoint and
-//! emits one `market_candle_closed` event per closed bar.
+//! This transport fetches either an operator-managed normalized candle endpoint
+//! or a built-in public provider such as Binance, then emits one
+//! `market_candle_closed` event per closed bar.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -48,7 +49,12 @@ const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MarketCandleTransport {
-    pub url:                  String,
+    #[serde(default)]
+    pub provider:             Option<String>,
+    #[serde(default)]
+    pub url:                  Option<String>,
+    #[serde(default)]
+    pub base_url:             Option<String>,
     pub interval_secs:        u64,
     #[serde(default)]
     pub headers:              HashMap<String, String>,
@@ -132,8 +138,13 @@ impl MarketCandleSource {
         self
     }
 
-    fn build_url(&self) -> anyhow::Result<Url> {
-        let mut url = Url::parse(&self.transport.url)?;
+    fn build_normalized_url(&self) -> anyhow::Result<Url> {
+        let url = self
+            .transport
+            .url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("normalized market candle URL is required"))?;
+        let mut url = Url::parse(url)?;
         if let Some(AuthConfig::Query {
             ref name,
             ref value,
@@ -141,6 +152,20 @@ impl MarketCandleSource {
         {
             url.query_pairs_mut().append_pair(name, value);
         }
+        Ok(url)
+    }
+
+    fn build_binance_klines_url(&self, symbol: &str, timeframe: &str) -> anyhow::Result<Url> {
+        let base_url = self
+            .transport
+            .base_url
+            .as_deref()
+            .unwrap_or("https://api.binance.com");
+        let mut url = Url::parse(base_url)?.join("/api/v3/klines")?;
+        url.query_pairs_mut()
+            .append_pair("symbol", symbol)
+            .append_pair("interval", timeframe)
+            .append_pair("limit", "2");
         Ok(url)
     }
 
@@ -173,7 +198,7 @@ impl MarketCandleSource {
         }
     }
 
-    fn parse_candle_events(&self, body: &[u8]) -> anyhow::Result<Vec<FeedEvent>> {
+    fn parse_normalized_candle_events(&self, body: &[u8]) -> anyhow::Result<Vec<FeedEvent>> {
         let batch: CandleBatch = serde_json::from_slice(body)?;
         let received_at = Timestamp::now();
         let mut events = Vec::new();
@@ -186,52 +211,75 @@ impl MarketCandleSource {
             let Some(candle) = self.parse_raw_candle(raw) else {
                 continue;
             };
-            let mut tags = self.tags.clone();
-            tags.extend([
-                "finance".to_owned(),
-                "market-data".to_owned(),
-                format!("source:{}", self.name),
-                format!("venue:{}", candle.venue),
-                format!("symbol:{}", candle.symbol),
-                format!("timeframe:{}", candle.timeframe),
-            ]);
-            dedupe_sort(&mut tags);
-
-            let payload = serde_json::json!({
-                "venue": candle.venue,
-                "symbol": candle.symbol,
-                "timeframe": candle.timeframe,
-                "open_time": candle.open_time,
-                "close_time": candle.close_time,
-                "open": candle.open.to_string(),
-                "high": candle.high.to_string(),
-                "low": candle.low.to_string(),
-                "close": candle.close.to_string(),
-                "volume": candle.volume.to_string(),
-            });
-
-            let identity = format!(
-                "{}:{}:{}:{}:{}",
-                self.name,
-                payload["venue"].as_str().unwrap_or_default(),
-                payload["symbol"].as_str().unwrap_or_default(),
-                payload["timeframe"].as_str().unwrap_or_default(),
-                payload["open_time"].as_str().unwrap_or_default()
-            );
-
-            events.push(
-                FeedEvent::builder()
-                    .id(FeedEventId::deterministic(&identity))
-                    .source_name(self.name.clone())
-                    .event_type("market_candle_closed".to_owned())
-                    .tags(tags)
-                    .payload(payload)
-                    .received_at(received_at)
-                    .build(),
-            );
+            events.push(self.event_from_candle(candle, received_at));
         }
 
         Ok(events)
+    }
+
+    fn parse_binance_candle_events(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        body: &[u8],
+    ) -> anyhow::Result<Vec<FeedEvent>> {
+        let rows: Vec<Vec<serde_json::Value>> = serde_json::from_slice(body)?;
+        let received_at = Timestamp::now();
+        let now_ms = received_at.as_millisecond();
+        let mut events = Vec::new();
+
+        for row in rows.into_iter().take(self.transport.max_candles_per_poll) {
+            let Some(candle) = self.parse_binance_row(symbol, timeframe, row, now_ms) else {
+                continue;
+            };
+            events.push(self.event_from_candle(candle, received_at));
+        }
+
+        Ok(events)
+    }
+
+    fn event_from_candle(&self, candle: ParsedCandle, received_at: Timestamp) -> FeedEvent {
+        let mut tags = self.tags.clone();
+        tags.extend([
+            "finance".to_owned(),
+            "market-data".to_owned(),
+            format!("source:{}", self.name),
+            format!("venue:{}", candle.venue),
+            format!("symbol:{}", candle.symbol),
+            format!("timeframe:{}", candle.timeframe),
+        ]);
+        dedupe_sort(&mut tags);
+
+        let payload = serde_json::json!({
+            "venue": candle.venue,
+            "symbol": candle.symbol,
+            "timeframe": candle.timeframe,
+            "open_time": candle.open_time,
+            "close_time": candle.close_time,
+            "open": candle.open.to_string(),
+            "high": candle.high.to_string(),
+            "low": candle.low.to_string(),
+            "close": candle.close.to_string(),
+            "volume": candle.volume.to_string(),
+        });
+
+        let identity = format!(
+            "{}:{}:{}:{}:{}",
+            self.name,
+            payload["venue"].as_str().unwrap_or_default(),
+            payload["symbol"].as_str().unwrap_or_default(),
+            payload["timeframe"].as_str().unwrap_or_default(),
+            payload["open_time"].as_str().unwrap_or_default()
+        );
+
+        FeedEvent::builder()
+            .id(FeedEventId::deterministic(&identity))
+            .source_name(self.name.clone())
+            .event_type("market_candle_closed".to_owned())
+            .tags(tags)
+            .payload(payload)
+            .received_at(received_at)
+            .build()
     }
 
     fn parse_raw_candle(&self, raw: RawCandle) -> Option<ParsedCandle> {
@@ -258,8 +306,35 @@ impl MarketCandleSource {
         })
     }
 
-    async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
-        let url = match self.build_url() {
+    fn parse_binance_row(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        row: Vec<serde_json::Value>,
+        now_ms: i64,
+    ) -> Option<ParsedCandle> {
+        let open_time_ms = row.first()?.as_i64()?;
+        let close_time_ms = row.get(6)?.as_i64()?;
+        if close_time_ms > now_ms {
+            return None;
+        }
+
+        Some(ParsedCandle {
+            venue:      self.transport.venue.clone(),
+            symbol:     symbol.to_owned(),
+            timeframe:  timeframe.to_owned(),
+            open_time:  Timestamp::from_millisecond(open_time_ms).ok()?.to_string(),
+            close_time: Timestamp::from_millisecond(close_time_ms).ok()?.to_string(),
+            open:       Decimal::from_str(row.get(1)?.as_str()?).ok()?,
+            high:       Decimal::from_str(row.get(2)?.as_str()?).ok()?,
+            low:        Decimal::from_str(row.get(3)?.as_str()?).ok()?,
+            close:      Decimal::from_str(row.get(4)?.as_str()?).ok()?,
+            volume:     Decimal::from_str(row.get(5)?.as_str()?).ok()?,
+        })
+    }
+
+    async fn poll_normalized_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        let url = match self.build_normalized_url() {
             Ok(url) => url,
             Err(err) => {
                 self.record_error(format!("failed to build market candle URL: {err}"));
@@ -303,7 +378,7 @@ impl MarketCandleSource {
             return true;
         }
 
-        let events = match self.parse_candle_events(&body) {
+        let events = match self.parse_normalized_candle_events(&body) {
             Ok(events) => events,
             Err(err) => {
                 self.record_error(format!("failed to parse market candle response: {err}"));
@@ -319,6 +394,89 @@ impl MarketCandleSource {
 
         self.record_success();
         true
+    }
+
+    async fn poll_binance_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        let mut any_success = false;
+
+        for symbol in &self.transport.symbols {
+            for timeframe in &self.transport.timeframes {
+                let url = match self.build_binance_klines_url(symbol, timeframe) {
+                    Ok(url) => url,
+                    Err(err) => {
+                        self.record_error(format!("failed to build Binance klines URL: {err}"));
+                        continue;
+                    }
+                };
+
+                let mut request = self.client.get(url);
+                for (key, value) in &self.transport.headers {
+                    request = request.header(key.as_str(), value.as_str());
+                }
+                request = apply_request_auth(request, &self.auth);
+
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(err) => {
+                        self.record_error(format!("Binance klines fetch failed: {err}"));
+                        continue;
+                    }
+                };
+
+                let status = response.status();
+                if !status.is_success() {
+                    self.record_error(format!(
+                        "Binance klines fetch received non-success status: {status}"
+                    ));
+                    continue;
+                }
+
+                let body = match response.bytes().await {
+                    Ok(body) => body,
+                    Err(err) => {
+                        self.record_error(format!("failed to read Binance klines body: {err}"));
+                        continue;
+                    }
+                };
+                if body.len() > MAX_BODY_BYTES {
+                    self.record_error(format!(
+                        "Binance klines response exceeded {MAX_BODY_BYTES} bytes"
+                    ));
+                    continue;
+                }
+
+                let events = match self.parse_binance_candle_events(symbol, timeframe, &body) {
+                    Ok(events) => events,
+                    Err(err) => {
+                        self.record_error(format!(
+                            "failed to parse Binance klines response: {err}"
+                        ));
+                        continue;
+                    }
+                };
+
+                any_success = true;
+                for event in events {
+                    if tx.send(event).await.is_err() {
+                        tracing::info!("event channel closed, stopping market candle loop");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if any_success {
+            self.record_success();
+        }
+        true
+    }
+
+    async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        if self.transport.provider.as_deref() == Some("binance") {
+            self.poll_binance_once(tx).await
+        } else {
+            self.poll_normalized_once(tx).await
+        }
     }
 }
 
@@ -336,7 +494,9 @@ impl DataFeed for MarketCandleSource {
     ) -> anyhow::Result<()> {
         let interval = Duration::from_secs(self.transport.interval_secs);
         tracing::info!(
-            url = %self.transport.url,
+            provider = ?self.transport.provider,
+            url = ?self.transport.url,
+            base_url = ?self.transport.base_url,
             ?interval,
             "market candle feed started"
         );
@@ -363,8 +523,28 @@ impl DataFeed for MarketCandleSource {
 }
 
 fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
-    let url = Url::parse(&transport.url)?;
-    anyhow::ensure!(url.scheme() == "https", "market candle URL must use HTTPS");
+    match transport.provider.as_deref().unwrap_or("normalized") {
+        "normalized" => {
+            let url = transport
+                .url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("market candle URL is required"))?;
+            let url = Url::parse(url)?;
+            anyhow::ensure!(url.scheme() == "https", "market candle URL must use HTTPS");
+        }
+        "binance" => {
+            let base_url = transport
+                .base_url
+                .as_deref()
+                .unwrap_or("https://api.binance.com");
+            let url = Url::parse(base_url)?;
+            anyhow::ensure!(
+                url.scheme() == "https",
+                "Binance market candle base_url must use HTTPS"
+            );
+        }
+        provider => anyhow::bail!("unsupported market candle provider: {provider}"),
+    }
     anyhow::ensure!(
         transport.interval_secs > 0,
         "market candle interval_secs must be greater than zero"
@@ -431,11 +611,35 @@ mod tests {
         MarketCandleSource::from_config(&config).expect("market candle config should parse")
     }
 
+    fn binance_source() -> MarketCandleSource {
+        let config = DataFeedConfig::builder()
+            .id("binance-candles-test".to_owned())
+            .name("binance-public".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "crypto".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "venue": "binance",
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build();
+
+        MarketCandleSource::from_config(&config).expect("Binance config should parse")
+    }
+
     #[test]
     fn closed_candles_for_many_symbols_become_batched_events() {
         let source = candle_source();
         let events = source
-            .parse_candle_events(
+            .parse_normalized_candle_events(
                 br#"{
   "candles": [
     {
@@ -505,8 +709,12 @@ mod tests {
   ]
 }"#;
 
-        let first = source.parse_candle_events(body).expect("first parse");
-        let second = source.parse_candle_events(body).expect("second parse");
+        let first = source
+            .parse_normalized_candle_events(body)
+            .expect("first parse");
+        let second = source
+            .parse_normalized_candle_events(body)
+            .expect("second parse");
 
         assert_eq!(first[0].id, second[0].id);
     }
@@ -515,7 +723,7 @@ mod tests {
     fn open_or_invalid_decimal_candles_are_not_emitted() {
         let source = candle_source();
         let events = source
-            .parse_candle_events(
+            .parse_normalized_candle_events(
                 br#"{
   "candles": [
     {
@@ -550,5 +758,61 @@ mod tests {
             .expect("payload should parse while invalid candles are skipped");
 
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn binance_provider_builds_public_klines_url() {
+        let source = binance_source();
+        let url = source
+            .build_binance_klines_url("BTCUSDT", "1m")
+            .expect("URL should build");
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=2"
+        );
+    }
+
+    #[test]
+    fn binance_klines_become_closed_candle_events() {
+        let source = binance_source();
+        let events = source
+            .parse_binance_candle_events(
+                "BTCUSDT",
+                "1m",
+                br#"[
+  [
+    1713100200000,
+    "61500.12",
+    "61640.00",
+    "61480.50",
+    "61610.30",
+    "124.551",
+    1713100259999,
+    "7669543.21",
+    42,
+    "60.1",
+    "3700000.00",
+    "0"
+  ]
+]"#,
+            )
+            .expect("Binance klines should parse");
+
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.source_name, "binance-public");
+        assert_eq!(event.event_type, "market_candle_closed");
+        assert!(event.tags.contains(&"venue:binance".to_owned()));
+        assert!(event.tags.contains(&"symbol:BTCUSDT".to_owned()));
+        assert!(event.tags.contains(&"timeframe:1m".to_owned()));
+        assert_eq!(event.payload["venue"], "binance");
+        assert_eq!(event.payload["symbol"], "BTCUSDT");
+        assert_eq!(event.payload["timeframe"], "1m");
+        assert_eq!(event.payload["open"], "61500.12");
+        assert_eq!(event.payload["high"], "61640.00");
+        assert_eq!(event.payload["low"], "61480.50");
+        assert_eq!(event.payload["close"], "61610.30");
+        assert_eq!(event.payload["volume"], "124.551");
     }
 }
