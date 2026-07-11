@@ -83,6 +83,18 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             "Binance Market Candles",
             "Public Binance spot OHLCV feed for BTCUSDT and ETHUSDT 1m candles.",
             ["finance", "market-data", "crypto", "binance"],
+            &["BTCUSDT", "ETHUSDT"],
+            &["1m"],
+            60,
+        ),
+        binance_market_candles_source(
+            "binance-major-crypto-15m",
+            "Binance Major Crypto 15m",
+            "Public Binance spot OHLCV feed for major crypto USDT pairs on 15m candles.",
+            ["finance", "market-data", "crypto", "binance"],
+            &["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"],
+            &["15m"],
+            300,
         ),
         provider_preset(
             "longbridge-market-candles",
@@ -91,6 +103,8 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             "longbridge",
             ["finance", "market-data", "equities", "longbridge"],
             "Connect Longbridge credentials behind a normalized candle endpoint before enabling.",
+            &["AAPL.US", "NVDA.US", "700.HK"],
+            &["1d"],
         ),
     ]
 }
@@ -126,6 +140,9 @@ fn binance_market_candles_source(
     name: &str,
     description: &str,
     tags: impl IntoIterator<Item = &'static str>,
+    symbols: &[&str],
+    timeframes: &[&str],
+    interval_secs: u64,
 ) -> DefaultFeedSource {
     DefaultFeedSource {
         id:                     id.to_owned(),
@@ -136,11 +153,11 @@ fn binance_market_candles_source(
         transport:              Some(serde_json::json!({
             "provider": "binance",
             "base_url": "https://api.binance.com",
-            "interval_secs": 60,
+            "interval_secs": interval_secs,
             "headers": {},
             "venue": "binance",
-            "symbols": ["BTCUSDT", "ETHUSDT"],
-            "timeframes": ["1m"],
+            "symbols": symbols,
+            "timeframes": timeframes,
             "max_candles_per_poll": 1000
         })),
         auth:                   None,
@@ -156,6 +173,8 @@ fn provider_preset(
     venue: &str,
     tags: impl IntoIterator<Item = &'static str>,
     setup_hint: &str,
+    symbols: &[&str],
+    timeframes: &[&str],
 ) -> DefaultFeedSource {
     DefaultFeedSource {
         id:                     id.to_owned(),
@@ -168,12 +187,120 @@ fn provider_preset(
             "interval_secs": 60,
             "headers": {},
             "venue": venue,
-            "symbols": [],
-            "timeframes": [],
+            "symbols": symbols,
+            "timeframes": timeframes,
             "max_candles_per_poll": 1000
         })),
         auth:                   None,
         requires_configuration: true,
         setup_hint:             Some(setup_hint.to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+
+    use super::default_finance_feed_sources;
+    use crate::feed::{market_candle::MarketCandleSource, rss::RssSource};
+
+    #[test]
+    fn catalog_ids_and_feed_names_are_unique() {
+        let catalog = default_finance_feed_sources();
+        let mut ids = HashSet::new();
+        let mut feed_names = HashSet::new();
+
+        for source in catalog {
+            assert!(!source.id.trim().is_empty());
+            assert!(ids.insert(source.id.clone()), "duplicate id {}", source.id);
+            assert!(
+                feed_names.insert(source.feed_name()),
+                "duplicate feed name for {}",
+                source.id
+            );
+            assert!(
+                source.tags.iter().any(|tag| tag == "finance"),
+                "{} must include finance tag",
+                source.id
+            );
+        }
+    }
+
+    #[test]
+    fn ready_catalog_sources_have_valid_transport_templates() {
+        for source in default_finance_feed_sources()
+            .into_iter()
+            .filter(|source| source.can_enable())
+        {
+            let config = DataFeedConfig::builder()
+                .id(format!("test-{}", source.id))
+                .name(source.feed_name())
+                .feed_type(source.feed_type)
+                .tags(source.tags)
+                .transport(
+                    source
+                        .transport
+                        .expect("ready source must have a transport template"),
+                )
+                .maybe_auth(source.auth)
+                .enabled(true)
+                .status(FeedStatus::Idle)
+                .created_at(jiff::Timestamp::UNIX_EPOCH)
+                .updated_at(jiff::Timestamp::UNIX_EPOCH)
+                .build();
+
+            match config.feed_type {
+                FeedType::Rss => {
+                    RssSource::from_config(&config)
+                        .unwrap_or_else(|err| panic!("{} should be valid: {err}", config.name));
+                }
+                FeedType::MarketCandle => {
+                    MarketCandleSource::from_config(&config)
+                        .unwrap_or_else(|err| panic!("{} should be valid: {err}", config.name));
+                }
+                other => panic!("unexpected ready finance feed type {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_contains_public_binance_15m_major_crypto_preset() {
+        let source = default_finance_feed_sources()
+            .into_iter()
+            .find(|source| source.id == "binance-major-crypto-15m")
+            .expect("missing Binance major crypto 15m preset");
+
+        assert!(source.can_enable());
+        assert_eq!(source.feed_type, FeedType::MarketCandle);
+        let transport = source.transport.expect("transport template");
+        assert_eq!(transport["provider"], "binance");
+        assert_eq!(transport["venue"], "binance");
+        assert_eq!(transport["timeframes"], serde_json::json!(["15m"]));
+        assert_eq!(
+            transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"])
+        );
+    }
+
+    #[test]
+    fn longbridge_preset_is_prefilled_but_requires_operator_endpoint() {
+        let source = default_finance_feed_sources()
+            .into_iter()
+            .find(|source| source.id == "longbridge-market-candles")
+            .expect("missing Longbridge preset");
+
+        assert!(!source.can_enable());
+        assert!(source.requires_configuration);
+        assert!(source.setup_hint.is_some());
+        let transport = source.transport.expect("transport template");
+        assert_eq!(transport["venue"], "longbridge");
+        assert_eq!(
+            transport["symbols"],
+            serde_json::json!(["AAPL.US", "NVDA.US", "700.HK"])
+        );
+        assert_eq!(transport["timeframes"], serde_json::json!(["1d"]));
+        assert_eq!(transport["url"], "");
     }
 }
