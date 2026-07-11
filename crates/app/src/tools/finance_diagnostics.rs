@@ -75,6 +75,9 @@ pub(super) struct FeedSourceDiagnostic {
     pub configured_status: Option<String>,
     pub runtime_state:     FeedRuntimeState,
     pub last_error:        Option<String>,
+    pub event_count:       i64,
+    pub last_event_at:     Option<String>,
+    pub lag_seconds:       Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +108,12 @@ pub(super) enum FeedRuntimeState {
     Running,
     Stopped,
     NotRegistered,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FeedEventSummary {
+    event_count:   i64,
+    last_event_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -170,6 +179,21 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
             .into_iter()
             .map(|feed| (feed.name.clone(), feed))
             .collect::<HashMap<_, _>>();
+        let event_summaries = self
+            .data_feed_svc
+            .event_summaries()
+            .await?
+            .into_iter()
+            .map(|summary| {
+                (
+                    summary.source_name,
+                    FeedEventSummary {
+                        event_count:   summary.event_count,
+                        last_event_at: summary.last_event_at,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
         let subscriptions = self
             .finance_registry
@@ -187,8 +211,14 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
         let mut diagnostics = Vec::with_capacity(subscriptions.len());
         for subscription in subscriptions {
             diagnostics.push(
-                self.diagnose_subscription(subscription, &feeds_by_name, as_of, stale_after_secs)
-                    .await?,
+                self.diagnose_subscription(
+                    subscription,
+                    &feeds_by_name,
+                    &event_summaries,
+                    as_of,
+                    stale_after_secs,
+                )
+                .await?,
             );
         }
 
@@ -206,10 +236,16 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
         &self,
         subscription: FinanceSubscription,
         feeds_by_name: &HashMap<String, DataFeedConfig>,
+        event_summaries: &HashMap<String, FeedEventSummary>,
         as_of: Timestamp,
         stale_after_secs: Option<u64>,
     ) -> anyhow::Result<CandleSubscriptionDiagnostic> {
-        let feed_sources = self.feed_diagnostics(&subscription.source_names, feeds_by_name);
+        let feed_sources = self.feed_diagnostics(
+            &subscription.source_names,
+            feeds_by_name,
+            event_summaries,
+            as_of,
+        );
         let streams = self
             .stream_diagnostics(&subscription, as_of, stale_after_secs)
             .await?;
@@ -232,22 +268,31 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
         &self,
         source_names: &[String],
         feeds_by_name: &HashMap<String, DataFeedConfig>,
+        event_summaries: &HashMap<String, FeedEventSummary>,
+        as_of: Timestamp,
     ) -> Vec<FeedSourceDiagnostic> {
         source_names
             .iter()
             .map(|source_name| {
                 let feed = feeds_by_name.get(source_name);
+                let event_summary = event_summaries.get(source_name);
+                let last_event_at = event_summary.and_then(|summary| summary.last_event_at);
+                let lag_seconds =
+                    last_event_at.map(|timestamp| as_of.duration_since(timestamp).as_secs().max(0));
                 FeedSourceDiagnostic {
-                    source_name:       source_name.clone(),
-                    feed_id:           feed.map(|feed| feed.id.clone()),
-                    feed_type:         feed.map(|feed| feed.feed_type.to_string()),
-                    enabled:           feed.map(|feed| feed.enabled),
+                    source_name: source_name.clone(),
+                    feed_id: feed.map(|feed| feed.id.clone()),
+                    feed_type: feed.map(|feed| feed.feed_type.to_string()),
+                    enabled: feed.map(|feed| feed.enabled),
                     configured_status: feed.map(|feed| feed.status.to_string()),
-                    runtime_state:     runtime_state(
+                    runtime_state: runtime_state(
                         feed,
                         self.data_feed_registry.is_running(source_name),
                     ),
-                    last_error:        feed.and_then(|feed| feed.last_error.clone()),
+                    last_error: feed.and_then(|feed| feed.last_error.clone()),
+                    event_count: event_summary.map_or(0, |summary| summary.event_count),
+                    last_event_at: last_event_at.map(|timestamp| timestamp.to_string()),
+                    lag_seconds,
                 }
             })
             .collect()
@@ -463,7 +508,10 @@ mod tests {
     use jiff::Timestamp;
     use rara_backend_admin::data_feeds::DataFeedSvc;
     use rara_kernel::{
-        data_feed::{DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType},
+        data_feed::{
+            DataFeedConfig, DataFeedRegistry, FeedEvent, FeedEventId, FeedStatus, FeedStore,
+            FeedType,
+        },
         identity::UserId,
         io::MessageId,
         queue::{ShardedEventQueue, ShardedEventQueueConfig},
@@ -522,6 +570,17 @@ mod tests {
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             )",
             "CREATE INDEX idx_data_feeds_name ON data_feeds(name)",
+            "CREATE TABLE data_feed_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                source_name TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                payload TEXT NOT NULL DEFAULT '{}',
+                received_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+            "CREATE INDEX idx_data_feed_events_source ON data_feed_events(source_name)",
+            "CREATE INDEX idx_data_feed_events_received ON data_feed_events(received_at)",
         ] {
             diesel::sql_query(ddl)
                 .execute(&mut *conn)
@@ -581,11 +640,13 @@ mod tests {
         Arc<FinanceSubscriptionRegistry>,
         Arc<DataFeedRegistry>,
         Arc<InMemoryMarketDataRepository>,
+        crate::feed_store::SqliteFeedStore,
         ToolContext,
     ) {
         let pools = rara_kernel::testing::build_memory_diesel_pools().await;
         bootstrap_data_feed_schema(&pools).await;
-        let svc = DataFeedSvc::new(pools);
+        let svc = DataFeedSvc::new(pools.clone());
+        let feed_store = crate::feed_store::SqliteFeedStore::new(pools);
         svc.create_feed(&feed_config()).await.unwrap();
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let data_feed_registry = Arc::new(DataFeedRegistry::new(event_tx));
@@ -607,6 +668,7 @@ mod tests {
             finance_registry,
             data_feed_registry,
             market_repo,
+            feed_store,
             context(),
         )
     }
@@ -637,14 +699,34 @@ mod tests {
         id
     }
 
+    async fn append_feed_event(store: &crate::feed_store::SqliteFeedStore, received_at: Timestamp) {
+        let event = FeedEvent::builder()
+            .id(FeedEventId::deterministic(
+                "finance-binance-market-candles:event",
+            ))
+            .source_name("finance-binance-market-candles".to_owned())
+            .event_type("market_candle_closed".to_owned())
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .payload(serde_json::json!({
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m"
+            }))
+            .received_at(received_at)
+            .build();
+        store.append(&event).await.unwrap();
+    }
+
     #[tokio::test]
     async fn diagnose_reports_running_fresh_subscription() {
-        let (tool, finance_registry, data_feed_registry, market_repo, ctx) = fixture().await;
+        let (tool, finance_registry, data_feed_registry, market_repo, feed_store, ctx) =
+            fixture().await;
         insert_subscription(&finance_registry, &ctx).await;
         data_feed_registry.set_running(
             "finance-binance-market-candles".to_owned(),
             CancellationToken::new(),
         );
+        append_feed_event(&feed_store, ts("2026-07-10T08:30:30Z")).await;
         market_repo
             .upsert_closed_candle(candle("2026-07-10T08:29:00Z", "2026-07-10T08:30:00Z"))
             .await
@@ -666,6 +748,12 @@ mod tests {
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::Ok);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
+        assert_eq!(sub.feed_sources[0].event_count, 1);
+        assert_eq!(
+            sub.feed_sources[0].last_event_at.as_deref(),
+            Some("2026-07-10T08:30:30Z")
+        );
+        assert_eq!(sub.feed_sources[0].lag_seconds, Some(30));
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Fresh);
         assert_eq!(sub.streams[0].lag_secs, Some(60));
         assert_eq!(
@@ -679,7 +767,8 @@ mod tests {
 
     #[tokio::test]
     async fn diagnose_reports_missing_data_when_feed_is_stopped() {
-        let (tool, finance_registry, _data_feed_registry, _market_repo, ctx) = fixture().await;
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
         insert_subscription(&finance_registry, &ctx).await;
 
         let result = tool
@@ -697,13 +786,17 @@ mod tests {
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::NeedsRuntime);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Stopped);
+        assert_eq!(sub.feed_sources[0].event_count, 0);
+        assert_eq!(sub.feed_sources[0].last_event_at, None);
+        assert_eq!(sub.feed_sources[0].lag_seconds, None);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
         assert!(sub.streams[0].latest.is_none());
     }
 
     #[tokio::test]
     async fn diagnose_filters_by_subscription_id_for_current_user() {
-        let (tool, finance_registry, _data_feed_registry, _market_repo, ctx) = fixture().await;
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
         let id = insert_subscription(&finance_registry, &ctx).await;
         let other_id = uuid::Uuid::new_v4();
         finance_registry
@@ -743,7 +836,8 @@ mod tests {
 
     #[tokio::test]
     async fn diagnose_tool_is_read_only() {
-        let (tool, _finance_registry, _data_feed_registry, _market_repo, _ctx) = fixture().await;
+        let (tool, _finance_registry, _data_feed_registry, _market_repo, _feed_store, _ctx) =
+            fixture().await;
 
         assert!(tool.is_read_only(&serde_json::json!({})));
     }

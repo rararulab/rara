@@ -126,11 +126,21 @@ do not require rara to hold exchange credentials. They still emit only
 
 ## Conversation tools
 
-The app registers three deferred tools:
+The app registers finance subscription tools:
 
 - `finance_subscribe`
 - `finance_unsubscribe`
 - `finance_list_subscriptions`
+
+It also registers feed-oriented tools for market data onboarding and runtime
+checks:
+
+- `finance_list_feed_sources`
+- `finance_enable_feed_source`
+- `finance_disable_feed_source`
+- `finance_restart_feed_source`
+- `finance_subscribe_instruments`
+- `finance_diagnose_candle_subscriptions`
 
 Identity and session routing are always taken from `ToolContext`. The tool
 schema has no `owner` or `session` parameter, so an agent cannot subscribe or
@@ -163,6 +173,17 @@ Default delivery is `silent`. Immediate delivery is bounded by per-subscription
 cooldown and hourly budget; events above the budget are appended to tape rather
 than waking the session.
 
+After subscribing to candle instruments, call
+`finance_diagnose_candle_subscriptions` to verify the path end to end. Each
+subscription diagnostic includes:
+
+- feed config/runtime state, including whether the source is registered and
+  running;
+- persisted feed-event summary (`event_count`, `last_event_at`, and
+  `lag_seconds`) to confirm the source is emitting events;
+- latest stored closed candle and freshness per
+  `(source_name, venue, symbol, timeframe)`.
+
 ## Acceptance checklist
 
 Use this checklist before considering a deployment ready:
@@ -175,14 +196,16 @@ Use this checklist before considering a deployment ready:
    for `(source_name, venue, symbol, timeframe, open_time)`.
 4. Use a conversation to call `finance_subscribe` for article `source_names`
    and `watch_terms`.
-5. Use a conversation to call `finance_subscribe` for candle `symbols` and
-   `timeframes`.
+5. Use a conversation to call `finance_subscribe_instruments` for candle
+   `symbols` and `timeframes`.
 6. Confirm the admin event endpoint stores one event per article and one event
    per closed candle across two polls.
-7. Confirm one matching item wakes the same session at most once.
-8. Confirm a seventh matching item in an hour is tape-only under the default
+7. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
+   recent feed event, and a fresh latest candle for the subscribed stream.
+8. Confirm one matching item wakes the same session at most once.
+9. Confirm a seventh matching item in an hour is tape-only under the default
    immediate-delivery budget.
-9. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
+10. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
    account tool is agent-callable.
 
 ## Non-goals
