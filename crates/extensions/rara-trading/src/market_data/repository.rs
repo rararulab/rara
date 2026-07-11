@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use tokio::sync::RwLock;
 
-use super::model::{CandleRangeQuery, MarketCandle};
+use super::model::{CandleLatestQuery, CandleRangeQuery, MarketCandle};
 
 /// Result of upserting a closed candle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +40,12 @@ pub trait MarketDataRepository: Send + Sync {
 
     /// Query ordered candles for a venue/symbol/timeframe range.
     async fn candles(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<MarketCandle>>;
+
+    /// Return the newest closed candle for a venue/symbol/timeframe stream.
+    async fn latest_closed_candle(
+        &self,
+        query: CandleLatestQuery,
+    ) -> anyhow::Result<Option<MarketCandle>>;
 
     /// Return missing open times in `[start, end)` based on the query
     /// timeframe.
@@ -142,6 +148,18 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
         Ok(rows)
     }
 
+    async fn latest_closed_candle(
+        &self,
+        query: CandleLatestQuery,
+    ) -> anyhow::Result<Option<MarketCandle>> {
+        let candles = self.candles.read().await;
+        Ok(candles
+            .values()
+            .filter(|candle| matches_latest_query(candle, &query))
+            .max_by_key(|candle| candle.open_time)
+            .cloned())
+    }
+
     async fn missing_open_times(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<Timestamp>> {
         let rows = self.candles(query.clone()).await?;
         let present: std::collections::HashSet<Timestamp> =
@@ -175,12 +193,22 @@ fn matches_query(candle: &MarketCandle, query: &CandleRangeQuery) -> bool {
         && candle.open_time < query.end
 }
 
+fn matches_latest_query(candle: &MarketCandle, query: &CandleLatestQuery) -> bool {
+    query
+        .source_name
+        .as_ref()
+        .is_none_or(|source| source == &candle.source_name)
+        && candle.venue == query.venue
+        && candle.symbol == query.symbol
+        && candle.timeframe == query.timeframe
+}
+
 #[cfg(test)]
 mod tests {
     use rust_decimal::Decimal;
 
     use super::{InMemoryMarketDataRepository, MarketDataRepository, UpsertOutcome};
-    use crate::market_data::{CandleRangeQuery, MarketCandle, Timeframe};
+    use crate::market_data::{CandleLatestQuery, CandleRangeQuery, MarketCandle, Timeframe};
 
     fn ts(value: &str) -> jiff::Timestamp { value.parse().expect("timestamp fixture should parse") }
 
@@ -291,5 +319,36 @@ mod tests {
 
         let missing = repo.missing_open_times(query()).await.unwrap();
         assert_eq!(missing, vec![ts("2026-07-10T08:15:00Z")]);
+    }
+
+    #[tokio::test]
+    async fn latest_closed_candle_returns_newest_matching_stream() {
+        let repo = InMemoryMarketDataRepository::default();
+        repo.upsert_closed_candle(candle("2026-07-10T08:00:00Z", "61500.00"))
+            .await
+            .unwrap();
+        repo.upsert_closed_candle(candle("2026-07-10T08:30:00Z", "61700.00"))
+            .await
+            .unwrap();
+        repo.upsert_closed_candle(MarketCandle {
+            source_name: "other-source".to_owned(),
+            ..candle("2026-07-10T08:45:00Z", "61800.00")
+        })
+        .await
+        .unwrap();
+
+        let latest = repo
+            .latest_closed_candle(CandleLatestQuery {
+                source_name: Some("binance-spot".to_owned()),
+                venue:       "binance".to_owned(),
+                symbol:      "BTCUSDT".to_owned(),
+                timeframe:   Timeframe::parse("15m").unwrap(),
+            })
+            .await
+            .unwrap()
+            .expect("matching candle should exist");
+
+        assert_eq!(latest.open_time, ts("2026-07-10T08:30:00Z"));
+        assert_eq!(latest.close, dec("61700.00"));
     }
 }

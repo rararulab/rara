@@ -168,6 +168,8 @@ pub struct ToolDeps {
     pub sandbox_map:           SandboxMap,
     /// Finance information subscription registry.
     pub finance_registry:      Arc<rara_trading::finance::registry::FinanceSubscriptionRegistry>,
+    /// Shared market-data repository for closed OHLCV candles.
+    pub market_data_repo:      rara_trading::market_data::MarketDataRepositoryRef,
 }
 
 /// Result of tool registration, carrying handles needed for post-init wiring.
@@ -297,6 +299,14 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceListSubscriptionsTool::new(deps.finance_registry)),
+        Arc::new(
+            rara_trading::market_data::tools::FinanceGetLatestCandleTool::new(
+                deps.market_data_repo.clone(),
+            ),
+        ),
+        Arc::new(
+            rara_trading::market_data::tools::FinanceQueryCandlesTool::new(deps.market_data_repo),
+        ),
         // Artifacts (rich-content side panel — deferred tier)
         Arc::new(ArtifactsTool::new(deps.tape_service.clone())),
     ];
