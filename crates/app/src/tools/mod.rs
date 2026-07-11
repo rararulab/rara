@@ -97,7 +97,8 @@ use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
 use rara_trading::finance::tools::{
-    FinanceListSubscriptionsTool, FinanceSubscribeTool, FinanceUnsubscribeTool,
+    FinanceListFeedSourcesTool, FinanceListSubscriptionsTool, FinanceSubscribeTool,
+    FinanceUnsubscribeTool,
 };
 use read_file::ReadFileTool;
 use run_code::RunCodeTool;
@@ -292,6 +293,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         // User interaction
         Arc::new(AskUserTool::new(deps.user_question_manager)),
         // Finance information subscriptions
+        Arc::new(FinanceListFeedSourcesTool),
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceListSubscriptionsTool::new(deps.finance_registry)),
