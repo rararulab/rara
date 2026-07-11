@@ -1007,8 +1007,12 @@ mod tests {
             .iter()
             .find(|entry| entry["id"] == "binance-market-candles")
             .unwrap();
-        assert_eq!(binance["requires_configuration"], true);
+        assert_eq!(binance["requires_configuration"], false);
         assert_eq!(binance["feed_type"], "market_candle");
+        assert_eq!(
+            binance["transport_template"]["provider"].as_str().unwrap(),
+            "binance"
+        );
     }
 
     #[tokio::test]
@@ -1042,13 +1046,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finance_catalog_enable_rejects_provider_preset_without_config() {
+    async fn finance_catalog_enable_creates_default_binance_feed() {
         let app = app_with_user(user_of(Role::Admin)).await;
         let res = app
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/data-feeds/catalog/binance-market-candles/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(feed.name, "finance-binance-market-candles");
+        assert_eq!(feed.feed_type, FeedType::MarketCandle);
+        assert_eq!(feed.transport["provider"], "binance");
+        assert_eq!(feed.transport["venue"], "binance");
+        assert_eq!(feed.transport["symbols"][0], "BTCUSDT");
+        assert!(feed.enabled);
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_enable_rejects_provider_preset_without_config() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/longbridge-market-candles/enable")
                     .header("Authorization", "Bearer s3cret")
                     .body(Body::empty())
                     .unwrap(),

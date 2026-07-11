@@ -78,14 +78,11 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             ["finance", "news", "sec", "regulatory"],
             300,
         ),
-        provider_preset(
+        binance_market_candles_source(
             "binance-market-candles",
             "Binance Market Candles",
-            "Preset for Binance OHLCV ingestion through a normalized candle endpoint.",
-            "binance",
+            "Public Binance spot OHLCV feed for BTCUSDT and ETHUSDT 1m candles.",
             ["finance", "market-data", "crypto", "binance"],
-            "Connect a normalized Binance candle endpoint and choose symbols/timeframes before \
-             enabling.",
         ),
         provider_preset(
             "longbridge-market-candles",
@@ -117,6 +114,34 @@ fn rss_source(
             "interval_secs": interval_secs,
             "headers": {},
             "max_entries_per_poll": 50
+        })),
+        auth:                   None,
+        requires_configuration: false,
+        setup_hint:             None,
+    }
+}
+
+fn binance_market_candles_source(
+    id: &str,
+    name: &str,
+    description: &str,
+    tags: impl IntoIterator<Item = &'static str>,
+) -> DefaultFeedSource {
+    DefaultFeedSource {
+        id:                     id.to_owned(),
+        name:                   name.to_owned(),
+        description:            description.to_owned(),
+        feed_type:              FeedType::MarketCandle,
+        tags:                   tags.into_iter().map(str::to_owned).collect(),
+        transport:              Some(serde_json::json!({
+            "provider": "binance",
+            "base_url": "https://api.binance.com",
+            "interval_secs": 60,
+            "headers": {},
+            "venue": "binance",
+            "symbols": ["BTCUSDT", "ETHUSDT"],
+            "timeframes": ["1m"],
+            "max_candles_per_poll": 1000
         })),
         auth:                   None,
         requires_configuration: false,
