@@ -1,33 +1,58 @@
-# Build artifacts
-target/
-.cargo/
-web/node_modules/
-web/dist/
+# Build context for docker/Dockerfile (server-only rara image).
+#
+# Keep this a BLOCK-list: the Rust workspace has many build.rs scripts that
+# read files across the tree, so excluding by allow-list is fragile. We only
+# drop heavy or build-irrelevant paths.
+#
+# IMPORTANT: do NOT exclude `.cargo/` — the repo's `.cargo/config.toml` sets
+# the mold linker flags the release build relies on (see docker/Dockerfile).
 
-# Git
+# Rust build artifacts (rebuilt inside the image)
+target/
+
+# Vendored third-party reference repos (not part of the workspace build)
+vendor/
+
+# Git metadata
 .git/
 .gitignore
+.gitattributes
 
-# Worktrees
+# Nested worktrees
 .worktrees/
 
-# IDE
+# Frontend / desktop — server-only image, no web build, no nginx
+web/
+desktop/
+extension/
+site/
+
+# Node / bun caches anywhere
+node_modules/
+**/node_modules/
+
+# Go tooling caches (scripts/bin build outputs)
+scripts/bin/
+
+# CI, docs, harness, specs — not needed to compile the binary
+.github/
+docs/
+harness/
+specs/
+verification/
+
+# IDE / editor
 .idea/
 .vscode/
+.cursor/
+.devcontainer/
 *.swp
 *.swo
 
-# CI / Docs
-.github/
-docs/
-!docs/book/
-*.md
-!CHANGELOG.md
-
-# Docker (avoid recursive context)
+# Docker compose (avoid recursive context)
 docker-compose*.yml
 
-# Miscellaneous
+# Local secrets / env
 .env
 .env.*
 env.local*
