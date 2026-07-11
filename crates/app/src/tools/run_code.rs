@@ -22,7 +22,7 @@
 //! `LifecycleHook::on_session_end` hook installed at startup
 //! (see [`SandboxCleanupHook`]).
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -47,7 +47,21 @@ use crate::{
         RECLAIM_BACKOFF, RECLAIM_MAX_ATTEMPTS, ReclaimOutcome, reclaim_when_idle,
         sandbox_for_session, sandbox_not_configured_error,
     },
+    tools::timeout::deserialize_timeout,
 };
+
+/// Default hard timeout for a `run_code` exec, in seconds.
+///
+/// A `run_code`-local mechanism-level safety backstop: without it a
+/// non-terminating command (`while true`) holds the per-session sandbox lock
+/// until the kernel's coarse per-tool wall drops the future, stalling every
+/// other exec in the session and leaving the guest process burning a vCPU.
+/// It is deliberately a **separate** const from `bash`'s `DEFAULT_TIMEOUT_SECS`
+/// — coupling two independent tools' safety backstops via one symbol is a
+/// footgun — and a Rust `const` rather than a YAML knob, per
+/// `docs/guides/anti-patterns.md` (mechanism-tuning constants are not config).
+/// The value matches bash's proven default rather than inventing a new number.
+const DEFAULT_EXEC_TIMEOUT_SECS: u64 = 120;
 
 /// Input parameters for the `run_code` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -57,6 +71,11 @@ pub struct RunCodeParams {
     /// Arguments to pass, in order. Empty vec means no args.
     #[serde(default)]
     args:    Vec<String>,
+    /// Hard timeout for the exec (default 120s). Accepts an integer (`120`),
+    /// a stringified integer (`"120"`), a humantime duration (`"2m"`), or a
+    /// `{"secs": N, "nanos": N}` map — the same forms `bash` accepts.
+    #[serde(default, deserialize_with = "deserialize_timeout")]
+    timeout: Option<Duration>,
 }
 
 /// Typed result returned by `run_code`.
@@ -71,6 +90,10 @@ pub struct RunCodeResult {
     /// Combined stderr captured during execution. Empty when the sandbox
     /// declined to materialise a stderr stream.
     pub stderr:    String,
+    /// Whether the exec was hard-killed by boxlite for exceeding its timeout.
+    /// Mirrors `BashResult::timed_out` so the model can distinguish a timeout
+    /// from an ordinary non-zero exit.
+    pub timed_out: bool,
 }
 
 /// Sandboxed code execution tool.
@@ -85,6 +108,7 @@ pub struct RunCodeResult {
                    one VM per session; the VM is destroyed when the session ends. Use this for \
                    running LLM-generated code that should not touch the host.",
     tier = "deferred",
+    timeout_secs = 150,
     destructive
 )]
 pub struct RunCodeTool {
@@ -139,10 +163,7 @@ impl ToolExecute for RunCodeTool {
         context: &ToolContext,
     ) -> anyhow::Result<RunCodeResult> {
         let sandbox = self.sandbox_for_session(context.session_key).await?;
-        let request = ExecRequest::builder()
-            .command(params.command)
-            .args(params.args)
-            .build();
+        let request = build_exec_request(params.command, params.args, params.timeout);
 
         // Hold the per-session lock for the whole exec — boxlite's `LiteBox`
         // is not assumed `Sync` (see `rara-sandbox/AGENT.md`), so concurrent
@@ -185,11 +206,18 @@ impl ToolExecute for RunCodeTool {
             }
         }
 
-        let exit_code = match outcome.execution.wait().await {
-            Ok(status) => Some(status.code()),
+        // boxlite enforces the per-exec timeout itself; if it fired, `wait`
+        // returns an error whose message names the timeout. We surface that as
+        // `timed_out = true` (mirroring `bash`) so the model sees an explicit
+        // signal rather than a generic error. Any other wait error degrades to
+        // `exit_code = None` with `timed_out = false`.
+        let (exit_code, timed_out) = match outcome.execution.wait().await {
+            Ok(status) => (Some(status.code()), false),
             Err(e) => {
-                tracing::warn!(error = %e, "sandbox exec wait failed; reporting None");
-                None
+                let msg = e.to_string();
+                let timed_out = is_timeout_error(&msg);
+                tracing::warn!(error = %msg, timed_out, "sandbox exec wait failed; reporting None");
+                (None, timed_out)
             }
         };
 
@@ -197,9 +225,35 @@ impl ToolExecute for RunCodeTool {
             exit_code,
             stdout,
             stderr,
+            timed_out,
         })
     }
 }
+
+/// Build the [`ExecRequest`] for a `run_code` invocation, resolving the
+/// timeout to the per-call value or the [`DEFAULT_EXEC_TIMEOUT_SECS`] backstop.
+///
+/// Extracted as a pure function so the timeout-resolution behavior is unit
+/// testable without a live boxlite VM (the real exec path is `#[ignore]`d in
+/// `tests/run_code_session.rs`).
+fn build_exec_request(
+    command: String,
+    args: Vec<String>,
+    timeout: Option<Duration>,
+) -> ExecRequest {
+    let timeout_dur = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_EXEC_TIMEOUT_SECS));
+    ExecRequest::builder()
+        .command(command)
+        .args(args)
+        .timeout(timeout_dur)
+        .build()
+}
+
+/// Classify a boxlite `wait` error message as a timeout kill.
+///
+/// boxlite reports a hit timeout as an error string containing "timeout" or
+/// "timed out"; any other message is an ordinary failure, not a timeout.
+fn is_timeout_error(msg: &str) -> bool { msg.contains("timeout") || msg.contains("timed out") }
 
 /// Lifecycle hook that destroys per-session sandboxes when their owning
 /// session ends.
@@ -291,5 +345,59 @@ mod tests {
             required.iter().any(|v| v.as_str() == Some("command")),
             "command must be required, got: {required:?}"
         );
+    }
+
+    #[test]
+    fn run_code_sets_default_exec_timeout() {
+        // No caller-supplied timeout → the ExecRequest carries the default
+        // backstop. Before this change the field was `None` (no `.timeout()`
+        // was ever set), so this assertion inverts the pre-change behavior.
+        let request = build_exec_request("sh".to_owned(), vec!["-c".to_owned()], None);
+        assert_eq!(
+            request.timeout,
+            Some(Duration::from_secs(DEFAULT_EXEC_TIMEOUT_SECS))
+        );
+    }
+
+    #[test]
+    fn run_code_honors_per_call_timeout() {
+        // A caller-supplied timeout is used verbatim; the default const is
+        // not consulted.
+        let five = Duration::from_secs(5);
+        let request = build_exec_request("sh".to_owned(), vec![], Some(five));
+        assert_eq!(request.timeout, Some(five));
+        assert_ne!(five, Duration::from_secs(DEFAULT_EXEC_TIMEOUT_SECS));
+    }
+
+    #[test]
+    fn run_code_params_accepts_timeout_forms() {
+        // The shared `deserialize_timeout` visitor accepts every shape `bash`
+        // does: integer, stringified integer, humantime, and secs/nanos map.
+        let cases = [
+            (serde_json::json!({"command": "sh", "timeout": 120}), 120),
+            (serde_json::json!({"command": "sh", "timeout": "120"}), 120),
+            (serde_json::json!({"command": "sh", "timeout": "2m"}), 120),
+            (
+                serde_json::json!({"command": "sh", "timeout": {"secs": 120, "nanos": 0}}),
+                120,
+            ),
+        ];
+        for (json, expected_secs) in cases {
+            let p: RunCodeParams = serde_json::from_value(json.clone()).expect("parse");
+            assert_eq!(
+                p.timeout,
+                Some(Duration::from_secs(expected_secs)),
+                "unexpected timeout for {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_code_maps_timeout_error_to_flag() {
+        // A boxlite wait-error that names the timeout classifies as timed_out;
+        // any other wait error does not.
+        assert!(is_timeout_error("exec killed: timeout exceeded"));
+        assert!(is_timeout_error("command timed out after 120s"));
+        assert!(!is_timeout_error("connection reset by peer"));
     }
 }

@@ -58,6 +58,7 @@ mod set_avatar;
 mod settings;
 mod skill_tools;
 mod system_paths;
+mod timeout;
 mod user_note;
 mod walk_directory;
 mod wechat_login;
