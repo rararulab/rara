@@ -16,7 +16,7 @@
   "dead_code|crates/kernel": 35,
   "dead_code|crates/rara-acp": 1,
   "dead_code|crates/skills": 1,
-  "unreachable_pub|crates/app": 211,
+  "unreachable_pub|crates/app": 208,
   "unreachable_pub|crates/channels": 14,
   "unreachable_pub|crates/cmd": 131,
   "unreachable_pub|crates/common/base": 7,

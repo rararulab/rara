@@ -747,24 +747,9 @@ pub async fn start_with_options(
             }
         };
 
-    let rara = crate::boot::boot(
-        diesel_pools.clone(),
-        settings_provider.clone(),
-        &config.users,
-        &config.owner_user_id,
-        browser_manager,
-        config.sandbox.clone(),
-        sandbox_map.clone(),
-        finance_registry.clone(),
-        market_data_repo.clone(),
-    )
-    .await
-    .whatever_context("Failed to boot kernel dependencies")?;
-
     // -- Data feed subsystem --------------------------------------------------
-    // Create the event channel and registry. The registry holds in-memory
-    // feed configs + cancellation tokens; the channel carries FeedEvents
-    // from all transports to the dispatch task.
+    // Create the event channel and registry before tool registration so
+    // finance tools can persist and start built-in feed sources directly.
     let (feed_event_tx, mut feed_event_rx) =
         tokio::sync::mpsc::channel::<rara_kernel::data_feed::FeedEvent>(256);
     let feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(feed_event_tx));
@@ -790,6 +775,22 @@ pub async fn start_with_options(
             warn!(error = %e, "failed to restore data feed configs, starting with empty registry");
         }
     }
+
+    let rara = crate::boot::boot(
+        diesel_pools.clone(),
+        settings_provider.clone(),
+        &config.users,
+        &config.owner_user_id,
+        browser_manager,
+        config.sandbox.clone(),
+        sandbox_map.clone(),
+        finance_registry.clone(),
+        feed_svc.clone(),
+        feed_registry.clone(),
+        market_data_repo.clone(),
+    )
+    .await
+    .whatever_context("Failed to boot kernel dependencies")?;
 
     let feed_router_state = rara_backend_admin::data_feeds::DataFeedRouterState {
         svc:      feed_svc,
