@@ -157,6 +157,11 @@ Stored closed candles are queryable through read-only market-data tools:
 - `finance_find_candle_gaps`
 - `finance_get_candle_freshness`
 
+Operators can also inspect stored stream watermarks without going through the
+agent via:
+
+- `GET /api/v1/data-feeds/market-data/candle-streams`
+
 Identity and session routing are always taken from `ToolContext`. The tool
 schema has no `owner` or `session` parameter, so an agent cannot subscribe or
 unsubscribe on behalf of another user by passing forged IDs.
@@ -240,12 +245,15 @@ Use this checklist before considering a deployment ready:
    recent feed event, and a fresh latest candle for the subscribed stream.
 9. Confirm `finance_get_latest_candle` returns the latest stored closed candle
    for the subscribed `(venue, symbol, timeframe)`.
-10. Confirm `finance_query_candles` returns a bounded ordered range with decimal
+10. Confirm
+   `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
+   returns the stored stream watermark.
+11. Confirm `finance_query_candles` returns a bounded ordered range with decimal
    values encoded as strings.
-11. Confirm one matching item wakes the same session at most once.
-12. Confirm a seventh matching item in an hour is tape-only under the default
+12. Confirm one matching item wakes the same session at most once.
+13. Confirm a seventh matching item in an hour is tape-only under the default
    immediate-delivery budget.
-13. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
+14. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
    account tool is agent-callable.
 
 ## Non-goals

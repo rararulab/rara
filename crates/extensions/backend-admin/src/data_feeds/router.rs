@@ -27,6 +27,7 @@
 //! | POST   | `/api/v1/data-feeds/catalog/{id}/unsubscribe` | remove current user's catalog subscriptions |
 //! | GET    | `/api/v1/data-feeds/finance/subscriptions` | list current user's finance subscriptions |
 //! | POST   | `/api/v1/data-feeds/finance/subscriptions` | create/update current user's finance subscription |
+//! | GET    | `/api/v1/data-feeds/market-data/candle-streams` | list stored market-data candle streams |
 //!
 //! All mutations synchronise both the database (via [`DataFeedSvc`]) and the
 //! in-memory [`DataFeedRegistry`]. When an active feed is created and
@@ -62,6 +63,7 @@ use rara_trading::{
     finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     },
+    market_data::{CandleStreamListQuery, CandleStreamSummary, MarketDataRepositoryRef, Timeframe},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -73,6 +75,9 @@ use crate::kernel::problem::ProblemDetails;
 
 const DEFAULT_FINANCE_COOLDOWN_SECS: u64 = 900;
 const DEFAULT_FINANCE_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
+const DEFAULT_MARKET_DATA_STREAM_LIMIT: usize = 500;
+const MAX_MARKET_DATA_STREAM_LIMIT: usize = 10_000;
+const MAX_MARKET_DATA_SELECTOR_LEN: usize = 128;
 
 /// Shared state for data feed routes.
 ///
@@ -86,6 +91,8 @@ pub struct DataFeedRouterState {
     pub registry:         Arc<DataFeedRegistry>,
     /// Finance subscription registry used to annotate catalog source status.
     pub finance_registry: Arc<FinanceSubscriptionRegistry>,
+    /// Shared market-data repository for closed OHLCV candle history.
+    pub market_data_repo: MarketDataRepositoryRef,
 }
 
 /// Build the `/api/v1/data-feeds/...` router.
@@ -113,6 +120,10 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         .route(
             "/api/v1/data-feeds/finance/subscriptions/{id}",
             get(get_finance_subscription).delete(delete_finance_subscription),
+        )
+        .route(
+            "/api/v1/data-feeds/market-data/candle-streams",
+            get(list_market_data_candle_streams),
         )
         .route(
             "/api/v1/data-feeds/{id}",
@@ -206,6 +217,37 @@ struct EventQueryParams {
     limit:  Option<i64>,
     /// Offset for pagination (default: 0).
     offset: Option<i64>,
+}
+
+/// Query parameters for stored market-data candle streams.
+#[derive(Debug, Deserialize)]
+struct CandleStreamQueryParams {
+    source_name: Option<String>,
+    venue:       Option<String>,
+    symbol:      Option<String>,
+    timeframe:   Option<String>,
+    limit:       Option<usize>,
+}
+
+/// Stored market-data candle stream inventory response.
+#[derive(Debug, Serialize)]
+struct CandleStreamListResponse {
+    streams:     Vec<CandleStreamResponse>,
+    count:       usize,
+    query_limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleStreamResponse {
+    source_name:        String,
+    venue:              String,
+    symbol:             String,
+    timeframe:          String,
+    candle_count:       usize,
+    first_open_time:    String,
+    latest_open_time:   String,
+    latest_close_time:  String,
+    latest_ingested_at: String,
 }
 
 /// Paginated event response.
@@ -1042,6 +1084,38 @@ async fn query_events(
     }))
 }
 
+/// `GET /api/v1/data-feeds/market-data/candle-streams` — list stored closed
+/// candle streams from the market-data repository.
+async fn list_market_data_candle_streams(
+    State(state): State<DataFeedRouterState>,
+    Query(params): Query<CandleStreamQueryParams>,
+) -> Result<Json<CandleStreamListResponse>, ProblemDetails> {
+    let limit = validate_market_data_stream_limit(params.limit)?;
+    let query = CandleStreamListQuery {
+        source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
+        venue: normalize_optional_market_data_venue(params.venue)?,
+        symbol: normalize_optional_market_data_symbol(params.symbol)?,
+        timeframe: normalize_optional_market_data_timeframe(params.timeframe)?,
+        limit,
+    };
+
+    let streams = state
+        .market_data_repo
+        .candle_streams(query)
+        .await
+        .map_err(|err| ProblemDetails::internal(format!("failed to list candle streams: {err}")))?;
+    let count = streams.len();
+
+    Ok(Json(CandleStreamListResponse {
+        streams: streams
+            .into_iter()
+            .map(CandleStreamResponse::from)
+            .collect(),
+        count,
+        query_limit: limit,
+    }))
+}
+
 /// `GET /api/v1/data-feeds/{id}/events/{event_id}` — get a single event.
 async fn get_event(
     State(state): State<DataFeedRouterState>,
@@ -1063,6 +1137,87 @@ async fn get_event(
 }
 
 // ---------------------------------------------------------------------------
+
+impl From<CandleStreamSummary> for CandleStreamResponse {
+    fn from(summary: CandleStreamSummary) -> Self {
+        Self {
+            source_name:        summary.source_name,
+            venue:              summary.venue,
+            symbol:             summary.symbol,
+            timeframe:          summary.timeframe.to_string(),
+            candle_count:       summary.candle_count,
+            first_open_time:    summary.first_open_time.to_string(),
+            latest_open_time:   summary.latest_open_time.to_string(),
+            latest_close_time:  summary.latest_close_time.to_string(),
+            latest_ingested_at: summary.latest_ingested_at.to_string(),
+        }
+    }
+}
+
+fn normalize_market_data_selector(name: &str, value: String) -> Result<String, ProblemDetails> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(ProblemDetails::bad_request(format!(
+            "{name} must not be empty"
+        )));
+    }
+    if value.chars().count() > MAX_MARKET_DATA_SELECTOR_LEN {
+        return Err(ProblemDetails::bad_request(format!("{name} is too long")));
+    }
+    Ok(value.to_owned())
+}
+
+fn normalize_optional_market_data_selector(
+    name: &str,
+    value: Option<String>,
+) -> Result<Option<String>, ProblemDetails> {
+    value
+        .map(|value| normalize_market_data_selector(name, value))
+        .transpose()
+}
+
+fn normalize_optional_market_data_venue(
+    value: Option<String>,
+) -> Result<Option<String>, ProblemDetails> {
+    value
+        .map(|value| normalize_market_data_selector("venue", value).map(|v| v.to_ascii_lowercase()))
+        .transpose()
+}
+
+fn normalize_optional_market_data_symbol(
+    value: Option<String>,
+) -> Result<Option<String>, ProblemDetails> {
+    value
+        .map(|value| {
+            normalize_market_data_selector("symbol", value).map(|v| v.to_ascii_uppercase())
+        })
+        .transpose()
+}
+
+fn normalize_optional_market_data_timeframe(
+    value: Option<String>,
+) -> Result<Option<Timeframe>, ProblemDetails> {
+    value
+        .map(|value| {
+            let value = normalize_market_data_selector("timeframe", value)?;
+            Timeframe::parse(value.to_ascii_lowercase())
+                .map_err(|err| ProblemDetails::bad_request(format!("invalid timeframe: {err}")))
+        })
+        .transpose()
+}
+
+fn validate_market_data_stream_limit(limit: Option<usize>) -> Result<usize, ProblemDetails> {
+    let limit = limit.unwrap_or(DEFAULT_MARKET_DATA_STREAM_LIMIT);
+    if limit == 0 {
+        return Err(ProblemDetails::bad_request("limit must be positive"));
+    }
+    if limit > MAX_MARKET_DATA_STREAM_LIMIT {
+        return Err(ProblemDetails::bad_request(format!(
+            "limit must be <= {MAX_MARKET_DATA_STREAM_LIMIT}"
+        )));
+    }
+    Ok(limit)
+}
 // Feed task lifecycle
 // ---------------------------------------------------------------------------
 
@@ -1543,7 +1698,13 @@ mod tests {
         session::SessionKey,
         testing::build_memory_diesel_pools,
     };
-    use rara_trading::finance::registry::{FinanceDelivery, FinanceEventKind};
+    use rara_trading::{
+        finance::registry::{FinanceDelivery, FinanceEventKind},
+        market_data::{
+            InMemoryMarketDataRepository, MarketCandle, MarketDataRepository,
+            MarketDataRepositoryRef, Timeframe,
+        },
+    };
     use tower::ServiceExt;
 
     use super::*;
@@ -1596,6 +1757,10 @@ mod tests {
         ))
     }
 
+    fn test_market_data_repo() -> Arc<InMemoryMarketDataRepository> {
+        Arc::new(InMemoryMarketDataRepository::default())
+    }
+
     /// Build a router whose handlers use a real (but empty / schema-less)
     /// diesel pool. The non-admin Principal guard runs before any DB query,
     /// so the pool is never hit on the 403 path these tests exercise.
@@ -1609,6 +1774,7 @@ mod tests {
             svc,
             registry,
             finance_registry: test_finance_registry(),
+            market_data_repo: test_market_data_repo(),
         };
         let auth = auth_state_direct(user);
         data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
@@ -1626,6 +1792,7 @@ mod tests {
             svc,
             registry,
             finance_registry: test_finance_registry(),
+            market_data_repo: test_market_data_repo(),
         };
         let auth = auth_state_direct(user);
         (
@@ -1647,6 +1814,26 @@ mod tests {
             svc,
             registry,
             finance_registry,
+            market_data_repo: test_market_data_repo(),
+        };
+        let auth = auth_state_direct(user);
+        data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
+    }
+
+    async fn app_with_user_and_market_data_repo(
+        user: KernelUser,
+        market_data_repo: MarketDataRepositoryRef,
+    ) -> Router {
+        let pools = build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = DataFeedSvc::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(DataFeedRegistry::new(event_tx));
+        let state = DataFeedRouterState {
+            svc,
+            registry,
+            finance_registry: test_finance_registry(),
+            market_data_repo,
         };
         let auth = auth_state_direct(user);
         data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
@@ -2665,6 +2852,64 @@ mod tests {
         assert_eq!(summary["event_count"], 0);
         assert!(summary["last_event_at"].is_null());
         assert!(summary["lag_seconds"].is_null());
+    }
+
+    #[tokio::test]
+    async fn market_data_candle_streams_endpoint_lists_stored_streams() {
+        let market_data_repo = test_market_data_repo();
+        market_data_repo
+            .upsert_closed_candle(MarketCandle {
+                source_name:       "finance-binance-market-candles".to_owned(),
+                venue:             "binance".to_owned(),
+                symbol:            "BTCUSDT".to_owned(),
+                timeframe:         Timeframe::parse("1m").unwrap(),
+                open_time:         "2026-07-10T08:00:00Z".parse().unwrap(),
+                close_time:        "2026-07-10T08:01:00Z".parse().unwrap(),
+                open:              rust_decimal::Decimal::new(100_000, 2),
+                high:              rust_decimal::Decimal::new(101_000, 2),
+                low:               rust_decimal::Decimal::new(99_000, 2),
+                close:             rust_decimal::Decimal::new(100_500, 2),
+                volume:            rust_decimal::Decimal::new(42, 0),
+                ingested_at:       "2026-07-10T08:01:03Z".parse().unwrap(),
+                provider_sequence: Some("seq-1".to_owned()),
+            })
+            .await
+            .unwrap();
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candle-streams?venue=BINANCE&\
+                         symbol=btcusdt&timeframe=1M",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["query_limit"], 500);
+        let stream = &result["streams"][0];
+        assert_eq!(stream["source_name"], "finance-binance-market-candles");
+        assert_eq!(stream["venue"], "binance");
+        assert_eq!(stream["symbol"], "BTCUSDT");
+        assert_eq!(stream["timeframe"], "1m");
+        assert_eq!(stream["candle_count"], 1);
+        assert_eq!(stream["first_open_time"], "2026-07-10T08:00:00Z");
+        assert_eq!(stream["latest_open_time"], "2026-07-10T08:00:00Z");
+        assert_eq!(stream["latest_close_time"], "2026-07-10T08:01:00Z");
+        assert_eq!(stream["latest_ingested_at"], "2026-07-10T08:01:03Z");
     }
 
     #[tokio::test]

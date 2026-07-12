@@ -66,6 +66,24 @@ export interface FeedSummary {
   lag_seconds: number | null;
 }
 
+export interface CandleStream {
+  source_name: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  candle_count: number;
+  first_open_time: string;
+  latest_open_time: string;
+  latest_close_time: string;
+  latest_ingested_at: string;
+}
+
+export interface CandleStreamsResponse {
+  streams: CandleStream[];
+  count: number;
+  query_limit: number;
+}
+
 export interface CreateFeedRequest {
   name: string;
   feed_type: FeedType;
@@ -185,6 +203,25 @@ export const dataFeedsApi = {
   catalog: () => api.get<FeedCatalogEntry[]>('/api/v1/data-feeds/catalog'),
 
   summaries: () => api.get<FeedSummary[]>('/api/v1/data-feeds/summary'),
+
+  candleStreams: (params?: {
+    source_name?: string;
+    venue?: string;
+    symbol?: string;
+    timeframe?: string;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.source_name) query.set('source_name', params.source_name);
+    if (params?.venue) query.set('venue', params.venue);
+    if (params?.symbol) query.set('symbol', params.symbol);
+    if (params?.timeframe) query.set('timeframe', params.timeframe);
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return api.get<CandleStreamsResponse>(
+      `/api/v1/data-feeds/market-data/candle-streams${qs ? `?${qs}` : ''}`,
+    );
+  },
 
   get: (id: string) => api.get<DataFeedConfig>(`/api/v1/data-feeds/${id}`),
 
