@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   dataFeedsApi,
+  type CandleStream,
   type CreateFinanceSubscriptionRequest,
   type FeedCatalogEntry,
   type FinanceEventKind,
@@ -27,6 +28,7 @@ import { useSettingsModal } from '@/components/settings/SettingsModalContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { candleStreamHealthForSelectors } from '@/lib/finance-candle-health';
 
 interface FinanceWatchesCardProps {
   sessionKey: string;
@@ -45,6 +47,12 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
     queryFn: () => dataFeedsApi.financeSubscriptions(),
     staleTime: 30_000,
   });
+  const candleStreamsQuery = useQuery({
+    queryKey: ['market-data-candle-streams'],
+    queryFn: () => dataFeedsApi.candleStreams({ limit: 100 }),
+    refetchInterval: 30_000,
+    staleTime: 30_000,
+  });
 
   const subscribeMutation = useMutation({
     mutationFn: (entry: FeedCatalogEntry) =>
@@ -52,6 +60,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['market-data-candle-streams'] });
     },
   });
   const enableMutation = useMutation({
@@ -60,6 +69,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+      void queryClient.invalidateQueries({ queryKey: ['market-data-candle-streams'] });
     },
   });
   const unsubscribeMutation = useMutation({
@@ -73,10 +83,12 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['market-data-candle-streams'] });
     },
   });
 
   const entries = (catalogQuery.data ?? []).filter(isFinanceWatchableEntry);
+  const candleStreams = candleStreamsQuery.data?.streams ?? [];
   const sessionSubscriptions = (subscriptionsQuery.data?.subscriptions ?? []).filter(
     (subscription) => subscription.session_key === sessionKey,
   );
@@ -84,6 +96,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
   const error =
     catalogQuery.error?.message ??
     subscriptionsQuery.error?.message ??
+    candleStreamsQuery.error?.message ??
     enableMutation.error?.message ??
     subscribeMutation.error?.message ??
     unsubscribeMutation.error?.message ??
@@ -124,6 +137,14 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
               const subscribed = matchingSubscriptions.length > 0;
               const canEnableInline = !entry.enabled && !entry.requires_configuration;
               const needsConfiguration = !entry.enabled && entry.requires_configuration;
+              const streamHealth =
+                subscribed && entry.feed_type === 'market_candle'
+                  ? marketCandleEntryStreamHealth(
+                      entry,
+                      candleStreams,
+                      candleStreamsQuery.isLoading,
+                    )
+                  : null;
               const pending =
                 (enableMutation.isPending && enableMutation.variables?.id === entry.id) ||
                 (subscribeMutation.isPending && subscribeMutation.variables?.id === entry.id) ||
@@ -158,6 +179,23 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                       <p className="line-clamp-2 text-[11px] text-muted-foreground">
                         {coverageLabel(entry)}
                       </p>
+                      {streamHealth && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <Badge
+                            variant={streamHealth.status === 'missing' ? 'secondary' : 'outline'}
+                            className={
+                              streamHealth.status === 'fresh'
+                                ? 'px-1.5 py-0 text-[10px] text-foreground'
+                                : streamHealth.status === 'stale'
+                                  ? 'px-1.5 py-0 text-[10px] text-amber-600'
+                                  : 'px-1.5 py-0 text-[10px] text-muted-foreground'
+                            }
+                          >
+                            Data {streamHealth.label}
+                          </Badge>
+                          <span>{streamHealth.detail}</span>
+                        </div>
+                      )}
                     </div>
                     <Button
                       size="sm"
@@ -287,6 +325,34 @@ function coverageLabel(entry: FeedCatalogEntry): string {
 
   const tags = entry.tags.filter((tag) => tag !== 'finance' && tag !== 'news');
   return tags.length > 0 ? tags.join(' · ') : entry.description;
+}
+
+function marketCandleEntryStreamHealth(
+  entry: FeedCatalogEntry,
+  streams: CandleStream[],
+  loading: boolean,
+): {
+  status: 'checking' | 'fresh' | 'stale' | 'missing';
+  label: string;
+  detail: string;
+} {
+  if (loading) {
+    return {
+      status: 'checking',
+      label: 'Checking',
+      detail: 'Checking stored K-line streams.',
+    };
+  }
+
+  return candleStreamHealthForSelectors(
+    {
+      sourceNames: [catalogSourceName(entry)],
+      venues: optionalList(catalogVenue(entry)),
+      symbols: catalogSymbols(entry),
+      timeframes: catalogTimeframes(entry),
+    },
+    streams,
+  );
 }
 
 function transportString(entry: FeedCatalogEntry, key: string): string | null {
