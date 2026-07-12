@@ -29,6 +29,7 @@ use crate::{
     finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     },
+    market_data::Timeframe,
 };
 
 const MAX_SELECTOR_VALUES: usize = 64;
@@ -307,6 +308,7 @@ fn validate_selectors(params: &FinanceSubscribeParams) -> anyhow::Result<()> {
     validate_string_group("venues", &params.venues)?;
     validate_string_group("symbols", &params.symbols)?;
     validate_string_group("timeframes", &params.timeframes)?;
+    validate_timeframes(&params.timeframes)?;
 
     if let Some(event_kinds) = &params.event_kinds {
         anyhow::ensure!(
@@ -321,6 +323,15 @@ fn validate_selectors(params: &FinanceSubscribeParams) -> anyhow::Result<()> {
         anyhow::ensure!(cooldown <= 86_400, "cooldown_secs must be <= 86400");
     }
 
+    Ok(())
+}
+
+fn validate_timeframes(values: &[String]) -> anyhow::Result<()> {
+    for value in values {
+        let normalized = value.trim().to_ascii_lowercase();
+        Timeframe::parse(&normalized)
+            .map_err(|err| anyhow::anyhow!("invalid timeframe selector {value:?}: {err}"))?;
+    }
     Ok(())
 }
 
@@ -647,5 +658,40 @@ mod tests {
         assert_eq!(subs[0].venues, ["binance"]);
         assert_eq!(subs[0].symbols, ["BTCUSDT"]);
         assert_eq!(subs[0].timeframes, ["15m"]);
+    }
+
+    #[tokio::test]
+    async fn subscribe_rejects_invalid_timeframe_selectors() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeTool::new(registry);
+
+        let err = tool
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds:            Some(vec![FinanceEventKind::MarketCandleClosed]),
+                    catalog_source_ids:     Vec::new(),
+                    source_names:           vec!["finance-binance-market-candles".to_owned()],
+                    category_tags:          Vec::new(),
+                    watch_terms:            Vec::new(),
+                    venues:                 vec!["binance".to_owned()],
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["15min".to_owned()],
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("invalid timeframe selector \"15min\""),
+            "{err}"
+        );
     }
 }
