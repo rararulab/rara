@@ -161,6 +161,13 @@ Operators can also inspect stored stream watermarks without going through the
 agent via:
 
 - `GET /api/v1/data-feeds/market-data/candle-streams`
+- `GET /api/v1/data-feeds/market-data/candles/latest`
+- `GET /api/v1/data-feeds/market-data/candles`
+
+The candle endpoints are read-only. They require canonical selectors
+(`venue`, `symbol`, `timeframe`) and return decimal OHLCV values as strings.
+The range endpoint uses `start` as an inclusive open-time lower bound and `end`
+as an exclusive open-time upper bound.
 
 Identity and session routing are always taken from `ToolContext`. The tool
 schema has no `owner` or `session` parameter, so an agent cannot subscribe or
@@ -248,8 +255,9 @@ Use this checklist before considering a deployment ready:
 10. Confirm
    `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
    returns the stored stream watermark.
-11. Confirm `finance_query_candles` returns a bounded ordered range with decimal
-   values encoded as strings.
+11. Confirm `finance_query_candles` and
+   `GET /api/v1/data-feeds/market-data/candles?venue=...&symbol=...&timeframe=...&start=...&end=...`
+   return bounded ordered ranges with decimal values encoded as strings.
 12. Confirm one matching item wakes the same session at most once.
 13. Confirm a seventh matching item in an hour is tape-only under the default
    immediate-delivery budget.

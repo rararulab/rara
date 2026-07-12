@@ -63,7 +63,10 @@ use rara_trading::{
     finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     },
-    market_data::{CandleStreamListQuery, CandleStreamSummary, MarketDataRepositoryRef, Timeframe},
+    market_data::{
+        CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary,
+        MarketCandle, MarketDataRepositoryRef, Timeframe,
+    },
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -77,6 +80,8 @@ const DEFAULT_FINANCE_COOLDOWN_SECS: u64 = 900;
 const DEFAULT_FINANCE_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 const DEFAULT_MARKET_DATA_STREAM_LIMIT: usize = 500;
 const MAX_MARKET_DATA_STREAM_LIMIT: usize = 10_000;
+const DEFAULT_MARKET_DATA_CANDLE_LIMIT: usize = 500;
+const MAX_MARKET_DATA_CANDLE_LIMIT: usize = 10_000;
 const MAX_MARKET_DATA_SELECTOR_LEN: usize = 128;
 
 /// Shared state for data feed routes.
@@ -124,6 +129,14 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         .route(
             "/api/v1/data-feeds/market-data/candle-streams",
             get(list_market_data_candle_streams),
+        )
+        .route(
+            "/api/v1/data-feeds/market-data/candles/latest",
+            get(get_latest_market_data_candle),
+        )
+        .route(
+            "/api/v1/data-feeds/market-data/candles",
+            get(query_market_data_candles),
         )
         .route(
             "/api/v1/data-feeds/{id}",
@@ -248,6 +261,56 @@ struct CandleStreamResponse {
     latest_open_time:   String,
     latest_close_time:  String,
     latest_ingested_at: String,
+}
+
+/// Query parameters for the latest stored closed candle.
+#[derive(Debug, Deserialize)]
+struct CandleLatestQueryParams {
+    source_name: Option<String>,
+    venue:       String,
+    symbol:      String,
+    timeframe:   String,
+}
+
+/// Query parameters for a bounded stored closed-candle range.
+#[derive(Debug, Deserialize)]
+struct CandleRangeQueryParams {
+    source_name: Option<String>,
+    venue:       String,
+    symbol:      String,
+    timeframe:   String,
+    start:       String,
+    end:         String,
+    limit:       Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleLatestResponse {
+    candle: Option<CandleResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleRangeResponse {
+    candles:     Vec<CandleResponse>,
+    count:       usize,
+    query_limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleResponse {
+    source_name:       String,
+    venue:             String,
+    symbol:            String,
+    timeframe:         String,
+    open_time:         String,
+    close_time:        String,
+    open:              String,
+    high:              String,
+    low:               String,
+    close:             String,
+    volume:            String,
+    ingested_at:       String,
+    provider_sequence: Option<String>,
 }
 
 /// Paginated event response.
@@ -1116,6 +1179,67 @@ async fn list_market_data_candle_streams(
     }))
 }
 
+/// `GET /api/v1/data-feeds/market-data/candles/latest` — fetch the newest
+/// stored closed candle for a stream.
+async fn get_latest_market_data_candle(
+    State(state): State<DataFeedRouterState>,
+    Query(params): Query<CandleLatestQueryParams>,
+) -> Result<Json<CandleLatestResponse>, ProblemDetails> {
+    let query = CandleLatestQuery {
+        source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
+        venue:       normalize_required_market_data_venue(params.venue)?,
+        symbol:      normalize_required_market_data_symbol(params.symbol)?,
+        timeframe:   normalize_required_market_data_timeframe(params.timeframe)?,
+    };
+
+    let candle = state
+        .market_data_repo
+        .latest_closed_candle(query)
+        .await
+        .map_err(|err| ProblemDetails::internal(format!("failed to get latest candle: {err}")))?;
+
+    Ok(Json(CandleLatestResponse {
+        candle: candle.map(CandleResponse::from),
+    }))
+}
+
+/// `GET /api/v1/data-feeds/market-data/candles` — query a bounded ordered
+/// range of stored closed candles for a stream.
+async fn query_market_data_candles(
+    State(state): State<DataFeedRouterState>,
+    Query(params): Query<CandleRangeQueryParams>,
+) -> Result<Json<CandleRangeResponse>, ProblemDetails> {
+    let limit = validate_market_data_candle_limit(params.limit)?;
+    let start = parse_market_data_timestamp("start", params.start)?;
+    let end = parse_market_data_timestamp("end", params.end)?;
+    if end <= start {
+        return Err(ProblemDetails::bad_request("end must be after start"));
+    }
+
+    let query = CandleRangeQuery {
+        source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
+        venue: normalize_required_market_data_venue(params.venue)?,
+        symbol: normalize_required_market_data_symbol(params.symbol)?,
+        timeframe: normalize_required_market_data_timeframe(params.timeframe)?,
+        start,
+        end,
+        limit,
+    };
+
+    let candles = state
+        .market_data_repo
+        .candles(query)
+        .await
+        .map_err(|err| ProblemDetails::internal(format!("failed to query candles: {err}")))?;
+    let count = candles.len();
+
+    Ok(Json(CandleRangeResponse {
+        candles: candles.into_iter().map(CandleResponse::from).collect(),
+        count,
+        query_limit: limit,
+    }))
+}
+
 /// `GET /api/v1/data-feeds/{id}/events/{event_id}` — get a single event.
 async fn get_event(
     State(state): State<DataFeedRouterState>,
@@ -1154,6 +1278,26 @@ impl From<CandleStreamSummary> for CandleStreamResponse {
     }
 }
 
+impl From<MarketCandle> for CandleResponse {
+    fn from(candle: MarketCandle) -> Self {
+        Self {
+            source_name:       candle.source_name,
+            venue:             candle.venue,
+            symbol:            candle.symbol,
+            timeframe:         candle.timeframe.to_string(),
+            open_time:         candle.open_time.to_string(),
+            close_time:        candle.close_time.to_string(),
+            open:              candle.open.to_string(),
+            high:              candle.high.to_string(),
+            low:               candle.low.to_string(),
+            close:             candle.close.to_string(),
+            volume:            candle.volume.to_string(),
+            ingested_at:       candle.ingested_at.to_string(),
+            provider_sequence: candle.provider_sequence,
+        }
+    }
+}
+
 fn normalize_market_data_selector(name: &str, value: String) -> Result<String, ProblemDetails> {
     let value = value.trim();
     if value.is_empty() {
@@ -1174,6 +1318,20 @@ fn normalize_optional_market_data_selector(
     value
         .map(|value| normalize_market_data_selector(name, value))
         .transpose()
+}
+
+fn normalize_required_market_data_venue(value: String) -> Result<String, ProblemDetails> {
+    normalize_market_data_selector("venue", value).map(|value| value.to_ascii_lowercase())
+}
+
+fn normalize_required_market_data_symbol(value: String) -> Result<String, ProblemDetails> {
+    normalize_market_data_selector("symbol", value).map(|value| value.to_ascii_uppercase())
+}
+
+fn normalize_required_market_data_timeframe(value: String) -> Result<Timeframe, ProblemDetails> {
+    let value = normalize_market_data_selector("timeframe", value)?;
+    Timeframe::parse(value.to_ascii_lowercase())
+        .map_err(|err| ProblemDetails::bad_request(format!("invalid timeframe: {err}")))
 }
 
 fn normalize_optional_market_data_venue(
@@ -1217,6 +1375,26 @@ fn validate_market_data_stream_limit(limit: Option<usize>) -> Result<usize, Prob
         )));
     }
     Ok(limit)
+}
+
+fn validate_market_data_candle_limit(limit: Option<usize>) -> Result<usize, ProblemDetails> {
+    let limit = limit.unwrap_or(DEFAULT_MARKET_DATA_CANDLE_LIMIT);
+    if limit == 0 {
+        return Err(ProblemDetails::bad_request("limit must be positive"));
+    }
+    if limit > MAX_MARKET_DATA_CANDLE_LIMIT {
+        return Err(ProblemDetails::bad_request(format!(
+            "limit must be <= {MAX_MARKET_DATA_CANDLE_LIMIT}"
+        )));
+    }
+    Ok(limit)
+}
+
+fn parse_market_data_timestamp(name: &str, value: String) -> Result<Timestamp, ProblemDetails> {
+    let value = normalize_market_data_selector(name, value)?;
+    value
+        .parse::<Timestamp>()
+        .map_err(|err| ProblemDetails::bad_request(format!("invalid {name}: {err}")))
 }
 // Feed task lifecycle
 // ---------------------------------------------------------------------------
@@ -1759,6 +1937,29 @@ mod tests {
 
     fn test_market_data_repo() -> Arc<InMemoryMarketDataRepository> {
         Arc::new(InMemoryMarketDataRepository::default())
+    }
+
+    fn market_data_candle(
+        open_time: &str,
+        close_time: &str,
+        close: &str,
+        provider_sequence: Option<&str>,
+    ) -> MarketCandle {
+        MarketCandle {
+            source_name:       "finance-binance-market-candles".to_owned(),
+            venue:             "binance".to_owned(),
+            symbol:            "BTCUSDT".to_owned(),
+            timeframe:         Timeframe::parse("1m").unwrap(),
+            open_time:         open_time.parse().unwrap(),
+            close_time:        close_time.parse().unwrap(),
+            open:              rust_decimal::Decimal::new(100_000, 2),
+            high:              rust_decimal::Decimal::new(101_000, 2),
+            low:               rust_decimal::Decimal::new(99_000, 2),
+            close:             close.parse().unwrap(),
+            volume:            rust_decimal::Decimal::new(42_500, 3),
+            ingested_at:       close_time.parse().unwrap(),
+            provider_sequence: provider_sequence.map(str::to_owned),
+        }
     }
 
     /// Build a router whose handlers use a real (but empty / schema-less)
@@ -2910,6 +3111,106 @@ mod tests {
         assert_eq!(stream["latest_open_time"], "2026-07-10T08:00:00Z");
         assert_eq!(stream["latest_close_time"], "2026-07-10T08:01:00Z");
         assert_eq!(stream["latest_ingested_at"], "2026-07-10T08:01:03Z");
+    }
+
+    #[tokio::test]
+    async fn market_data_latest_candle_endpoint_returns_stored_candle() {
+        let market_data_repo = test_market_data_repo();
+        market_data_repo
+            .upsert_closed_candle(market_data_candle(
+                "2026-07-10T08:00:00Z",
+                "2026-07-10T08:01:00Z",
+                "1005.00",
+                Some("seq-1"),
+            ))
+            .await
+            .unwrap();
+        market_data_repo
+            .upsert_closed_candle(market_data_candle(
+                "2026-07-10T08:01:00Z",
+                "2026-07-10T08:02:00Z",
+                "1006.25",
+                Some("seq-2"),
+            ))
+            .await
+            .unwrap();
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles/latest?venue=BINANCE&\
+                         symbol=btcusdt&timeframe=1M",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let candle = &result["candle"];
+
+        assert_eq!(candle["source_name"], "finance-binance-market-candles");
+        assert_eq!(candle["venue"], "binance");
+        assert_eq!(candle["symbol"], "BTCUSDT");
+        assert_eq!(candle["timeframe"], "1m");
+        assert_eq!(candle["open_time"], "2026-07-10T08:01:00Z");
+        assert_eq!(candle["close_time"], "2026-07-10T08:02:00Z");
+        assert_eq!(candle["close"], "1006.25");
+        assert_eq!(candle["volume"], "42.500");
+        assert_eq!(candle["provider_sequence"], "seq-2");
+    }
+
+    #[tokio::test]
+    async fn market_data_candles_endpoint_returns_bounded_ordered_range() {
+        let market_data_repo = test_market_data_repo();
+        for (open_time, close_time, close) in [
+            ("2026-07-10T08:00:00Z", "2026-07-10T08:01:00Z", "1005.00"),
+            ("2026-07-10T08:01:00Z", "2026-07-10T08:02:00Z", "1006.25"),
+            ("2026-07-10T08:02:00Z", "2026-07-10T08:03:00Z", "1007.75"),
+        ] {
+            market_data_repo
+                .upsert_closed_candle(market_data_candle(open_time, close_time, close, None))
+                .await
+                .unwrap();
+        }
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles?venue=binance&symbol=BTCUSDT&\
+                         timeframe=1m&start=2026-07-10T08:00:00Z&end=2026-07-10T08:03:00Z&limit=2",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(result["count"], 2);
+        assert_eq!(result["query_limit"], 2);
+        assert_eq!(result["candles"][0]["open_time"], "2026-07-10T08:00:00Z");
+        assert_eq!(result["candles"][0]["close"], "1005.00");
+        assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:01:00Z");
+        assert_eq!(result["candles"][1]["close"], "1006.25");
     }
 
     #[tokio::test]

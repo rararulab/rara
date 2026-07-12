@@ -84,6 +84,32 @@ export interface CandleStreamsResponse {
   query_limit: number;
 }
 
+export interface MarketCandle {
+  source_name: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+  open_time: string;
+  close_time: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  ingested_at: string;
+  provider_sequence: string | null;
+}
+
+export interface LatestMarketCandleResponse {
+  candle: MarketCandle | null;
+}
+
+export interface MarketCandlesResponse {
+  candles: MarketCandle[];
+  count: number;
+  query_limit: number;
+}
+
 export interface CreateFeedRequest {
   name: string;
   feed_type: FeedType;
@@ -220,6 +246,44 @@ export const dataFeedsApi = {
     const qs = query.toString();
     return api.get<CandleStreamsResponse>(
       `/api/v1/data-feeds/market-data/candle-streams${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  latestCandle: (params: {
+    source_name?: string;
+    venue: string;
+    symbol: string;
+    timeframe: string;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.source_name) query.set('source_name', params.source_name);
+    query.set('venue', params.venue);
+    query.set('symbol', params.symbol);
+    query.set('timeframe', params.timeframe);
+    return api.get<LatestMarketCandleResponse>(
+      `/api/v1/data-feeds/market-data/candles/latest?${query.toString()}`,
+    );
+  },
+
+  candles: (params: {
+    source_name?: string;
+    venue: string;
+    symbol: string;
+    timeframe: string;
+    start: string;
+    end: string;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.source_name) query.set('source_name', params.source_name);
+    query.set('venue', params.venue);
+    query.set('symbol', params.symbol);
+    query.set('timeframe', params.timeframe);
+    query.set('start', params.start);
+    query.set('end', params.end);
+    if (params.limit) query.set('limit', String(params.limit));
+    return api.get<MarketCandlesResponse>(
+      `/api/v1/data-feeds/market-data/candles?${query.toString()}`,
     );
   },
 
