@@ -30,6 +30,7 @@ import { useState, useCallback, useEffect } from 'react';
 
 import {
   dataFeedsApi,
+  type CandleStream,
   type DataFeedConfig,
   type FeedCatalogEntry,
   type FeedEvent,
@@ -224,6 +225,10 @@ function financeSubscriptionSelectors(subscription: FinanceSubscription): string
     summarizeList(subscription.watch_terms),
   ].filter(Boolean);
   return selectors.length > 0 ? selectors : ['All matching events'];
+}
+
+function streamLabel(stream: CandleStream): string {
+  return `${stream.venue.toUpperCase()} · ${stream.symbol} · ${stream.timeframe}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1522,14 +1527,110 @@ function FinanceSubscriptionsCard({ result }: { result: FinanceSubscriptionsResp
   );
 }
 
+function MarketDataStreamsCard({
+  streams,
+  isLoading,
+  isError,
+  onRetry,
+}: {
+  streams: CandleStream[];
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold">Stored K-line streams</h3>
+          <p className="text-xs text-muted-foreground">
+            Latest closed candles persisted in the market-data repository.
+          </p>
+        </div>
+        <Badge variant="outline" className="shrink-0 text-xs">
+          {streams.length} stream{streams.length === 1 ? '' : 's'}
+        </Badge>
+      </div>
+      {isLoading ? (
+        <div className="space-y-2 px-4 py-4">
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      ) : isError ? (
+        <div className="flex items-center justify-between gap-3 px-4 py-4">
+          <p className="text-xs text-muted-foreground">Failed to load K-line stream watermarks.</p>
+          <Button variant="outline" size="sm" className="h-8" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      ) : streams.length === 0 ? (
+        <div className="px-4 py-4 text-xs text-muted-foreground">
+          No closed candles have been stored yet. Enable a K-line feed and wait for the first
+          persisted candle.
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Stream</TableHead>
+              <TableHead className="w-36 text-right">Candles</TableHead>
+              <TableHead className="w-40 text-right">Latest Close</TableHead>
+              <TableHead className="w-40 text-right">Ingested</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {streams.map((stream) => (
+              <TableRow
+                key={`${stream.source_name}:${stream.venue}:${stream.symbol}:${stream.timeframe}`}
+              >
+                <TableCell>
+                  <div className="space-y-0.5">
+                    <div className="text-sm font-medium">{streamLabel(stream)}</div>
+                    <div className="font-mono text-[11px] text-muted-foreground">
+                      {stream.source_name}
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell className="text-right text-xs text-muted-foreground">
+                  {stream.candle_count.toLocaleString()}
+                </TableCell>
+                <TableCell
+                  className="text-right text-xs text-muted-foreground"
+                  title={new Date(stream.latest_close_time).toLocaleString()}
+                >
+                  {timeAgo(stream.latest_close_time)}
+                </TableCell>
+                <TableCell
+                  className="text-right text-xs text-muted-foreground"
+                  title={new Date(stream.latest_ingested_at).toLocaleString()}
+                >
+                  {timeAgo(stream.latest_ingested_at)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
 function FeedListView({
   feeds,
   summaries,
+  candleStreams,
+  candleStreamsLoading,
+  candleStreamsError,
+  onRetryCandleStreams,
   onSelectFeed,
   focusCatalogEntryId,
 }: {
   feeds: DataFeedConfig[];
   summaries: FeedSummary[];
+  candleStreams: CandleStream[];
+  candleStreamsLoading: boolean;
+  candleStreamsError: boolean;
+  onRetryCandleStreams: () => void;
   onSelectFeed: (feed: DataFeedConfig) => void;
   focusCatalogEntryId?: string | undefined;
 }) {
@@ -1620,6 +1721,12 @@ function FeedListView({
       {financeSubscriptionsQuery.data && (
         <FinanceSubscriptionsCard result={financeSubscriptionsQuery.data} />
       )}
+      <MarketDataStreamsCard
+        streams={candleStreams}
+        isLoading={candleStreamsLoading}
+        isError={candleStreamsError}
+        onRetry={onRetryCandleStreams}
+      />
 
       {/* Table */}
       {feeds.length === 0 ? (
@@ -1794,6 +1901,11 @@ export default function DataFeedsPanel({
     queryFn: () => dataFeedsApi.summaries(),
     refetchInterval: 30_000,
   });
+  const candleStreamsQuery = useQuery({
+    queryKey: ['market-data-candle-streams'],
+    queryFn: () => dataFeedsApi.candleStreams({ limit: 100 }),
+    refetchInterval: 30_000,
+  });
 
   if (feedsQuery.isLoading) {
     return (
@@ -1833,6 +1945,12 @@ export default function DataFeedsPanel({
     <FeedListView
       feeds={feeds}
       summaries={summaries}
+      candleStreams={candleStreamsQuery.data?.streams ?? []}
+      candleStreamsLoading={candleStreamsQuery.isLoading}
+      candleStreamsError={candleStreamsQuery.isError}
+      onRetryCandleStreams={() => {
+        void candleStreamsQuery.refetch();
+      }}
       onSelectFeed={(feed) => setView({ kind: 'events', feed })}
       focusCatalogEntryId={focusCatalogEntryId}
     />
