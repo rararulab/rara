@@ -30,6 +30,13 @@ export type CandleStreamSelectors = {
   timeframes?: string[];
 };
 
+export type ExpectedCandleStreamSelectors = {
+  sourceName: string;
+  venue?: string | null;
+  symbols: string[];
+  timeframes: string[];
+};
+
 export function candleSubscriptionStreamHealth(
   subscription: FinanceSubscription,
   streams: CandleStream[],
@@ -78,6 +85,87 @@ export function candleStreamHealthForSelectors(
   };
 }
 
+export function expectedCandleStreamHealth(
+  selectors: ExpectedCandleStreamSelectors,
+  streams: CandleStream[],
+): CandleStreamHealth {
+  const symbols = Array.from(normalizedSelectorSet(selectors.symbols, 'upper'));
+  const timeframes = Array.from(normalizedSelectorSet(selectors.timeframes, 'timeframe'));
+  const sourceName = selectors.sourceName.trim().toLowerCase();
+  const venue = selectors.venue?.trim().toLowerCase() || null;
+
+  if (!sourceName || symbols.length === 0 || timeframes.length === 0) {
+    return candleStreamHealthForSelectors(
+      {
+        sourceNames: sourceName ? [sourceName] : [],
+        venues: venue ? [venue] : [],
+        symbols,
+        timeframes,
+      },
+      streams,
+    );
+  }
+
+  const expected = symbols.flatMap((symbol) =>
+    timeframes.map((timeframe) => ({
+      sourceName,
+      venue,
+      symbol,
+      timeframe,
+    })),
+  );
+  const matchedStreams: CandleStream[] = [];
+  const missing = expected.filter((selector) => {
+    const stream = streams.find((candidate) => expectedSelectorMatchesStream(selector, candidate));
+    if (stream) {
+      matchedStreams.push(stream);
+      return false;
+    }
+    return true;
+  });
+
+  if (missing.length > 0) {
+    const presentCount = expected.length - missing.length;
+    if (presentCount === 0) {
+      return {
+        status: 'missing',
+        label: 'Missing',
+        detail: 'No stored K-line stream matches this subscription yet.',
+      };
+    }
+
+    return {
+      status: 'missing',
+      label: 'Partial',
+      detail: `${presentCount}/${expected.length} expected stream${expected.length === 1 ? '' : 's'} present; ${missing.length} missing.`,
+    };
+  }
+
+  const staleCount = matchedStreams.filter(isStaleStream).length;
+  if (staleCount === matchedStreams.length) {
+    return {
+      status: 'stale',
+      label: 'Stale',
+      detail: `${staleCount} expected stream${staleCount === 1 ? '' : 's'} past the freshness window.`,
+    };
+  }
+
+  if (staleCount > 0) {
+    const freshCount = matchedStreams.length - staleCount;
+    return {
+      status: 'stale',
+      label: 'Partial',
+      detail: `${freshCount}/${expected.length} expected stream${expected.length === 1 ? '' : 's'} fresh; ${staleCount} stale.`,
+    };
+  }
+
+  return {
+    status: 'fresh',
+    label: 'Fresh',
+    detail: `${expected.length}/${expected.length} expected stream${expected.length === 1 ? '' : 's'} fresh.`,
+  };
+}
+
 function streamMatchesSelectors(stream: CandleStream, selectors: CandleStreamSelectors): boolean {
   const sourceNames = normalizedSelectorSet(selectors.sourceNames ?? [], 'lower');
   const venues = normalizedSelectorSet(selectors.venues ?? [], 'lower');
@@ -95,6 +183,16 @@ function streamMatchesSelectors(stream: CandleStream, selectors: CandleStreamSel
   if (symbols.size > 0 && !symbols.has(stream.symbol.toUpperCase())) return false;
   if (timeframes.size > 0 && !timeframes.has(stream.timeframe.toLowerCase())) return false;
   return true;
+}
+
+function expectedSelectorMatchesStream(
+  selector: { sourceName: string; venue: string | null; symbol: string; timeframe: string },
+  stream: CandleStream,
+): boolean {
+  if (stream.source_name.toLowerCase() !== selector.sourceName) return false;
+  if (selector.venue && stream.venue.toLowerCase() !== selector.venue) return false;
+  if (stream.symbol.toUpperCase() !== selector.symbol) return false;
+  return stream.timeframe.toLowerCase() === selector.timeframe;
 }
 
 function normalizedSelectorSet(

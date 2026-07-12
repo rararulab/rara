@@ -28,7 +28,7 @@ import { useSettingsModal } from '@/components/settings/SettingsModalContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { candleStreamHealthForSelectors } from '@/lib/finance-candle-health';
+import { expectedCandleStreamHealth } from '@/lib/finance-candle-health';
 
 interface FinanceWatchesCardProps {
   sessionKey: string;
@@ -344,10 +344,10 @@ function marketCandleEntryStreamHealth(
     };
   }
 
-  return candleStreamHealthForSelectors(
+  return expectedCandleStreamHealth(
     {
-      sourceNames: [catalogSourceName(entry)],
-      venues: optionalList(catalogVenue(entry)),
+      sourceName: catalogSourceName(entry),
+      venue: catalogVenue(entry),
       symbols: catalogSymbols(entry),
       timeframes: catalogTimeframes(entry),
     },
