@@ -176,6 +176,7 @@ impl ToolExecute for FinanceSubscribeTool {
     ) -> anyhow::Result<FinanceSubscribeResult> {
         let mut params = params;
         expand_catalog_source_ids(&mut params)?;
+        infer_event_kinds_from_scoped_selectors(&mut params);
         let catalog_source_ids = params.catalog_source_ids.clone();
         validate_selectors(&params)?;
         let delivery = params.delivery.unwrap_or(FinanceDelivery::Silent);
@@ -309,6 +310,7 @@ fn validate_selectors(params: &FinanceSubscribeParams) -> anyhow::Result<()> {
     validate_string_group("symbols", &params.symbols)?;
     validate_string_group("timeframes", &params.timeframes)?;
     validate_timeframes(&params.timeframes)?;
+    validate_selector_scope(params)?;
 
     if let Some(event_kinds) = &params.event_kinds {
         anyhow::ensure!(
@@ -324,6 +326,59 @@ fn validate_selectors(params: &FinanceSubscribeParams) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn infer_event_kinds_from_scoped_selectors(params: &mut FinanceSubscribeParams) {
+    if params.event_kinds.is_some() {
+        return;
+    }
+    match (
+        has_article_only_selectors(params),
+        has_candle_only_selectors(params),
+    ) {
+        (true, false) => params.event_kinds = Some(vec![FinanceEventKind::RssArticle]),
+        (false, true) => params.event_kinds = Some(vec![FinanceEventKind::MarketCandleClosed]),
+        _ => {}
+    }
+}
+
+fn validate_selector_scope(params: &FinanceSubscribeParams) -> anyhow::Result<()> {
+    let Some(event_kinds) = &params.event_kinds else {
+        return Ok(());
+    };
+    let includes_rss = event_kinds.contains(&FinanceEventKind::RssArticle);
+    let includes_candle = event_kinds.contains(&FinanceEventKind::MarketCandleClosed);
+    let has_article_only = has_article_only_selectors(params);
+    let has_candle_only = has_candle_only_selectors(params);
+
+    anyhow::ensure!(
+        includes_rss || !has_article_only,
+        "watch_terms selectors require rss_article event kind"
+    );
+    anyhow::ensure!(
+        includes_candle || !has_candle_only,
+        "venue/symbol/timeframe selectors require market_candle_closed event kind"
+    );
+    anyhow::ensure!(
+        !(includes_rss && includes_candle && has_article_only && !has_candle_only),
+        "subscriptions that include market_candle_closed and watch_terms must also include a \
+         venue, symbol, or timeframe selector"
+    );
+    anyhow::ensure!(
+        !(includes_rss && includes_candle && has_candle_only && !has_article_only),
+        "subscriptions that include rss_article and market candle selectors must also include a \
+         watch_terms selector"
+    );
+
+    Ok(())
+}
+
+fn has_article_only_selectors(params: &FinanceSubscribeParams) -> bool {
+    !params.watch_terms.is_empty()
+}
+
+fn has_candle_only_selectors(params: &FinanceSubscribeParams) -> bool {
+    !params.venues.is_empty() || !params.symbols.is_empty() || !params.timeframes.is_empty()
 }
 
 fn validate_timeframes(values: &[String]) -> anyhow::Result<()> {
@@ -692,6 +747,135 @@ mod tests {
             err.to_string()
                 .contains("invalid timeframe selector \"15min\""),
             "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_infers_rss_event_kind_for_watch_terms() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeTool::new(registry.clone());
+
+        tool.run(
+            FinanceSubscribeParams {
+                event_kinds:            None,
+                catalog_source_ids:     Vec::new(),
+                source_names:           vec!["finance-fed-press-releases".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            vec!["rate cut".to_owned()],
+                venues:                 Vec::new(),
+                symbols:                Vec::new(),
+                timeframes:             Vec::new(),
+                delivery:               None,
+                cooldown_secs:          None,
+                max_immediate_per_hour: None,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+
+        let subs = registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].event_kinds, [FinanceEventKind::RssArticle]);
+    }
+
+    #[tokio::test]
+    async fn subscribe_infers_candle_event_kind_for_market_selectors() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeTool::new(registry.clone());
+
+        tool.run(
+            FinanceSubscribeParams {
+                event_kinds:            None,
+                catalog_source_ids:     Vec::new(),
+                source_names:           vec!["finance-binance-market-candles".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["binance".to_owned()],
+                symbols:                vec!["BTCUSDT".to_owned()],
+                timeframes:             vec!["15m".to_owned()],
+                delivery:               None,
+                cooldown_secs:          None,
+                max_immediate_per_hour: None,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+
+        let subs = registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].event_kinds, [FinanceEventKind::MarketCandleClosed]);
+    }
+
+    #[tokio::test]
+    async fn subscribe_rejects_mismatched_event_specific_selectors() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeTool::new(registry);
+
+        let rss_with_symbol = tool
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds:            Some(vec![FinanceEventKind::RssArticle]),
+                    catalog_source_ids:     Vec::new(),
+                    source_names:           vec!["finance-fed-press-releases".to_owned()],
+                    category_tags:          Vec::new(),
+                    watch_terms:            Vec::new(),
+                    venues:                 Vec::new(),
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             Vec::new(),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            rss_with_symbol
+                .to_string()
+                .contains("market_candle_closed event kind"),
+            "{rss_with_symbol}"
+        );
+
+        let candle_with_watch_term = tool
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds:            Some(vec![FinanceEventKind::MarketCandleClosed]),
+                    catalog_source_ids:     Vec::new(),
+                    source_names:           vec!["finance-binance-market-candles".to_owned()],
+                    category_tags:          Vec::new(),
+                    watch_terms:            vec!["BTC".to_owned()],
+                    venues:                 Vec::new(),
+                    symbols:                Vec::new(),
+                    timeframes:             Vec::new(),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            candle_with_watch_term
+                .to_string()
+                .contains("rss_article event kind"),
+            "{candle_with_watch_term}"
         );
     }
 }
