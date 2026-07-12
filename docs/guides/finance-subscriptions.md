@@ -153,6 +153,7 @@ Stored closed candles are queryable through read-only market-data tools:
 
 - `finance_list_candle_streams`
 - `finance_get_latest_candle`
+- `finance_get_recent_candles`
 - `finance_query_candles`
 - `finance_find_candle_gaps`
 - `finance_get_candle_freshness`
@@ -162,6 +163,7 @@ agent via:
 
 - `GET /api/v1/data-feeds/market-data/candle-streams`
 - `GET /api/v1/data-feeds/market-data/candles/latest`
+- `GET /api/v1/data-feeds/market-data/candles/recent`
 - `GET /api/v1/data-feeds/market-data/candles`
 - `GET /api/v1/data-feeds/market-data/candles/freshness`
 - `GET /api/v1/data-feeds/market-data/candles/gaps`
@@ -228,18 +230,22 @@ subscription diagnostic includes:
   `(source_name, venue, symbol, timeframe)`.
 
 For ad hoc market-data inspection, use `finance_list_candle_streams` to discover
-stored streams, `finance_get_latest_candle` for the newest closed bar, and
+stored streams, `finance_get_latest_candle` for one newest closed bar,
+`finance_get_recent_candles` for the newest N closed bars, and
 `finance_query_candles` for bounded historical windows. `finance_find_candle_gaps`
 checks completeness over a bounded range, while `finance_get_candle_freshness`
 answers whether a stream is currently stale. All prices and volumes are returned
-as strings to preserve decimal precision. `finance_list_candle_streams` and
-`finance_query_candles` return `has_more` when additional rows match the
-selectors beyond the returned `query_limit`; narrow by `source_name`, `venue`,
-`symbol`, `timeframe`, or time range before assuming a broad query is exhaustive.
-When `finance_query_candles.has_more` is true, `next_start` contains the next
-candle open time to use as the following query's inclusive `start`. The
-stream-list and candle-range limits are capped at 9,999 so the tools can probe
-one extra row and report pagination state accurately.
+as strings to preserve decimal precision. `finance_list_candle_streams`,
+`finance_get_recent_candles`, and `finance_query_candles` return `has_more` when
+additional rows match the selectors beyond the returned `query_limit`; narrow by
+`source_name`, `venue`, `symbol`, `timeframe`, or time range before assuming a
+broad query is exhaustive. When `finance_query_candles.has_more` is true,
+`next_start` contains the next candle open time to use as the following query's
+inclusive `start`. When `finance_get_recent_candles.has_more` is true,
+`next_end` contains the oldest returned candle open time to use as an exclusive
+`end` when paging older history via `finance_query_candles`. The stream-list,
+recent-candle, and candle-range limits are capped at 9,999 so the tools can
+probe one extra row and report pagination state accurately.
 
 ## Acceptance checklist
 
@@ -266,9 +272,11 @@ Use this checklist before considering a deployment ready:
 10. Confirm
    `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
    returns the stored stream watermark.
-11. Confirm `finance_query_candles` and
+11. Confirm `finance_get_recent_candles`,
+   `GET /api/v1/data-feeds/market-data/candles/recent?venue=...&symbol=...&timeframe=...`,
+   `finance_query_candles`, and
    `GET /api/v1/data-feeds/market-data/candles?venue=...&symbol=...&timeframe=...&start=...&end=...`
-   return bounded ordered ranges with decimal values encoded as strings.
+   return ordered candles with decimal values encoded as strings.
 12. Confirm one matching item wakes the same session at most once.
 13. Confirm a seventh matching item in an hour is tape-only under the default
    immediate-delivery budget.

@@ -142,6 +142,16 @@ pub struct CandleLatestQuery {
     pub timeframe:   Timeframe,
 }
 
+/// Recent-candle query for the newest closed candles in a stream.
+#[derive(Debug, Clone)]
+pub struct CandleRecentQuery {
+    pub source_name: Option<String>,
+    pub venue:       String,
+    pub symbol:      String,
+    pub timeframe:   Timeframe,
+    pub limit:       usize,
+}
+
 /// Stream inventory query for stored candle data.
 #[derive(Debug, Clone)]
 pub struct CandleStreamListQuery {

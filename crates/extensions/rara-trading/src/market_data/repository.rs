@@ -19,7 +19,8 @@ use jiff::Timestamp;
 use tokio::sync::RwLock;
 
 use super::model::{
-    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary, MarketCandle,
+    CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, CandleStreamListQuery,
+    CandleStreamSummary, MarketCandle,
 };
 
 /// Result of upserting a closed candle.
@@ -48,6 +49,9 @@ pub trait MarketDataRepository: Send + Sync {
         &self,
         query: CandleLatestQuery,
     ) -> anyhow::Result<Option<MarketCandle>>;
+
+    /// Return the newest closed candles for a stream, ordered by open time.
+    async fn recent_candles(&self, query: CandleRecentQuery) -> anyhow::Result<Vec<MarketCandle>>;
 
     /// List stored candle streams with their latest watermarks.
     async fn candle_streams(
@@ -166,6 +170,19 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
             .filter(|candle| matches_latest_query(candle, &query))
             .max_by_key(|candle| candle.open_time)
             .cloned())
+    }
+
+    async fn recent_candles(&self, query: CandleRecentQuery) -> anyhow::Result<Vec<MarketCandle>> {
+        let candles = self.candles.read().await;
+        let mut rows: Vec<MarketCandle> = candles
+            .values()
+            .filter(|candle| matches_recent_query(candle, &query))
+            .cloned()
+            .collect();
+        rows.sort_by_key(|candle| std::cmp::Reverse(candle.open_time));
+        rows.truncate(query.limit.min(10_000));
+        rows.sort_by_key(|candle| candle.open_time);
+        Ok(rows)
     }
 
     async fn candle_streams(
@@ -288,6 +305,16 @@ fn matches_latest_query(candle: &MarketCandle, query: &CandleLatestQuery) -> boo
         && candle.timeframe == query.timeframe
 }
 
+fn matches_recent_query(candle: &MarketCandle, query: &CandleRecentQuery) -> bool {
+    query
+        .source_name
+        .as_ref()
+        .is_none_or(|source| source == &candle.source_name)
+        && candle.venue == query.venue
+        && candle.symbol == query.symbol
+        && candle.timeframe == query.timeframe
+}
+
 fn matches_stream_query(candle: &MarketCandle, query: &CandleStreamListQuery) -> bool {
     query
         .source_name
@@ -313,7 +340,8 @@ mod tests {
 
     use super::{InMemoryMarketDataRepository, MarketDataRepository, UpsertOutcome};
     use crate::market_data::{
-        CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, MarketCandle, Timeframe,
+        CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, CandleStreamListQuery,
+        MarketCandle, Timeframe,
     };
 
     fn ts(value: &str) -> jiff::Timestamp { value.parse().expect("timestamp fixture should parse") }
@@ -476,6 +504,44 @@ mod tests {
 
         assert_eq!(latest.open_time, ts("2026-07-10T08:30:00Z"));
         assert_eq!(latest.close, dec("61700.00"));
+    }
+
+    #[tokio::test]
+    async fn recent_candles_returns_latest_n_in_ascending_order() {
+        let repo = InMemoryMarketDataRepository::default();
+        for (open_time, close) in [
+            ("2026-07-10T08:00:00Z", "61500.00"),
+            ("2026-07-10T08:15:00Z", "61610.30"),
+            ("2026-07-10T08:30:00Z", "61700.00"),
+        ] {
+            repo.upsert_closed_candle(candle(open_time, close))
+                .await
+                .unwrap();
+        }
+        repo.upsert_closed_candle(MarketCandle {
+            source_name: "other-source".to_owned(),
+            ..candle("2026-07-10T08:45:00Z", "61800.00")
+        })
+        .await
+        .unwrap();
+
+        let rows = repo
+            .recent_candles(CandleRecentQuery {
+                source_name: Some("binance-spot".to_owned()),
+                venue:       "binance".to_owned(),
+                symbol:      "BTCUSDT".to_owned(),
+                timeframe:   Timeframe::parse("15m").unwrap(),
+                limit:       2,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.open_time.to_string())
+                .collect::<Vec<_>>(),
+            vec!["2026-07-10T08:15:00Z", "2026-07-10T08:30:00Z"]
+        );
     }
 
     #[tokio::test]

@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use super::{
     model::{
-        CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary,
-        MarketCandle, Timeframe,
+        CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, CandleStreamListQuery,
+        CandleStreamSummary, MarketCandle, Timeframe,
     },
     repository::{MarketDataRepository, UpsertOutcome},
 };
@@ -180,6 +180,45 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
         .await?;
 
         row.map(row_to_candle).transpose()
+    }
+
+    async fn recent_candles(&self, query: CandleRecentQuery) -> anyhow::Result<Vec<MarketCandle>> {
+        let limit = i64::try_from(query.limit.min(10_000))?;
+        let rows = sqlx_core::query::query(
+            r#"
+            SELECT
+              source_name, venue, symbol, timeframe,
+              open_time::text AS open_time,
+              close_time::text AS close_time,
+              open::text AS open,
+              high::text AS high,
+              low::text AS low,
+              close::text AS close,
+              volume::text AS volume,
+              ingested_at::text AS ingested_at,
+              provider_sequence
+            FROM (
+              SELECT *
+              FROM market_candles
+              WHERE ($1::text IS NULL OR source_name = $1)
+                AND venue = $2
+                AND symbol = $3
+                AND timeframe = $4
+              ORDER BY open_time DESC
+              LIMIT $5
+            ) recent
+            ORDER BY open_time ASC
+            "#,
+        )
+        .bind(query.source_name.as_deref())
+        .bind(&query.venue)
+        .bind(&query.symbol)
+        .bind(query.timeframe.as_str())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_candle).collect()
     }
 
     async fn candle_streams(

@@ -37,6 +37,7 @@ const catalogMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const candleStreamsMock = vi.fn();
 const candlesMock = vi.fn();
+const recentCandlesMock = vi.fn();
 const candleFreshnessMock = vi.fn();
 const candleGapsMock = vi.fn();
 
@@ -49,6 +50,7 @@ vi.mock('@/api/data-feeds', () => ({
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
     candles: (...args: unknown[]) => candlesMock(...args),
+    recentCandles: (...args: unknown[]) => recentCandlesMock(...args),
     candleFreshness: (...args: unknown[]) => candleFreshnessMock(...args),
     candleGaps: (...args: unknown[]) => candleGapsMock(...args),
     toggle: vi.fn(),
@@ -121,6 +123,7 @@ beforeEach(() => {
   financeSubscriptionsMock.mockReset();
   candleStreamsMock.mockReset();
   candlesMock.mockReset();
+  recentCandlesMock.mockReset();
   candleFreshnessMock.mockReset();
   candleGapsMock.mockReset();
 
@@ -144,6 +147,13 @@ beforeEach(() => {
     has_more: false,
     next_start: null,
   } satisfies MarketCandlesResponse);
+  recentCandlesMock.mockResolvedValue({
+    candles: [],
+    count: 0,
+    query_limit: 50,
+    has_more: false,
+    next_end: null,
+  });
   candleFreshnessMock.mockResolvedValue({
     latest: null,
     as_of: '2026-07-12T00:50:00Z',
@@ -355,7 +365,7 @@ describe('DataFeedsPanel', () => {
       query_limit: 100,
       has_more: false,
     } satisfies CandleStreamsResponse);
-    candlesMock.mockResolvedValue({
+    recentCandlesMock.mockResolvedValue({
       candles: [
         {
           source_name: 'finance-binance-market-candles',
@@ -391,8 +401,8 @@ describe('DataFeedsPanel', () => {
       count: 2,
       query_limit: 50,
       has_more: false,
-      next_start: null,
-    } satisfies MarketCandlesResponse);
+      next_end: null,
+    });
     candleFreshnessMock.mockResolvedValue({
       latest: {
         source_name: 'finance-binance-market-candles',
@@ -430,13 +440,11 @@ describe('DataFeedsPanel', () => {
     fireEvent.click(previewButton);
 
     await waitFor(() => {
-      expect(candlesMock).toHaveBeenCalledWith({
+      expect(recentCandlesMock).toHaveBeenCalledWith({
         source_name: 'finance-binance-market-candles',
         venue: 'binance',
         symbol: 'BTCUSDT',
         timeframe: '1m',
-        start: '2026-07-12T00:00:00.000Z',
-        end: '2026-07-12T00:50:00.000Z',
         limit: 50,
       });
     });
@@ -482,7 +490,7 @@ describe('DataFeedsPanel', () => {
       query_limit: 100,
       has_more: false,
     } satisfies CandleStreamsResponse);
-    candlesMock.mockResolvedValue({
+    recentCandlesMock.mockResolvedValue({
       candles: Array.from({ length: 50 }, (_, index) => ({
         source_name: 'finance-binance-market-candles',
         venue: 'binance',
@@ -501,8 +509,8 @@ describe('DataFeedsPanel', () => {
       count: 50,
       query_limit: 50,
       has_more: true,
-      next_start: '2026-07-12T00:50:00Z',
-    } satisfies MarketCandlesResponse);
+      next_end: '2026-07-12T00:00:00Z',
+    });
 
     renderPanel();
 
@@ -512,9 +520,9 @@ describe('DataFeedsPanel', () => {
     fireEvent.click(previewButton);
 
     expect(
-      await screen.findByText(/Showing the first 50 candles in this preview/),
+      await screen.findByText(/Showing the latest 50 candles in this preview/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Next page starts at/)).toBeInTheDocument();
-    expect(screen.getByText('2026-07-12T00:50:00Z')).toBeInTheDocument();
+    expect(screen.getByText(/Older page ends before/)).toBeInTheDocument();
+    expect(screen.getByText('2026-07-12T00:00:00Z')).toBeInTheDocument();
   });
 });

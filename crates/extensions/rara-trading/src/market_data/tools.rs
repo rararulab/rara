@@ -22,8 +22,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary, MarketCandle,
-    MarketDataRepositoryRef, Timeframe,
+    CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, CandleStreamListQuery,
+    CandleStreamSummary, MarketCandle, MarketDataRepositoryRef, Timeframe,
 };
 
 const DEFAULT_CANDLE_LIMIT: usize = 500;
@@ -44,6 +44,26 @@ pub struct FinanceGetLatestCandleParams {
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceGetLatestCandleResult {
     pub candle: Option<FinanceCandle>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinanceGetRecentCandlesParams {
+    #[serde(default)]
+    pub source_name: Option<String>,
+    pub venue:       String,
+    pub symbol:      String,
+    pub timeframe:   String,
+    #[serde(default)]
+    pub limit:       Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceGetRecentCandlesResult {
+    pub candles:     Vec<FinanceCandle>,
+    pub count:       usize,
+    pub query_limit: usize,
+    pub has_more:    bool,
+    pub next_end:    Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -256,6 +276,64 @@ impl ToolExecute for FinanceGetLatestCandleTool {
         let candle = self.repository.latest_closed_candle(query).await?;
         Ok(FinanceGetLatestCandleResult {
             candle: candle.map(FinanceCandle::from),
+        })
+    }
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_get_recent_candles",
+    description = "Return the newest closed OHLCV candles stored in the market-data TSDB for a \
+                   venue, symbol, and timeframe, ordered from oldest to newest. Decimal values \
+                   are returned as strings to preserve financial precision. This is read-only and \
+                   never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub struct FinanceGetRecentCandlesTool {
+    repository: MarketDataRepositoryRef,
+}
+
+impl FinanceGetRecentCandlesTool {
+    pub fn new(repository: MarketDataRepositoryRef) -> Self { Self { repository } }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceGetRecentCandlesTool {
+    type Output = FinanceGetRecentCandlesResult;
+    type Params = FinanceGetRecentCandlesParams;
+
+    async fn run(
+        &self,
+        params: FinanceGetRecentCandlesParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceGetRecentCandlesResult> {
+        let limit = validate_candle_range_limit(params.limit)?;
+        let probe_limit = limit.saturating_add(1);
+        let query = CandleRecentQuery {
+            source_name: normalize_optional_source_name_selector(params.source_name)?,
+            venue:       normalize_required_venue_selector(params.venue)?,
+            symbol:      normalize_required_symbol_selector(params.symbol)?,
+            timeframe:   normalize_required_timeframe_selector(params.timeframe)?,
+            limit:       probe_limit,
+        };
+        let mut candles = self.repository.recent_candles(query).await?;
+        let has_more = candles.len() > limit;
+        if has_more {
+            candles.remove(0);
+        }
+        let next_end = candles
+            .first()
+            .filter(|_| has_more)
+            .map(|candle| candle.open_time.to_string());
+        let count = candles.len();
+        Ok(FinanceGetRecentCandlesResult {
+            candles: candles.into_iter().map(FinanceCandle::from).collect(),
+            count,
+            query_limit: limit,
+            has_more,
+            next_end,
         })
     }
 }
@@ -608,8 +686,8 @@ mod tests {
     use super::{
         FinanceFindCandleGapsParams, FinanceFindCandleGapsTool, FinanceGetCandleFreshnessParams,
         FinanceGetCandleFreshnessTool, FinanceGetLatestCandleParams, FinanceGetLatestCandleTool,
-        FinanceListCandleStreamsParams, FinanceListCandleStreamsTool, FinanceQueryCandlesParams,
-        FinanceQueryCandlesTool,
+        FinanceGetRecentCandlesParams, FinanceGetRecentCandlesTool, FinanceListCandleStreamsParams,
+        FinanceListCandleStreamsTool, FinanceQueryCandlesParams, FinanceQueryCandlesTool,
     };
     use crate::market_data::{
         InMemoryMarketDataRepository, MarketCandle, MarketDataRepository, Timeframe,
@@ -870,6 +948,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recent_candles_tool_returns_latest_candles_in_order() {
+        let repository = repository().await;
+        let tool = FinanceGetRecentCandlesTool::new(repository);
+        let result = tool
+            .run(
+                FinanceGetRecentCandlesParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       "binance".to_owned(),
+                    symbol:      "BTCUSDT".to_owned(),
+                    timeframe:   "1m".to_owned(),
+                    limit:       Some(1),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.query_limit, 1);
+        assert!(result.has_more);
+        assert_eq!(result.next_end.as_deref(), Some("2026-07-10T08:01:00Z"));
+        assert_eq!(result.candles[0].open_time, "2026-07-10T08:01:00Z");
+        assert_eq!(result.candles[0].close, "61520.00");
+    }
+
+    #[tokio::test]
     async fn query_candles_tool_returns_ordered_range() {
         let repository = repository().await;
         let tool = FinanceQueryCandlesTool::new(repository);
@@ -1107,12 +1211,14 @@ mod tests {
         let repository = Arc::new(InMemoryMarketDataRepository::default());
         let streams = FinanceListCandleStreamsTool::new(repository.clone());
         let latest = FinanceGetLatestCandleTool::new(repository.clone());
+        let recent = FinanceGetRecentCandlesTool::new(repository.clone());
         let query = FinanceQueryCandlesTool::new(repository.clone());
         let gaps = FinanceFindCandleGapsTool::new(repository.clone());
         let freshness = FinanceGetCandleFreshnessTool::new(repository);
 
         assert!(streams.is_read_only(&serde_json::json!({})));
         assert!(latest.is_read_only(&serde_json::json!({})));
+        assert!(recent.is_read_only(&serde_json::json!({})));
         assert!(query.is_read_only(&serde_json::json!({})));
         assert!(gaps.is_read_only(&serde_json::json!({})));
         assert!(freshness.is_read_only(&serde_json::json!({})));
