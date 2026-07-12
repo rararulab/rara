@@ -39,7 +39,7 @@ use reqwest::{
     header::{HeaderName, HeaderValue},
 };
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
@@ -49,7 +49,7 @@ use crate::market_data::Timeframe;
 const MAX_CANDLES_PER_POLL: usize = 10_000;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MarketCandleTransport {
     #[serde(default)]
     pub provider:             Option<String>,
@@ -112,11 +112,19 @@ struct ParsedCandle {
 }
 
 impl MarketCandleSource {
-    pub fn from_config(config: &DataFeedConfig) -> anyhow::Result<Self> {
+    pub fn normalize_config(config: &mut DataFeedConfig) -> anyhow::Result<()> {
         let mut transport: MarketCandleTransport =
             serde_json::from_value(config.transport.clone())?;
         normalize_transport(&mut transport)?;
         validate_transport(&transport)?;
+        config.transport = serde_json::to_value(transport)?;
+        Ok(())
+    }
+
+    pub fn from_config(config: &DataFeedConfig) -> anyhow::Result<Self> {
+        let mut config = config.clone();
+        Self::normalize_config(&mut config)?;
+        let transport: MarketCandleTransport = serde_json::from_value(config.transport.clone())?;
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
