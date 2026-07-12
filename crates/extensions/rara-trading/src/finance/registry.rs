@@ -33,6 +33,8 @@ use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::market_data::Timeframe;
+
 /// Finance event kinds supported by the MVP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -391,13 +393,30 @@ fn candle_fields_match(subscription: &FinanceSubscription, event: &FeedEvent) ->
     if event.event_type != "market_candle_closed" {
         return true;
     }
-    let venue = event.payload["venue"].as_str().unwrap_or_default();
-    let symbol = event.payload["symbol"].as_str().unwrap_or_default();
-    let timeframe = event.payload["timeframe"].as_str().unwrap_or_default();
+    let venue = event
+        .payload
+        .get("venue")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_venue)
+        .unwrap_or_default();
+    let symbol = event
+        .payload
+        .get("symbol")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_symbol)
+        .unwrap_or_default();
+    let timeframe = event
+        .payload
+        .get("timeframe")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_timeframe)
+        .transpose()
+        .unwrap_or(None)
+        .unwrap_or_default();
 
-    string_group_matches(&subscription.venues, venue)
-        && string_group_matches(&subscription.symbols, symbol)
-        && string_group_matches(&subscription.timeframes, timeframe)
+    string_group_matches(&subscription.venues, &venue)
+        && string_group_matches(&subscription.symbols, &symbol)
+        && string_group_matches(&subscription.timeframes, &timeframe)
 }
 
 fn normalize_subscription(mut subscription: FinanceSubscription) -> FinanceSubscription {
@@ -439,7 +458,7 @@ fn normalize_subscription(mut subscription: FinanceSubscription) -> FinanceSubsc
         subscription
             .venues
             .into_iter()
-            .map(|venue| venue.trim().to_ascii_lowercase())
+            .map(|venue| normalize_venue(&venue))
             .filter(|venue| !venue.is_empty())
             .collect(),
     );
@@ -447,7 +466,7 @@ fn normalize_subscription(mut subscription: FinanceSubscription) -> FinanceSubsc
         subscription
             .symbols
             .into_iter()
-            .map(|symbol| symbol.trim().to_ascii_uppercase())
+            .map(|symbol| normalize_symbol(&symbol))
             .filter(|symbol| !symbol.is_empty())
             .collect(),
     );
@@ -455,11 +474,26 @@ fn normalize_subscription(mut subscription: FinanceSubscription) -> FinanceSubsc
         subscription
             .timeframes
             .into_iter()
-            .map(|timeframe| timeframe.trim().to_ascii_lowercase())
+            .map(|timeframe| {
+                normalize_timeframe(&timeframe)
+                    .unwrap_or_else(|_| timeframe.trim().to_ascii_lowercase())
+            })
             .filter(|timeframe| !timeframe.is_empty())
             .collect(),
     );
     subscription
+}
+
+fn normalize_venue(value: &str) -> String { value.trim().to_ascii_lowercase() }
+
+fn normalize_symbol(value: &str) -> String { value.trim().to_ascii_uppercase() }
+
+fn normalize_timeframe(value: &str) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(Timeframe::parse(value)?.to_string())
 }
 
 fn dedupe(mut values: Vec<String>) -> Vec<String> {
@@ -595,6 +629,31 @@ mod tests {
             .build()
     }
 
+    fn candle_with_payload(venue: &str, symbol: &str, timeframe: &str) -> FeedEvent {
+        FeedEvent::builder()
+            .id(FeedEventId::deterministic(&format!(
+                "{venue}:{symbol}:{timeframe}"
+            )))
+            .source_name("binance-spot".to_owned())
+            .event_type("market_candle_closed".to_owned())
+            .tags(vec![
+                "finance".to_owned(),
+                "market-data".to_owned(),
+                format!("venue:{venue}"),
+                format!("symbol:{symbol}"),
+                format!("timeframe:{timeframe}"),
+            ])
+            .payload(serde_json::json!({
+                "venue": venue,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "close_time": "2026-07-10T08:30:00Z",
+                "close": "61610.30"
+            }))
+            .received_at(ts("2026-07-10T08:30:00Z"))
+            .build()
+    }
+
     #[tokio::test]
     async fn article_source_and_watch_terms_are_anded() {
         let (registry, _clock, _tmp) = registry(ts("2026-07-10T08:31:00Z"));
@@ -688,6 +747,38 @@ mod tests {
 
         assert_eq!(
             registry.match_event(&candle("BTCUSDT", "15m")).await.len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn candle_event_payload_selectors_are_normalized_before_matching() {
+        let (registry, _clock, _tmp) = registry(ts("2026-07-10T08:31:00Z"));
+        let session = SessionKey::new();
+        registry
+            .upsert(FinanceSubscription {
+                id:                     uuid::Uuid::new_v4(),
+                owner:                  owner(),
+                session_key:            session,
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           Vec::new(),
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["binance".to_owned()],
+                symbols:                vec!["BTCUSDT".to_owned()],
+                timeframes:             vec!["15m".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            registry
+                .match_event(&candle_with_payload(" Binance ", " btcusdt ", " 15M "))
+                .await
+                .len(),
             1
         );
     }
