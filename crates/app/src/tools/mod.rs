@@ -409,6 +409,17 @@ mod tests {
             "ask-user",
             "fff-find",
             "fff-grep",
+            "finance_list_feed_sources",
+            "finance_enable_feed_source",
+            "finance_disable_feed_source",
+            "finance_restart_feed_source",
+            "finance_subscribe_instruments",
+            "finance_diagnose_candle_subscriptions",
+            "finance_list_candle_streams",
+            "finance_get_latest_candle",
+            "finance_query_candles",
+            "finance_find_candle_gaps",
+            "finance_get_candle_freshness",
         ] {
             assert!(
                 !names.iter().any(|n| n == deferred),
