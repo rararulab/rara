@@ -39,14 +39,20 @@ use axum::{
     routing::{get, post, put},
 };
 use jiff::Timestamp;
-use rara_kernel::data_feed::{
-    DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, parse_duration_ago,
-    polling::PollingSource,
+use rara_kernel::{
+    data_feed::{
+        DataFeed, DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType, parse_duration_ago,
+        polling::PollingSource,
+    },
+    identity::{Principal, Resolved, UserId},
 };
-use rara_trading::feed::{
-    catalog::{DefaultFeedSource, default_finance_feed_sources},
-    market_candle::MarketCandleSource,
-    rss::RssSource,
+use rara_trading::{
+    feed::{
+        catalog::{DefaultFeedSource, default_finance_feed_sources},
+        market_candle::MarketCandleSource,
+        rss::RssSource,
+    },
+    finance::registry::{FinanceSubscription, FinanceSubscriptionRegistry},
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -63,9 +69,11 @@ use crate::kernel::problem::ProblemDetails;
 #[derive(Clone)]
 pub struct DataFeedRouterState {
     /// Persistence service for feed configs and events.
-    pub svc:      DataFeedSvc,
+    pub svc:              DataFeedSvc,
     /// In-memory registry (also holds cancellation tokens for running tasks).
-    pub registry: Arc<DataFeedRegistry>,
+    pub registry:         Arc<DataFeedRegistry>,
+    /// Finance subscription registry used to annotate catalog source status.
+    pub finance_registry: Arc<FinanceSubscriptionRegistry>,
 }
 
 /// Build the `/api/v1/data-feeds/...` router.
@@ -192,6 +200,14 @@ struct FeedCatalogEntryResponse {
     venue:                  Option<String>,
     configured_symbols:     Vec<String>,
     configured_timeframes:  Vec<String>,
+    subscriptions:          FeedCatalogSubscriptionResponse,
+}
+
+/// Current user's finance subscription status for a built-in feed source.
+#[derive(Debug, Serialize)]
+struct FeedCatalogSubscriptionResponse {
+    user_subscribed:       bool,
+    user_subscription_ids: Vec<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,9 +225,12 @@ async fn list_feeds(
 /// `GET /api/v1/data-feeds/catalog` — list built-in finance feed sources.
 async fn list_feed_catalog(
     State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<Principal<Resolved>>,
 ) -> Result<Json<Vec<FeedCatalogEntryResponse>>, ProblemDetails> {
     let feeds = state.svc.list_feeds().await?;
-    Ok(Json(catalog_response(&feeds)))
+    let owner = UserId(principal.user_id.0);
+    let subscriptions = state.finance_registry.list_for_owner(&owner).await;
+    Ok(Json(catalog_response(&feeds, &subscriptions)))
 }
 
 /// `GET /api/v1/data-feeds/summary` — list per-feed persisted-event health.
@@ -825,7 +844,10 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
     }
 }
 
-fn catalog_response(feeds: &[DataFeedConfig]) -> Vec<FeedCatalogEntryResponse> {
+fn catalog_response(
+    feeds: &[DataFeedConfig],
+    subscriptions: &[FinanceSubscription],
+) -> Vec<FeedCatalogEntryResponse> {
     default_finance_feed_sources()
         .into_iter()
         .map(|source| {
@@ -850,9 +872,31 @@ fn catalog_response(feeds: &[DataFeedConfig]) -> Vec<FeedCatalogEntryResponse> {
                 venue,
                 configured_symbols,
                 configured_timeframes,
+                subscriptions: catalog_subscription_response(subscriptions, &feed_name),
             }
         })
         .collect()
+}
+
+fn catalog_subscription_response(
+    subscriptions: &[FinanceSubscription],
+    source_name: &str,
+) -> FeedCatalogSubscriptionResponse {
+    let user_subscription_ids = subscriptions
+        .iter()
+        .filter(|subscription| {
+            subscription
+                .source_names
+                .iter()
+                .any(|name| name == source_name)
+        })
+        .map(|subscription| subscription.id)
+        .collect::<Vec<_>>();
+
+    FeedCatalogSubscriptionResponse {
+        user_subscribed: !user_subscription_ids.is_empty(),
+        user_subscription_ids,
+    }
 }
 
 fn catalog_transport_string(transport: Option<&serde_json::Value>, key: &str) -> Option<String> {
@@ -963,8 +1007,10 @@ mod tests {
         error::Result as KernelResult,
         identity::{KernelUser, Permission, Role, UserStore},
         security::{ApprovalManager, ApprovalPolicy, SecuritySubsystem},
+        session::SessionKey,
         testing::build_memory_diesel_pools,
     };
+    use rara_trading::finance::registry::{FinanceDelivery, FinanceEventKind};
     use tower::ServiceExt;
 
     use super::*;
@@ -1008,6 +1054,15 @@ mod tests {
         AuthState::for_tests("s3cret", &name, security)
     }
 
+    fn test_finance_registry() -> Arc<FinanceSubscriptionRegistry> {
+        Arc::new(FinanceSubscriptionRegistry::load(
+            std::env::temp_dir().join(format!(
+                "rara-test-finance-subscriptions-{}.json",
+                Uuid::new_v4()
+            )),
+        ))
+    }
+
     /// Build a router whose handlers use a real (but empty / schema-less)
     /// diesel pool. The non-admin Principal guard runs before any DB query,
     /// so the pool is never hit on the 403 path these tests exercise.
@@ -1017,7 +1072,11 @@ mod tests {
         let svc = DataFeedSvc::new(pools);
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let registry = Arc::new(DataFeedRegistry::new(event_tx));
-        let state = DataFeedRouterState { svc, registry };
+        let state = DataFeedRouterState {
+            svc,
+            registry,
+            finance_registry: test_finance_registry(),
+        };
         let auth = auth_state_direct(user);
         data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
     }
@@ -1030,12 +1089,34 @@ mod tests {
         let svc = DataFeedSvc::new(pools.clone());
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let registry = Arc::new(DataFeedRegistry::new(event_tx));
-        let state = DataFeedRouterState { svc, registry };
+        let state = DataFeedRouterState {
+            svc,
+            registry,
+            finance_registry: test_finance_registry(),
+        };
         let auth = auth_state_direct(user);
         (
             data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer)),
             pools,
         )
+    }
+
+    async fn app_with_user_and_finance_registry(
+        user: KernelUser,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+    ) -> Router {
+        let pools = build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = DataFeedSvc::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(DataFeedRegistry::new(event_tx));
+        let state = DataFeedRouterState {
+            svc,
+            registry,
+            finance_registry,
+        };
+        let auth = auth_state_direct(user);
+        data_feed_routes(state).layer(middleware::from_fn_with_state(auth, auth_layer))
     }
 
     async fn bootstrap_data_feed_schema(pools: &yunara_store::diesel_pool::DieselSqlitePools) {
@@ -1316,6 +1397,73 @@ mod tests {
             serde_json::json!(["BTCUSDT", "ETHUSDT"])
         );
         assert_eq!(binance["configured_timeframes"], serde_json::json!(["1m"]));
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_reports_current_user_subscription_status() {
+        let finance_registry = test_finance_registry();
+        let subscription_id = Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id:                     subscription_id,
+                owner:                  UserId("admin".to_owned()),
+                session_key:            SessionKey::new(),
+                event_kinds:            vec![FinanceEventKind::RssArticle],
+                source_names:           vec!["finance-fed-press-releases".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 Vec::new(),
+                symbols:                Vec::new(),
+                timeframes:             Vec::new(),
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let app = app_with_user_and_finance_registry(user_of(Role::Admin), finance_registry).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/catalog")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let entries: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fed = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "fed-press-releases")
+            .unwrap();
+        let sec = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "sec-press-releases")
+            .unwrap();
+
+        assert_eq!(fed["subscriptions"]["user_subscribed"], true);
+        assert_eq!(
+            fed["subscriptions"]["user_subscription_ids"],
+            serde_json::json!([subscription_id])
+        );
+        assert_eq!(sec["subscriptions"]["user_subscribed"], false);
+        assert_eq!(
+            sec["subscriptions"]["user_subscription_ids"],
+            serde_json::json!([])
+        );
     }
 
     #[tokio::test]

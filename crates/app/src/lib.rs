@@ -794,8 +794,9 @@ pub async fn start_with_options(
     .whatever_context("Failed to boot kernel dependencies")?;
 
     let feed_router_state = rara_backend_admin::data_feeds::DataFeedRouterState {
-        svc:      feed_svc,
-        registry: feed_registry.clone(),
+        svc:              feed_svc,
+        registry:         feed_registry.clone(),
+        finance_registry: finance_registry.clone(),
     };
 
     // TraceService is shared between the kernel (which writes traces at
