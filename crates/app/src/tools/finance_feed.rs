@@ -27,7 +27,10 @@ use rara_kernel::{
 };
 use rara_tool_macro::ToolDef;
 use rara_trading::{
-    feed::catalog::{DefaultFeedSource, default_finance_feed_sources},
+    feed::{
+        catalog::{DefaultFeedSource, default_finance_feed_sources},
+        market_candle::MarketCandleSource,
+    },
     finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     },
@@ -1099,7 +1102,7 @@ fn config_from_source(
         |feed| merge_tags(source.tags.clone(), &feed.tags),
     );
 
-    Ok(DataFeedConfig::builder()
+    let mut config = DataFeedConfig::builder()
         .id(id)
         .name(source.feed_name())
         .feed_type(source.feed_type)
@@ -1111,7 +1114,16 @@ fn config_from_source(
         .maybe_last_error(None)
         .created_at(created_at)
         .updated_at(now)
-        .build())
+        .build();
+    normalize_finance_feed_config(&mut config)?;
+    Ok(config)
+}
+
+fn normalize_finance_feed_config(config: &mut DataFeedConfig) -> anyhow::Result<()> {
+    if config.feed_type == FeedType::MarketCandle {
+        MarketCandleSource::normalize_config(config)?;
+    }
+    Ok(())
 }
 
 fn merge_tags(mut tags: Vec<String>, existing: &[String]) -> Vec<String> {
@@ -1515,7 +1527,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enable_feed_source_preserves_existing_persisted_transport() {
+    async fn enable_feed_source_normalizes_existing_persisted_transport() {
         let (_list, tool, _disable, _restart, _subscribe, svc, _registry, _finance_registry) =
             tool().await;
         let now = jiff::Timestamp::now();
@@ -1525,13 +1537,13 @@ mod tests {
             .feed_type(FeedType::MarketCandle)
             .tags(vec!["finance".to_owned(), "custom-watchlist".to_owned()])
             .transport(serde_json::json!({
-                "provider": "binance",
+                "provider": " BINANCE ",
                 "base_url": "https://api.binance.com",
                 "interval_secs": 60,
                 "headers": {},
-                "venue": "binance",
-                "symbols": ["SOLUSDT"],
-                "timeframes": ["5m"],
+                "venue": " BINANCE ",
+                "symbols": [" solusdt ", "SOLUSDT", "btcusdt"],
+                "timeframes": [" 5M ", "5m"],
                 "max_candles_per_poll": 1000
             }))
             .enabled(false)
@@ -1558,7 +1570,12 @@ mod tests {
         assert!(feed.enabled);
         assert_eq!(feed.status, FeedStatus::Idle);
         assert_eq!(feed.last_error, None);
-        assert_eq!(feed.transport["symbols"], serde_json::json!(["SOLUSDT"]));
+        assert_eq!(feed.transport["provider"], "binance");
+        assert_eq!(feed.transport["venue"], "binance");
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "SOLUSDT"])
+        );
         assert_eq!(feed.transport["timeframes"], serde_json::json!(["5m"]));
         assert!(feed.tags.iter().any(|tag| tag == "custom-watchlist"));
     }
