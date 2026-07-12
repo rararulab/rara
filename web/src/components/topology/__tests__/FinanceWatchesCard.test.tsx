@@ -414,7 +414,9 @@ describe('FinanceWatchesCard', () => {
 
     expect(await screen.findByText('watching')).toBeInTheDocument();
     expect(await screen.findByText('Data Partial')).toBeInTheDocument();
-    expect(screen.getByText('1/2 expected streams present; 1 missing.')).toBeInTheDocument();
+    expect(
+      screen.getByText('1/2 expected streams present; 1 missing. Missing: binance ETHUSDT 1m.'),
+    ).toBeInTheDocument();
   });
 
   it('uses_subscription_selectors_for_watched_kline_health', async () => {
