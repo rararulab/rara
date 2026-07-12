@@ -198,9 +198,9 @@ fn finance_directive(event: &FeedEvent) -> String {
 fn market_candle_from_event(event: &FeedEvent) -> anyhow::Result<MarketCandle> {
     Ok(MarketCandle {
         source_name:       event.source_name.clone(),
-        venue:             required_str(event, "venue")?.to_owned(),
-        symbol:            required_str(event, "symbol")?.to_owned(),
-        timeframe:         Timeframe::parse(required_str(event, "timeframe")?)?,
+        venue:             normalize_venue(required_str(event, "venue")?),
+        symbol:            normalize_symbol(required_str(event, "symbol")?),
+        timeframe:         normalize_timeframe(required_str(event, "timeframe")?)?,
         open_time:         required_str(event, "open_time")?.parse()?,
         close_time:        required_str(event, "close_time")?.parse()?,
         open:              Decimal::from_str_exact(required_str(event, "open")?)?,
@@ -219,6 +219,14 @@ fn required_str<'a>(event: &'a FeedEvent, field: &str) -> anyhow::Result<&'a str
     event.payload[field]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("market candle event missing string field '{field}'"))
+}
+
+fn normalize_venue(value: &str) -> String { value.trim().to_ascii_lowercase() }
+
+fn normalize_symbol(value: &str) -> String { value.trim().to_ascii_uppercase() }
+
+fn normalize_timeframe(value: &str) -> anyhow::Result<Timeframe> {
+    Timeframe::parse(value.trim().to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -269,7 +277,9 @@ mod tests {
         finance::registry::{
             FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
         },
-        market_data::InMemoryMarketDataRepository,
+        market_data::{
+            CandleLatestQuery, InMemoryMarketDataRepository, MarketDataRepository, Timeframe,
+        },
     };
 
     use super::{FeedDispatchOutcome, TestFeedDispatchSink, dispatch_feed_event};
@@ -310,6 +320,36 @@ mod tests {
                 "venue": "binance",
                 "symbol": "BTCUSDT",
                 "timeframe": "15m",
+                "open_time": "2026-07-10T08:15:00Z",
+                "close_time": "2026-07-10T08:30:00Z",
+                "open": "61500.12",
+                "high": "61640.00",
+                "low": "61480.50",
+                "close": "61610.30",
+                "volume": "124.551"
+            }))
+            .received_at(ts("2026-07-10T08:30:00Z"))
+            .build()
+    }
+
+    fn candle_with_selectors(venue: &str, symbol: &str, timeframe: &str) -> FeedEvent {
+        FeedEvent::builder()
+            .id(FeedEventId::deterministic(&format!(
+                "{venue}:{symbol}:{timeframe}:2026-07-10T08:15:00Z"
+            )))
+            .source_name("binance-spot".to_owned())
+            .event_type("market_candle_closed".to_owned())
+            .tags(vec![
+                "finance".to_owned(),
+                "market-data".to_owned(),
+                format!("venue:{venue}"),
+                format!("symbol:{symbol}"),
+                format!("timeframe:{timeframe}"),
+            ])
+            .payload(serde_json::json!({
+                "venue": venue,
+                "symbol": symbol,
+                "timeframe": timeframe,
                 "open_time": "2026-07-10T08:15:00Z",
                 "close_time": "2026-07-10T08:30:00Z",
                 "open": "61500.12",
@@ -426,6 +466,38 @@ mod tests {
         .unwrap();
 
         assert_eq!(market_repo.correction_count().await, 0);
+        assert_eq!(sink.synthetic_turns().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn closed_candle_event_selectors_are_normalized_before_upsert() {
+        let session = SessionKey::new();
+        let market_repo = InMemoryMarketDataRepository::default();
+        let sink = TestFeedDispatchSink::new([session]);
+        dispatch_feed_event(
+            &candle_with_selectors(" Binance ", " btcusdt ", " 15M "),
+            &InMemoryFeedStore::default(),
+            &market_repo,
+            &registry_for(candle_sub(session, FinanceDelivery::Immediate)).await,
+            &sink,
+        )
+        .await
+        .unwrap();
+
+        let candle = market_repo
+            .latest_closed_candle(CandleLatestQuery {
+                source_name: Some("binance-spot".to_owned()),
+                venue:       "binance".to_owned(),
+                symbol:      "BTCUSDT".to_owned(),
+                timeframe:   Timeframe::parse("15m").unwrap(),
+            })
+            .await
+            .unwrap()
+            .expect("canonical candle should be stored");
+
+        assert_eq!(candle.venue, "binance");
+        assert_eq!(candle.symbol, "BTCUSDT");
+        assert_eq!(candle.timeframe.to_string(), "15m");
         assert_eq!(sink.synthetic_turns().await.len(), 1);
     }
 
