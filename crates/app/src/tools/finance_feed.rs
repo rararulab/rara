@@ -42,6 +42,7 @@ use uuid::Uuid;
 const MAX_CATALOG_SOURCE_ID_LEN: usize = 128;
 const MAX_FEED_ID_LEN: usize = 128;
 const MAX_NEWS_SOURCE_REFS: usize = 32;
+const MAX_UNSUBSCRIBE_SOURCE_REFS: usize = 64;
 const MAX_NEWS_CATEGORY_TAGS: usize = 64;
 const MAX_NEWS_WATCH_TERMS: usize = 64;
 const MAX_NEWS_SELECTOR_LEN: usize = 128;
@@ -109,6 +110,62 @@ pub(super) struct FinanceListSubscriptionsParams {
 pub(super) struct FinanceListSubscriptionsResult {
     pub subscriptions: Vec<FinanceSubscriptionEntry>,
     pub count:         usize,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct FinanceUnsubscribeParams {
+    /// Backward-compatible single subscription id. Prefer using
+    /// subscription_ids for multiple removals.
+    #[serde(default)]
+    pub subscription_id:      Option<Uuid>,
+    /// Finance subscription ids from finance_list_subscriptions.
+    #[serde(default)]
+    pub subscription_ids:     Vec<Uuid>,
+    /// Built-in source ids from finance_list_feed_sources, for example
+    /// fed-press-releases or binance-market-candles.
+    #[serde(default)]
+    pub catalog_source_ids:   Vec<String>,
+    /// Concrete finance source names for custom feeds.
+    #[serde(default)]
+    pub source_names:         Vec<String>,
+    /// Event kinds to match, for example rss_article or market_candle_closed.
+    #[serde(default)]
+    pub event_kinds:          Vec<FinanceEventKind>,
+    /// Instrument symbols to match.
+    #[serde(default)]
+    pub symbols:              Vec<String>,
+    /// Candle intervals to match.
+    #[serde(default)]
+    pub timeframes:           Vec<String>,
+    /// Restrict selector-based removals to the current conversation/session.
+    /// Defaults to true unless explicit subscription ids are supplied.
+    #[serde(default)]
+    pub current_session_only: Option<bool>,
+    /// Return matches without removing them.
+    #[serde(default)]
+    pub dry_run:              Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceUnsubscribeResult {
+    pub dry_run:                  bool,
+    pub matched_count:            usize,
+    pub removed_count:            usize,
+    pub removed_subscription_ids: Vec<Uuid>,
+    pub matches:                  Vec<FinanceUnsubscribeMatch>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceUnsubscribeMatch {
+    pub subscription_id: Uuid,
+    pub current_session: bool,
+    pub session_key:     String,
+    pub event_kinds:     Vec<FinanceEventKind>,
+    pub source_names:    Vec<String>,
+    pub venues:          Vec<String>,
+    pub symbols:         Vec<String>,
+    pub timeframes:      Vec<String>,
+    pub delivery:        FinanceDelivery,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -348,6 +405,21 @@ pub(super) struct FinanceListSubscriptionsTool {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_unsubscribe",
+    description = "Remove finance information subscriptions owned by the current user. Accepts \
+                   explicit subscription ids from finance_list_subscriptions, or selector filters \
+                   such as catalog_source_ids, source_names, event_kinds, symbols, and \
+                   timeframes. Selector-based removals default to the current conversation only; \
+                   broad wildcard subscriptions are only removed by explicit id. This never \
+                   places trades.",
+    tier = "deferred"
+)]
+pub(super) struct FinanceUnsubscribeTool {
+    finance_registry: Arc<FinanceSubscriptionRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_enable_feed_source",
     description = "Enable one built-in finance feed source from finance_list_feed_sources. This \
                    persists a DataFeedConfig and optionally starts the runtime feed task. It only \
@@ -445,6 +517,12 @@ impl FinanceListSubscriptionsTool {
             registry,
             finance_registry,
         }
+    }
+}
+
+impl FinanceUnsubscribeTool {
+    pub(super) fn new(finance_registry: Arc<FinanceSubscriptionRegistry>) -> Self {
+        Self { finance_registry }
     }
 }
 
@@ -589,6 +667,52 @@ impl ToolExecute for FinanceListSubscriptionsTool {
         Ok(FinanceListSubscriptionsResult {
             count: subscriptions.len(),
             subscriptions,
+        })
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceUnsubscribeTool {
+    type Output = FinanceUnsubscribeResult;
+    type Params = FinanceUnsubscribeParams;
+
+    async fn run(
+        &self,
+        params: FinanceUnsubscribeParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceUnsubscribeResult> {
+        let selector = normalize_unsubscribe_selector(params)?;
+        let owner = UserId(context.user_id.clone());
+        let dry_run = selector.dry_run;
+
+        let matches = self
+            .finance_registry
+            .list_for_owner(&owner)
+            .await
+            .into_iter()
+            .filter(|subscription| unsubscribe_selector_matches(subscription, &selector, context))
+            .map(|subscription| unsubscribe_match(subscription, context.session_key))
+            .collect::<Vec<_>>();
+
+        let mut removed_subscription_ids = Vec::new();
+        if !dry_run {
+            for entry in &matches {
+                if self
+                    .finance_registry
+                    .remove(&owner, entry.subscription_id)
+                    .await?
+                {
+                    removed_subscription_ids.push(entry.subscription_id);
+                }
+            }
+        }
+
+        Ok(FinanceUnsubscribeResult {
+            dry_run,
+            matched_count: matches.len(),
+            removed_count: removed_subscription_ids.len(),
+            removed_subscription_ids,
+            matches,
         })
     }
 }
@@ -1541,6 +1665,148 @@ where
     left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
 }
 
+struct UnsubscribeSelector {
+    subscription_ids:     Vec<Uuid>,
+    source_names:         Vec<String>,
+    event_kinds:          Vec<FinanceEventKind>,
+    symbols:              Vec<String>,
+    timeframes:           Vec<String>,
+    current_session_only: bool,
+    dry_run:              bool,
+}
+
+fn normalize_unsubscribe_selector(
+    params: FinanceUnsubscribeParams,
+) -> anyhow::Result<UnsubscribeSelector> {
+    let mut subscription_ids = params.subscription_ids;
+    if let Some(subscription_id) = params.subscription_id {
+        subscription_ids.push(subscription_id);
+    }
+    subscription_ids.sort_unstable();
+    subscription_ids.dedup();
+
+    let catalog_source_ids = params
+        .catalog_source_ids
+        .into_iter()
+        .map(normalize_catalog_source_id)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut source_names = normalize_string_refs(
+        "source_names",
+        params.source_names,
+        MAX_UNSUBSCRIBE_SOURCE_REFS,
+        MAX_NEWS_SELECTOR_LEN,
+    )?;
+    for catalog_source_id in catalog_source_ids {
+        let source_name = find_catalog_source(&catalog_source_id)?.feed_name();
+        if !source_names.contains(&source_name) {
+            source_names.push(source_name);
+        }
+    }
+    anyhow::ensure!(
+        source_names.len() <= MAX_UNSUBSCRIBE_SOURCE_REFS,
+        "source_names has too many values"
+    );
+
+    let event_kinds = dedupe_event_kinds(params.event_kinds);
+    let symbols =
+        normalize_optional_instrument_values("symbols", params.symbols, true, MAX_SYMBOLS)?;
+    let timeframes = normalize_optional_instrument_values(
+        "timeframes",
+        params.timeframes,
+        false,
+        MAX_TIMEFRAMES,
+    )?;
+    let has_ids = !subscription_ids.is_empty();
+    anyhow::ensure!(
+        has_ids
+            || !source_names.is_empty()
+            || !event_kinds.is_empty()
+            || !symbols.is_empty()
+            || !timeframes.is_empty(),
+        "finance_unsubscribe requires subscription_ids or at least one selector filter"
+    );
+
+    Ok(UnsubscribeSelector {
+        subscription_ids,
+        source_names,
+        event_kinds,
+        symbols,
+        timeframes,
+        current_session_only: params.current_session_only.unwrap_or(!has_ids),
+        dry_run: params.dry_run.unwrap_or(false),
+    })
+}
+
+fn normalize_optional_instrument_values(
+    name: &str,
+    values: Vec<String>,
+    uppercase: bool,
+    max_values: usize,
+) -> anyhow::Result<Vec<String>> {
+    if values.is_empty() {
+        Ok(Vec::new())
+    } else {
+        normalize_instrument_values(name, values, uppercase, max_values)
+    }
+}
+
+fn dedupe_event_kinds(values: Vec<FinanceEventKind>) -> Vec<FinanceEventKind> {
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    out
+}
+
+fn unsubscribe_selector_matches(
+    subscription: &FinanceSubscription,
+    selector: &UnsubscribeSelector,
+    context: &ToolContext,
+) -> bool {
+    if selector.current_session_only && subscription.session_key != context.session_key {
+        return false;
+    }
+    if !selector.subscription_ids.is_empty()
+        && !selector.subscription_ids.contains(&subscription.id)
+    {
+        return false;
+    }
+    selector_group_matches(&subscription.source_names, &selector.source_names)
+        && selector_group_matches(&subscription.event_kinds, &selector.event_kinds)
+        && selector_group_matches(&subscription.symbols, &selector.symbols)
+        && selector_group_matches(&subscription.timeframes, &selector.timeframes)
+}
+
+fn selector_group_matches<T>(subscription_values: &[T], selector_values: &[T]) -> bool
+where
+    T: Eq,
+{
+    selector_values.is_empty()
+        || (!subscription_values.is_empty()
+            && subscription_values
+                .iter()
+                .any(|value| selector_values.contains(value)))
+}
+
+fn unsubscribe_match(
+    subscription: FinanceSubscription,
+    current_session: rara_kernel::session::SessionKey,
+) -> FinanceUnsubscribeMatch {
+    FinanceUnsubscribeMatch {
+        subscription_id: subscription.id,
+        current_session: subscription.session_key == current_session,
+        session_key:     subscription.session_key.to_string(),
+        event_kinds:     subscription.event_kinds,
+        source_names:    subscription.source_names,
+        venues:          subscription.venues,
+        symbols:         subscription.symbols,
+        timeframes:      subscription.timeframes,
+        delivery:        subscription.delivery,
+    }
+}
+
 fn find_catalog_source(catalog_source_id: &str) -> anyhow::Result<DefaultFeedSource> {
     default_finance_feed_sources()
         .into_iter()
@@ -1870,7 +2136,8 @@ mod tests {
         FinanceListFeedSourcesTool, FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
         FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
-        FinanceSubscribeNewsParams, FinanceSubscribeNewsTool,
+        FinanceSubscribeNewsParams, FinanceSubscribeNewsTool, FinanceUnsubscribeParams,
+        FinanceUnsubscribeTool,
     };
 
     fn context() -> ToolContext {
@@ -1930,6 +2197,31 @@ mod tests {
             registry,
             finance_registry,
         )
+    }
+
+    fn finance_subscription(
+        ctx: &ToolContext,
+        session_key: SessionKey,
+        event_kinds: Vec<FinanceEventKind>,
+        source_names: Vec<String>,
+        symbols: Vec<String>,
+        timeframes: Vec<String>,
+    ) -> FinanceSubscription {
+        FinanceSubscription {
+            id: Uuid::new_v4(),
+            owner: UserId(ctx.user_id.clone()),
+            session_key,
+            event_kinds,
+            source_names,
+            category_tags: Vec::new(),
+            watch_terms: Vec::new(),
+            venues: Vec::new(),
+            symbols,
+            timeframes,
+            delivery: FinanceDelivery::Silent,
+            cooldown_secs: 900,
+            max_immediate_per_hour: 6,
+        }
     }
 
     async fn bootstrap_data_feed_schema(pools: &yunara_store::diesel_pool::DieselSqlitePools) {
@@ -2196,6 +2488,202 @@ mod tests {
         assert_eq!(current.subscriptions[0].sources[0].catalog_source_id, None);
         assert_eq!(current.subscriptions[0].sources[0].enabled, None);
         assert!(!current.subscriptions[0].sources[0].running);
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_accepts_legacy_subscription_id() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            _svc,
+            _registry,
+            finance_registry,
+        ) = tool().await;
+        let ctx = context();
+        let subscription = finance_subscription(
+            &ctx,
+            ctx.session_key,
+            vec![FinanceEventKind::RssArticle],
+            vec!["finance-fed-press-releases".to_owned()],
+            Vec::new(),
+            Vec::new(),
+        );
+        let subscription_id = subscription.id;
+        finance_registry.upsert(subscription).await.unwrap();
+
+        let unsubscribe = FinanceUnsubscribeTool::new(finance_registry.clone());
+        let result = unsubscribe
+            .run(
+                FinanceUnsubscribeParams {
+                    subscription_id: Some(subscription_id),
+                    ..Default::default()
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.matched_count, 1);
+        assert_eq!(result.removed_count, 1);
+        assert_eq!(result.removed_subscription_ids, [subscription_id]);
+        assert!(
+            finance_registry
+                .list_for_owner(&UserId(ctx.user_id.clone()))
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_matches_catalog_source_in_current_session_by_default() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            _svc,
+            _registry,
+            finance_registry,
+        ) = tool().await;
+        let ctx = context();
+        let other_session = SessionKey::new();
+        let current = finance_subscription(
+            &ctx,
+            ctx.session_key,
+            vec![FinanceEventKind::RssArticle],
+            vec!["finance-fed-press-releases".to_owned()],
+            Vec::new(),
+            Vec::new(),
+        );
+        let other = finance_subscription(
+            &ctx,
+            other_session,
+            vec![FinanceEventKind::RssArticle],
+            vec!["finance-fed-press-releases".to_owned()],
+            Vec::new(),
+            Vec::new(),
+        );
+        let current_id = current.id;
+        let other_id = other.id;
+        finance_registry.upsert(current).await.unwrap();
+        finance_registry.upsert(other).await.unwrap();
+
+        let unsubscribe = FinanceUnsubscribeTool::new(finance_registry.clone());
+        let result = unsubscribe
+            .run(
+                FinanceUnsubscribeParams {
+                    catalog_source_ids: vec!["fed-press-releases".to_owned()],
+                    ..Default::default()
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.removed_subscription_ids, [current_id]);
+        let remaining = finance_registry
+            .list_for_owner(&UserId(ctx.user_id.clone()))
+            .await;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, other_id);
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_dry_run_does_not_remove_matches() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            _svc,
+            _registry,
+            finance_registry,
+        ) = tool().await;
+        let ctx = context();
+        let subscription = finance_subscription(
+            &ctx,
+            ctx.session_key,
+            vec![FinanceEventKind::MarketCandleClosed],
+            vec!["finance-binance-market-candles".to_owned()],
+            vec!["BTCUSDT".to_owned()],
+            vec!["1m".to_owned()],
+        );
+        let subscription_id = subscription.id;
+        finance_registry.upsert(subscription).await.unwrap();
+
+        let unsubscribe = FinanceUnsubscribeTool::new(finance_registry.clone());
+        let result = unsubscribe
+            .run(
+                FinanceUnsubscribeParams {
+                    source_names: vec!["finance-binance-market-candles".to_owned()],
+                    event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+                    symbols: vec!["btcusdt".to_owned()],
+                    timeframes: vec!["1M".to_owned()],
+                    dry_run: Some(true),
+                    ..Default::default()
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.dry_run);
+        assert_eq!(result.matched_count, 1);
+        assert_eq!(result.removed_count, 0);
+        assert!(result.removed_subscription_ids.is_empty());
+        let remaining = finance_registry
+            .list_for_owner(&UserId(ctx.user_id.clone()))
+            .await;
+        assert_eq!(remaining[0].id, subscription_id);
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_selector_does_not_remove_wildcard_subscription() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            _svc,
+            _registry,
+            finance_registry,
+        ) = tool().await;
+        let ctx = context();
+        let subscription = finance_subscription(
+            &ctx,
+            ctx.session_key,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let subscription_id = subscription.id;
+        finance_registry.upsert(subscription).await.unwrap();
+
+        let unsubscribe = FinanceUnsubscribeTool::new(finance_registry.clone());
+        let result = unsubscribe
+            .run(
+                FinanceUnsubscribeParams {
+                    catalog_source_ids: vec!["fed-press-releases".to_owned()],
+                    ..Default::default()
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.matched_count, 0);
+        assert_eq!(result.removed_count, 0);
+        let remaining = finance_registry
+            .list_for_owner(&UserId(ctx.user_id.clone()))
+            .await;
+        assert_eq!(remaining[0].id, subscription_id);
     }
 
     #[tokio::test]
