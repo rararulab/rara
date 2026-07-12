@@ -194,12 +194,10 @@ impl ToolExecute for FinanceListCandleStreamsTool {
     ) -> anyhow::Result<FinanceListCandleStreamsResult> {
         let limit = validate_limit(params.limit)?;
         let query = CandleStreamListQuery {
-            source_name: normalize_optional_selector("source_name", params.source_name)?,
-            venue: normalize_optional_selector("venue", params.venue)?,
-            symbol: normalize_optional_selector("symbol", params.symbol)?,
-            timeframe: normalize_optional_selector("timeframe", params.timeframe)?
-                .map(Timeframe::parse)
-                .transpose()?,
+            source_name: normalize_optional_source_name_selector(params.source_name)?,
+            venue: normalize_optional_venue_selector(params.venue)?,
+            symbol: normalize_optional_symbol_selector(params.symbol)?,
+            timeframe: normalize_optional_timeframe_selector(params.timeframe)?,
             limit,
         };
         let streams = self.repository.candle_streams(query).await?;
@@ -241,10 +239,10 @@ impl ToolExecute for FinanceGetLatestCandleTool {
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceGetLatestCandleResult> {
         let query = CandleLatestQuery {
-            source_name: normalize_optional_selector("source_name", params.source_name)?,
-            venue:       normalize_required_selector("venue", params.venue)?,
-            symbol:      normalize_required_selector("symbol", params.symbol)?,
-            timeframe:   Timeframe::parse(params.timeframe)?,
+            source_name: normalize_optional_source_name_selector(params.source_name)?,
+            venue:       normalize_required_venue_selector(params.venue)?,
+            symbol:      normalize_required_symbol_selector(params.symbol)?,
+            timeframe:   normalize_required_timeframe_selector(params.timeframe)?,
         };
         let candle = self.repository.latest_closed_candle(query).await?;
         Ok(FinanceGetLatestCandleResult {
@@ -287,10 +285,10 @@ impl ToolExecute for FinanceQueryCandlesTool {
         anyhow::ensure!(start < end, "start must be before end");
 
         let query = CandleRangeQuery {
-            source_name: normalize_optional_selector("source_name", params.source_name)?,
-            venue: normalize_required_selector("venue", params.venue)?,
-            symbol: normalize_required_selector("symbol", params.symbol)?,
-            timeframe: Timeframe::parse(params.timeframe)?,
+            source_name: normalize_optional_source_name_selector(params.source_name)?,
+            venue: normalize_required_venue_selector(params.venue)?,
+            symbol: normalize_required_symbol_selector(params.symbol)?,
+            timeframe: normalize_required_timeframe_selector(params.timeframe)?,
             start,
             end,
             limit,
@@ -334,16 +332,16 @@ impl ToolExecute for FinanceFindCandleGapsTool {
         params: FinanceFindCandleGapsParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceFindCandleGapsResult> {
-        let timeframe = Timeframe::parse(params.timeframe)?;
+        let timeframe = normalize_required_timeframe_selector(params.timeframe)?;
         let start = parse_timestamp("start", &params.start)?;
         let end = parse_timestamp("end", &params.end)?;
         anyhow::ensure!(start < end, "start must be before end");
         let expected_count = expected_open_time_count(&timeframe, start, end)?;
 
         let query = CandleRangeQuery {
-            source_name: normalize_optional_selector("source_name", params.source_name)?,
-            venue: normalize_required_selector("venue", params.venue)?,
-            symbol: normalize_required_selector("symbol", params.symbol)?,
+            source_name: normalize_optional_source_name_selector(params.source_name)?,
+            venue: normalize_required_venue_selector(params.venue)?,
+            symbol: normalize_required_symbol_selector(params.symbol)?,
             timeframe,
             start,
             end,
@@ -389,7 +387,7 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
         params: FinanceGetCandleFreshnessParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceGetCandleFreshnessResult> {
-        let timeframe = Timeframe::parse(params.timeframe)?;
+        let timeframe = normalize_required_timeframe_selector(params.timeframe)?;
         let default_stale_after_secs =
             u64::try_from(timeframe.step()?.as_secs())?.saturating_mul(2);
         let stale_after_secs = params.stale_after_secs.unwrap_or(default_stale_after_secs);
@@ -406,9 +404,9 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
             .unwrap_or_else(Timestamp::now);
 
         let query = CandleLatestQuery {
-            source_name: normalize_optional_selector("source_name", params.source_name)?,
-            venue: normalize_required_selector("venue", params.venue)?,
-            symbol: normalize_required_selector("symbol", params.symbol)?,
+            source_name: normalize_optional_source_name_selector(params.source_name)?,
+            venue: normalize_required_venue_selector(params.venue)?,
+            symbol: normalize_required_symbol_selector(params.symbol)?,
             timeframe,
         };
         let latest = self.repository.latest_closed_candle(query).await?;
@@ -497,6 +495,38 @@ fn normalize_optional_selector(
     value
         .map(|value| normalize_required_selector(name, value))
         .transpose()
+}
+
+fn normalize_optional_source_name_selector(
+    value: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    normalize_optional_selector("source_name", value)
+}
+
+fn normalize_required_venue_selector(value: String) -> anyhow::Result<String> {
+    Ok(normalize_required_selector("venue", value)?.to_ascii_lowercase())
+}
+
+fn normalize_optional_venue_selector(value: Option<String>) -> anyhow::Result<Option<String>> {
+    value.map(normalize_required_venue_selector).transpose()
+}
+
+fn normalize_required_symbol_selector(value: String) -> anyhow::Result<String> {
+    Ok(normalize_required_selector("symbol", value)?.to_ascii_uppercase())
+}
+
+fn normalize_optional_symbol_selector(value: Option<String>) -> anyhow::Result<Option<String>> {
+    value.map(normalize_required_symbol_selector).transpose()
+}
+
+fn normalize_required_timeframe_selector(value: String) -> anyhow::Result<Timeframe> {
+    Timeframe::parse(normalize_required_selector("timeframe", value)?.to_ascii_lowercase())
+}
+
+fn normalize_optional_timeframe_selector(
+    value: Option<String>,
+) -> anyhow::Result<Option<Timeframe>> {
+    value.map(normalize_required_timeframe_selector).transpose()
 }
 
 fn validate_limit(limit: Option<usize>) -> anyhow::Result<usize> {
@@ -693,6 +723,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_candle_streams_tool_normalizes_user_selectors() {
+        let repository = repository_with_multiple_streams().await;
+        let tool = FinanceListCandleStreamsTool::new(repository);
+        let result = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: Some(" binance-spot ".to_owned()),
+                    venue:       Some(" Binance ".to_owned()),
+                    symbol:      Some(" btcusdt ".to_owned()),
+                    timeframe:   Some(" 1M ".to_owned()),
+                    limit:       None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.streams[0].venue, "binance");
+        assert_eq!(result.streams[0].symbol, "BTCUSDT");
+        assert_eq!(result.streams[0].timeframe, "1m");
+        assert_eq!(result.streams[0].candle_count, 2);
+    }
+
+    #[tokio::test]
     async fn latest_candle_tool_returns_newest_candle_as_strings() {
         let repository = repository().await;
         let tool = FinanceGetLatestCandleTool::new(repository);
@@ -713,6 +768,30 @@ mod tests {
         assert_eq!(candle.open_time, "2026-07-10T08:01:00Z");
         assert_eq!(candle.close, "61520.00");
         assert_eq!(candle.volume, "124.551");
+    }
+
+    #[tokio::test]
+    async fn latest_candle_tool_normalizes_user_selectors() {
+        let repository = repository().await;
+        let tool = FinanceGetLatestCandleTool::new(repository);
+        let result = tool
+            .run(
+                FinanceGetLatestCandleParams {
+                    source_name: Some(" binance-spot ".to_owned()),
+                    venue:       " Binance ".to_owned(),
+                    symbol:      " btcusdt ".to_owned(),
+                    timeframe:   " 1M ".to_owned(),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let candle = result.candle.expect("latest candle should exist");
+        assert_eq!(candle.venue, "binance");
+        assert_eq!(candle.symbol, "BTCUSDT");
+        assert_eq!(candle.timeframe, "1m");
+        assert_eq!(candle.open_time, "2026-07-10T08:01:00Z");
     }
 
     #[tokio::test]
@@ -745,6 +824,64 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["2026-07-10T08:00:00Z", "2026-07-10T08:01:00Z"]
         );
+    }
+
+    #[tokio::test]
+    async fn candle_quality_tools_normalize_user_selectors() {
+        let repository = repository_with_gap().await;
+        let query = FinanceQueryCandlesTool::new(repository.clone());
+        let gaps = FinanceFindCandleGapsTool::new(repository.clone());
+        let freshness = FinanceGetCandleFreshnessTool::new(repository);
+
+        let query_result = query
+            .run(
+                FinanceQueryCandlesParams {
+                    source_name: Some(" binance-spot ".to_owned()),
+                    venue:       " Binance ".to_owned(),
+                    symbol:      " btcusdt ".to_owned(),
+                    timeframe:   " 1M ".to_owned(),
+                    start:       "2026-07-10T08:00:00Z".to_owned(),
+                    end:         "2026-07-10T08:03:00Z".to_owned(),
+                    limit:       Some(10),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(query_result.count, 2);
+
+        let gap_result = gaps
+            .run(
+                FinanceFindCandleGapsParams {
+                    source_name: Some(" binance-spot ".to_owned()),
+                    venue:       " Binance ".to_owned(),
+                    symbol:      " btcusdt ".to_owned(),
+                    timeframe:   " 1M ".to_owned(),
+                    start:       "2026-07-10T08:00:00Z".to_owned(),
+                    end:         "2026-07-10T08:03:00Z".to_owned(),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(gap_result.missing_open_times, vec!["2026-07-10T08:01:00Z"]);
+
+        let freshness_result = freshness
+            .run(
+                FinanceGetCandleFreshnessParams {
+                    source_name:      Some(" binance-spot ".to_owned()),
+                    venue:            " Binance ".to_owned(),
+                    symbol:           " btcusdt ".to_owned(),
+                    timeframe:        " 1M ".to_owned(),
+                    as_of:            Some("2026-07-10T08:03:00Z".to_owned()),
+                    stale_after_secs: Some(120),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(freshness_result.status, "fresh");
+        assert_eq!(freshness_result.lag_secs, Some(120));
     }
 
     #[tokio::test]
