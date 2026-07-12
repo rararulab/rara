@@ -406,11 +406,12 @@ struct EventListResponse {
 /// Runtime read-model for a feed's persisted event stream.
 #[derive(Debug, Serialize)]
 struct FeedSummaryResponse {
-    feed_id:       String,
-    source_name:   String,
-    event_count:   i64,
-    last_event_at: Option<Timestamp>,
-    lag_seconds:   Option<i64>,
+    feed_id:         String,
+    source_name:     String,
+    event_count:     i64,
+    last_event_type: Option<String>,
+    last_event_at:   Option<Timestamp>,
+    lag_seconds:     Option<i64>,
 }
 
 /// Built-in feed catalog entry plus current materialized state.
@@ -745,6 +746,7 @@ async fn list_feed_summaries(
                     feed_id: feed.id,
                     source_name: feed.name,
                     event_count: summary.map_or(0, |summary| summary.event_count),
+                    last_event_type: summary.and_then(|summary| summary.last_event_type.clone()),
                     last_event_at,
                     lag_seconds,
                 }
@@ -3304,6 +3306,7 @@ mod tests {
 
         assert_eq!(summary["source_name"], "summary-feed");
         assert_eq!(summary["event_count"], 1);
+        assert_eq!(summary["last_event_type"], "poll_response");
         assert_eq!(summary["last_event_at"], event_at.to_string());
         let lag_seconds = summary["lag_seconds"].as_i64().unwrap();
         assert!((58..=62).contains(&lag_seconds), "lag={lag_seconds}");

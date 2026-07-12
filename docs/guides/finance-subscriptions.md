@@ -147,8 +147,9 @@ checks:
 
 `finance_list_feed_sources` is the preferred status view before and after
 subscription changes. It combines the built-in source catalog, persisted feed
-runtime state, event watermarks, configured K-line selectors, and source-name
-subscription matches for the current user/session. Use
+runtime state, event watermarks (`event_count`, `last_event_type`,
+`last_event_at`, and `lag_seconds`), configured K-line selectors, and
+source-name subscription matches for the current user/session. Use
 `finance_list_feed_events` when the user asks what recent finance news or
 closed-candle notifications were actually received. It reads persisted events by
 `catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
@@ -243,8 +244,9 @@ subscription diagnostic includes:
   deterministic diagnostic such as `missing symbols: ETHUSDT; missing
   timeframes: 5m`, so a fresh-runtime/no-data case can be separated from a
   feed configuration that cannot emit the subscribed stream;
-- persisted feed-event summary (`event_count`, `last_event_at`, and
-  `lag_seconds`) to confirm the source is emitting events;
+- persisted feed-event summary (`event_count`, `last_event_type`,
+  `last_event_at`, and `lag_seconds`) to confirm the source is emitting the
+  expected event kind;
 - latest stored closed candle and freshness per
   `(source_name, venue, symbol, timeframe)`.
 

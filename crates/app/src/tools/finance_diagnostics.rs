@@ -81,6 +81,7 @@ pub(super) struct FeedSourceDiagnostic {
     pub runtime_state:         FeedRuntimeState,
     pub last_error:            Option<String>,
     pub event_count:           i64,
+    pub last_event_type:       Option<String>,
     pub last_event_at:         Option<String>,
     pub lag_seconds:           Option<i64>,
 }
@@ -125,10 +126,11 @@ pub(super) enum FeedSelectorCoverage {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct FeedEventSummary {
-    event_count:   i64,
-    last_event_at: Option<Timestamp>,
+    event_count:     i64,
+    last_event_type: Option<String>,
+    last_event_at:   Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -203,8 +205,9 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
                 (
                     summary.source_name,
                     FeedEventSummary {
-                        event_count:   summary.event_count,
-                        last_event_at: summary.last_event_at,
+                        event_count:     summary.event_count,
+                        last_event_type: summary.last_event_type,
+                        last_event_at:   summary.last_event_at,
                     },
                 )
             })
@@ -325,6 +328,8 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     ),
                     last_error: feed.and_then(|feed| feed.last_error.clone()),
                     event_count: event_summary.map_or(0, |summary| summary.event_count),
+                    last_event_type: event_summary
+                        .and_then(|summary| summary.last_event_type.clone()),
                     last_event_at: last_event_at.map(|timestamp| timestamp.to_string()),
                     lag_seconds,
                 }
@@ -910,6 +915,10 @@ mod tests {
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.feed_sources[0].event_count, 1);
         assert_eq!(
+            sub.feed_sources[0].last_event_type.as_deref(),
+            Some("market_candle_closed")
+        );
+        assert_eq!(
             sub.feed_sources[0].configured_venue.as_deref(),
             Some("binance")
         );
@@ -1013,6 +1022,7 @@ mod tests {
         assert_eq!(sub.status, SubscriptionHealth::NeedsRuntime);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Stopped);
         assert_eq!(sub.feed_sources[0].event_count, 0);
+        assert_eq!(sub.feed_sources[0].last_event_type, None);
         assert_eq!(sub.feed_sources[0].last_event_at, None);
         assert_eq!(sub.feed_sources[0].lag_seconds, None);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
