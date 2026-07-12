@@ -211,9 +211,12 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
     }
 
     async fn missing_open_times(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<Timestamp>> {
-        let rows = self.candles(query.clone()).await?;
-        let present: std::collections::HashSet<Timestamp> =
-            rows.into_iter().map(|row| row.open_time).collect();
+        let candles = self.candles.read().await;
+        let present: std::collections::HashSet<Timestamp> = candles
+            .values()
+            .filter(|candle| matches_query(candle, &query))
+            .map(|row| row.open_time)
+            .collect();
         let step = query.timeframe.step()?;
         let mut missing = Vec::new();
         let mut cursor = query.start;
@@ -422,6 +425,26 @@ mod tests {
 
         let missing = repo.missing_open_times(query()).await.unwrap();
         assert_eq!(missing, vec![ts("2026-07-10T08:15:00Z")]);
+    }
+
+    #[tokio::test]
+    async fn gap_detection_ignores_range_query_limit() {
+        let repo = InMemoryMarketDataRepository::default();
+        repo.upsert_closed_candle(candle("2026-07-10T08:00:00Z", "61500.00"))
+            .await
+            .unwrap();
+        repo.upsert_closed_candle(candle("2026-07-10T08:15:00Z", "61610.30"))
+            .await
+            .unwrap();
+        repo.upsert_closed_candle(candle("2026-07-10T08:30:00Z", "61700.00"))
+            .await
+            .unwrap();
+
+        let mut query = query();
+        query.limit = 1;
+
+        let missing = repo.missing_open_times(query).await.unwrap();
+        assert!(missing.is_empty());
     }
 
     #[tokio::test]

@@ -126,7 +126,7 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
             timeframe:   Timeframe::parse("15m")?,
             start:       ts("2026-07-10T08:00:00Z"),
             end:         ts("2026-07-10T08:45:00Z"),
-            limit:       3,
+            limit:       1,
         })
         .await?;
     assert_eq!(missing, vec![ts("2026-07-10T08:00:00Z")]);
