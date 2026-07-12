@@ -698,6 +698,7 @@ impl FinanceSubscribeInstrumentsTool {
                     .get_feed(&feed_id)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
+                ensure_finance_feed_source(&config)?;
                 Ok(FeedResolution {
                     config,
                     catalog_source_id: None,
@@ -1947,5 +1948,53 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_rejects_non_finance_feed_id() {
+        let (_list, _enable, _disable, _restart, tool, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("plain-market-candles".to_owned())
+            .name("plain-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let err = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      None,
+                    feed_id:                Some("plain-market-candles".to_owned()),
+                    venue:                  None,
+                    symbols:                vec!["ETHUSDT".to_owned()],
+                    timeframes:             vec!["5m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not finance-scoped"));
     }
 }
