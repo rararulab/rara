@@ -27,6 +27,7 @@ const financeSubscriptionsMock = vi.fn();
 const enableCatalogEntryMock = vi.fn();
 const createFinanceSubscriptionMock = vi.fn();
 const unsubscribeCatalogEntryMock = vi.fn();
+const openSettingsMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
   dataFeedsApi: {
@@ -36,6 +37,13 @@ vi.mock('@/api/data-feeds', () => ({
     createFinanceSubscription: (...args: unknown[]) => createFinanceSubscriptionMock(...args),
     unsubscribeCatalogEntry: (...args: unknown[]) => unsubscribeCatalogEntryMock(...args),
   },
+}));
+
+vi.mock('@/components/settings/SettingsModalContext', () => ({
+  useSettingsModal: () => ({
+    openSettings: openSettingsMock,
+    closeSettings: vi.fn(),
+  }),
 }));
 
 function buildClient() {
@@ -87,6 +95,7 @@ beforeEach(() => {
   enableCatalogEntryMock.mockReset();
   createFinanceSubscriptionMock.mockReset();
   unsubscribeCatalogEntryMock.mockReset();
+  openSettingsMock.mockReset();
 });
 
 afterEach(() => {
@@ -236,5 +245,32 @@ describe('FinanceWatchesCard', () => {
         subscription_ids: ['sub-1'],
       });
     });
+  });
+
+  it('opens_data_feed_settings_for_sources_that_require_configuration', async () => {
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'longport-market-candles',
+        name: 'LongPort Market Candles',
+        feed_type: 'market_candle',
+        enabled: false,
+        requires_configuration: true,
+        setup_hint: 'Configure LongPort credentials and selectors before enabling.',
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure' }));
+
+    expect(openSettingsMock).toHaveBeenCalledWith('data-feeds', {
+      dataFeedCatalogId: 'longport-market-candles',
+    });
+    expect(createFinanceSubscriptionMock).not.toHaveBeenCalled();
+    expect(enableCatalogEntryMock).not.toHaveBeenCalled();
   });
 });

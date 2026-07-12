@@ -16,7 +16,7 @@
 
 import { Sparkles } from 'lucide-react';
 
-import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import { useSettingsModal } from '@/components/settings/SettingsModalContext';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,

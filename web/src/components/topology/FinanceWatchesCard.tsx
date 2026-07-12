@@ -23,6 +23,7 @@ import {
   type FinanceEventKind,
   type FinanceSubscription,
 } from '@/api/data-feeds';
+import { useSettingsModal } from '@/components/settings/SettingsModalContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,6 +34,7 @@ interface FinanceWatchesCardProps {
 
 export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
   const queryClient = useQueryClient();
+  const { openSettings } = useSettingsModal();
   const catalogQuery = useQuery({
     queryKey: ['data-feed-catalog'],
     queryFn: () => dataFeedsApi.catalog(),
@@ -161,10 +163,12 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                       size="sm"
                       variant={subscribed ? 'outline' : 'default'}
                       className="h-7 shrink-0 px-2 text-[11px]"
-                      disabled={pending || needsConfiguration}
+                      disabled={pending}
                       onClick={() => {
                         if (canEnableInline) {
                           enableMutation.mutate(entry);
+                        } else if (needsConfiguration) {
+                          openSettings('data-feeds', { dataFeedCatalogId: entry.id });
                         } else if (subscribed) {
                           unsubscribeMutation.mutate({
                             entry,

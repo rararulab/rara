@@ -692,8 +692,10 @@ type SettingsNavGroup = {
  */
 export default function SettingsPanel({
   initialSection,
+  dataFeedCatalogId,
 }: {
   initialSection?: SettingsPage | undefined;
+  dataFeedCatalogId?: string | undefined;
 }) {
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
@@ -1556,7 +1558,7 @@ export default function SettingsPanel({
           {/* ── Data Feeds ── */}
           {activeCategory === 'data-feeds' && (
             <div className="data-panel p-4">
-              <DataFeedsPanel />
+              <DataFeedsPanel focusCatalogEntryId={dataFeedCatalogId} />
             </div>
           )}
 

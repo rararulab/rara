@@ -21,10 +21,8 @@ import { BrowserRouter, Navigate, Routes, Route, useNavigate, useParams } from '
 import { ConnectionSetupDialog } from '@/components/ConnectionSetupDialog';
 import { RequireAuth } from '@/components/RequireAuth';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
-import {
-  SettingsModalProvider,
-  useSettingsModal,
-} from '@/components/settings/SettingsModalProvider';
+import { useSettingsModal } from '@/components/settings/SettingsModalContext';
+import { SettingsModalProvider } from '@/components/settings/SettingsModalProvider';
 import type { SettingsPage } from '@/components/settings/SettingsPanel';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import Docs from '@/pages/Docs';
