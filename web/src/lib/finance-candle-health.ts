@@ -89,31 +89,18 @@ export function expectedCandleStreamHealth(
   selectors: ExpectedCandleStreamSelectors,
   streams: CandleStream[],
 ): CandleStreamHealth {
-  const symbols = Array.from(normalizedSelectorSet(selectors.symbols, 'upper'));
-  const timeframes = Array.from(normalizedSelectorSet(selectors.timeframes, 'timeframe'));
-  const sourceName = selectors.sourceName.trim().toLowerCase();
-  const venue = selectors.venue?.trim().toLowerCase() || null;
+  return expectedCandleStreamHealthForGroups([selectors], streams);
+}
 
-  if (!sourceName || symbols.length === 0 || timeframes.length === 0) {
-    return candleStreamHealthForSelectors(
-      {
-        sourceNames: sourceName ? [sourceName] : [],
-        venues: venue ? [venue] : [],
-        symbols,
-        timeframes,
-      },
-      streams,
-    );
+export function expectedCandleStreamHealthForGroups(
+  selectorGroups: ExpectedCandleStreamSelectors[],
+  streams: CandleStream[],
+): CandleStreamHealth {
+  const expected = uniqueExpectedSelectors(selectorGroups.flatMap(expectedSelectorsForGroup));
+  if (expected.length === 0) {
+    return candleStreamHealthForSelectors(fallbackSelectorsForGroups(selectorGroups), streams);
   }
 
-  const expected = symbols.flatMap((symbol) =>
-    timeframes.map((timeframe) => ({
-      sourceName,
-      venue,
-      symbol,
-      timeframe,
-    })),
-  );
   const matchedStreams: CandleStream[] = [];
   const missing = expected.filter((selector) => {
     const stream = streams.find((candidate) => expectedSelectorMatchesStream(selector, candidate));
@@ -163,6 +150,62 @@ export function expectedCandleStreamHealth(
     status: 'fresh',
     label: 'Fresh',
     detail: `${expected.length}/${expected.length} expected stream${expected.length === 1 ? '' : 's'} fresh.`,
+  };
+}
+
+function expectedSelectorsForGroup(selectors: ExpectedCandleStreamSelectors): Array<{
+  sourceName: string;
+  venue: string | null;
+  symbol: string;
+  timeframe: string;
+}> {
+  const symbols = Array.from(normalizedSelectorSet(selectors.symbols, 'upper'));
+  const timeframes = Array.from(normalizedSelectorSet(selectors.timeframes, 'timeframe'));
+  const sourceName = selectors.sourceName.trim().toLowerCase();
+  const venue = selectors.venue?.trim().toLowerCase() || null;
+
+  if (!sourceName || symbols.length === 0 || timeframes.length === 0) return [];
+
+  return symbols.flatMap((symbol) =>
+    timeframes.map((timeframe) => ({
+      sourceName,
+      venue,
+      symbol,
+      timeframe,
+    })),
+  );
+}
+
+function uniqueExpectedSelectors(
+  selectors: Array<{
+    sourceName: string;
+    venue: string | null;
+    symbol: string;
+    timeframe: string;
+  }>,
+): Array<{
+  sourceName: string;
+  venue: string | null;
+  symbol: string;
+  timeframe: string;
+}> {
+  const seen = new Set<string>();
+  return selectors.filter((selector) => {
+    const key = `${selector.sourceName}:${selector.venue ?? ''}:${selector.symbol}:${selector.timeframe}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function fallbackSelectorsForGroups(
+  selectorGroups: ExpectedCandleStreamSelectors[],
+): CandleStreamSelectors {
+  return {
+    sourceNames: selectorGroups.map((group) => group.sourceName),
+    venues: selectorGroups.flatMap((group) => (group.venue ? [group.venue] : [])),
+    symbols: selectorGroups.flatMap((group) => group.symbols),
+    timeframes: selectorGroups.flatMap((group) => group.timeframes),
   };
 }
 

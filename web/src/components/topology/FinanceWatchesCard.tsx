@@ -28,7 +28,7 @@ import { useSettingsModal } from '@/components/settings/SettingsModalContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { expectedCandleStreamHealth } from '@/lib/finance-candle-health';
+import { expectedCandleStreamHealthForGroups } from '@/lib/finance-candle-health';
 
 interface FinanceWatchesCardProps {
   sessionKey: string;
@@ -141,6 +141,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                 subscribed && entry.feed_type === 'market_candle'
                   ? marketCandleEntryStreamHealth(
                       entry,
+                      matchingSubscriptions,
                       candleStreams,
                       candleStreamsQuery.isLoading,
                     )
@@ -329,6 +330,7 @@ function coverageLabel(entry: FeedCatalogEntry): string {
 
 function marketCandleEntryStreamHealth(
   entry: FeedCatalogEntry,
+  subscriptions: FinanceSubscription[],
   streams: CandleStream[],
   loading: boolean,
 ): {
@@ -344,13 +346,14 @@ function marketCandleEntryStreamHealth(
     };
   }
 
-  return expectedCandleStreamHealth(
-    {
+  return expectedCandleStreamHealthForGroups(
+    subscriptions.map((subscription) => ({
       sourceName: catalogSourceName(entry),
-      venue: catalogVenue(entry),
-      symbols: catalogSymbols(entry),
-      timeframes: catalogTimeframes(entry),
-    },
+      venue: subscription.venues[0] ?? catalogVenue(entry),
+      symbols: subscription.symbols.length > 0 ? subscription.symbols : catalogSymbols(entry),
+      timeframes:
+        subscription.timeframes.length > 0 ? subscription.timeframes : catalogTimeframes(entry),
+    })),
     streams,
   );
 }
