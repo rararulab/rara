@@ -24,6 +24,7 @@ import { api } from '@/api/client';
 import { fetchSessionMessagesBetweenAnchors } from '@/api/sessions';
 import type { ChatMessageData, ChatSession, SessionAnchor } from '@/api/types';
 import { usePublishPageStatus, type PageLiveStatus } from '@/components/shell/PageStatusContext';
+import { FinanceWatchesCard } from '@/components/topology/FinanceWatchesCard';
 import { SessionAnchorMinimap } from '@/components/topology/SessionAnchorMinimap';
 import { SessionPicker } from '@/components/topology/SessionPicker';
 import { TimelineView } from '@/components/topology/TimelineView';
@@ -295,6 +296,7 @@ export default function Chat() {
                 onSelectChild={setViewChild}
               />
             </div>
+            <FinanceWatchesCard sessionKey={rootSessionKey} />
             <div>
               <div className="mb-1.5 text-xs font-medium text-muted-foreground">Anchors</div>
               <SessionAnchorMinimap
