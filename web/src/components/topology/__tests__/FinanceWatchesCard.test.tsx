@@ -20,10 +20,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FinanceWatchesCard } from '../FinanceWatchesCard';
 
-import type { FeedCatalogEntry, FinanceSubscriptionsResponse } from '@/api/data-feeds';
+import type {
+  CandleStreamsResponse,
+  FeedCatalogEntry,
+  FinanceSubscription,
+  FinanceSubscriptionsResponse,
+} from '@/api/data-feeds';
 
 const catalogMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
+const candleStreamsMock = vi.fn();
 const enableCatalogEntryMock = vi.fn();
 const createFinanceSubscriptionMock = vi.fn();
 const unsubscribeCatalogEntryMock = vi.fn();
@@ -33,6 +39,7 @@ vi.mock('@/api/data-feeds', () => ({
   dataFeedsApi: {
     catalog: (...args: unknown[]) => catalogMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
+    candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
     enableCatalogEntry: (...args: unknown[]) => enableCatalogEntryMock(...args),
     createFinanceSubscription: (...args: unknown[]) => createFinanceSubscriptionMock(...args),
     unsubscribeCatalogEntry: (...args: unknown[]) => unsubscribeCatalogEntryMock(...args),
@@ -89,17 +96,43 @@ function catalogEntry(partial: Partial<FeedCatalogEntry> & { id: string }): Feed
   return entry;
 }
 
+function financeSubscription(partial: Partial<FinanceSubscription> = {}): FinanceSubscription {
+  return {
+    subscription_id: partial.subscription_id ?? 'sub-1',
+    session_key: partial.session_key ?? 'session-1',
+    event_kinds: partial.event_kinds ?? ['market_candle_closed'],
+    source_names: partial.source_names ?? ['finance-binance-market-candles'],
+    matches_all_sources: partial.matches_all_sources ?? false,
+    sources: partial.sources ?? [],
+    category_tags: partial.category_tags ?? [],
+    watch_terms: partial.watch_terms ?? [],
+    venues: partial.venues ?? ['binance'],
+    symbols: partial.symbols ?? ['BTCUSDT', 'ETHUSDT'],
+    timeframes: partial.timeframes ?? ['1m'],
+    delivery: partial.delivery ?? 'silent',
+    cooldown_secs: partial.cooldown_secs ?? 900,
+    max_immediate_per_hour: partial.max_immediate_per_hour ?? 6,
+  };
+}
+
 beforeEach(() => {
   catalogMock.mockReset();
   financeSubscriptionsMock.mockReset();
+  candleStreamsMock.mockReset();
   enableCatalogEntryMock.mockReset();
   createFinanceSubscriptionMock.mockReset();
   unsubscribeCatalogEntryMock.mockReset();
   openSettingsMock.mockReset();
+  candleStreamsMock.mockResolvedValue({
+    streams: [],
+    count: 0,
+    query_limit: 100,
+  } satisfies CandleStreamsResponse);
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe('FinanceWatchesCard', () => {
@@ -272,5 +305,56 @@ describe('FinanceWatchesCard', () => {
     });
     expect(createFinanceSubscriptionMock).not.toHaveBeenCalled();
     expect(enableCatalogEntryMock).not.toHaveBeenCalled();
+  });
+
+  it('shows_fresh_stream_health_for_watched_kline_source', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        feed_type: 'market_candle',
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT', 'ETHUSDT'],
+        configured_timeframes: ['1m'],
+        tags: ['finance', 'market-data', 'crypto', 'binance'],
+        transport_template: {
+          venue: 'binance',
+          symbols: ['BTCUSDT', 'ETHUSDT'],
+          timeframes: ['1m'],
+        },
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [financeSubscription()],
+      count: 1,
+    } satisfies FinanceSubscriptionsResponse);
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 42,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T00:41:00Z',
+          latest_close_time: '2026-07-12T00:41:59Z',
+          latest_ingested_at: '2026-07-12T00:42:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 100,
+    } satisfies CandleStreamsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('watching')).toBeInTheDocument();
+    expect(await screen.findByText('Data Fresh')).toBeInTheDocument();
+    expect(screen.getByText('1/1 matched stream fresh.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(candleStreamsMock).toHaveBeenCalledWith({ limit: 100 });
+    });
   });
 });
