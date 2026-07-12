@@ -151,8 +151,9 @@ runtime state, event watermarks, configured K-line selectors, and source-name
 subscription matches for the current user/session. Use
 `finance_list_feed_events` when the user asks what recent finance news or
 closed-candle notifications were actually received. It reads persisted events by
-`catalog_source_ids`, `source_names`, or `feed_ids` and returns per-source pages
-with `total`, `has_more`, `query_limit`, and `query_offset`.
+`catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
+`event_kinds` (`rss_article`, `market_candle_closed`), and returns per-source
+pages with `total`, `has_more`, `query_limit`, and `query_offset`.
 
 Stored closed candles are queryable through read-only market-data tools:
 
@@ -270,7 +271,8 @@ Use this checklist before considering a deployment ready:
    `subscriptions.session_subscribed = true`.
 7. Confirm the admin event endpoint stores one event per article and one event
    per closed candle across two polls, and `finance_list_feed_events` returns
-   recent persisted events for the subscribed source.
+   recent persisted events for the subscribed source, including filtered views
+   by `event_kinds`.
 8. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
    recent feed event, and a fresh latest candle for the subscribed stream.
 9. Confirm `finance_get_latest_candle` returns the latest stored closed candle

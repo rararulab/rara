@@ -220,6 +220,7 @@ impl DataFeedSvc {
         &self,
         source_name: &str,
         since: Option<Timestamp>,
+        event_types: &[String],
         limit: i64,
         offset: i64,
     ) -> Result<EventPage> {
@@ -232,6 +233,9 @@ impl DataFeedSvc {
         if let Some(ref ts) = since {
             count_q = count_q.filter(data_feed_events::received_at.ge(ts.to_string()));
         }
+        if !event_types.is_empty() {
+            count_q = count_q.filter(data_feed_events::event_type.eq_any(event_types));
+        }
         let total: i64 = count_q
             .count()
             .get_result(&mut *conn)
@@ -243,6 +247,9 @@ impl DataFeedSvc {
             .into_boxed();
         if let Some(ref ts) = since {
             rows_q = rows_q.filter(data_feed_events::received_at.ge(ts.to_string()));
+        }
+        if !event_types.is_empty() {
+            rows_q = rows_q.filter(data_feed_events::event_type.eq_any(event_types));
         }
         let rows: Vec<EventRow> = rows_q
             .select(EventRow::as_select())

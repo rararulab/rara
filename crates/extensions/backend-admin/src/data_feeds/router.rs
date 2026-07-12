@@ -1216,7 +1216,7 @@ async fn query_events(
 
     let page = state
         .svc
-        .query_events(&feed.name, since, limit, offset)
+        .query_events(&feed.name, since, &[], limit, offset)
         .await?;
 
     Ok(Json(EventListResponse {
