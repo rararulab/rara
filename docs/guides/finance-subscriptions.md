@@ -144,6 +144,11 @@ checks:
 - `finance_subscribe_instruments`
 - `finance_diagnose_candle_subscriptions`
 
+`finance_list_feed_sources` is the preferred status view before and after
+subscription changes. It combines the built-in source catalog, persisted feed
+runtime state, event watermarks, configured K-line selectors, and source-name
+subscription matches for the current user/session.
+
 Stored closed candles are queryable through read-only market-data tools:
 
 - `finance_list_candle_streams`
@@ -227,18 +232,20 @@ Use this checklist before considering a deployment ready:
    and `watch_terms`.
 5. Use a conversation to call `finance_subscribe_instruments` for candle
    `symbols` and `timeframes`.
-6. Confirm the admin event endpoint stores one event per article and one event
+6. Confirm `finance_list_feed_sources` reports the subscribed source with
+   `subscriptions.session_subscribed = true`.
+7. Confirm the admin event endpoint stores one event per article and one event
    per closed candle across two polls.
-7. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
+8. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
    recent feed event, and a fresh latest candle for the subscribed stream.
-8. Confirm `finance_get_latest_candle` returns the latest stored closed candle
+9. Confirm `finance_get_latest_candle` returns the latest stored closed candle
    for the subscribed `(venue, symbol, timeframe)`.
-9. Confirm `finance_query_candles` returns a bounded ordered range with decimal
+10. Confirm `finance_query_candles` returns a bounded ordered range with decimal
    values encoded as strings.
-10. Confirm one matching item wakes the same session at most once.
-11. Confirm a seventh matching item in an hour is tape-only under the default
+11. Confirm one matching item wakes the same session at most once.
+12. Confirm a seventh matching item in an hour is tape-only under the default
    immediate-delivery budget.
-12. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
+13. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
    account tool is agent-callable.
 
 ## Non-goals
