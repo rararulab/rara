@@ -141,6 +141,7 @@ beforeEach(() => {
     candles: [],
     count: 0,
     query_limit: 50,
+    has_more: false,
   } satisfies MarketCandlesResponse);
   candleFreshnessMock.mockResolvedValue({
     latest: null,
@@ -388,6 +389,7 @@ describe('DataFeedsPanel', () => {
       ],
       count: 2,
       query_limit: 50,
+      has_more: false,
     } satisfies MarketCandlesResponse);
     candleFreshnessMock.mockResolvedValue({
       latest: {
@@ -457,5 +459,57 @@ describe('DataFeedsPanel', () => {
     expect(screen.getByText('0/50 missing in preview window')).toBeInTheDocument();
     expect(screen.getAllByText('64140.25').length).toBeGreaterThan(0);
     expect(screen.getByText('12.34')).toBeInTheDocument();
+  });
+
+  it('warns when the candle preview reaches the query limit', async () => {
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 75,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T01:14:00Z',
+          latest_close_time: '2026-07-12T01:14:59Z',
+          latest_ingested_at: '2026-07-12T01:15:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 100,
+      has_more: false,
+    } satisfies CandleStreamsResponse);
+    candlesMock.mockResolvedValue({
+      candles: Array.from({ length: 50 }, (_, index) => ({
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        symbol: 'BTCUSDT',
+        timeframe: '1m',
+        open_time: new Date(Date.UTC(2026, 6, 12, 0, index)).toISOString(),
+        close_time: new Date(Date.UTC(2026, 6, 12, 0, index, 59)).toISOString(),
+        open: '64100.00',
+        high: '64150.00',
+        low: '64090.00',
+        close: '64125.00',
+        volume: '10.00',
+        ingested_at: new Date(Date.UTC(2026, 6, 12, 0, index, 59)).toISOString(),
+        provider_sequence: null,
+      })),
+      count: 50,
+      query_limit: 50,
+      has_more: true,
+    } satisfies MarketCandlesResponse);
+
+    renderPanel();
+
+    const previewButton = await screen.findByRole('button', {
+      name: 'Preview BINANCE · BTCUSDT · 1m',
+    });
+    fireEvent.click(previewButton);
+
+    expect(
+      await screen.findByText(/Showing the first 50 candles in this preview/),
+    ).toBeInTheDocument();
   });
 });

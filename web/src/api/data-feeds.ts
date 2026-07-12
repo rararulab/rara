@@ -111,6 +111,7 @@ export interface MarketCandlesResponse {
   candles: MarketCandle[];
   count: number;
   query_limit: number;
+  has_more: boolean;
 }
 
 export interface MarketCandleFreshnessResponse {

@@ -84,6 +84,7 @@ const DEFAULT_MARKET_DATA_STREAM_LIMIT: usize = 500;
 const MAX_MARKET_DATA_STREAM_LIMIT: usize = 10_000;
 const DEFAULT_MARKET_DATA_CANDLE_LIMIT: usize = 500;
 const MAX_MARKET_DATA_CANDLE_LIMIT: usize = 10_000;
+const MAX_MARKET_DATA_CANDLE_RANGE_LIMIT: usize = MAX_MARKET_DATA_CANDLE_LIMIT - 1;
 const MAX_MARKET_DATA_FRESHNESS_STALE_AFTER_SECS: u64 = 31_536_000;
 const MAX_MARKET_DATA_SELECTOR_LEN: usize = 128;
 
@@ -328,6 +329,7 @@ struct CandleRangeResponse {
     candles:     Vec<CandleResponse>,
     count:       usize,
     query_limit: usize,
+    has_more:    bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1370,7 +1372,8 @@ async fn query_market_data_candles(
     State(state): State<DataFeedRouterState>,
     Query(params): Query<CandleRangeQueryParams>,
 ) -> Result<Json<CandleRangeResponse>, ProblemDetails> {
-    let limit = validate_market_data_candle_limit(params.limit)?;
+    let limit = validate_market_data_candle_range_limit(params.limit)?;
+    let probe_limit = limit.saturating_add(1);
     let start = parse_market_data_timestamp("start", params.start)?;
     let end = parse_market_data_timestamp("end", params.end)?;
     if end <= start {
@@ -1384,20 +1387,23 @@ async fn query_market_data_candles(
         timeframe: normalize_required_market_data_timeframe(params.timeframe)?,
         start,
         end,
-        limit,
+        limit: probe_limit,
     };
 
-    let candles = state
+    let mut candles = state
         .market_data_repo
         .candles(query)
         .await
         .map_err(|err| ProblemDetails::internal(format!("failed to query candles: {err}")))?;
+    let has_more = candles.len() > limit;
+    candles.truncate(limit);
     let count = candles.len();
 
     Ok(Json(CandleRangeResponse {
         candles: candles.into_iter().map(CandleResponse::from).collect(),
         count,
         query_limit: limit,
+        has_more,
     }))
 }
 
@@ -1538,14 +1544,14 @@ fn validate_market_data_stream_limit(limit: Option<usize>) -> Result<usize, Prob
     Ok(limit)
 }
 
-fn validate_market_data_candle_limit(limit: Option<usize>) -> Result<usize, ProblemDetails> {
+fn validate_market_data_candle_range_limit(limit: Option<usize>) -> Result<usize, ProblemDetails> {
     let limit = limit.unwrap_or(DEFAULT_MARKET_DATA_CANDLE_LIMIT);
     if limit == 0 {
         return Err(ProblemDetails::bad_request("limit must be positive"));
     }
-    if limit > MAX_MARKET_DATA_CANDLE_LIMIT {
+    if limit > MAX_MARKET_DATA_CANDLE_RANGE_LIMIT {
         return Err(ProblemDetails::bad_request(format!(
-            "limit must be <= {MAX_MARKET_DATA_CANDLE_LIMIT}"
+            "limit must be <= {MAX_MARKET_DATA_CANDLE_RANGE_LIMIT}"
         )));
     }
     Ok(limit)
@@ -3462,10 +3468,45 @@ mod tests {
 
         assert_eq!(result["count"], 2);
         assert_eq!(result["query_limit"], 2);
+        assert_eq!(result["has_more"], true);
         assert_eq!(result["candles"][0]["open_time"], "2026-07-10T08:00:00Z");
         assert_eq!(result["candles"][0]["close"], "1005.00");
         assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:01:00Z");
         assert_eq!(result["candles"][1]["close"], "1006.25");
+    }
+
+    #[tokio::test]
+    async fn market_data_candles_endpoint_rejects_unprobeable_limit() {
+        let app =
+            app_with_user_and_market_data_repo(user_of(Role::Admin), test_market_data_repo()).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles?venue=binance&symbol=BTCUSDT&\
+                         timeframe=1m&start=2026-07-10T08:00:00Z&end=2026-07-10T08:03:00Z&\
+                         limit=10000",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            result["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("limit must be <= 9999"),
+            "unexpected body: {result}"
+        );
     }
 
     #[tokio::test]
