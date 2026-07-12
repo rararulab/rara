@@ -142,6 +142,14 @@ checks:
 - `finance_subscribe_instruments`
 - `finance_diagnose_candle_subscriptions`
 
+Stored closed candles are queryable through read-only market-data tools:
+
+- `finance_list_candle_streams`
+- `finance_get_latest_candle`
+- `finance_query_candles`
+- `finance_find_candle_gaps`
+- `finance_get_candle_freshness`
+
 Identity and session routing are always taken from `ToolContext`. The tool
 schema has no `owner` or `session` parameter, so an agent cannot subscribe or
 unsubscribe on behalf of another user by passing forged IDs.
@@ -184,6 +192,13 @@ subscription diagnostic includes:
 - latest stored closed candle and freshness per
   `(source_name, venue, symbol, timeframe)`.
 
+For ad hoc market-data inspection, use `finance_list_candle_streams` to discover
+stored streams, `finance_get_latest_candle` for the newest closed bar, and
+`finance_query_candles` for bounded historical windows. `finance_find_candle_gaps`
+checks completeness over a bounded range, while `finance_get_candle_freshness`
+answers whether a stream is currently stale. All prices and volumes are returned
+as strings to preserve decimal precision.
+
 ## Acceptance checklist
 
 Use this checklist before considering a deployment ready:
@@ -202,10 +217,14 @@ Use this checklist before considering a deployment ready:
    per closed candle across two polls.
 7. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
    recent feed event, and a fresh latest candle for the subscribed stream.
-8. Confirm one matching item wakes the same session at most once.
-9. Confirm a seventh matching item in an hour is tape-only under the default
+8. Confirm `finance_get_latest_candle` returns the latest stored closed candle
+   for the subscribed `(venue, symbol, timeframe)`.
+9. Confirm `finance_query_candles` returns a bounded ordered range with decimal
+   values encoded as strings.
+10. Confirm one matching item wakes the same session at most once.
+11. Confirm a seventh matching item in an hour is tape-only under the default
    immediate-delivery budget.
-10. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
+12. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
    account tool is agent-callable.
 
 ## Non-goals
