@@ -1040,23 +1040,37 @@ fn feed_source_entry(
             .and_then(|value| value.get("venue"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
-        configured_symbols: transport
-            .map_or_else(Vec::new, |value| extract_string_array(value, "symbols")),
-        configured_timeframes: transport
-            .map_or_else(Vec::new, |value| extract_string_array(value, "timeframes")),
+        configured_symbols: transport.map_or_else(Vec::new, |value| {
+            extract_normalized_string_array(value, "symbols", true)
+        }),
+        configured_timeframes: transport.map_or_else(Vec::new, |value| {
+            extract_normalized_string_array(value, "timeframes", false)
+        }),
     }
 }
 
-fn extract_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+fn extract_normalized_string_array(
+    value: &serde_json::Value,
+    key: &str,
+    uppercase: bool,
+) -> Vec<String> {
     value
         .get(key)
         .and_then(serde_json::Value::as_array)
         .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .collect()
+            let mut out = Vec::new();
+            for item in items {
+                let Some(value) = item.as_str() else {
+                    continue;
+                };
+                let Ok(normalized) = normalize_instrument_value(key, value, uppercase) else {
+                    continue;
+                };
+                if !out.contains(&normalized) {
+                    out.push(normalized);
+                }
+            }
+            out
         })
         .unwrap_or_default()
 }
@@ -1407,6 +1421,47 @@ mod tests {
         assert!(binance.runtime.enabled);
         assert_eq!(binance.configured_symbols, ["SOLUSDT", "BTCUSDT"]);
         assert_eq!(binance.configured_timeframes, ["15m", "1m"]);
+    }
+
+    #[tokio::test]
+    async fn list_feed_sources_normalizes_persisted_market_selection() {
+        let (list, _enable, _disable, _restart, _subscribe, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": [" btcusdt ", "BTCUSDT", "ethusdt"],
+                "timeframes": ["1M", " 5m ", "1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let result = list
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+        let binance = result
+            .sources
+            .iter()
+            .find(|source| source.id == "binance-market-candles")
+            .expect("binance source should be listed");
+
+        assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
+        assert_eq!(binance.configured_timeframes, ["1m", "5m"]);
     }
 
     #[tokio::test]
