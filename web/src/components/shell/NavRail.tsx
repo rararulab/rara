@@ -18,7 +18,7 @@ import { BookOpen, MessageSquare, PanelLeft, PanelLeftClose, Settings } from 'lu
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router';
 
-import { useSettingsModal } from '@/components/settings/SettingsModalProvider';
+import { useSettingsModal } from '@/components/settings/SettingsModalContext';
 import { Button } from '@/components/ui/button';
 import { useServerStatus } from '@/hooks/use-server-status';
 import { cn } from '@/lib/utils';

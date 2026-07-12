@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import SettingsModal from './SettingsModal';
+import {
+  SettingsModalContext,
+  type SettingsModalContextValue,
+  type SettingsOpenOptions,
+} from './SettingsModalContext';
 import type { SettingsPage } from './SettingsPanel';
-
-interface SettingsModalContextValue {
-  openSettings: (section?: SettingsPage) => void;
-  closeSettings: () => void;
-}
-
-const SettingsModalContext = createContext<SettingsModalContextValue | null>(null);
 
 /**
  * Provides a single admin-settings modal instance to the whole tree and
@@ -35,9 +33,11 @@ const SettingsModalContext = createContext<SettingsModalContextValue | null>(nul
 export function SettingsModalProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<SettingsPage | undefined>(undefined);
+  const [options, setOptions] = useState<SettingsOpenOptions | undefined>(undefined);
 
-  const openSettings = useCallback((next?: SettingsPage) => {
+  const openSettings = useCallback((next?: SettingsPage, nextOptions?: SettingsOpenOptions) => {
     setSection(next);
+    setOptions(nextOptions);
     setOpen(true);
   }, []);
 
@@ -53,19 +53,7 @@ export function SettingsModalProvider({ children }: { children: ReactNode }) {
   return (
     <SettingsModalContext.Provider value={value}>
       {children}
-      <SettingsModal open={open} onClose={closeSettings} section={section} />
+      <SettingsModal open={open} onClose={closeSettings} section={section} options={options} />
     </SettingsModalContext.Provider>
   );
-}
-
-/**
- * Read the settings-modal controls. Throws when called outside the
- * provider so a misplaced caller fails loudly rather than silently no-op.
- */
-export function useSettingsModal(): SettingsModalContextValue {
-  const ctx = useContext(SettingsModalContext);
-  if (!ctx) {
-    throw new Error('useSettingsModal must be used inside <SettingsModalProvider>');
-  }
-  return ctx;
 }

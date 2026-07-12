@@ -17,12 +17,14 @@
 import { X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 
+import type { SettingsOpenOptions } from './SettingsModalContext';
 import SettingsPanel, { type SettingsPage } from './SettingsPanel';
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   section?: SettingsPage | undefined;
+  options?: SettingsOpenOptions | undefined;
 }
 
 /**
@@ -32,7 +34,7 @@ interface SettingsModalProps {
  * its own internal scroll regions that `Dialog`'s capped `max-w-lg`/`grid`
  * content layout fights against.
  */
-export default function SettingsModal({ open, onClose, section }: SettingsModalProps) {
+export default function SettingsModal({ open, onClose, section, options }: SettingsModalProps) {
   const backdropRef = useRef<HTMLDivElement>(null);
   // Tracks whether the current click began on the backdrop itself, so a drag
   // that started inside an input (text selection) and released on the backdrop
@@ -87,7 +89,11 @@ export default function SettingsModal({ open, onClose, section }: SettingsModalP
           <X className="h-4 w-4" />
         </button>
         <div className="min-h-0 flex-1 overflow-hidden">
-          <SettingsPanel key={section ?? 'connection'} initialSection={section} />
+          <SettingsPanel
+            key={`${section ?? 'connection'}:${options?.dataFeedCatalogId ?? ''}`}
+            initialSection={section}
+            dataFeedCatalogId={options?.dataFeedCatalogId}
+          />
         </div>
       </div>
     </div>

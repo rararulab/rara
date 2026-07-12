@@ -1243,12 +1243,22 @@ function CatalogConfigureDialog({
 function FeedCatalogCard({
   entries,
   onUseTemplate,
+  focusCatalogEntryId,
 }: {
   entries: FeedCatalogEntry[];
   onUseTemplate: (entry: FeedCatalogEntry) => void;
+  focusCatalogEntryId?: string | undefined;
 }) {
   const queryClient = useQueryClient();
   const [configureEntry, setConfigureEntry] = useState<FeedCatalogEntry | null>(null);
+
+  useEffect(() => {
+    if (!focusCatalogEntryId) return;
+    const entry = entries.find((candidate) => candidate.id === focusCatalogEntryId);
+    if (entry?.requires_configuration) {
+      setConfigureEntry(entry);
+    }
+  }, [entries, focusCatalogEntryId]);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
@@ -1516,10 +1526,12 @@ function FeedListView({
   feeds,
   summaries,
   onSelectFeed,
+  focusCatalogEntryId,
 }: {
   feeds: DataFeedConfig[];
   summaries: FeedSummary[];
   onSelectFeed: (feed: DataFeedConfig) => void;
+  focusCatalogEntryId?: string | undefined;
 }) {
   const queryClient = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
@@ -1599,7 +1611,11 @@ function FeedListView({
       </div>
 
       {catalogQuery.data && (
-        <FeedCatalogCard entries={catalogQuery.data} onUseTemplate={handleUseTemplate} />
+        <FeedCatalogCard
+          entries={catalogQuery.data}
+          onUseTemplate={handleUseTemplate}
+          focusCatalogEntryId={focusCatalogEntryId}
+        />
       )}
       {financeSubscriptionsQuery.data && (
         <FinanceSubscriptionsCard result={financeSubscriptionsQuery.data} />
@@ -1762,7 +1778,11 @@ function FeedListView({
 
 type View = { kind: 'list' } | { kind: 'events'; feed: DataFeedConfig };
 
-export default function DataFeedsPanel() {
+export default function DataFeedsPanel({
+  focusCatalogEntryId,
+}: {
+  focusCatalogEntryId?: string | undefined;
+} = {}) {
   const [view, setView] = useState<View>({ kind: 'list' });
 
   const feedsQuery = useQuery({
@@ -1814,6 +1834,7 @@ export default function DataFeedsPanel() {
       feeds={feeds}
       summaries={summaries}
       onSelectFeed={(feed) => setView({ kind: 'events', feed })}
+      focusCatalogEntryId={focusCatalogEntryId}
     />
   );
 }
