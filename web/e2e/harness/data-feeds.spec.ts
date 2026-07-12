@@ -72,6 +72,54 @@ interface FeedCatalogEntry {
   };
 }
 
+interface FinanceSubscriptionSource {
+  source_name: string;
+  catalog_source_id: string | null;
+  catalog_name: string | null;
+  feed_id: string | null;
+  feed_type: DataFeedConfig['feed_type'] | null;
+  enabled: boolean | null;
+  status: DataFeedConfig['status'] | null;
+}
+
+interface FinanceSubscription {
+  subscription_id: string;
+  session_key: string;
+  event_kinds: Array<'rss_article' | 'market_candle_closed'>;
+  source_names: string[];
+  matches_all_sources: boolean;
+  sources: FinanceSubscriptionSource[];
+  category_tags: string[];
+  watch_terms: string[];
+  venues: string[];
+  symbols: string[];
+  timeframes: string[];
+  delivery: 'immediate' | 'silent';
+  cooldown_secs: number;
+  max_immediate_per_hour: number;
+}
+
+interface FinanceSubscriptionsResponse {
+  subscriptions: FinanceSubscription[];
+  count: number;
+}
+
+interface ChatSession {
+  key: string;
+  title: string | null;
+  model: string | null;
+  model_provider: string | null;
+  thinking_level: string | null;
+  system_prompt: string | null;
+  message_count: number;
+  preview: string | null;
+  anchors: unknown[];
+  status: 'active' | 'archived';
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Shared mock data
 // ---------------------------------------------------------------------------
@@ -177,6 +225,26 @@ function makeSummary(
   };
 }
 
+function makeChatSession(overrides: Partial<ChatSession> = {}): ChatSession {
+  const now = new Date().toISOString();
+  return {
+    key: 'session-1',
+    title: 'Finance research',
+    model: null,
+    model_provider: null,
+    thinking_level: null,
+    system_prompt: null,
+    message_count: 0,
+    preview: null,
+    anchors: [],
+    status: 'active',
+    metadata: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Setup — fetch real Yahoo Finance data once for realistic payloads
 // ---------------------------------------------------------------------------
@@ -219,6 +287,8 @@ async function setupRoutes(
     events: FeedEvent[];
     summaries?: FeedSummary[];
     catalog?: FeedCatalogEntry[];
+    financeSubscriptions?: FinanceSubscriptionsResponse;
+    sessions?: ChatSession[];
     lastCatalogEnableBody?: unknown;
   },
 ) {
@@ -249,6 +319,46 @@ async function setupRoutes(
     route.fulfill({ status: 200, json: MOCK_SETTINGS }),
   );
 
+  const sessions = state.sessions ?? [];
+
+  await page.route(/\/api\/v1\/chat\/sessions(\?.*)?$/, async (route, request) => {
+    if (request.method() === 'GET') {
+      await route.fulfill({ json: sessions });
+      return;
+    }
+
+    if (request.method() === 'POST') {
+      const created = makeChatSession({
+        key: `session-${Date.now()}`,
+        title: 'New session',
+      });
+      sessions.unshift(created);
+      await route.fulfill({ json: created });
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await page.route(/\/api\/v1\/chat\/sessions\/([^/?]+)\/messages(\?.*)?$/, async (route) => {
+    await route.fulfill({ json: [] });
+  });
+
+  await page.route(/\/api\/v1\/chat\/sessions\/([^/?]+)(\?.*)?$/, async (route, request) => {
+    if (request.method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+
+    const key = decodeURIComponent(request.url().match(/chat\/sessions\/([^/?]+)/)?.[1] ?? '');
+    const session = sessions.find((item) => item.key === key);
+    if (!session) {
+      await route.fulfill({ status: 404, json: { error: 'not found' } });
+      return;
+    }
+    await route.fulfill({ json: session });
+  });
+
   // Default feed source catalog.
   await page.route('**/api/v1/data-feeds/catalog', async (route) => {
     await route.fulfill({ json: state.catalog ?? [] });
@@ -258,6 +368,53 @@ async function setupRoutes(
     await route.fulfill({
       json: state.summaries ?? state.feeds.map((feed) => makeSummary(feed, state.events)),
     });
+  });
+
+  await page.route('**/api/v1/data-feeds/finance/subscriptions', async (route, request) => {
+    if (!state.financeSubscriptions) {
+      await route.continue();
+      return;
+    }
+
+    if (request.method() === 'GET') {
+      await route.fulfill({ json: state.financeSubscriptions });
+      return;
+    }
+
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as {
+        session_key: string;
+        catalog_source_ids?: string[];
+        delivery?: 'immediate' | 'silent';
+      };
+      const entry = state.catalog?.find((item) => item.id === body.catalog_source_ids?.[0]);
+      const subscription: FinanceSubscription = {
+        subscription_id: `sub-${Date.now()}`,
+        session_key: body.session_key,
+        event_kinds: [
+          entry?.feed_type === 'market_candle' ? 'market_candle_closed' : 'rss_article',
+        ],
+        source_names: [entry?.source_name ?? `finance-${entry?.id ?? 'unknown'}`],
+        matches_all_sources: false,
+        sources: [],
+        category_tags: [],
+        watch_terms: [],
+        venues: [],
+        symbols: [],
+        timeframes: [],
+        delivery: body.delivery ?? 'silent',
+        cooldown_secs: 900,
+        max_immediate_per_hour: 6,
+      };
+      const response = state.financeSubscriptions ?? { subscriptions: [], count: 0 };
+      response.subscriptions.push(subscription);
+      response.count = response.subscriptions.length;
+      state.financeSubscriptions = response;
+      await route.fulfill({ status: 201, json: { subscription, created: true } });
+      return;
+    }
+
+    await route.continue();
   });
 
   await page.route('**/api/v1/data-feeds/catalog/*/enable', async (route, request) => {
@@ -516,7 +673,9 @@ test.describe('Data Feeds Management', () => {
       .locator('xpath=ancestor::div[contains(@class, "justify-between")][1]');
     await fedEntry.getByRole('button', { name: 'Enable' }).click();
 
-    await expect(page.getByText('finance-fed-press-releases')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: 'finance-fed-press-releases' })).toBeVisible({
+      timeout: 5_000,
+    });
     await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible();
   });
 
@@ -615,6 +774,53 @@ test.describe('Data Feeds Management', () => {
         timeframes: ['1d'],
       },
     });
+  });
+
+  test('finance watch configure opens the focused data feed preset', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await setupRoutes(page, {
+      feeds: [],
+      events: [],
+      sessions: [makeChatSession({ key: 'session-1' })],
+      financeSubscriptions: { subscriptions: [], count: 0 },
+      catalog: [
+        {
+          id: 'longbridge-market-candles',
+          name: 'Longbridge Market Data',
+          description: 'Preset for Longbridge equities market data.',
+          feed_type: 'market_candle',
+          tags: ['finance', 'market-data', 'equities', 'longbridge'],
+          source_name: 'finance-longbridge-market-candles',
+          enabled: false,
+          feed_id: null,
+          requires_configuration: true,
+          setup_hint: 'Connect Longbridge credentials behind a normalized candle endpoint.',
+          transport_template: {
+            url: '',
+            interval_secs: 60,
+            headers: {},
+            venue: 'longbridge',
+            symbols: [],
+            timeframes: [],
+            max_candles_per_poll: 1000,
+          },
+        },
+      ],
+    });
+
+    await page.goto('/chat/session-1');
+
+    await expect(page.getByText('Finance watches')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Longbridge Market Data', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Configure' }).click();
+
+    await expect(page.getByText('Configure Longbridge Market Data')).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.locator('input[placeholder="binance"]')).toHaveValue('longbridge');
+    await expect(
+      page.locator('input[placeholder="https://market-data.example/candles/latest"]'),
+    ).toBeVisible();
   });
 
   // -----------------------------------------------------------------------
