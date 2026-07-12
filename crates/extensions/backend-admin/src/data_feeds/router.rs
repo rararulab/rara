@@ -503,6 +503,7 @@ struct FinanceSubscriptionSourceResponse {
     source_name:       String,
     catalog_source_id: Option<String>,
     catalog_name:      Option<String>,
+    provider:          Option<String>,
     feed_id:           Option<String>,
     feed_type:         Option<FeedType>,
     enabled:           Option<bool>,
@@ -2054,11 +2055,28 @@ fn finance_subscription_source_response(
         source_name:       source_name.to_owned(),
         catalog_source_id: catalog_source.map(|source| source.id.clone()),
         catalog_name:      catalog_source.map(|source| source.name.clone()),
+        provider:          finance_subscription_source_provider(catalog_source, feed),
         feed_id:           feed.map(|feed| feed.id.clone()),
         feed_type:         feed.map(|feed| feed.feed_type.clone()),
         enabled:           feed.map(|feed| feed.enabled),
         status:            feed.map(|feed| feed.status),
     }
+}
+
+fn finance_subscription_source_provider(
+    catalog_source: Option<&DefaultFeedSource>,
+    feed: Option<&DataFeedConfig>,
+) -> Option<String> {
+    catalog_source
+        .and_then(|source| source.provider.clone())
+        .or_else(|| {
+            feed.and_then(|feed| {
+                feed.transport
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+        })
 }
 
 fn catalog_by_source_name() -> HashMap<String, DefaultFeedSource> {
@@ -2883,6 +2901,7 @@ mod tests {
             subscription["sources"][0]["catalog_source_id"],
             "binance-market-candles"
         );
+        assert_eq!(subscription["sources"][0]["provider"], "binance");
         assert_eq!(subscription["venues"], serde_json::json!(["binance"]));
         assert_eq!(subscription["symbols"], serde_json::json!(["BTCUSDT"]));
         assert_eq!(subscription["timeframes"], serde_json::json!(["1m"]));
@@ -2938,6 +2957,7 @@ mod tests {
             created["subscription"]["sources"][0]["catalog_source_id"],
             "binance-market-candles"
         );
+        assert_eq!(created["subscription"]["sources"][0]["provider"], "binance");
         assert_eq!(created["subscription"]["delivery"], "immediate");
 
         let update_body = serde_json::json!({
