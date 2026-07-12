@@ -116,6 +116,9 @@ pub(super) struct FinanceListFeedEventsParams {
     /// Existing persisted finance DataFeedConfig ids.
     #[serde(default)]
     pub feed_ids:           Vec<String>,
+    /// Optional event-kind filter, e.g. rss_article or market_candle_closed.
+    #[serde(default)]
+    pub event_kinds:        Vec<FinanceEventKind>,
     /// Duration string such as "1h", "24h", or "7d".
     #[serde(default)]
     pub since:              Option<String>,
@@ -716,12 +719,17 @@ impl ToolExecute for FinanceListFeedEventsTool {
             .unwrap_or(DEFAULT_FEED_EVENT_LIMIT)
             .clamp(1, MAX_FEED_EVENT_LIMIT);
         let offset = params.offset.unwrap_or(0).max(0);
+        let event_types = dedupe_event_kinds(params.event_kinds)
+            .into_iter()
+            .map(finance_event_kind_type)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
 
         let mut sources = Vec::with_capacity(source_refs.len());
         for source_ref in source_refs {
             let page = self
                 .svc
-                .query_events(&source_ref.source_name, since, limit, offset)
+                .query_events(&source_ref.source_name, since, &event_types, limit, offset)
                 .await?;
             sources.push(FinanceFeedEventPage {
                 source_name:       source_ref.source_name,
@@ -1986,6 +1994,13 @@ fn dedupe_event_kinds(values: Vec<FinanceEventKind>) -> Vec<FinanceEventKind> {
     out
 }
 
+fn finance_event_kind_type(kind: FinanceEventKind) -> &'static str {
+    match kind {
+        FinanceEventKind::RssArticle => "rss_article",
+        FinanceEventKind::MarketCandleClosed => "market_candle_closed",
+    }
+}
+
 fn unsubscribe_selector_matches(
     subscription: &FinanceSubscription,
     selector: &UnsubscribeSelector,
@@ -3019,6 +3034,7 @@ mod tests {
                     catalog_source_ids: vec!["fed-press-releases".to_owned()],
                     source_names:       Vec::new(),
                     feed_ids:           Vec::new(),
+                    event_kinds:        Vec::new(),
                     since:              None,
                     limit:              Some(1),
                     offset:             None,
@@ -3040,6 +3056,77 @@ mod tests {
         assert_eq!(page.events.len(), 1);
         assert_eq!(page.events[0].event_type, "rss_article");
         assert_eq!(page.events[0].payload["title"], "Latest Fed update");
+    }
+
+    #[tokio::test]
+    async fn list_feed_events_filters_by_event_kind() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools.clone());
+        let store = crate::feed_store::SqliteFeedStore::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        for (id, event_type, title, received_at) in [
+            (
+                "rss-fed-event",
+                "rss_article",
+                "Fed update",
+                "2026-07-12T08:00:00Z",
+            ),
+            (
+                "candle-fed-event",
+                "market_candle_closed",
+                "BTCUSDT candle",
+                "2026-07-12T08:01:00Z",
+            ),
+        ] {
+            let event = FeedEvent::builder()
+                .id(FeedEventId::deterministic(id))
+                .source_name("finance-fed-press-releases".to_owned())
+                .event_type(event_type.to_owned())
+                .tags(vec!["finance".to_owned()])
+                .payload(serde_json::json!({ "title": title }))
+                .received_at(received_at.parse().unwrap())
+                .build();
+            store.append(&event).await.unwrap();
+        }
+
+        let tool = FinanceListFeedEventsTool::new(svc);
+        let result = tool
+            .run(
+                FinanceListFeedEventsParams {
+                    catalog_source_ids: vec!["fed-press-releases".to_owned()],
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    event_kinds:        vec![FinanceEventKind::MarketCandleClosed],
+                    since:              None,
+                    limit:              Some(20),
+                    offset:             None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.sources.len(), 1);
+        let page = &result.sources[0];
+        assert_eq!(page.total, 1);
+        assert!(!page.has_more);
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].event_type, "market_candle_closed");
+        assert_eq!(page.events[0].payload["title"], "BTCUSDT candle");
     }
 
     #[tokio::test]
