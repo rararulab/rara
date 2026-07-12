@@ -319,7 +319,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
 }
 
 fn finance_tools(deps: &ToolDeps) -> Vec<AgentToolRef> {
-    vec![
+    let mut tools: Vec<AgentToolRef> = vec![
         Arc::new(FinanceListFeedSourcesTool::new(
             deps.data_feed_svc.clone(),
             deps.data_feed_registry.clone(),
@@ -360,29 +360,38 @@ fn finance_tools(deps: &ToolDeps) -> Vec<AgentToolRef> {
         )),
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
+    ];
+    tools.extend(finance_market_data_tools(&deps.market_data_repo));
+    tools
+}
+
+fn finance_market_data_tools(
+    market_data_repo: &rara_trading::market_data::MarketDataRepositoryRef,
+) -> Vec<AgentToolRef> {
+    vec![
         Arc::new(
             rara_trading::market_data::tools::FinanceListCandleStreamsTool::new(
-                deps.market_data_repo.clone(),
+                market_data_repo.clone(),
             ),
         ),
         Arc::new(
             rara_trading::market_data::tools::FinanceGetLatestCandleTool::new(
-                deps.market_data_repo.clone(),
+                market_data_repo.clone(),
             ),
         ),
         Arc::new(
             rara_trading::market_data::tools::FinanceQueryCandlesTool::new(
-                deps.market_data_repo.clone(),
+                market_data_repo.clone(),
             ),
         ),
         Arc::new(
             rara_trading::market_data::tools::FinanceFindCandleGapsTool::new(
-                deps.market_data_repo.clone(),
+                market_data_repo.clone(),
             ),
         ),
         Arc::new(
             rara_trading::market_data::tools::FinanceGetCandleFreshnessTool::new(
-                deps.market_data_repo.clone(),
+                market_data_repo.clone(),
             ),
         ),
     ]
@@ -452,6 +461,35 @@ mod tests {
             "Core tool set has {} tools — keep it under 12 to control token costs. Use tier = \
              \"deferred\" for non-essential tools.",
             names.len()
+        );
+    }
+
+    #[test]
+    fn finance_market_data_tools_are_registered_as_deferred_tools() {
+        let market_data_repo: rara_trading::market_data::MarketDataRepositoryRef =
+            Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default());
+        let mut registry = ToolRegistry::new();
+        for tool in finance_market_data_tools(&market_data_repo) {
+            registry.register(tool);
+        }
+
+        let names = registry.deferred_names();
+        for expected in [
+            "finance_list_candle_streams",
+            "finance_get_latest_candle",
+            "finance_query_candles",
+            "finance_find_candle_gaps",
+            "finance_get_candle_freshness",
+        ] {
+            assert!(
+                names.iter().any(|name| name == expected),
+                "missing finance market-data deferred tool: {expected}"
+            );
+        }
+        assert_eq!(
+            names.len(),
+            5,
+            "finance market-data helper should only register read-side candle tools"
         );
     }
 }
