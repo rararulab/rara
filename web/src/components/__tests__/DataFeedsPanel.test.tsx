@@ -176,6 +176,68 @@ afterEach(() => {
 });
 
 describe('DataFeedsPanel', () => {
+  it('shows provider metadata for built-in finance catalog entries', async () => {
+    catalogMock.mockResolvedValue([
+      {
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        description: 'Public Binance spot OHLCV feed.',
+        feed_type: 'market_candle',
+        provider: 'binance',
+        tags: ['finance', 'market-data', 'crypto', 'binance'],
+        source_name: 'finance-binance-market-candles',
+        enabled: false,
+        feed_id: null,
+        requires_configuration: false,
+        setup_hint: null,
+        transport_template: {
+          provider: 'binance',
+          base_url: 'https://api.binance.com',
+          interval_secs: 60,
+          headers: {},
+          venue: 'binance',
+          symbols: ['BTCUSDT', 'ETHUSDT'],
+          timeframes: ['1m'],
+          max_candles_per_poll: 1000,
+        },
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT', 'ETHUSDT'],
+        configured_timeframes: ['1m'],
+      },
+      {
+        id: 'longbridge-market-candles',
+        name: 'Longbridge Market Data',
+        description: 'Preset for Longbridge equities market data.',
+        feed_type: 'market_candle',
+        provider: 'longbridge',
+        tags: ['finance', 'market-data', 'equities', 'longbridge'],
+        source_name: 'finance-longbridge-market-candles',
+        enabled: false,
+        feed_id: null,
+        requires_configuration: true,
+        setup_hint: 'Connect Longbridge credentials behind a normalized candle endpoint.',
+        transport_template: {
+          url: '',
+          interval_secs: 60,
+          headers: {},
+          venue: 'longbridge',
+          symbols: ['AAPL.US', 'NVDA.US'],
+          timeframes: ['1d'],
+          max_candles_per_poll: 1000,
+        },
+        venue: 'longbridge',
+        configured_symbols: ['AAPL.US', 'NVDA.US'],
+        configured_timeframes: ['1d'],
+      },
+    ] satisfies FeedCatalogEntry[]);
+
+    renderPanel();
+
+    expect(await screen.findByText('Default finance sources')).toBeInTheDocument();
+    expect(screen.getByText('Provider binance')).toBeInTheDocument();
+    expect(screen.getByText('Provider longbridge')).toBeInTheDocument();
+  });
+
   it('requests and displays stored K-line stream watermarks', async () => {
     listMock.mockResolvedValue([feed()]);
     candleStreamsMock.mockResolvedValue({

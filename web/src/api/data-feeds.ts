@@ -152,6 +152,7 @@ export interface FeedCatalogEntry {
   name: string;
   description: string;
   feed_type: FeedType;
+  provider?: string | null;
   tags: string[];
   source_name?: string;
   enabled: boolean;
