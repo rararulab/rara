@@ -34,6 +34,8 @@ import {
   type FeedCatalogEntry,
   type FeedEvent,
   type FeedSummary,
+  type FinanceSubscription,
+  type FinanceSubscriptionsResponse,
   type CreateFeedRequest,
   type EnableCatalogEntryRequest,
   type AuthType,
@@ -194,6 +196,34 @@ function catalogCoverageLabel(entry: FeedCatalogEntry): string | null {
 
 function catalogSourceName(entry: FeedCatalogEntry): string {
   return entry.source_name?.trim() || `finance-${entry.id}`;
+}
+
+function financeEventKindLabel(kind: FinanceSubscription['event_kinds'][number]): string {
+  switch (kind) {
+    case 'rss_article':
+      return 'News';
+    case 'market_candle_closed':
+      return 'K-line';
+  }
+}
+
+function financeSubscriptionTitle(subscription: FinanceSubscription): string {
+  const source =
+    subscription.sources[0]?.catalog_name ??
+    subscription.source_names[0] ??
+    (subscription.matches_all_sources ? 'All finance sources' : 'Custom source');
+  const kinds = subscription.event_kinds.map(financeEventKindLabel).join(' + ');
+  return kinds ? `${source} · ${kinds}` : source;
+}
+
+function financeSubscriptionSelectors(subscription: FinanceSubscription): string[] {
+  const selectors = [
+    summarizeList(subscription.symbols),
+    summarizeList(subscription.timeframes, 3),
+    summarizeList(subscription.category_tags),
+    summarizeList(subscription.watch_terms),
+  ].filter(Boolean);
+  return selectors.length > 0 ? selectors : ['All matching events'];
 }
 
 // ---------------------------------------------------------------------------
@@ -1224,6 +1254,7 @@ function FeedCatalogCard({
     void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
     void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
     void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+    void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
   };
 
   const enableMutation = useMutation({
@@ -1413,6 +1444,74 @@ function FeedCatalogCard({
   );
 }
 
+function FinanceSubscriptionsCard({ result }: { result: FinanceSubscriptionsResponse }) {
+  const queryClient = useQueryClient();
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => dataFeedsApi.deleteFinanceSubscription(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+    },
+  });
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h3 className="text-sm font-semibold">Finance subscriptions</h3>
+        <p className="text-xs text-muted-foreground">
+          Conversation-created watches for finance news and K-line events. Feed ingestion keeps
+          running when a subscription is removed.
+        </p>
+      </div>
+      {result.count === 0 ? (
+        <div className="px-4 py-4 text-xs text-muted-foreground">
+          No active finance subscriptions for the current user.
+        </div>
+      ) : (
+        <div className="divide-y">
+          {result.subscriptions.map((subscription) => {
+            const deleting =
+              deleteMutation.isPending && deleteMutation.variables === subscription.subscription_id;
+            return (
+              <div
+                key={subscription.subscription_id}
+                className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">
+                      {financeSubscriptionTitle(subscription)}
+                    </span>
+                    <Badge variant="outline" className="text-xs">
+                      {subscription.delivery}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {financeSubscriptionSelectors(subscription).join(' · ')}
+                  </p>
+                  <p className="font-mono text-[11px] text-muted-foreground">
+                    {subscription.subscription_id}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0 gap-1"
+                  onClick={() => deleteMutation.mutate(subscription.subscription_id)}
+                  disabled={deleting}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {deleting ? 'Removing...' : 'Remove'}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FeedListView({
   feeds,
   summaries,
@@ -1431,12 +1530,17 @@ function FeedListView({
     queryKey: ['data-feed-catalog'],
     queryFn: () => dataFeedsApi.catalog(),
   });
+  const financeSubscriptionsQuery = useQuery({
+    queryKey: ['finance-subscriptions'],
+    queryFn: () => dataFeedsApi.financeSubscriptions(),
+  });
 
   const toggleMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.toggle(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
     },
   });
 
@@ -1446,6 +1550,7 @@ function FeedListView({
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
       setDeleteId(null);
     },
   });
@@ -1495,6 +1600,9 @@ function FeedListView({
 
       {catalogQuery.data && (
         <FeedCatalogCard entries={catalogQuery.data} onUseTemplate={handleUseTemplate} />
+      )}
+      {financeSubscriptionsQuery.data && (
+        <FinanceSubscriptionsCard result={financeSubscriptionsQuery.data} />
       )}
 
       {/* Table */}
