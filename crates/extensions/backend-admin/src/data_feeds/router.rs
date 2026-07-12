@@ -26,12 +26,16 @@
 //! | GET    | `/api/v1/data-feeds/{id}/events/{event_id}` | get single event    |
 //! | POST   | `/api/v1/data-feeds/catalog/{id}/unsubscribe` | remove current user's catalog subscriptions |
 //! | GET    | `/api/v1/data-feeds/finance/subscriptions` | list current user's finance subscriptions |
+//! | POST   | `/api/v1/data-feeds/finance/subscriptions` | create/update current user's finance subscription |
 //!
 //! All mutations synchronise both the database (via [`DataFeedSvc`]) and the
 //! in-memory [`DataFeedRegistry`]. When an active feed is created and
 //! enabled, a background task is spawned automatically.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     Json, Router,
@@ -47,6 +51,7 @@ use rara_kernel::{
         polling::PollingSource,
     },
     identity::{Principal, Resolved, UserId},
+    session::SessionKey,
 };
 use rara_trading::{
     feed::{
@@ -65,6 +70,9 @@ use uuid::Uuid;
 
 use super::service::DataFeedSvc;
 use crate::kernel::problem::ProblemDetails;
+
+const DEFAULT_FINANCE_COOLDOWN_SECS: u64 = 900;
+const DEFAULT_FINANCE_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 
 /// Shared state for data feed routes.
 ///
@@ -100,7 +108,7 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         )
         .route(
             "/api/v1/data-feeds/finance/subscriptions",
-            get(list_finance_subscriptions),
+            get(list_finance_subscriptions).post(create_finance_subscription),
         )
         .route(
             "/api/v1/data-feeds/finance/subscriptions/{id}",
@@ -251,6 +259,38 @@ struct FinanceSubscriptionListResponse {
     count:         usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreateFinanceSubscriptionRequest {
+    session_key:            String,
+    #[serde(default)]
+    event_kinds:            Vec<FinanceEventKind>,
+    #[serde(default)]
+    catalog_source_ids:     Vec<String>,
+    #[serde(default)]
+    source_names:           Vec<String>,
+    #[serde(default)]
+    match_all_sources:      bool,
+    #[serde(default)]
+    category_tags:          Vec<String>,
+    #[serde(default)]
+    watch_terms:            Vec<String>,
+    #[serde(default)]
+    venues:                 Vec<String>,
+    #[serde(default)]
+    symbols:                Vec<String>,
+    #[serde(default)]
+    timeframes:             Vec<String>,
+    delivery:               Option<FinanceDelivery>,
+    cooldown_secs:          Option<u64>,
+    max_immediate_per_hour: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateFinanceSubscriptionResponse {
+    subscription: FinanceSubscriptionResponse,
+    created:      bool,
+}
+
 #[derive(Debug, Serialize)]
 struct FinanceSubscriptionResponse {
     subscription_id:        Uuid,
@@ -332,6 +372,110 @@ async fn list_finance_subscriptions(
         count: subscriptions.len(),
         subscriptions,
     }))
+}
+
+/// `POST /api/v1/data-feeds/finance/subscriptions` — create or update a
+/// current-user finance subscription for an explicit session key.
+async fn create_finance_subscription(
+    State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<Principal<Resolved>>,
+    Json(request): Json<CreateFinanceSubscriptionRequest>,
+) -> Result<(StatusCode, Json<CreateFinanceSubscriptionResponse>), ProblemDetails> {
+    let session_key = SessionKey::try_from_raw(&request.session_key)
+        .map_err(|e| ProblemDetails::bad_request(format!("invalid session_key: {e}")))?;
+    let owner = UserId(principal.user_id.0);
+    let source_names = resolve_finance_subscription_source_names(
+        &request.catalog_source_ids,
+        &request.source_names,
+        request.match_all_sources,
+    )?;
+    let event_kinds = resolve_finance_subscription_event_kinds(&request)?;
+    let delivery = request.delivery.unwrap_or(FinanceDelivery::Silent);
+    let cooldown_secs = request
+        .cooldown_secs
+        .unwrap_or(DEFAULT_FINANCE_COOLDOWN_SECS);
+    if cooldown_secs > 86_400 {
+        return Err(ProblemDetails::bad_request(
+            "cooldown_secs must be <= 86400",
+        ));
+    }
+    let max_immediate_per_hour = request
+        .max_immediate_per_hour
+        .unwrap_or(DEFAULT_FINANCE_MAX_IMMEDIATE_PER_HOUR);
+    if max_immediate_per_hour > 60 {
+        return Err(ProblemDetails::bad_request(
+            "max_immediate_per_hour must be <= 60",
+        ));
+    }
+
+    let existing = state
+        .finance_registry
+        .list_for_owner(&owner)
+        .await
+        .into_iter()
+        .find(|subscription| {
+            subscription.session_key == session_key
+                && same_finance_event_kinds(&subscription.event_kinds, &event_kinds)
+                && same_string_set(&subscription.source_names, &source_names)
+                && same_string_set(&subscription.category_tags, &request.category_tags)
+                && same_string_set(&subscription.watch_terms, &request.watch_terms)
+                && same_string_set(&subscription.venues, &request.venues)
+                && same_string_set(&subscription.symbols, &request.symbols)
+                && same_string_set(&subscription.timeframes, &request.timeframes)
+        });
+    let created = existing.is_none();
+    let id = existing.as_ref().map_or_else(Uuid::new_v4, |sub| sub.id);
+    let subscription = FinanceSubscription {
+        id,
+        owner: owner.clone(),
+        session_key,
+        event_kinds,
+        source_names,
+        category_tags: request.category_tags,
+        watch_terms: request.watch_terms,
+        venues: request.venues,
+        symbols: request.symbols,
+        timeframes: request.timeframes,
+        delivery,
+        cooldown_secs,
+        max_immediate_per_hour,
+    };
+
+    let id = state
+        .finance_registry
+        .upsert(subscription)
+        .await
+        .map_err(|err| {
+            ProblemDetails::internal(format!("failed to create finance subscription: {err}"))
+        })?;
+    let feeds = state.svc.list_feeds().await?;
+    let catalog_by_source_name = catalog_by_source_name();
+    let subscription = state
+        .finance_registry
+        .list_for_owner(&owner)
+        .await
+        .into_iter()
+        .find(|subscription| subscription.id == id)
+        .ok_or_else(|| {
+            ProblemDetails::internal("created finance subscription was not persisted")
+        })?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+
+    Ok((
+        status,
+        Json(CreateFinanceSubscriptionResponse {
+            subscription: finance_subscription_response(
+                subscription,
+                &feeds,
+                &catalog_by_source_name,
+            ),
+            created,
+        }),
+    ))
 }
 
 /// `GET /api/v1/data-feeds/finance/subscriptions/{id}` — fetch one current-user
@@ -1115,6 +1259,101 @@ fn catalog_subscription_response(
         user_subscribed: !user_subscription_ids.is_empty(),
         user_subscription_ids,
     }
+}
+
+fn resolve_finance_subscription_source_names(
+    catalog_source_ids: &[String],
+    source_names: &[String],
+    match_all_sources: bool,
+) -> Result<Vec<String>, ProblemDetails> {
+    if match_all_sources && (!catalog_source_ids.is_empty() || !source_names.is_empty()) {
+        return Err(ProblemDetails::bad_request(
+            "match_all_sources cannot be combined with catalog_source_ids or source_names",
+        ));
+    }
+    if match_all_sources {
+        return Ok(Vec::new());
+    }
+
+    let mut resolved = Vec::new();
+    for catalog_source_id in catalog_source_ids {
+        let id = catalog_source_id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        resolved.push(find_catalog_source(id)?.feed_name());
+    }
+    resolved.extend(
+        source_names
+            .iter()
+            .map(|source_name| source_name.trim())
+            .filter(|source_name| !source_name.is_empty())
+            .map(str::to_owned),
+    );
+    resolved = dedupe_strings(resolved);
+    if resolved.is_empty() {
+        return Err(ProblemDetails::bad_request(
+            "catalog_source_ids or source_names is required unless match_all_sources is true",
+        ));
+    }
+    Ok(resolved)
+}
+
+fn resolve_finance_subscription_event_kinds(
+    request: &CreateFinanceSubscriptionRequest,
+) -> Result<Vec<FinanceEventKind>, ProblemDetails> {
+    let mut event_kinds = request.event_kinds.clone();
+    if event_kinds.is_empty() {
+        for catalog_source_id in &request.catalog_source_ids {
+            let id = catalog_source_id.trim();
+            if id.is_empty() {
+                continue;
+            }
+            if let Some(kind) = finance_event_kind_for_feed_type(find_catalog_source(id)?.feed_type)
+            {
+                event_kinds.push(kind);
+            }
+        }
+    }
+    event_kinds = dedupe_finance_event_kinds(event_kinds);
+    if event_kinds.is_empty() {
+        return Err(ProblemDetails::bad_request(
+            "event_kinds is required when it cannot be inferred from catalog_source_ids",
+        ));
+    }
+    Ok(event_kinds)
+}
+
+fn finance_event_kind_for_feed_type(feed_type: FeedType) -> Option<FinanceEventKind> {
+    match feed_type {
+        FeedType::Rss => Some(FinanceEventKind::RssArticle),
+        FeedType::MarketCandle => Some(FinanceEventKind::MarketCandleClosed),
+        FeedType::Polling | FeedType::Webhook | FeedType::WebSocket => None,
+    }
+}
+
+fn dedupe_finance_event_kinds(values: Vec<FinanceEventKind>) -> Vec<FinanceEventKind> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .filter(|value| seen.insert(*value))
+        .collect()
+}
+
+fn dedupe_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn same_finance_event_kinds(left: &[FinanceEventKind], right: &[FinanceEventKind]) -> bool {
+    left.len() == right.len() && left.iter().all(|kind| right.contains(kind))
+}
+
+fn same_string_set(left: &[String], right: &[String]) -> bool {
+    left.len() == right.len() && left.iter().all(|value| right.contains(value))
 }
 
 fn finance_subscription_response(
@@ -1923,6 +2162,121 @@ mod tests {
         assert_eq!(subscription["venues"], serde_json::json!(["binance"]));
         assert_eq!(subscription["symbols"], serde_json::json!(["BTCUSDT"]));
         assert_eq!(subscription["timeframes"], serde_json::json!(["1m"]));
+    }
+
+    #[tokio::test]
+    async fn finance_subscriptions_create_infers_catalog_event_kind_and_updates_existing() {
+        let finance_registry = test_finance_registry();
+        let app =
+            app_with_user_and_finance_registry(user_of(Role::User), finance_registry.clone()).await;
+        let session_key = SessionKey::new();
+        let body = serde_json::json!({
+            "session_key": session_key.to_string(),
+            "catalog_source_ids": ["binance-market-candles"],
+            "venues": ["binance"],
+            "symbols": ["BTCUSDT"],
+            "timeframes": ["1m"],
+            "delivery": "immediate"
+        });
+
+        let create_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/finance/subscriptions")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_res.status(), StatusCode::CREATED);
+        let create_body = axum::body::to_bytes(create_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+        assert_eq!(created["created"], true);
+        let subscription_id = created["subscription"]["subscription_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            created["subscription"]["event_kinds"],
+            serde_json::json!(["market_candle_closed"])
+        );
+        assert_eq!(
+            created["subscription"]["source_names"],
+            serde_json::json!(["finance-binance-market-candles"])
+        );
+        assert_eq!(
+            created["subscription"]["sources"][0]["catalog_source_id"],
+            "binance-market-candles"
+        );
+        assert_eq!(created["subscription"]["delivery"], "immediate");
+
+        let update_body = serde_json::json!({
+            "session_key": session_key.to_string(),
+            "catalog_source_ids": ["binance-market-candles"],
+            "venues": ["binance"],
+            "symbols": ["BTCUSDT"],
+            "timeframes": ["1m"],
+            "delivery": "silent"
+        });
+        let update_res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/finance/subscriptions")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(update_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_res.status(), StatusCode::OK);
+        let update_body = axum::body::to_bytes(update_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: serde_json::Value = serde_json::from_slice(&update_body).unwrap();
+        assert_eq!(updated["created"], false);
+        assert_eq!(
+            updated["subscription"]["subscription_id"],
+            serde_json::json!(subscription_id)
+        );
+        assert_eq!(updated["subscription"]["delivery"], "silent");
+
+        let subscriptions = finance_registry
+            .list_for_owner(&UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subscriptions.len(), 1);
+        assert_eq!(subscriptions[0].session_key, session_key);
+    }
+
+    #[tokio::test]
+    async fn finance_subscriptions_create_requires_source_scope() {
+        let app = app_with_user(user_of(Role::User)).await;
+        let body = serde_json::json!({
+            "session_key": SessionKey::new().to_string(),
+            "event_kinds": ["rss_article"]
+        });
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/finance/subscriptions")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
