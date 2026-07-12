@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use rara_backend_admin::data_feeds::{DataFeedSvc, start_feed_task};
 use rara_kernel::{
-    data_feed::{DataFeedConfig, DataFeedRegistry, FeedStatus, FeedType},
+    data_feed::{
+        DataFeedConfig, DataFeedRegistry, FeedEvent, FeedStatus, FeedType, parse_duration_ago,
+    },
     identity::UserId,
     tool::{ToolContext, ToolExecute},
 };
@@ -41,7 +43,9 @@ use uuid::Uuid;
 
 const MAX_CATALOG_SOURCE_ID_LEN: usize = 128;
 const MAX_FEED_ID_LEN: usize = 128;
+const MAX_SOURCE_NAME_LEN: usize = 128;
 const MAX_NEWS_SOURCE_REFS: usize = 32;
+const MAX_EVENT_SOURCE_REFS: usize = 32;
 const MAX_UNSUBSCRIBE_SOURCE_REFS: usize = 64;
 const MAX_NEWS_CATEGORY_TAGS: usize = 64;
 const MAX_NEWS_WATCH_TERMS: usize = 64;
@@ -51,6 +55,8 @@ const MAX_TIMEFRAMES: usize = 32;
 const MAX_INSTRUMENT_SELECTOR_LEN: usize = 64;
 const DEFAULT_COOLDOWN_SECS: u64 = 900;
 const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
+const DEFAULT_FEED_EVENT_LIMIT: i64 = 20;
+const MAX_FEED_EVENT_LIMIT: i64 = 200;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceListFeedSourcesParams {}
@@ -97,6 +103,45 @@ pub(super) struct FinanceFeedSourceSubscriptions {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceListFeedSourcesResult {
     pub sources: Vec<FinanceFeedSourceEntry>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct FinanceListFeedEventsParams {
+    /// Built-in source ids from finance_list_feed_sources.
+    #[serde(default)]
+    pub catalog_source_ids: Vec<String>,
+    /// Concrete finance source names for custom feeds.
+    #[serde(default)]
+    pub source_names:       Vec<String>,
+    /// Existing persisted finance DataFeedConfig ids.
+    #[serde(default)]
+    pub feed_ids:           Vec<String>,
+    /// Duration string such as "1h", "24h", or "7d".
+    #[serde(default)]
+    pub since:              Option<String>,
+    /// Maximum events per source. Defaults to 20, max 200.
+    #[serde(default)]
+    pub limit:              Option<i64>,
+    /// Offset per source for pagination. Defaults to 0.
+    #[serde(default)]
+    pub offset:             Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceListFeedEventsResult {
+    pub sources: Vec<FinanceFeedEventPage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedEventPage {
+    pub source_name:       String,
+    pub catalog_source_id: Option<String>,
+    pub feed_id:           Option<String>,
+    pub events:            Vec<FeedEvent>,
+    pub total:             i64,
+    pub has_more:          bool,
+    pub query_limit:       i64,
+    pub query_offset:      i64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -387,6 +432,22 @@ pub(super) struct FinanceListFeedSourcesTool {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_list_feed_events",
+    description = "List recent persisted events for finance RSS or market-candle feed sources. \
+                   Use this after subscribing or diagnosing a feed when the user asks what recent \
+                   finance news or closed-candle notifications were received. Select sources by \
+                   catalog_source_ids, source_names, or feed_ids from finance_list_feed_sources. \
+                   This is read-only and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub(super) struct FinanceListFeedEventsTool {
+    svc: DataFeedSvc,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_list_subscriptions",
     description = "List finance information subscriptions owned by the current user with \
                    conversation/session ownership, source catalog ids, persisted feed config, and \
@@ -504,6 +565,10 @@ impl FinanceListFeedSourcesTool {
             finance_registry,
         }
     }
+}
+
+impl FinanceListFeedEventsTool {
+    pub(super) fn new(svc: DataFeedSvc) -> Self { Self { svc } }
 }
 
 impl FinanceListSubscriptionsTool {
@@ -624,6 +689,57 @@ impl ToolExecute for FinanceListFeedSourcesTool {
 }
 
 #[async_trait]
+impl ToolExecute for FinanceListFeedEventsTool {
+    type Output = FinanceListFeedEventsResult;
+    type Params = FinanceListFeedEventsParams;
+
+    async fn run(
+        &self,
+        params: FinanceListFeedEventsParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinanceListFeedEventsResult> {
+        let source_refs = resolve_feed_event_sources(
+            &self.svc,
+            params.catalog_source_ids,
+            params.source_names,
+            params.feed_ids,
+        )
+        .await?;
+        let since = params
+            .since
+            .as_deref()
+            .map(parse_duration_ago)
+            .transpose()
+            .map_err(|err| anyhow::anyhow!("invalid since duration: {err}"))?;
+        let limit = params
+            .limit
+            .unwrap_or(DEFAULT_FEED_EVENT_LIMIT)
+            .clamp(1, MAX_FEED_EVENT_LIMIT);
+        let offset = params.offset.unwrap_or(0).max(0);
+
+        let mut sources = Vec::with_capacity(source_refs.len());
+        for source_ref in source_refs {
+            let page = self
+                .svc
+                .query_events(&source_ref.source_name, since, limit, offset)
+                .await?;
+            sources.push(FinanceFeedEventPage {
+                source_name:       source_ref.source_name,
+                catalog_source_id: source_ref.catalog_source_id,
+                feed_id:           source_ref.feed_id,
+                events:            page.events,
+                total:             page.total,
+                has_more:          page.has_more,
+                query_limit:       limit,
+                query_offset:      offset,
+            });
+        }
+
+        Ok(FinanceListFeedEventsResult { sources })
+    }
+}
+
+#[async_trait]
 impl ToolExecute for FinanceListSubscriptionsTool {
     type Output = FinanceListSubscriptionsResult;
     type Params = FinanceListSubscriptionsParams;
@@ -640,10 +756,7 @@ impl ToolExecute for FinanceListSubscriptionsTool {
             .iter()
             .map(|feed| (feed.name.clone(), feed))
             .collect::<HashMap<_, _>>();
-        let catalog_by_source_name = default_finance_feed_sources()
-            .into_iter()
-            .map(|source| (source.feed_name(), source))
-            .collect::<HashMap<_, _>>();
+        let catalog_by_source_name = catalog_by_source_name();
 
         let subscriptions = self
             .finance_registry
@@ -1410,6 +1523,119 @@ struct FeedResolution {
     replace_existing_instruments: bool,
 }
 
+struct FeedEventSourceRef {
+    source_name:       String,
+    catalog_source_id: Option<String>,
+    feed_id:           Option<String>,
+}
+
+async fn resolve_feed_event_sources(
+    svc: &DataFeedSvc,
+    catalog_source_ids: Vec<String>,
+    source_names: Vec<String>,
+    feed_ids: Vec<String>,
+) -> anyhow::Result<Vec<FeedEventSourceRef>> {
+    let catalog_source_ids = normalize_string_refs(
+        "catalog_source_ids",
+        catalog_source_ids,
+        MAX_EVENT_SOURCE_REFS,
+        MAX_CATALOG_SOURCE_ID_LEN,
+    )?;
+    let source_names = normalize_string_refs(
+        "source_names",
+        source_names,
+        MAX_EVENT_SOURCE_REFS,
+        MAX_SOURCE_NAME_LEN,
+    )?;
+    let feed_ids =
+        normalize_string_refs("feed_ids", feed_ids, MAX_EVENT_SOURCE_REFS, MAX_FEED_ID_LEN)?;
+    anyhow::ensure!(
+        !catalog_source_ids.is_empty() || !source_names.is_empty() || !feed_ids.is_empty(),
+        "catalog_source_ids, source_names, or feed_ids is required"
+    );
+    anyhow::ensure!(
+        catalog_source_ids.len() + source_names.len() + feed_ids.len() <= MAX_EVENT_SOURCE_REFS,
+        "too many feed event sources"
+    );
+
+    let feeds = svc.list_feeds().await?;
+    let catalog_by_source_name = catalog_by_source_name();
+    let mut refs = Vec::new();
+
+    for catalog_source_id in catalog_source_ids {
+        let catalog_source = find_catalog_source(&catalog_source_id)?;
+        let source_name = catalog_source.feed_name();
+        let feed_id = feeds
+            .iter()
+            .find(|feed| feed.name == source_name)
+            .map(|feed| feed.id.clone());
+        push_unique_feed_event_source(
+            &mut refs,
+            FeedEventSourceRef {
+                source_name,
+                catalog_source_id: Some(catalog_source_id),
+                feed_id,
+            },
+        );
+    }
+
+    for source_name in source_names {
+        let feed = feeds.iter().find(|feed| feed.name == source_name);
+        if let Some(feed) = feed {
+            ensure_finance_feed_source(feed)?;
+        } else {
+            anyhow::ensure!(
+                catalog_by_source_name.contains_key(&source_name),
+                "source_name is not a known finance feed source: {source_name}"
+            );
+        }
+        push_unique_feed_event_source(
+            &mut refs,
+            FeedEventSourceRef {
+                catalog_source_id: catalog_by_source_name
+                    .get(&source_name)
+                    .map(|source| source.id.clone()),
+                feed_id: feed.map(|feed| feed.id.clone()),
+                source_name,
+            },
+        );
+    }
+
+    for feed_id in feed_ids {
+        let config = svc
+            .get_feed(&feed_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
+        ensure_finance_feed_source(&config)?;
+        let catalog_source_id = catalog_by_source_name
+            .get(&config.name)
+            .map(|source| source.id.clone());
+        push_unique_feed_event_source(
+            &mut refs,
+            FeedEventSourceRef {
+                source_name: config.name,
+                catalog_source_id,
+                feed_id: Some(feed_id),
+            },
+        );
+    }
+
+    Ok(refs)
+}
+
+fn push_unique_feed_event_source(
+    refs: &mut Vec<FeedEventSourceRef>,
+    candidate: FeedEventSourceRef,
+) {
+    if refs
+        .iter()
+        .any(|existing| existing.source_name == candidate.source_name)
+    {
+        return;
+    }
+    refs.push(candidate);
+}
+
 fn normalize_catalog_source_id(value: String) -> anyhow::Result<String> {
     let value = value.trim();
     anyhow::ensure!(!value.is_empty(), "catalog_source_id must not be empty");
@@ -1816,6 +2042,13 @@ fn find_catalog_source(catalog_source_id: &str) -> anyhow::Result<DefaultFeedSou
         })
 }
 
+fn catalog_by_source_name() -> HashMap<String, DefaultFeedSource> {
+    default_finance_feed_sources()
+        .into_iter()
+        .map(|source| (source.feed_name(), source))
+        .collect()
+}
+
 async fn resolve_existing_finance_feed(
     svc: &DataFeedSvc,
     source_ref: SourceRef,
@@ -2132,8 +2365,9 @@ mod tests {
 
     use super::{
         FeedChange, FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
-        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedSourcesParams,
-        FinanceListFeedSourcesTool, FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
+        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedEventsParams,
+        FinanceListFeedEventsTool, FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
+        FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
         FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
         FinanceSubscribeNewsParams, FinanceSubscribeNewsTool, FinanceUnsubscribeParams,
@@ -2738,6 +2972,74 @@ mod tests {
         assert_eq!(fed.runtime.event_count, 1);
         assert_eq!(fed.runtime.last_event_at, Some(received_at.to_string()));
         assert!(fed.runtime.lag_seconds.is_some_and(|lag| lag >= 0));
+    }
+
+    #[tokio::test]
+    async fn list_feed_events_returns_recent_events_for_finance_source() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools.clone());
+        let store = crate::feed_store::SqliteFeedStore::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        for (title, received_at) in [
+            ("Older Fed update", "2026-07-12T08:00:00Z"),
+            ("Latest Fed update", "2026-07-12T08:01:00Z"),
+        ] {
+            let event = FeedEvent::builder()
+                .id(FeedEventId::deterministic(title))
+                .source_name("finance-fed-press-releases".to_owned())
+                .event_type("rss_article".to_owned())
+                .tags(vec!["finance".to_owned(), "fed".to_owned()])
+                .payload(serde_json::json!({
+                    "title": title,
+                    "url": "https://www.federalreserve.gov/example"
+                }))
+                .received_at(received_at.parse().unwrap())
+                .build();
+            store.append(&event).await.unwrap();
+        }
+
+        let tool = FinanceListFeedEventsTool::new(svc);
+        let result = tool
+            .run(
+                FinanceListFeedEventsParams {
+                    catalog_source_ids: vec!["fed-press-releases".to_owned()],
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    since:              None,
+                    limit:              Some(1),
+                    offset:             None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.sources.len(), 1);
+        let page = &result.sources[0];
+        assert_eq!(
+            page.catalog_source_id.as_deref(),
+            Some("fed-press-releases")
+        );
+        assert_eq!(page.source_name, "finance-fed-press-releases");
+        assert_eq!(page.total, 2);
+        assert!(page.has_more);
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].event_type, "rss_article");
+        assert_eq!(page.events[0].payload["title"], "Latest Fed update");
     }
 
     #[tokio::test]

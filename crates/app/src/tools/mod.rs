@@ -81,9 +81,9 @@ use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
 use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
-    FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool,
-    FinanceListSubscriptionsTool, FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool,
-    FinanceSubscribeNewsTool, FinanceUnsubscribeTool,
+    FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedEventsTool,
+    FinanceListFeedSourcesTool, FinanceListSubscriptionsTool, FinanceRestartFeedSourceTool,
+    FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsTool, FinanceUnsubscribeTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -325,6 +325,7 @@ fn finance_tools(deps: &ToolDeps) -> Vec<AgentToolRef> {
             deps.data_feed_registry.clone(),
             deps.finance_registry.clone(),
         )),
+        Arc::new(FinanceListFeedEventsTool::new(deps.data_feed_svc.clone())),
         Arc::new(FinanceListSubscriptionsTool::new(
             deps.data_feed_svc.clone(),
             deps.data_feed_registry.clone(),
@@ -464,6 +465,7 @@ mod tests {
             "fff-find",
             "fff-grep",
             "finance_list_feed_sources",
+            "finance_list_feed_events",
             "finance_list_subscriptions",
             "finance_enable_feed_source",
             "finance_disable_feed_source",
