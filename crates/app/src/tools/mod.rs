@@ -399,7 +399,33 @@ fn finance_market_data_tools(
 
 #[cfg(test)]
 mod tests {
+    use rara_kernel::{
+        io::MessageId,
+        queue::{ShardedEventQueue, ShardedEventQueueConfig},
+        session::SessionKey,
+        tool::{AgentTool, DiscoverToolsResult, DiscoverToolsStatus, ToolContext},
+    };
+
     use super::*;
+
+    fn context_with_registry(tool_registry: ToolRegistry) -> ToolContext {
+        ToolContext {
+            user_id:               "alice".to_owned(),
+            session_key:           SessionKey::new(),
+            origin_endpoint:       None,
+            origin_user_id:        None,
+            event_queue:           Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+                num_shards:      0,
+                shard_capacity:  1,
+                global_capacity: 16,
+            })),
+            rara_turn_id:          MessageId::new(),
+            context_window_tokens: 0,
+            tool_registry:         Some(Arc::new(tool_registry)),
+            stream_handle:         None,
+            tool_call_id:          None,
+        }
+    }
 
     #[test]
     fn rara_tool_names_includes_core_tools() {
@@ -491,5 +517,39 @@ mod tests {
             5,
             "finance market-data helper should only register read-side candle tools"
         );
+    }
+
+    #[tokio::test]
+    async fn discover_tools_finds_finance_market_data_candle_tools() {
+        let market_data_repo: rara_trading::market_data::MarketDataRepositoryRef =
+            Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default());
+        let mut registry = ToolRegistry::new();
+        for tool in finance_market_data_tools(&market_data_repo) {
+            registry.register(tool);
+        }
+        let context = context_with_registry(registry);
+        let discover = DiscoverToolsTool::new(rara_skills::registry::InMemoryRegistry::new());
+
+        let output = discover
+            .execute(serde_json::json!({"query": "candle"}), &context)
+            .await
+            .expect("discover finance market-data tools");
+        let result: DiscoverToolsResult =
+            serde_json::from_value(output.json).expect("discover result");
+
+        assert_eq!(result.status, DiscoverToolsStatus::Activated);
+        let names: Vec<&str> = result.tools.iter().map(|tool| tool.name.as_str()).collect();
+        for expected in [
+            "finance_list_candle_streams",
+            "finance_get_latest_candle",
+            "finance_query_candles",
+            "finance_find_candle_gaps",
+            "finance_get_candle_freshness",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "discover-tools did not return finance market-data tool: {expected}"
+            );
+        }
     }
 }
