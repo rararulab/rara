@@ -31,6 +31,7 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   dataFeedsApi,
   type CandleStream,
+  type MarketCandle,
   type DataFeedConfig,
   type FeedCatalogEntry,
   type FeedEvent,
@@ -230,6 +231,104 @@ function financeSubscriptionSelectors(subscription: FinanceSubscription): string
 
 function streamLabel(stream: CandleStream): string {
   return `${stream.venue.toUpperCase()} · ${stream.symbol} · ${stream.timeframe}`;
+}
+
+const CANDLE_PREVIEW_LIMIT = 50;
+
+function timeframeMillis(timeframe: string): number | null {
+  const match = /^(\d+)([smhdw])$/i.exec(timeframe.trim());
+  if (!match) return null;
+
+  const [, amountText, unit] = match;
+  if (!amountText || !unit) return null;
+
+  const amount = Number(amountText);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  switch (unit.toLowerCase()) {
+    case 's':
+      return amount * 1_000;
+    case 'm':
+      return amount * 60_000;
+    case 'h':
+      return amount * 3_600_000;
+    case 'd':
+      return amount * 86_400_000;
+    case 'w':
+      return amount * 604_800_000;
+    default:
+      return null;
+  }
+}
+
+function candlePreviewWindow(stream: CandleStream): {
+  start: string;
+  end: string;
+  limit: number;
+} {
+  const stepMs = timeframeMillis(stream.timeframe) ?? 60_000;
+  const latestOpenMs = Date.parse(stream.latest_open_time);
+  const anchorMs = Number.isFinite(latestOpenMs) ? latestOpenMs : Date.now();
+
+  return {
+    start: new Date(anchorMs - stepMs * (CANDLE_PREVIEW_LIMIT - 1)).toISOString(),
+    end: new Date(anchorMs + stepMs).toISOString(),
+    limit: CANDLE_PREVIEW_LIMIT,
+  };
+}
+
+function candlePreviewRequest(stream: CandleStream) {
+  const window = candlePreviewWindow(stream);
+  return {
+    source_name: stream.source_name,
+    venue: stream.venue,
+    symbol: stream.symbol,
+    timeframe: stream.timeframe,
+    ...window,
+  };
+}
+
+function CandleCloseSparkline({ candles }: { candles: MarketCandle[] }) {
+  const values = candles.map((candle) => Number(candle.close)).filter(Number.isFinite);
+
+  if (values.length === 0) {
+    return (
+      <div className="flex h-24 items-center justify-center rounded-md border bg-muted/20 text-xs text-muted-foreground">
+        No numeric close values in this range.
+      </div>
+    );
+  }
+
+  const width = 420;
+  const height = 96;
+  const padding = 10;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const points = values
+    .map((value, index) => {
+      const x =
+        values.length === 1
+          ? width / 2
+          : padding + (index * (width - padding * 2)) / (values.length - 1);
+      const y = height - padding - ((value - min) / span) * (height - padding * 2);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+
+  return (
+    <div className="rounded-md border bg-muted/10 p-3">
+      <svg
+        role="img"
+        aria-label="Recent candle close price sparkline"
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-24 w-full"
+        preserveAspectRatio="none"
+      >
+        <polyline fill="none" stroke="currentColor" strokeWidth="2" points={points} />
+      </svg>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,80 +1662,215 @@ function MarketDataStreamsCard({
   isError: boolean;
   onRetry: () => void;
 }) {
+  const [previewStream, setPreviewStream] = useState<CandleStream | null>(null);
+  const previewRequest = previewStream ? candlePreviewRequest(previewStream) : null;
+  const previewQuery = useQuery({
+    queryKey: [
+      'market-data-candles-preview',
+      previewRequest?.source_name,
+      previewRequest?.venue,
+      previewRequest?.symbol,
+      previewRequest?.timeframe,
+      previewRequest?.start,
+      previewRequest?.end,
+      previewRequest?.limit,
+    ],
+    queryFn: () => {
+      if (!previewRequest) throw new Error('Missing candle preview request');
+      return dataFeedsApi.candles(previewRequest);
+    },
+    enabled: previewRequest != null,
+    refetchInterval: previewRequest != null ? 30_000 : false,
+  });
+  const previewCandles = previewQuery.data?.candles ?? [];
+
   return (
-    <div className="rounded-lg border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-        <div>
-          <h3 className="text-sm font-semibold">Stored K-line streams</h3>
-          <p className="text-xs text-muted-foreground">
-            Latest closed candles persisted in the market-data repository.
-          </p>
+    <>
+      <div className="rounded-lg border bg-card">
+        <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold">Stored K-line streams</h3>
+            <p className="text-xs text-muted-foreground">
+              Latest closed candles persisted in the market-data repository.
+            </p>
+          </div>
+          <Badge variant="outline" className="shrink-0 text-xs">
+            {streams.length} stream{streams.length === 1 ? '' : 's'}
+          </Badge>
         </div>
-        <Badge variant="outline" className="shrink-0 text-xs">
-          {streams.length} stream{streams.length === 1 ? '' : 's'}
-        </Badge>
-      </div>
-      {isLoading ? (
-        <div className="space-y-2 px-4 py-4">
-          <Skeleton className="h-4 w-1/2" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
-      ) : isError ? (
-        <div className="flex items-center justify-between gap-3 px-4 py-4">
-          <p className="text-xs text-muted-foreground">Failed to load K-line stream watermarks.</p>
-          <Button variant="outline" size="sm" className="h-8" onClick={onRetry}>
-            Retry
-          </Button>
-        </div>
-      ) : streams.length === 0 ? (
-        <div className="px-4 py-4 text-xs text-muted-foreground">
-          No closed candles have been stored yet. Enable a K-line feed and wait for the first
-          persisted candle.
-        </div>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Stream</TableHead>
-              <TableHead className="w-36 text-right">Candles</TableHead>
-              <TableHead className="w-40 text-right">Latest Close</TableHead>
-              <TableHead className="w-40 text-right">Ingested</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {streams.map((stream) => (
-              <TableRow
-                key={`${stream.source_name}:${stream.venue}:${stream.symbol}:${stream.timeframe}`}
-              >
-                <TableCell>
-                  <div className="space-y-0.5">
-                    <div className="text-sm font-medium">{streamLabel(stream)}</div>
-                    <div className="font-mono text-[11px] text-muted-foreground">
-                      {stream.source_name}
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="text-right text-xs text-muted-foreground">
-                  {stream.candle_count.toLocaleString()}
-                </TableCell>
-                <TableCell
-                  className="text-right text-xs text-muted-foreground"
-                  title={new Date(stream.latest_close_time).toLocaleString()}
-                >
-                  {timeAgo(stream.latest_close_time)}
-                </TableCell>
-                <TableCell
-                  className="text-right text-xs text-muted-foreground"
-                  title={new Date(stream.latest_ingested_at).toLocaleString()}
-                >
-                  {timeAgo(stream.latest_ingested_at)}
-                </TableCell>
+        {isLoading ? (
+          <div className="space-y-2 px-4 py-4">
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        ) : isError ? (
+          <div className="flex items-center justify-between gap-3 px-4 py-4">
+            <p className="text-xs text-muted-foreground">
+              Failed to load K-line stream watermarks.
+            </p>
+            <Button variant="outline" size="sm" className="h-8" onClick={onRetry}>
+              Retry
+            </Button>
+          </div>
+        ) : streams.length === 0 ? (
+          <div className="px-4 py-4 text-xs text-muted-foreground">
+            No closed candles have been stored yet. Enable a K-line feed and wait for the first
+            persisted candle.
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Stream</TableHead>
+                <TableHead className="w-36 text-right">Candles</TableHead>
+                <TableHead className="w-40 text-right">Latest Close</TableHead>
+                <TableHead className="w-40 text-right">Ingested</TableHead>
+                <TableHead className="w-28 text-right">Preview</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-    </div>
+            </TableHeader>
+            <TableBody>
+              {streams.map((stream) => (
+                <TableRow
+                  key={`${stream.source_name}:${stream.venue}:${stream.symbol}:${stream.timeframe}`}
+                >
+                  <TableCell>
+                    <div className="space-y-0.5">
+                      <div className="text-sm font-medium">{streamLabel(stream)}</div>
+                      <div className="font-mono text-[11px] text-muted-foreground">
+                        {stream.source_name}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">
+                    {stream.candle_count.toLocaleString()}
+                  </TableCell>
+                  <TableCell
+                    className="text-right text-xs text-muted-foreground"
+                    title={new Date(stream.latest_close_time).toLocaleString()}
+                  >
+                    {timeAgo(stream.latest_close_time)}
+                  </TableCell>
+                  <TableCell
+                    className="text-right text-xs text-muted-foreground"
+                    title={new Date(stream.latest_ingested_at).toLocaleString()}
+                  >
+                    {timeAgo(stream.latest_ingested_at)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7"
+                      aria-label={`Preview ${streamLabel(stream)}`}
+                      onClick={() => setPreviewStream(stream)}
+                    >
+                      Preview
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
+      <Dialog
+        open={previewStream != null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewStream(null);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              {previewStream ? `Recent candles · ${streamLabel(previewStream)}` : 'Recent candles'}
+            </DialogTitle>
+            <DialogDescription>
+              {previewStream
+                ? `${previewStream.source_name} · ${CANDLE_PREVIEW_LIMIT} latest expected bars from the stored market-data repository.`
+                : 'Stored market-data candles.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewQuery.isLoading ? (
+            <div className="space-y-3 py-2">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          ) : previewQuery.isError ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              Failed to load recent candles for this stream.
+            </div>
+          ) : previewCandles.length === 0 ? (
+            <div className="rounded-md border bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
+              No candles were found in the preview window.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-md border px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Returned
+                  </div>
+                  <div className="text-sm font-medium">{previewCandles.length} candles</div>
+                </div>
+                <div className="rounded-md border px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Latest close
+                  </div>
+                  <div className="font-mono text-sm">
+                    {previewCandles[previewCandles.length - 1]?.close}
+                  </div>
+                </div>
+                <div className="rounded-md border px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Query limit
+                  </div>
+                  <div className="text-sm font-medium">{previewQuery.data?.query_limit}</div>
+                </div>
+              </div>
+
+              <CandleCloseSparkline candles={previewCandles} />
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Open Time</TableHead>
+                    <TableHead className="text-right">Open</TableHead>
+                    <TableHead className="text-right">High</TableHead>
+                    <TableHead className="text-right">Low</TableHead>
+                    <TableHead className="text-right">Close</TableHead>
+                    <TableHead className="text-right">Volume</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {previewCandles.slice(-10).map((candle) => (
+                    <TableRow
+                      key={`${candle.source_name}:${candle.venue}:${candle.symbol}:${candle.timeframe}:${candle.open_time}`}
+                    >
+                      <TableCell
+                        className="whitespace-nowrap text-xs text-muted-foreground"
+                        title={new Date(candle.open_time).toLocaleString()}
+                      >
+                        {new Date(candle.open_time).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">{candle.open}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">{candle.high}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">{candle.low}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">{candle.close}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {candle.volume}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
