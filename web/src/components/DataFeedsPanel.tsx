@@ -29,6 +29,7 @@ import {
 import { useState, useCallback, useEffect } from 'react';
 
 import {
+  CANDLE_STREAM_OVERVIEW_LIMIT,
   dataFeedsApi,
   type CandleStream,
   type MarketCandle,
@@ -2263,7 +2264,7 @@ export default function DataFeedsPanel({
   });
   const candleStreamsQuery = useQuery({
     queryKey: ['market-data-candle-streams'],
-    queryFn: () => dataFeedsApi.candleStreams({ limit: 100 }),
+    queryFn: () => dataFeedsApi.candleStreams({ limit: CANDLE_STREAM_OVERVIEW_LIMIT }),
     refetchInterval: 30_000,
   });
 

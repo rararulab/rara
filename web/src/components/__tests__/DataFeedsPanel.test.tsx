@@ -41,6 +41,7 @@ const candleFreshnessMock = vi.fn();
 const candleGapsMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
+  CANDLE_STREAM_OVERVIEW_LIMIT: 500,
   dataFeedsApi: {
     list: (...args: unknown[]) => listMock(...args),
     summaries: (...args: unknown[]) => summariesMock(...args),
@@ -190,7 +191,7 @@ describe('DataFeedsPanel', () => {
     expect(screen.getByText('42')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(candleStreamsMock).toHaveBeenCalledWith({ limit: 100 });
+      expect(candleStreamsMock).toHaveBeenCalledWith({ limit: 500 });
     });
   });
 

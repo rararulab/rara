@@ -16,6 +16,8 @@
 
 import { api } from './client';
 
+export const CANDLE_STREAM_OVERVIEW_LIMIT = 500;
+
 // ---------------------------------------------------------------------------
 // Types — mirrors kernel::data_feed::config
 // ---------------------------------------------------------------------------
