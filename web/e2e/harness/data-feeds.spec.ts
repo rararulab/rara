@@ -57,6 +57,7 @@ interface FeedCatalogEntry {
   description: string;
   feed_type: DataFeedConfig['feed_type'];
   tags: string[];
+  source_name?: string;
   enabled: boolean;
   feed_id: string | null;
   requires_configuration: boolean;
@@ -65,6 +66,10 @@ interface FeedCatalogEntry {
   venue?: string | null;
   configured_symbols?: string[];
   configured_timeframes?: string[];
+  subscriptions?: {
+    user_subscribed: boolean;
+    user_subscription_ids: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -457,10 +462,15 @@ test.describe('Data Feeds Management', () => {
           description: 'Official Federal Reserve press releases.',
           feed_type: 'rss',
           tags: ['finance', 'news', 'fed'],
+          source_name: 'finance-fed-press-releases',
           enabled: false,
           feed_id: null,
           requires_configuration: false,
           setup_hint: null,
+          subscriptions: {
+            user_subscribed: true,
+            user_subscription_ids: ['sub-fed'],
+          },
           transport_template: {
             url: 'https://www.federalreserve.gov/feeds/press_all.xml',
             interval_secs: 300,
@@ -497,6 +507,8 @@ test.describe('Data Feeds Management', () => {
     await expect(page.getByText('News feeds', { exact: true })).toBeVisible();
     await expect(page.getByText('K-line feeds', { exact: true })).toBeVisible();
     await expect(page.getByText('Federal Reserve Press Releases', { exact: true })).toBeVisible();
+    await expect(page.getByText('Source finance-fed-press-releases')).toBeVisible();
+    await expect(page.getByText('Subscribed')).toBeVisible();
     await expect(page.getByText('binance · BTCUSDT, ETHUSDT · 1m')).toBeVisible();
 
     const fedEntry = page

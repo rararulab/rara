@@ -192,6 +192,10 @@ function catalogCoverageLabel(entry: FeedCatalogEntry): string | null {
   return null;
 }
 
+function catalogSourceName(entry: FeedCatalogEntry): string {
+  return entry.source_name?.trim() || `finance-${entry.id}`;
+}
+
 // ---------------------------------------------------------------------------
 // Status badge
 // ---------------------------------------------------------------------------
@@ -1275,6 +1279,9 @@ function FeedCatalogCard({
             )}
           </div>
           <p className="text-xs text-muted-foreground">{entry.description}</p>
+          <p className="font-mono text-[11px] text-muted-foreground">
+            Source {catalogSourceName(entry)}
+          </p>
           {entry.setup_hint && <p className="text-xs text-muted-foreground">{entry.setup_hint}</p>}
           {coverage && <p className="text-[11px] text-muted-foreground">{coverage}</p>}
         </div>

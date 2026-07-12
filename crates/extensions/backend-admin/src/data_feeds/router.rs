@@ -192,6 +192,7 @@ struct FeedCatalogEntryResponse {
     description:            String,
     feed_type:              FeedType,
     tags:                   Vec<String>,
+    source_name:            String,
     enabled:                bool,
     feed_id:                Option<String>,
     requires_configuration: bool,
@@ -864,6 +865,7 @@ fn catalog_response(
                 description: source.description,
                 feed_type: source.feed_type,
                 tags: source.tags,
+                source_name: feed_name.clone(),
                 enabled: feed.is_some_and(|feed| feed.enabled),
                 feed_id: feed.map(|feed| feed.id.clone()),
                 requires_configuration: source.requires_configuration,
@@ -1385,6 +1387,7 @@ mod tests {
             .iter()
             .find(|entry| entry["id"] == "binance-market-candles")
             .unwrap();
+        assert_eq!(binance["source_name"], "finance-binance-market-candles");
         assert_eq!(binance["requires_configuration"], false);
         assert_eq!(binance["feed_type"], "market_candle");
         assert_eq!(
