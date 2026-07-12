@@ -763,9 +763,9 @@ test.describe('Data Feeds Management', () => {
     await page.locator('input[placeholder="1m, 15m, 1h"]').fill('1d');
     await page.getByRole('button', { name: 'Enable source' }).click();
 
-    await expect(page.getByText('finance-longbridge-market-candles')).toBeVisible({
-      timeout: 5_000,
-    });
+    await expect(
+      page.getByRole('button', { name: 'finance-longbridge-market-candles' }),
+    ).toBeVisible({ timeout: 5_000 });
     expect(state.lastCatalogEnableBody).toMatchObject({
       transport: {
         url: 'https://market-data.local/longbridge/candles/latest',
