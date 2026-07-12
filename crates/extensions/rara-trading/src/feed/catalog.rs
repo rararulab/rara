@@ -26,6 +26,7 @@ pub struct DefaultFeedSource {
     pub name:                   String,
     pub description:            String,
     pub feed_type:              FeedType,
+    pub provider:               Option<String>,
     pub tags:                   Vec<String>,
     pub transport:              Option<serde_json::Value>,
     pub auth:                   Option<AuthConfig>,
@@ -122,6 +123,7 @@ fn rss_source(
         name:                   name.to_owned(),
         description:            description.to_owned(),
         feed_type:              FeedType::Rss,
+        provider:               None,
         tags:                   tags.into_iter().map(str::to_owned).collect(),
         transport:              Some(serde_json::json!({
             "url": url,
@@ -149,6 +151,7 @@ fn binance_market_candles_source(
         name:                   name.to_owned(),
         description:            description.to_owned(),
         feed_type:              FeedType::MarketCandle,
+        provider:               Some("binance".to_owned()),
         tags:                   tags.into_iter().map(str::to_owned).collect(),
         transport:              Some(serde_json::json!({
             "provider": "binance",
@@ -181,6 +184,7 @@ fn provider_preset(
         name:                   name.to_owned(),
         description:            description.to_owned(),
         feed_type:              FeedType::MarketCandle,
+        provider:               Some(venue.to_owned()),
         tags:                   tags.into_iter().map(str::to_owned).collect(),
         transport:              Some(serde_json::json!({
             "url": "",
@@ -294,7 +298,9 @@ mod tests {
         assert!(!source.can_enable());
         assert!(source.requires_configuration);
         assert!(source.setup_hint.is_some());
+        assert_eq!(source.provider.as_deref(), Some("longbridge"));
         let transport = source.transport.expect("transport template");
+        assert!(transport.get("provider").is_none());
         assert_eq!(transport["venue"], "longbridge");
         assert_eq!(
             transport["symbols"],

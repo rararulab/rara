@@ -149,12 +149,17 @@ checks:
 subscription changes. It combines the built-in source catalog, persisted feed
 runtime state, event watermarks (`event_count`, `last_event_type`,
 `last_event_at`, and `lag_seconds`), configured K-line selectors, and
-source-name subscription matches for the current user/session. Use
-`finance_list_feed_events` when the user asks what recent finance news or
-closed-candle notifications were actually received. It reads persisted events by
-`catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
-`event_kinds` (`rss_article`, `market_candle_closed`), and returns per-source
-pages with `total`, `has_more`, `query_limit`, and `query_offset`.
+provider metadata. It also reports source-name subscription matches for the
+current user/session. Use `finance_list_feed_events` when the user asks what
+recent finance news or closed-candle notifications were actually received. It
+reads persisted events by `catalog_source_ids`, `source_names`, or `feed_ids`,
+can narrow mixed sources by `event_kinds` (`rss_article`,
+`market_candle_closed`), and returns per-source pages with `total`, `has_more`,
+`query_limit`, and `query_offset`.
+
+For built-in catalog entries, `provider` is catalog metadata used by the agent
+and UI to label fixed data sources such as Binance and Longbridge. It is
+separate from `transport.provider`, which selects a runtime transport driver.
 
 Stored closed candles are queryable through read-only market-data tools:
 

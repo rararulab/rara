@@ -67,6 +67,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub name:                   String,
     pub description:            String,
     pub feed_type:              String,
+    pub provider:               Option<String>,
     pub tags:                   Vec<String>,
     pub source_name:            String,
     pub requires_configuration: bool,
@@ -2141,11 +2142,18 @@ fn feed_source_entry(
         .map(|feed| &feed.transport)
         .or(source.transport.as_ref());
     let can_enable = source.can_enable();
+    let provider = source.provider.clone().or_else(|| {
+        transport
+            .and_then(|value| value.get("provider"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    });
     FinanceFeedSourceEntry {
         id: source.id,
         name: source.name,
         description: source.description,
         feed_type: source.feed_type.to_string(),
+        provider,
         tags: source.tags,
         source_name,
         requires_configuration: source.requires_configuration,
@@ -2559,9 +2567,25 @@ mod tests {
             .iter()
             .find(|source| source.id == "binance-market-candles")
             .expect("binance source should be listed");
+        assert_eq!(binance.provider.as_deref(), Some("binance"));
         assert_eq!(binance.venue.as_deref(), Some("binance"));
         assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
         assert_eq!(binance.configured_timeframes, ["1m"]);
+
+        let longbridge = result
+            .sources
+            .iter()
+            .find(|source| source.id == "longbridge-market-candles")
+            .expect("longbridge source should be listed");
+        assert_eq!(longbridge.provider.as_deref(), Some("longbridge"));
+        assert!(longbridge.requires_configuration);
+        assert!(!longbridge.can_enable);
+        assert!(
+            longbridge
+                .setup_hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("Longbridge"))
+        );
     }
 
     #[tokio::test]
