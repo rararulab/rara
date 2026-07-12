@@ -35,14 +35,18 @@ use std::{
     time::Duration,
 };
 
-use rara_kernel::channel::{
-    adapter::ChannelAdapter,
-    types::{ChannelType, GroupPolicy},
+use rara_kernel::{
+    channel::{
+        adapter::ChannelAdapter,
+        types::{ChannelType, GroupPolicy},
+    },
+    data_feed::{DataFeedConfig, FeedType},
 };
 use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
+use rara_trading::feed::market_candle::MarketCandleSource;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
@@ -766,10 +770,36 @@ pub async fn start_with_options(
 
     // Restore feed configs from database into registry.
     match feed_svc.list_feeds().await {
-        Ok(configs) => {
+        Ok(mut configs) => {
             let count = configs.len();
+            let mut normalized_count = 0usize;
+            for config in &mut configs {
+                match normalize_restored_data_feed_config(config) {
+                    Ok(true) => {
+                        normalized_count += 1;
+                        if let Err(e) = feed_svc.update_feed(config).await {
+                            warn!(
+                                feed = %config.name,
+                                error = %e,
+                                "failed to persist normalized restored data feed config"
+                            );
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        warn!(
+                            feed = %config.name,
+                            error = %e,
+                            "failed to normalize restored data feed config"
+                        );
+                    }
+                }
+            }
             feed_registry.restore(configs);
-            info!(count, "restored data feed configs from database");
+            info!(
+                count,
+                normalized_count, "restored data feed configs from database"
+            );
         }
         Err(e) => {
             warn!(error = %e, "failed to restore data feed configs, starting with empty registry");
@@ -1496,6 +1526,16 @@ async fn try_build_wechat(
     Ok(Some(adapter))
 }
 
+fn normalize_restored_data_feed_config(config: &mut DataFeedConfig) -> anyhow::Result<bool> {
+    if config.feed_type != FeedType::MarketCandle {
+        return Ok(false);
+    }
+
+    let before = config.transport.clone();
+    MarketCandleSource::normalize_config(config)?;
+    Ok(config.transport != before)
+}
+
 /// Diesel-embedded SQLite migrations, shipped inside the binary at build time.
 const EMBEDDED_MIGRATIONS: diesel_migrations::EmbeddedMigrations =
     diesel_migrations::embed_migrations!("../rara-model/migrations");
@@ -1654,6 +1694,9 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
 mod tests {
     use std::fs;
 
+    use jiff::Timestamp;
+    use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+
     use super::AppConfig;
 
     const BASE_YAML: &str = r#"
@@ -1719,6 +1762,46 @@ mita:
         assert!(
             err.to_string().contains("owner_token must not be empty"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn normalize_restored_data_feed_config_canonicalizes_market_candle_transport() {
+        let now = Timestamp::now();
+        let mut config = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": " BINANCE ",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": " BINANCE ",
+                "symbols": [" ethusdt ", "BTCUSDT", "btcusdt"],
+                "timeframes": [" 15M ", "1m", "15m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+
+        assert!(
+            super::normalize_restored_data_feed_config(&mut config)
+                .expect("market candle config should normalize")
+        );
+        assert_eq!(config.transport["provider"], "binance");
+        assert_eq!(config.transport["venue"], "binance");
+        assert_eq!(
+            config.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            config.transport["timeframes"],
+            serde_json::json!(["15m", "1m"])
         );
     }
 
