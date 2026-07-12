@@ -82,7 +82,8 @@ use file_stats::FileStatsTool;
 use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
     FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool,
-    FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsTool,
+    FinanceListSubscriptionsTool, FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool,
+    FinanceSubscribeNewsTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -103,9 +104,7 @@ use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
-use rara_trading::finance::tools::{
-    FinanceListSubscriptionsTool, FinanceSubscribeTool, FinanceUnsubscribeTool,
-};
+use rara_trading::finance::tools::{FinanceSubscribeTool, FinanceUnsubscribeTool};
 use read_file::ReadFileTool;
 use run_code::RunCodeTool;
 pub use run_code::SandboxCleanupHook;
@@ -205,6 +204,7 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
     let dispatch_handle_ref = dispatch_rara.handle_ref();
     let list_sessions = Arc::new(ListSessionsTool::new());
     let list_sessions_handle_ref = list_sessions.handle_ref();
+    let finance_tools = finance_tools(&deps);
 
     // Core tools.
     //
@@ -304,8 +304,28 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         Arc::new(WechatLoginConfirmTool::new()),
         // User interaction
         Arc::new(AskUserTool::new(deps.user_question_manager)),
-        // Finance information subscriptions
+        // Artifacts (rich-content side panel — deferred tier)
+        Arc::new(ArtifactsTool::new(deps.tape_service.clone())),
+    ];
+
+    for tool in tools.into_iter().chain(finance_tools) {
+        registry.register(tool);
+    }
+
+    ToolRegistrationResult {
+        dispatch_rara_handle: dispatch_handle_ref,
+        list_sessions_handle: list_sessions_handle_ref,
+    }
+}
+
+fn finance_tools(deps: &ToolDeps) -> Vec<AgentToolRef> {
+    vec![
         Arc::new(FinanceListFeedSourcesTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+            deps.finance_registry.clone(),
+        )),
+        Arc::new(FinanceListSubscriptionsTool::new(
             deps.data_feed_svc.clone(),
             deps.data_feed_registry.clone(),
             deps.finance_registry.clone(),
@@ -333,14 +353,13 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
             deps.finance_registry.clone(),
         )),
         Arc::new(FinanceDiagnoseCandleSubscriptionsTool::new(
-            deps.data_feed_svc,
-            deps.data_feed_registry,
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
             deps.finance_registry.clone(),
             deps.market_data_repo.clone(),
         )),
         Arc::new(FinanceSubscribeTool::new(deps.finance_registry.clone())),
         Arc::new(FinanceUnsubscribeTool::new(deps.finance_registry.clone())),
-        Arc::new(FinanceListSubscriptionsTool::new(deps.finance_registry)),
         Arc::new(
             rara_trading::market_data::tools::FinanceListCandleStreamsTool::new(
                 deps.market_data_repo.clone(),
@@ -363,21 +382,10 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
         ),
         Arc::new(
             rara_trading::market_data::tools::FinanceGetCandleFreshnessTool::new(
-                deps.market_data_repo,
+                deps.market_data_repo.clone(),
             ),
         ),
-        // Artifacts (rich-content side panel — deferred tier)
-        Arc::new(ArtifactsTool::new(deps.tape_service.clone())),
-    ];
-
-    for tool in tools {
-        registry.register(tool);
-    }
-
-    ToolRegistrationResult {
-        dispatch_rara_handle: dispatch_handle_ref,
-        list_sessions_handle: list_sessions_handle_ref,
-    }
+    ]
 }
 
 #[cfg(test)]
@@ -416,6 +424,7 @@ mod tests {
             "fff-find",
             "fff-grep",
             "finance_list_feed_sources",
+            "finance_list_subscriptions",
             "finance_enable_feed_source",
             "finance_disable_feed_source",
             "finance_restart_feed_source",
