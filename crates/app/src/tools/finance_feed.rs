@@ -1313,14 +1313,23 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
         let normalized_transport_changed = config.transport != original_transport;
 
         let requested_venue = params.venue.map(normalize_venue).transpose()?;
-        let venue = requested_venue.unwrap_or_else(|| {
-            config
-                .transport
-                .get("venue")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        });
+        let feed_venue = config
+            .transport
+            .get("venue")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let venue = match requested_venue {
+            Some(requested_venue) => {
+                anyhow::ensure!(
+                    requested_venue == feed_venue,
+                    "requested venue {requested_venue} does not match market candle feed venue \
+                     {feed_venue}"
+                );
+                requested_venue
+            }
+            None => feed_venue,
+        };
         anyhow::ensure!(!venue.is_empty(), "market candle venue is required");
 
         let was_enabled = config.enabled;
@@ -4158,6 +4167,64 @@ mod tests {
                 .await
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_rejects_requested_venue_mismatch() {
+        let (_list, _enable, _disable, _restart, tool, svc, _registry, finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("custom-feed".to_owned())
+            .name("custom-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let err = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      None,
+                    feed_id:                Some("custom-feed".to_owned()),
+                    venue:                  Some("okx".to_owned()),
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("requested venue okx does not match market candle feed venue binance")
+        );
+        assert_eq!(
+            finance_registry
+                .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+                .await
+                .len(),
+            0
         );
     }
 
