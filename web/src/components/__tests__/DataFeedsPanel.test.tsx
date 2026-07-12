@@ -135,6 +135,7 @@ beforeEach(() => {
     streams: [],
     count: 0,
     query_limit: 100,
+    has_more: false,
   } satisfies CandleStreamsResponse);
   candlesMock.mockResolvedValue({
     candles: [],
@@ -181,6 +182,7 @@ describe('DataFeedsPanel', () => {
       ],
       count: 1,
       query_limit: 100,
+      has_more: false,
     } satisfies CandleStreamsResponse);
 
     renderPanel();
@@ -223,6 +225,7 @@ describe('DataFeedsPanel', () => {
       ],
       count: 1,
       query_limit: 1,
+      has_more: true,
     } satisfies CandleStreamsResponse);
 
     renderPanel();
@@ -257,6 +260,7 @@ describe('DataFeedsPanel', () => {
       ],
       count: 1,
       query_limit: 100,
+      has_more: false,
     } satisfies CandleStreamsResponse);
 
     renderPanel();
@@ -296,6 +300,7 @@ describe('DataFeedsPanel', () => {
       ],
       count: 1,
       query_limit: 100,
+      has_more: false,
     } satisfies CandleStreamsResponse);
     candlesMock.mockResolvedValue({
       candles: [

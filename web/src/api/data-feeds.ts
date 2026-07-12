@@ -84,6 +84,7 @@ export interface CandleStreamsResponse {
   streams: CandleStream[];
   count: number;
   query_limit: number;
+  has_more: boolean;
 }
 
 export interface MarketCandle {

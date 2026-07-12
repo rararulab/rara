@@ -90,9 +90,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
 
   const entries = (catalogQuery.data ?? []).filter(isFinanceWatchableEntry);
   const candleStreams = candleStreamsQuery.data?.streams ?? [];
-  const candleStreamLimitReached =
-    candleStreamsQuery.data != null &&
-    candleStreamsQuery.data.streams.length >= candleStreamsQuery.data.query_limit;
+  const candleStreamHasMore = candleStreamsQuery.data?.has_more ?? false;
   const sessionSubscriptions = (subscriptionsQuery.data?.subscriptions ?? []).filter(
     (subscription) => subscription.session_key === sessionKey,
   );
@@ -134,7 +132,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
           </div>
         ) : (
           <div className="space-y-2">
-            {candleStreamLimitReached && (
+            {candleStreamHasMore && candleStreamsQuery.data != null && (
               <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
                 K-line stream overview is limited to {candleStreamsQuery.data.query_limit} streams;
                 a missing health check may need a narrower source, symbol, or timeframe query.

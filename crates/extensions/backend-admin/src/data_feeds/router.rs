@@ -259,6 +259,7 @@ struct CandleStreamListResponse {
     streams:     Vec<CandleStreamResponse>,
     count:       usize,
     query_limit: usize,
+    has_more:    bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1205,19 +1206,22 @@ async fn list_market_data_candle_streams(
     Query(params): Query<CandleStreamQueryParams>,
 ) -> Result<Json<CandleStreamListResponse>, ProblemDetails> {
     let limit = validate_market_data_stream_limit(params.limit)?;
+    let probe_limit = limit.saturating_add(1);
     let query = CandleStreamListQuery {
         source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
-        venue: normalize_optional_market_data_venue(params.venue)?,
-        symbol: normalize_optional_market_data_symbol(params.symbol)?,
-        timeframe: normalize_optional_market_data_timeframe(params.timeframe)?,
-        limit,
+        venue:       normalize_optional_market_data_venue(params.venue)?,
+        symbol:      normalize_optional_market_data_symbol(params.symbol)?,
+        timeframe:   normalize_optional_market_data_timeframe(params.timeframe)?,
+        limit:       probe_limit,
     };
 
-    let streams = state
+    let mut streams = state
         .market_data_repo
         .candle_streams(query)
         .await
         .map_err(|err| ProblemDetails::internal(format!("failed to list candle streams: {err}")))?;
+    let has_more = streams.len() > limit;
+    streams.truncate(limit);
     let count = streams.len();
 
     Ok(Json(CandleStreamListResponse {
@@ -1227,6 +1231,7 @@ async fn list_market_data_candle_streams(
             .collect(),
         count,
         query_limit: limit,
+        has_more,
     }))
 }
 
@@ -3297,6 +3302,7 @@ mod tests {
 
         assert_eq!(result["count"], 1);
         assert_eq!(result["query_limit"], 500);
+        assert_eq!(result["has_more"], false);
         let stream = &result["streams"][0];
         assert_eq!(stream["source_name"], "finance-binance-market-candles");
         assert_eq!(stream["venue"], "binance");
@@ -3307,6 +3313,59 @@ mod tests {
         assert_eq!(stream["latest_open_time"], "2026-07-10T08:00:00Z");
         assert_eq!(stream["latest_close_time"], "2026-07-10T08:01:00Z");
         assert_eq!(stream["latest_ingested_at"], "2026-07-10T08:01:03Z");
+    }
+
+    #[tokio::test]
+    async fn market_data_candle_streams_endpoint_reports_has_more() {
+        let market_data_repo = test_market_data_repo();
+        market_data_repo
+            .upsert_closed_candle(market_data_candle(
+                "2026-07-10T08:00:00Z",
+                "2026-07-10T08:01:00Z",
+                "1005.00",
+                Some("seq-1"),
+            ))
+            .await
+            .unwrap();
+        market_data_repo
+            .upsert_closed_candle(MarketCandle {
+                symbol: "ETHUSDT".to_owned(),
+                open_time: "2026-07-10T08:01:00Z".parse().unwrap(),
+                close_time: "2026-07-10T08:02:00Z".parse().unwrap(),
+                close: rust_decimal::Decimal::new(320_000, 2),
+                ..market_data_candle(
+                    "2026-07-10T08:01:00Z",
+                    "2026-07-10T08:02:00Z",
+                    "3200.00",
+                    Some("seq-2"),
+                )
+            })
+            .await
+            .unwrap();
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/market-data/candle-streams?limit=1")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["query_limit"], 1);
+        assert_eq!(result["has_more"], true);
+        assert_eq!(result["streams"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
