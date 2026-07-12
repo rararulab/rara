@@ -107,6 +107,7 @@ pub(super) enum SubscriptionHealth {
 pub(super) enum FeedRuntimeState {
     Running,
     Stopped,
+    Disabled,
     NotRegistered,
 }
 
@@ -398,6 +399,7 @@ fn validate_stale_after(value: Option<u64>) -> anyhow::Result<()> {
 fn runtime_state(feed: Option<&DataFeedConfig>, running: bool) -> FeedRuntimeState {
     match (feed, running) {
         (None, _) => FeedRuntimeState::NotRegistered,
+        (Some(feed), _) if !feed.enabled => FeedRuntimeState::Disabled,
         (Some(_), true) => FeedRuntimeState::Running,
         (Some(_), false) => FeedRuntimeState::Stopped,
     }
@@ -484,10 +486,12 @@ fn subscription_health(
     {
         return SubscriptionHealth::Unconfigured;
     }
-    if feed_sources
-        .iter()
-        .any(|feed| feed.runtime_state == FeedRuntimeState::NotRegistered)
-    {
+    if feed_sources.iter().any(|feed| {
+        matches!(
+            feed.runtime_state,
+            FeedRuntimeState::Disabled | FeedRuntimeState::NotRegistered
+        )
+    }) {
         return SubscriptionHealth::Unconfigured;
     }
     if feed_sources
@@ -843,6 +847,43 @@ mod tests {
         );
         assert_eq!(sub.feed_sources[0].feed_id, None);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_unconfigured_when_feed_source_is_disabled() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        let mut disabled = feed_config();
+        disabled.enabled = false;
+        disabled.status = FeedStatus::Idle;
+        disabled.updated_at = ts("2026-07-10T08:31:00Z");
+        assert!(
+            tool.data_feed_svc
+                .update_feed(&disabled)
+                .await
+                .expect("disabled feed update should succeed")
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  None,
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(sub.feed_sources[0].enabled, Some(false));
+        assert_eq!(
+            sub.feed_sources[0].runtime_state,
+            FeedRuntimeState::Disabled
+        );
     }
 
     #[tokio::test]
