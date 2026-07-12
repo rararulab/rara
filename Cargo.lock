@@ -7037,6 +7037,7 @@ dependencies = [
  "rara-sessions",
  "rara-skills",
  "rara-trading",
+ "rust_decimal",
  "serde",
  "serde_json",
  "snafu",

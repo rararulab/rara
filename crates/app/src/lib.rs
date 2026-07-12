@@ -797,6 +797,7 @@ pub async fn start_with_options(
         svc:              feed_svc,
         registry:         feed_registry.clone(),
         finance_registry: finance_registry.clone(),
+        market_data_repo: market_data_repo.clone(),
     };
 
     // TraceService is shared between the kernel (which writes traces at
