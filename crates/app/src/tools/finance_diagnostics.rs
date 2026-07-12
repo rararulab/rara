@@ -24,6 +24,7 @@ use rara_kernel::{
 };
 use rara_tool_macro::ToolDef;
 use rara_trading::{
+    feed::catalog::{DefaultFeedSource, default_finance_feed_sources},
     finance::registry::{FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry},
     market_data::{CandleLatestQuery, MarketDataRepositoryRef, Timeframe, tools::FinanceCandle},
 };
@@ -69,6 +70,8 @@ pub(super) struct CandleSubscriptionDiagnostic {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FeedSourceDiagnostic {
     pub source_name:           String,
+    pub catalog_source_id:     Option<String>,
+    pub catalog_name:          Option<String>,
     pub feed_id:               Option<String>,
     pub feed_type:             Option<String>,
     pub configured_provider:   Option<String>,
@@ -286,11 +289,13 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
         event_summaries: &HashMap<String, FeedEventSummary>,
         as_of: Timestamp,
     ) -> Vec<FeedSourceDiagnostic> {
+        let catalog_by_source_name = catalog_by_source_name();
         subscription
             .source_names
             .iter()
             .map(|source_name| {
                 let feed = feeds_by_name.get(source_name);
+                let catalog_source = catalog_by_source_name.get(source_name);
                 let event_summary = event_summaries.get(source_name);
                 let last_event_at = event_summary.and_then(|summary| summary.last_event_at);
                 let lag_seconds =
@@ -314,6 +319,8 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                 );
                 FeedSourceDiagnostic {
                     source_name: source_name.clone(),
+                    catalog_source_id: catalog_source.map(|source| source.id.clone()),
+                    catalog_name: catalog_source.map(|source| source.name.clone()),
                     feed_id: feed.map(|feed| feed.id.clone()),
                     feed_type: feed.map(|feed| feed.feed_type.to_string()),
                     configured_provider,
@@ -451,6 +458,13 @@ fn optional_source_names(source_names: &[String]) -> Vec<Option<String>> {
     } else {
         source_names.iter().cloned().map(Some).collect()
     }
+}
+
+fn catalog_by_source_name() -> HashMap<String, DefaultFeedSource> {
+    default_finance_feed_sources()
+        .into_iter()
+        .map(|source| (source.feed_name(), source))
+        .collect()
 }
 
 fn transport_string(transport: &serde_json::Value, key: &str) -> Option<String> {
@@ -925,6 +939,14 @@ mod tests {
         assert_eq!(sub.status, SubscriptionHealth::Ok);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.feed_sources[0].event_count, 1);
+        assert_eq!(
+            sub.feed_sources[0].catalog_source_id.as_deref(),
+            Some("binance-market-candles")
+        );
+        assert_eq!(
+            sub.feed_sources[0].catalog_name.as_deref(),
+            Some("Binance Market Candles")
+        );
         assert_eq!(
             sub.feed_sources[0].last_event_type.as_deref(),
             Some("market_candle_closed")
