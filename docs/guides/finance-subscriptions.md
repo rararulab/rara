@@ -224,6 +224,11 @@ Example candle subscription:
 }
 ```
 
+`finance_subscribe_instruments` derives `venue` from the selected
+`market_candle` feed when omitted. If a caller supplies `venue`, it must match
+the feed transport venue; mismatches are rejected before subscription creation
+because the feed cannot emit candles for another venue.
+
 Default delivery is `silent`. Immediate delivery is bounded by per-subscription
 cooldown and hourly budget; events above the budget are appended to tape rather
 than waking the session.
