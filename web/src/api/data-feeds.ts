@@ -80,6 +80,7 @@ export interface FeedCatalogEntry {
   description: string;
   feed_type: FeedType;
   tags: string[];
+  source_name?: string;
   enabled: boolean;
   feed_id: string | null;
   requires_configuration: boolean;
