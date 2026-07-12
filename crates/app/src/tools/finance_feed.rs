@@ -242,6 +242,7 @@ pub(super) struct FinanceSubscriptionSource {
     pub source_name:       String,
     pub catalog_source_id: Option<String>,
     pub catalog_name:      Option<String>,
+    pub provider:          Option<String>,
     pub feed_id:           Option<String>,
     pub feed_type:         Option<String>,
     pub persisted:         bool,
@@ -2235,6 +2236,7 @@ fn subscription_source_entry(
         source_name:       source_name.to_owned(),
         catalog_source_id: catalog_source.map(|source| source.id.clone()),
         catalog_name:      catalog_source.map(|source| source.name.clone()),
+        provider:          subscription_source_provider(catalog_source, feed),
         feed_id:           feed.map(|feed| feed.id.clone()),
         feed_type:         feed.map(|feed| feed.feed_type.to_string()),
         persisted:         feed.is_some(),
@@ -2243,6 +2245,22 @@ fn subscription_source_entry(
         status:            feed.map(|feed| feed.status.to_string()),
         last_error:        feed.and_then(|feed| feed.last_error.clone()),
     }
+}
+
+fn subscription_source_provider(
+    catalog_source: Option<&DefaultFeedSource>,
+    feed: Option<&DataFeedConfig>,
+) -> Option<String> {
+    catalog_source
+        .and_then(|source| source.provider.clone())
+        .or_else(|| {
+            feed.and_then(|feed| {
+                feed.transport
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+        })
 }
 
 fn source_subscription_summary(
@@ -2700,6 +2718,7 @@ mod tests {
         assert_eq!(source.enabled, Some(true));
         assert!(!source.running);
         assert_eq!(source.status.as_deref(), Some("idle"));
+        assert_eq!(source.provider, None);
         assert_eq!(source.last_error, None);
     }
 
@@ -3838,6 +3857,11 @@ mod tests {
     async fn subscribe_instruments_creates_market_feed_and_finance_subscription() {
         let (_list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
             tool().await;
+        let list = FinanceListSubscriptionsTool::new(
+            svc.clone(),
+            registry.clone(),
+            finance_registry.clone(),
+        );
         let ctx = context();
 
         let result = tool
@@ -3884,6 +3908,21 @@ mod tests {
         assert_eq!(subs[0].venues, ["binance"]);
         assert_eq!(subs[0].symbols, ["BTCUSDT", "SOLUSDT"]);
         assert_eq!(subs[0].timeframes, ["1m", "5m"]);
+
+        let listed = list
+            .run(
+                FinanceListSubscriptionsParams {
+                    current_session_only: Some(true),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.count, 1);
+        assert_eq!(
+            listed.subscriptions[0].sources[0].provider.as_deref(),
+            Some("binance")
+        );
     }
 
     #[tokio::test]

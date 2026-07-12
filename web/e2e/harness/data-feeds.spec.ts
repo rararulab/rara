@@ -77,6 +77,7 @@ interface FinanceSubscriptionSource {
   source_name: string;
   catalog_source_id: string | null;
   catalog_name: string | null;
+  provider: string | null;
   feed_id: string | null;
   feed_type: DataFeedConfig['feed_type'] | null;
   enabled: boolean | null;
