@@ -421,6 +421,7 @@ struct FeedCatalogEntryResponse {
     name:                   String,
     description:            String,
     feed_type:              FeedType,
+    provider:               Option<String>,
     tags:                   Vec<String>,
     source_name:            String,
     enabled:                bool,
@@ -1833,6 +1834,10 @@ fn catalog_response(
         .map(|source| {
             let feed_name = source.feed_name();
             let feed = feeds.iter().find(|feed| feed.name == feed_name);
+            let provider = source
+                .provider
+                .clone()
+                .or_else(|| catalog_transport_string(source.transport.as_ref(), "provider"));
             let venue = catalog_transport_string(source.transport.as_ref(), "venue");
             let configured_symbols =
                 catalog_transport_string_list(source.transport.as_ref(), "symbols");
@@ -1843,6 +1848,7 @@ fn catalog_response(
                 name: source.name,
                 description: source.description,
                 feed_type: source.feed_type,
+                provider,
                 tags: source.tags,
                 source_name: feed_name.clone(),
                 enabled: feed.is_some_and(|feed| feed.enabled),
@@ -2627,12 +2633,28 @@ mod tests {
             binance["transport_template"]["provider"].as_str().unwrap(),
             "binance"
         );
+        assert_eq!(binance["provider"], "binance");
         assert_eq!(binance["venue"], "binance");
         assert_eq!(
             binance["configured_symbols"],
             serde_json::json!(["BTCUSDT", "ETHUSDT"])
         );
         assert_eq!(binance["configured_timeframes"], serde_json::json!(["1m"]));
+
+        let longbridge = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "longbridge-market-candles")
+            .unwrap();
+        assert_eq!(longbridge["provider"], "longbridge");
+        assert_eq!(longbridge["requires_configuration"], true);
+        assert_eq!(longbridge["feed_type"], "market_candle");
+        assert!(
+            longbridge["setup_hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("Longbridge"))
+        );
     }
 
     #[tokio::test]
