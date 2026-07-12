@@ -68,16 +68,19 @@ pub(super) struct CandleSubscriptionDiagnostic {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FeedSourceDiagnostic {
-    pub source_name:       String,
-    pub feed_id:           Option<String>,
-    pub feed_type:         Option<String>,
-    pub enabled:           Option<bool>,
-    pub configured_status: Option<String>,
-    pub runtime_state:     FeedRuntimeState,
-    pub last_error:        Option<String>,
-    pub event_count:       i64,
-    pub last_event_at:     Option<String>,
-    pub lag_seconds:       Option<i64>,
+    pub source_name:           String,
+    pub feed_id:               Option<String>,
+    pub feed_type:             Option<String>,
+    pub configured_venue:      Option<String>,
+    pub configured_symbols:    Vec<String>,
+    pub configured_timeframes: Vec<String>,
+    pub enabled:               Option<bool>,
+    pub configured_status:     Option<String>,
+    pub runtime_state:         FeedRuntimeState,
+    pub last_error:            Option<String>,
+    pub event_count:           i64,
+    pub last_event_at:         Option<String>,
+    pub lag_seconds:           Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,6 +287,16 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     source_name: source_name.clone(),
                     feed_id: feed.map(|feed| feed.id.clone()),
                     feed_type: feed.map(|feed| feed.feed_type.to_string()),
+                    configured_venue: feed
+                        .and_then(|feed| feed.transport.get("venue"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    configured_symbols: feed.map_or_else(Vec::new, |feed| {
+                        transport_string_array(&feed.transport, "symbols", true)
+                    }),
+                    configured_timeframes: feed.map_or_else(Vec::new, |feed| {
+                        transport_string_array(&feed.transport, "timeframes", false)
+                    }),
                     enabled: feed.map(|feed| feed.enabled),
                     configured_status: feed.map(|feed| feed.status.to_string()),
                     runtime_state: runtime_state(
@@ -411,6 +424,29 @@ fn optional_source_names(source_names: &[String]) -> Vec<Option<String>> {
     } else {
         source_names.iter().cloned().map(Some).collect()
     }
+}
+
+fn transport_string_array(
+    transport: &serde_json::Value,
+    key: &str,
+    uppercase: bool,
+) -> Vec<String> {
+    transport
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if uppercase {
+                value.to_ascii_uppercase()
+            } else {
+                value.to_ascii_lowercase()
+            }
+        })
+        .collect()
 }
 
 fn invalid_stream(
@@ -759,6 +795,15 @@ mod tests {
         assert_eq!(sub.status, SubscriptionHealth::Ok);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.feed_sources[0].event_count, 1);
+        assert_eq!(
+            sub.feed_sources[0].configured_venue.as_deref(),
+            Some("binance")
+        );
+        assert_eq!(
+            sub.feed_sources[0].configured_symbols,
+            ["BTCUSDT".to_owned()]
+        );
+        assert_eq!(sub.feed_sources[0].configured_timeframes, ["1m".to_owned()]);
         assert_eq!(
             sub.feed_sources[0].last_event_at.as_deref(),
             Some("2026-07-10T08:30:30Z")

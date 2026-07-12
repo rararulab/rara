@@ -233,7 +233,7 @@ After subscribing to candle instruments, call
 subscription diagnostic includes:
 
 - feed config/runtime state, including whether the source is registered and
-  running;
+  running, plus configured `venue`, `symbols`, and `timeframes`;
 - persisted feed-event summary (`event_count`, `last_event_at`, and
   `lag_seconds`) to confirm the source is emitting events;
 - latest stored closed candle and freshness per
