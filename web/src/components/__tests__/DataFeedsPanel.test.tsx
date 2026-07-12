@@ -15,7 +15,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import DataFeedsPanel from '../DataFeedsPanel';
@@ -26,6 +26,7 @@ import type {
   FeedCatalogEntry,
   FinanceSubscription,
   FinanceSubscriptionsResponse,
+  MarketCandlesResponse,
 } from '@/api/data-feeds';
 
 const listMock = vi.fn();
@@ -33,6 +34,7 @@ const summariesMock = vi.fn();
 const catalogMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const candleStreamsMock = vi.fn();
+const candlesMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
   dataFeedsApi: {
@@ -41,6 +43,7 @@ vi.mock('@/api/data-feeds', () => ({
     catalog: (...args: unknown[]) => catalogMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
+    candles: (...args: unknown[]) => candlesMock(...args),
     toggle: vi.fn(),
     delete: vi.fn(),
     enableCatalogEntry: vi.fn(),
@@ -110,6 +113,7 @@ beforeEach(() => {
   catalogMock.mockReset();
   financeSubscriptionsMock.mockReset();
   candleStreamsMock.mockReset();
+  candlesMock.mockReset();
 
   listMock.mockResolvedValue([]);
   summariesMock.mockResolvedValue([]);
@@ -123,6 +127,11 @@ beforeEach(() => {
     count: 0,
     query_limit: 100,
   } satisfies CandleStreamsResponse);
+  candlesMock.mockResolvedValue({
+    candles: [],
+    count: 0,
+    query_limit: 50,
+  } satisfies MarketCandlesResponse);
 });
 
 afterEach(() => {
@@ -216,5 +225,83 @@ describe('DataFeedsPanel', () => {
     expect(
       screen.getByText('No stored K-line stream matches this subscription yet.'),
     ).toBeInTheDocument();
+  });
+
+  it('loads a recent candle preview for a stored K-line stream', async () => {
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 50,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T00:49:00Z',
+          latest_close_time: '2026-07-12T00:49:59Z',
+          latest_ingested_at: '2026-07-12T00:50:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 100,
+    } satisfies CandleStreamsResponse);
+    candlesMock.mockResolvedValue({
+      candles: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          open_time: '2026-07-12T00:48:00Z',
+          close_time: '2026-07-12T00:48:59Z',
+          open: '64100.10',
+          high: '64120.00',
+          low: '64090.00',
+          close: '64110.50',
+          volume: '12.34',
+          ingested_at: '2026-07-12T00:49:02Z',
+          provider_sequence: null,
+        },
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          open_time: '2026-07-12T00:49:00Z',
+          close_time: '2026-07-12T00:49:59Z',
+          open: '64110.50',
+          high: '64150.00',
+          low: '64105.00',
+          close: '64140.25',
+          volume: '8.75',
+          ingested_at: '2026-07-12T00:50:02Z',
+          provider_sequence: null,
+        },
+      ],
+      count: 2,
+      query_limit: 50,
+    } satisfies MarketCandlesResponse);
+
+    renderPanel();
+
+    const previewButton = await screen.findByRole('button', {
+      name: 'Preview BINANCE · BTCUSDT · 1m',
+    });
+    fireEvent.click(previewButton);
+
+    await waitFor(() => {
+      expect(candlesMock).toHaveBeenCalledWith({
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        symbol: 'BTCUSDT',
+        timeframe: '1m',
+        start: '2026-07-12T00:00:00.000Z',
+        end: '2026-07-12T00:50:00.000Z',
+        limit: 50,
+      });
+    });
+    expect(await screen.findByText('Recent candles · BINANCE · BTCUSDT · 1m')).toBeInTheDocument();
+    expect(screen.getAllByText('64140.25').length).toBeGreaterThan(0);
+    expect(screen.getByText('12.34')).toBeInTheDocument();
   });
 });
