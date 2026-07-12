@@ -1263,6 +1263,11 @@ function FeedCatalogCard({
                 Enabled
               </Badge>
             )}
+            {entry.subscriptions?.user_subscribed && (
+              <Badge variant="outline" className="text-xs text-foreground">
+                Subscribed
+              </Badge>
+            )}
             {entry.requires_configuration && (
               <Badge variant="secondary" className="text-xs text-muted-foreground">
                 Requires config
@@ -1322,8 +1327,8 @@ function FeedCatalogCard({
         <div className="border-b px-4 py-3">
           <h3 className="text-sm font-semibold">Default finance sources</h3>
           <p className="text-xs text-muted-foreground">
-            Enable built-in news and K-line feeds, or configure provider presets with your own
-            endpoint.
+            Enable operator-owned news and K-line ingestion, then subscribe conversations to the
+            sources they should watch.
           </p>
         </div>
         <div className="divide-y">

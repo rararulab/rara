@@ -88,6 +88,12 @@ export interface FeedCatalogEntry {
   venue?: string | null;
   configured_symbols?: string[];
   configured_timeframes?: string[];
+  subscriptions?: FeedCatalogSubscriptions;
+}
+
+export interface FeedCatalogSubscriptions {
+  user_subscribed: boolean;
+  user_subscription_ids: string[];
 }
 
 export interface EnableCatalogEntryRequest {
