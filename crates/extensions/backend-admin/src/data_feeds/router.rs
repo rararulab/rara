@@ -242,11 +242,14 @@ where
 #[derive(Debug, Deserialize)]
 struct EventQueryParams {
     /// Duration string: `"1h"`, `"24h"`, `"7d"`, etc.
-    since:  Option<String>,
+    since:       Option<String>,
+    /// Optional comma-separated event-kind filter, e.g. rss_article or
+    /// market_candle_closed.
+    event_kinds: Option<String>,
     /// Maximum events to return (default: 50, max: 200).
-    limit:  Option<i64>,
+    limit:       Option<i64>,
     /// Offset for pagination (default: 0).
-    offset: Option<i64>,
+    offset:      Option<i64>,
 }
 
 /// Query parameters for stored market-data candle streams.
@@ -1213,10 +1216,15 @@ async fn query_events(
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
+    let event_types = parse_event_kind_filter(params.event_kinds.as_deref())?
+        .into_iter()
+        .map(finance_event_kind_type)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
 
     let page = state
         .svc
-        .query_events(&feed.name, since, &[], limit, offset)
+        .query_events(&feed.name, since, &event_types, limit, offset)
         .await?;
 
     Ok(Json(EventListResponse {
@@ -1939,6 +1947,34 @@ fn finance_event_kind_for_feed_type(feed_type: FeedType) -> Option<FinanceEventK
         FeedType::MarketCandle => Some(FinanceEventKind::MarketCandleClosed),
         FeedType::Polling | FeedType::Webhook | FeedType::WebSocket => None,
     }
+}
+
+fn finance_event_kind_type(kind: FinanceEventKind) -> &'static str {
+    match kind {
+        FinanceEventKind::RssArticle => "rss_article",
+        FinanceEventKind::MarketCandleClosed => "market_candle_closed",
+    }
+}
+
+fn parse_event_kind_filter(value: Option<&str>) -> Result<Vec<FinanceEventKind>, ProblemDetails> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+
+    let mut event_kinds = Vec::new();
+    for raw in value.split(',') {
+        match raw.trim() {
+            "" => {}
+            "rss_article" => event_kinds.push(FinanceEventKind::RssArticle),
+            "market_candle_closed" => event_kinds.push(FinanceEventKind::MarketCandleClosed),
+            invalid => {
+                return Err(ProblemDetails::bad_request(format!(
+                    "invalid event_kinds value: {invalid}"
+                )));
+            }
+        }
+    }
+    Ok(dedupe_finance_event_kinds(event_kinds))
 }
 
 fn dedupe_finance_event_kinds(values: Vec<FinanceEventKind>) -> Vec<FinanceEventKind> {
@@ -3271,6 +3307,153 @@ mod tests {
         assert_eq!(summary["last_event_at"], event_at.to_string());
         let lag_seconds = summary["lag_seconds"].as_i64().unwrap();
         assert!((58..=62).contains(&lag_seconds), "lag={lag_seconds}");
+    }
+
+    #[tokio::test]
+    async fn feed_events_endpoint_filters_by_event_kind() {
+        let (app, pools) = app_with_user_and_pools(user_of(Role::Admin)).await;
+        let create_body = serde_json::json!({
+            "name": "mixed-finance-feed",
+            "feed_type": "polling",
+            "tags": ["finance"],
+            "transport": {
+                "url": "https://example.com/feed",
+                "interval_secs": 60,
+                "headers": {},
+                "method": "GET"
+            },
+        });
+        let create_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(create_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        let mut conn = pools.writer.get().await.expect("pool conn");
+        for (event_id, event_type, title, received_at) in [
+            (
+                "mixed-finance-feed:rss",
+                "rss_article",
+                "Macro update",
+                "2026-07-12T08:00:00Z",
+            ),
+            (
+                "mixed-finance-feed:candle",
+                "market_candle_closed",
+                "BTCUSDT candle",
+                "2026-07-12T08:01:00Z",
+            ),
+        ] {
+            diesel::sql_query(
+                "INSERT INTO data_feed_events (id, source_name, event_type, tags, payload, \
+                 received_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind::<diesel::sql_types::Text, _>(
+                rara_kernel::data_feed::FeedEventId::deterministic(event_id).to_string(),
+            )
+            .bind::<diesel::sql_types::Text, _>("mixed-finance-feed")
+            .bind::<diesel::sql_types::Text, _>(event_type)
+            .bind::<diesel::sql_types::Text, _>("[\"finance\"]")
+            .bind::<diesel::sql_types::Text, _>(serde_json::json!({ "title": title }).to_string())
+            .bind::<diesel::sql_types::Text, _>(received_at)
+            .execute(&mut *conn)
+            .await
+            .expect("insert event");
+        }
+        drop(conn);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/v1/data-feeds/{}/events?event_kinds=market_candle_closed",
+                        feed.id
+                    ))
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let events: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(events["total"], 1);
+        assert_eq!(events["has_more"], false);
+        let returned = events["events"].as_array().unwrap();
+        assert_eq!(returned.len(), 1);
+        assert_eq!(returned[0]["event_type"], "market_candle_closed");
+        assert_eq!(returned[0]["payload"]["title"], "BTCUSDT candle");
+    }
+
+    #[tokio::test]
+    async fn feed_events_endpoint_rejects_unknown_event_kind() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let create_body = serde_json::json!({
+            "name": "invalid-kind-feed",
+            "feed_type": "polling",
+            "tags": ["finance"],
+            "transport": {
+                "url": "https://example.com/feed",
+                "interval_secs": 60,
+                "headers": {},
+                "method": "GET"
+            },
+        });
+        let create_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(create_res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/v1/data-feeds/{}/events?event_kinds=unknown_kind",
+                        feed.id
+                    ))
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

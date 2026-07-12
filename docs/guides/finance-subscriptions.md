@@ -174,6 +174,10 @@ agent via:
 - `GET /api/v1/data-feeds/market-data/candles/freshness`
 - `GET /api/v1/data-feeds/market-data/candles/gaps`
 
+The admin feed-events endpoint mirrors the same event-kind split for UI and
+operator views: `GET /api/v1/data-feeds/{id}/events?event_kinds=rss_article`
+or `event_kinds=market_candle_closed`. Multiple values are comma-separated.
+
 The candle endpoints are read-only. They require canonical selectors
 (`venue`, `symbol`, `timeframe`) and return decimal OHLCV values as strings.
 The range endpoint uses `start` as an inclusive open-time lower bound and `end`
