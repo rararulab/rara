@@ -110,6 +110,22 @@ export interface MarketCandlesResponse {
   query_limit: number;
 }
 
+export interface MarketCandleFreshnessResponse {
+  latest: MarketCandle | null;
+  as_of: string;
+  stale_after_secs: number;
+  lag_secs: number | null;
+  is_stale: boolean;
+  status: 'missing' | 'future' | 'stale' | 'fresh';
+}
+
+export interface MarketCandleGapsResponse {
+  missing_open_times: string[];
+  missing_count: number;
+  expected_count: number;
+  complete: boolean;
+}
+
 export interface CreateFeedRequest {
   name: string;
   feed_type: FeedType;
@@ -284,6 +300,46 @@ export const dataFeedsApi = {
     if (params.limit) query.set('limit', String(params.limit));
     return api.get<MarketCandlesResponse>(
       `/api/v1/data-feeds/market-data/candles?${query.toString()}`,
+    );
+  },
+
+  candleFreshness: (params: {
+    source_name?: string;
+    venue: string;
+    symbol: string;
+    timeframe: string;
+    as_of?: string;
+    stale_after_secs?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.source_name) query.set('source_name', params.source_name);
+    query.set('venue', params.venue);
+    query.set('symbol', params.symbol);
+    query.set('timeframe', params.timeframe);
+    if (params.as_of) query.set('as_of', params.as_of);
+    if (params.stale_after_secs) query.set('stale_after_secs', String(params.stale_after_secs));
+    return api.get<MarketCandleFreshnessResponse>(
+      `/api/v1/data-feeds/market-data/candles/freshness?${query.toString()}`,
+    );
+  },
+
+  candleGaps: (params: {
+    source_name?: string;
+    venue: string;
+    symbol: string;
+    timeframe: string;
+    start: string;
+    end: string;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.source_name) query.set('source_name', params.source_name);
+    query.set('venue', params.venue);
+    query.set('symbol', params.symbol);
+    query.set('timeframe', params.timeframe);
+    query.set('start', params.start);
+    query.set('end', params.end);
+    return api.get<MarketCandleGapsResponse>(
+      `/api/v1/data-feeds/market-data/candles/gaps?${query.toString()}`,
     );
   },
 

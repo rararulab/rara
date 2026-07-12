@@ -163,11 +163,15 @@ agent via:
 - `GET /api/v1/data-feeds/market-data/candle-streams`
 - `GET /api/v1/data-feeds/market-data/candles/latest`
 - `GET /api/v1/data-feeds/market-data/candles`
+- `GET /api/v1/data-feeds/market-data/candles/freshness`
+- `GET /api/v1/data-feeds/market-data/candles/gaps`
 
 The candle endpoints are read-only. They require canonical selectors
 (`venue`, `symbol`, `timeframe`) and return decimal OHLCV values as strings.
 The range endpoint uses `start` as an inclusive open-time lower bound and `end`
-as an exclusive open-time upper bound.
+as an exclusive open-time upper bound. Freshness defaults its stale threshold to
+2x the timeframe step. Gap checks use the same inclusive/exclusive range
+semantics and are capped at 10,000 expected candles.
 
 Identity and session routing are always taken from `ToolContext`. The tool
 schema has no `owner` or `session` parameter, so an agent cannot subscribe or
