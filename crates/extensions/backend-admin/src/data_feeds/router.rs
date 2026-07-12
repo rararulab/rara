@@ -189,6 +189,9 @@ struct FeedCatalogEntryResponse {
     requires_configuration: bool,
     setup_hint:             Option<String>,
     transport_template:     Option<serde_json::Value>,
+    venue:                  Option<String>,
+    configured_symbols:     Vec<String>,
+    configured_timeframes:  Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -828,19 +831,49 @@ fn catalog_response(feeds: &[DataFeedConfig]) -> Vec<FeedCatalogEntryResponse> {
         .map(|source| {
             let feed_name = source.feed_name();
             let feed = feeds.iter().find(|feed| feed.name == feed_name);
+            let venue = catalog_transport_string(source.transport.as_ref(), "venue");
+            let configured_symbols =
+                catalog_transport_string_list(source.transport.as_ref(), "symbols");
+            let configured_timeframes =
+                catalog_transport_string_list(source.transport.as_ref(), "timeframes");
             FeedCatalogEntryResponse {
-                id:                     source.id,
-                name:                   source.name,
-                description:            source.description,
-                feed_type:              source.feed_type,
-                tags:                   source.tags,
-                enabled:                feed.is_some_and(|feed| feed.enabled),
-                feed_id:                feed.map(|feed| feed.id.clone()),
+                id: source.id,
+                name: source.name,
+                description: source.description,
+                feed_type: source.feed_type,
+                tags: source.tags,
+                enabled: feed.is_some_and(|feed| feed.enabled),
+                feed_id: feed.map(|feed| feed.id.clone()),
                 requires_configuration: source.requires_configuration,
-                setup_hint:             source.setup_hint,
-                transport_template:     source.transport,
+                setup_hint: source.setup_hint,
+                transport_template: source.transport,
+                venue,
+                configured_symbols,
+                configured_timeframes,
             }
         })
+        .collect()
+}
+
+fn catalog_transport_string(transport: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    transport
+        .and_then(|transport| transport.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn catalog_transport_string_list(transport: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    transport
+        .and_then(|transport| transport.get(key))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
         .collect()
 }
 
@@ -1277,6 +1310,12 @@ mod tests {
             binance["transport_template"]["provider"].as_str().unwrap(),
             "binance"
         );
+        assert_eq!(binance["venue"], "binance");
+        assert_eq!(
+            binance["configured_symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(binance["configured_timeframes"], serde_json::json!(["1m"]));
     }
 
     #[tokio::test]
