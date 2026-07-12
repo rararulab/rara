@@ -108,7 +108,7 @@ describe('expectedCandleStreamHealthForGroups', () => {
     expect(health).toEqual({
       status: 'missing',
       label: 'Partial',
-      detail: '1/2 expected streams present; 1 missing.',
+      detail: '1/2 expected streams present; 1 missing. Missing: binance ETHUSDT 1m.',
     });
   });
 
@@ -135,7 +135,32 @@ describe('expectedCandleStreamHealthForGroups', () => {
     expect(health).toEqual({
       status: 'stale',
       label: 'Partial',
-      detail: '1/2 expected streams fresh; 1 stale.',
+      detail: '1/2 expected streams fresh; 1 stale. Stale: binance ETHUSDT 1m.',
+    });
+  });
+
+  it('summarizes stale selectors when every expected stream is stale', () => {
+    const health = expectedCandleStreamHealthForGroups(
+      [
+        {
+          sourceName: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbols: ['BTCUSDT'],
+          timeframes: ['1m'],
+        },
+      ],
+      [
+        candleStream({
+          latest_open_time: '2026-07-12T11:50:00Z',
+          latest_close_time: '2026-07-12T11:50:59Z',
+        }),
+      ],
+    );
+
+    expect(health).toEqual({
+      status: 'stale',
+      label: 'Stale',
+      detail: '1 expected stream past the freshness window. Stale: binance BTCUSDT 1m.',
     });
   });
 
