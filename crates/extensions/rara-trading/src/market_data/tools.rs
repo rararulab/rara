@@ -28,6 +28,7 @@ use super::{
 
 const DEFAULT_CANDLE_LIMIT: usize = 500;
 const MAX_CANDLE_LIMIT: usize = 10_000;
+const MAX_CANDLE_RANGE_LIMIT: usize = MAX_CANDLE_LIMIT - 1;
 const MAX_CANDLE_STREAM_LIMIT: usize = MAX_CANDLE_LIMIT - 1;
 const MAX_SELECTOR_LEN: usize = 128;
 
@@ -65,6 +66,7 @@ pub struct FinanceQueryCandlesResult {
     pub candles:     Vec<FinanceCandle>,
     pub count:       usize,
     pub query_limit: usize,
+    pub has_more:    bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -285,7 +287,8 @@ impl ToolExecute for FinanceQueryCandlesTool {
         params: FinanceQueryCandlesParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceQueryCandlesResult> {
-        let limit = validate_candle_limit(params.limit)?;
+        let limit = validate_candle_range_limit(params.limit)?;
+        let probe_limit = limit.saturating_add(1);
         let start = parse_timestamp("start", &params.start)?;
         let end = parse_timestamp("end", &params.end)?;
         anyhow::ensure!(start < end, "start must be before end");
@@ -297,14 +300,17 @@ impl ToolExecute for FinanceQueryCandlesTool {
             timeframe: normalize_required_timeframe_selector(params.timeframe)?,
             start,
             end,
-            limit,
+            limit: probe_limit,
         };
-        let candles = self.repository.candles(query).await?;
+        let mut candles = self.repository.candles(query).await?;
+        let has_more = candles.len() > limit;
+        candles.truncate(limit);
         let count = candles.len();
         Ok(FinanceQueryCandlesResult {
             candles: candles.into_iter().map(FinanceCandle::from).collect(),
             count,
             query_limit: limit,
+            has_more,
         })
     }
 }
@@ -535,12 +541,12 @@ fn normalize_optional_timeframe_selector(
     value.map(normalize_required_timeframe_selector).transpose()
 }
 
-fn validate_candle_limit(limit: Option<usize>) -> anyhow::Result<usize> {
+fn validate_candle_range_limit(limit: Option<usize>) -> anyhow::Result<usize> {
     let limit = limit.unwrap_or(DEFAULT_CANDLE_LIMIT);
     anyhow::ensure!(limit > 0, "limit must be positive");
     anyhow::ensure!(
-        limit <= MAX_CANDLE_LIMIT,
-        "limit must be <= {MAX_CANDLE_LIMIT}"
+        limit <= MAX_CANDLE_RANGE_LIMIT,
+        "limit must be <= {MAX_CANDLE_RANGE_LIMIT}"
     );
     Ok(limit)
 }
@@ -880,6 +886,7 @@ mod tests {
 
         assert_eq!(result.count, 2);
         assert_eq!(result.query_limit, 10);
+        assert!(!result.has_more);
         assert_eq!(
             result
                 .candles
@@ -887,6 +894,58 @@ mod tests {
                 .map(|candle| candle.open_time.as_str())
                 .collect::<Vec<_>>(),
             vec!["2026-07-10T08:00:00Z", "2026-07-10T08:01:00Z"]
+        );
+    }
+
+    #[tokio::test]
+    async fn query_candles_tool_reports_when_more_candles_match() {
+        let repository = repository().await;
+        let tool = FinanceQueryCandlesTool::new(repository);
+        let result = tool
+            .run(
+                FinanceQueryCandlesParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       "binance".to_owned(),
+                    symbol:      "BTCUSDT".to_owned(),
+                    timeframe:   "1m".to_owned(),
+                    start:       "2026-07-10T08:00:00Z".to_owned(),
+                    end:         "2026-07-10T08:02:00Z".to_owned(),
+                    limit:       Some(1),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.query_limit, 1);
+        assert!(result.has_more);
+        assert_eq!(result.candles[0].open_time, "2026-07-10T08:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn query_candles_tool_rejects_unprobeable_limit() {
+        let repository = repository().await;
+        let tool = FinanceQueryCandlesTool::new(repository);
+        let error = tool
+            .run(
+                FinanceQueryCandlesParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       "binance".to_owned(),
+                    symbol:      "BTCUSDT".to_owned(),
+                    timeframe:   "1m".to_owned(),
+                    start:       "2026-07-10T08:00:00Z".to_owned(),
+                    end:         "2026-07-10T08:02:00Z".to_owned(),
+                    limit:       Some(10_000),
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("limit must be <= 9999"),
+            "unexpected error: {error}"
         );
     }
 
