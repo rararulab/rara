@@ -420,6 +420,57 @@ describe('FinanceWatchesCard', () => {
     ).toBeInTheDocument();
   });
 
+  it('warns_when_watched_kline_health_uses_a_limited_stream_overview', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        feed_type: 'market_candle',
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT'],
+        configured_timeframes: ['1m'],
+        tags: ['finance', 'market-data', 'crypto', 'binance'],
+        transport_template: {
+          venue: 'binance',
+          symbols: ['BTCUSDT'],
+          timeframes: ['1m'],
+        },
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [financeSubscription({ symbols: ['BTCUSDT'] })],
+      count: 1,
+    } satisfies FinanceSubscriptionsResponse);
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 42,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T00:41:00Z',
+          latest_close_time: '2026-07-12T00:41:59Z',
+          latest_ingested_at: '2026-07-12T00:42:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 1,
+    } satisfies CandleStreamsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('watching')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'K-line stream overview is limited to 1 streams; a missing health check may need a narrower source, symbol, or timeframe query.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('uses_subscription_selectors_for_watched_kline_health', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
     catalogMock.mockResolvedValue([

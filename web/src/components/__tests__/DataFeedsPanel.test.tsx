@@ -206,6 +206,35 @@ describe('DataFeedsPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('warns when the stored K-line stream overview reaches the query limit', async () => {
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 42,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T00:41:00Z',
+          latest_close_time: '2026-07-12T00:41:59Z',
+          latest_ingested_at: '2026-07-12T00:42:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 1,
+    } satisfies CandleStreamsResponse);
+
+    renderPanel();
+
+    expect(await screen.findByText('Stored K-line streams')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Showing the first 1 streams. Narrow by source, venue, symbol, or timeframe if a watched K-line stream is missing from this overview.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows fresh health for a K-line subscription with a matching stored stream', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
     financeSubscriptionsMock.mockResolvedValue({
