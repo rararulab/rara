@@ -115,6 +115,14 @@ export interface MarketCandlesResponse {
   next_start: string | null;
 }
 
+export interface RecentMarketCandlesResponse {
+  candles: MarketCandle[];
+  count: number;
+  query_limit: number;
+  has_more: boolean;
+  next_end: string | null;
+}
+
 export interface MarketCandleFreshnessResponse {
   latest: MarketCandle | null;
   as_of: string;
@@ -283,6 +291,24 @@ export const dataFeedsApi = {
     query.set('timeframe', params.timeframe);
     return api.get<LatestMarketCandleResponse>(
       `/api/v1/data-feeds/market-data/candles/latest?${query.toString()}`,
+    );
+  },
+
+  recentCandles: (params: {
+    source_name?: string;
+    venue: string;
+    symbol: string;
+    timeframe: string;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params.source_name) query.set('source_name', params.source_name);
+    query.set('venue', params.venue);
+    query.set('symbol', params.symbol);
+    query.set('timeframe', params.timeframe);
+    if (params.limit) query.set('limit', String(params.limit));
+    return api.get<RecentMarketCandlesResponse>(
+      `/api/v1/data-feeds/market-data/candles/recent?${query.toString()}`,
     );
   },
 

@@ -28,6 +28,7 @@
 //! | GET    | `/api/v1/data-feeds/finance/subscriptions` | list current user's finance subscriptions |
 //! | POST   | `/api/v1/data-feeds/finance/subscriptions` | create/update current user's finance subscription |
 //! | GET    | `/api/v1/data-feeds/market-data/candle-streams` | list stored market-data candle streams |
+//! | GET    | `/api/v1/data-feeds/market-data/candles/recent` | query newest stored candles |
 //! | GET    | `/api/v1/data-feeds/market-data/candles/freshness` | check stored candle freshness |
 //! | GET    | `/api/v1/data-feeds/market-data/candles/gaps` | find missing stored candle open times |
 //!
@@ -66,8 +67,8 @@ use rara_trading::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     },
     market_data::{
-        CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, CandleStreamSummary,
-        MarketCandle, MarketDataRepositoryRef, Timeframe,
+        CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, CandleStreamListQuery,
+        CandleStreamSummary, MarketCandle, MarketDataRepositoryRef, Timeframe,
     },
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -137,6 +138,10 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         .route(
             "/api/v1/data-feeds/market-data/candles/latest",
             get(get_latest_market_data_candle),
+        )
+        .route(
+            "/api/v1/data-feeds/market-data/candles/recent",
+            get(get_recent_market_data_candles),
         )
         .route(
             "/api/v1/data-feeds/market-data/candles/freshness",
@@ -285,6 +290,16 @@ struct CandleLatestQueryParams {
     timeframe:   String,
 }
 
+/// Query parameters for the newest stored closed candles.
+#[derive(Debug, Deserialize)]
+struct CandleRecentQueryParams {
+    source_name: Option<String>,
+    venue:       String,
+    symbol:      String,
+    timeframe:   String,
+    limit:       Option<usize>,
+}
+
 /// Query parameters for a bounded stored closed-candle range.
 #[derive(Debug, Deserialize)]
 struct CandleRangeQueryParams {
@@ -331,6 +346,15 @@ struct CandleRangeResponse {
     query_limit: usize,
     has_more:    bool,
     next_start:  Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleRecentResponse {
+    candles:     Vec<CandleResponse>,
+    count:       usize,
+    query_limit: usize,
+    has_more:    bool,
+    next_end:    Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1259,6 +1283,46 @@ async fn get_latest_market_data_candle(
 
     Ok(Json(CandleLatestResponse {
         candle: candle.map(CandleResponse::from),
+    }))
+}
+
+/// `GET /api/v1/data-feeds/market-data/candles/recent` — fetch the newest
+/// stored closed candles for a stream, ordered oldest to newest.
+async fn get_recent_market_data_candles(
+    State(state): State<DataFeedRouterState>,
+    Query(params): Query<CandleRecentQueryParams>,
+) -> Result<Json<CandleRecentResponse>, ProblemDetails> {
+    let limit = validate_market_data_candle_range_limit(params.limit)?;
+    let probe_limit = limit.saturating_add(1);
+    let query = CandleRecentQuery {
+        source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
+        venue:       normalize_required_market_data_venue(params.venue)?,
+        symbol:      normalize_required_market_data_symbol(params.symbol)?,
+        timeframe:   normalize_required_market_data_timeframe(params.timeframe)?,
+        limit:       probe_limit,
+    };
+
+    let mut candles = state
+        .market_data_repo
+        .recent_candles(query)
+        .await
+        .map_err(|err| ProblemDetails::internal(format!("failed to get recent candles: {err}")))?;
+    let has_more = candles.len() > limit;
+    if has_more {
+        candles.remove(0);
+    }
+    let next_end = candles
+        .first()
+        .filter(|_| has_more)
+        .map(|candle| candle.open_time.to_string());
+    let count = candles.len();
+
+    Ok(Json(CandleRecentResponse {
+        candles: candles.into_iter().map(CandleResponse::from).collect(),
+        count,
+        query_limit: limit,
+        has_more,
+        next_end,
     }))
 }
 
@@ -3479,6 +3543,52 @@ mod tests {
         assert_eq!(result["candles"][0]["close"], "1005.00");
         assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:01:00Z");
         assert_eq!(result["candles"][1]["close"], "1006.25");
+    }
+
+    #[tokio::test]
+    async fn market_data_recent_candles_endpoint_returns_latest_candles() {
+        let market_data_repo = test_market_data_repo();
+        for (open_time, close_time, close) in [
+            ("2026-07-10T08:00:00Z", "2026-07-10T08:01:00Z", "1005.00"),
+            ("2026-07-10T08:01:00Z", "2026-07-10T08:02:00Z", "1006.25"),
+            ("2026-07-10T08:02:00Z", "2026-07-10T08:03:00Z", "1007.75"),
+        ] {
+            market_data_repo
+                .upsert_closed_candle(market_data_candle(open_time, close_time, close, None))
+                .await
+                .unwrap();
+        }
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles/recent?venue=binance&\
+                         symbol=BTCUSDT&timeframe=1m&limit=2",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(result["count"], 2);
+        assert_eq!(result["query_limit"], 2);
+        assert_eq!(result["has_more"], true);
+        assert_eq!(result["next_end"], "2026-07-10T08:01:00Z");
+        assert_eq!(result["candles"][0]["open_time"], "2026-07-10T08:01:00Z");
+        assert_eq!(result["candles"][0]["close"], "1006.25");
+        assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:02:00Z");
+        assert_eq!(result["candles"][1]["close"], "1007.75");
     }
 
     #[tokio::test]

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use rara_trading::market_data::{
-    CandleLatestQuery, CandleRangeQuery, CandleStreamListQuery, MarketCandle, MarketDataRepository,
-    Timeframe, TimescaleMarketDataRepository, UpsertOutcome,
+    CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, CandleStreamListQuery, MarketCandle,
+    MarketDataRepository, Timeframe, TimescaleMarketDataRepository, UpsertOutcome,
 };
 use rust_decimal::Decimal;
 use sqlx_core::row::Row;
@@ -87,6 +87,19 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
         .expect("latest candle should exist");
     assert_eq!(latest.open_time, ts("2026-07-10T08:30:00Z"));
     assert_eq!(latest.close, dec("61700.00"));
+
+    let recent = repo
+        .recent_candles(CandleRecentQuery {
+            source_name: Some("timescale-container-contract".to_owned()),
+            venue:       "binance".to_owned(),
+            symbol:      "BTCUSDT".to_owned(),
+            timeframe:   Timeframe::parse("15m")?,
+            limit:       1,
+        })
+        .await?;
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].open_time, ts("2026-07-10T08:30:00Z"));
+    assert_eq!(recent[0].close, dec("61700.00"));
 
     assert_eq!(
         repo.upsert_closed_candle(MarketCandle {

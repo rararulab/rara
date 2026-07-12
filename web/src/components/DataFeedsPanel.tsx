@@ -1753,7 +1753,13 @@ function MarketDataStreamsCard({
     ],
     queryFn: () => {
       if (!previewRequest) throw new Error('Missing candle preview request');
-      return dataFeedsApi.candles(previewRequest);
+      return dataFeedsApi.recentCandles({
+        source_name: previewRequest.source_name,
+        venue: previewRequest.venue,
+        symbol: previewRequest.symbol,
+        timeframe: previewRequest.timeframe,
+        limit: previewRequest.limit,
+      });
     },
     enabled: previewRequest != null,
     refetchInterval: previewRequest != null ? 30_000 : false,
@@ -2035,13 +2041,13 @@ function MarketDataStreamsCard({
                   <AlertTriangle className="h-4 w-4 shrink-0" />
                   <div className="space-y-1">
                     <div>
-                      Showing the first {previewQuery.data.query_limit} candles in this preview.
+                      Showing the latest {previewQuery.data.query_limit} candles in this preview.
                       Narrow the time range before treating it as exhaustive.
                     </div>
-                    {previewQuery.data.next_start ? (
+                    {previewQuery.data.next_end ? (
                       <div>
-                        Next page starts at{' '}
-                        <span className="font-mono">{previewQuery.data.next_start}</span>.
+                        Older page ends before{' '}
+                        <span className="font-mono">{previewQuery.data.next_end}</span>.
                       </div>
                     ) : null}
                   </div>
