@@ -416,4 +416,57 @@ describe('FinanceWatchesCard', () => {
     expect(await screen.findByText('Data Partial')).toBeInTheDocument();
     expect(screen.getByText('1/2 expected streams present; 1 missing.')).toBeInTheDocument();
   });
+
+  it('uses_subscription_selectors_for_watched_kline_health', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        feed_type: 'market_candle',
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT', 'ETHUSDT'],
+        configured_timeframes: ['1m'],
+        tags: ['finance', 'market-data', 'crypto', 'binance'],
+        transport_template: {
+          venue: 'binance',
+          symbols: ['BTCUSDT', 'ETHUSDT'],
+          timeframes: ['1m'],
+        },
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [
+        financeSubscription({
+          symbols: ['BTCUSDT'],
+          timeframes: ['1m'],
+        }),
+      ],
+      count: 1,
+    } satisfies FinanceSubscriptionsResponse);
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 42,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T00:41:00Z',
+          latest_close_time: '2026-07-12T00:41:59Z',
+          latest_ingested_at: '2026-07-12T00:42:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 100,
+    } satisfies CandleStreamsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('watching')).toBeInTheDocument();
+    expect(await screen.findByText('Data Fresh')).toBeInTheDocument();
+    expect(screen.getByText('1/1 expected stream fresh.')).toBeInTheDocument();
+  });
 });
