@@ -74,6 +74,8 @@ pub(super) struct FeedSourceDiagnostic {
     pub configured_venue:      Option<String>,
     pub configured_symbols:    Vec<String>,
     pub configured_timeframes: Vec<String>,
+    pub selector_coverage:     FeedSelectorCoverage,
+    pub selector_diagnostic:   Option<String>,
     pub enabled:               Option<bool>,
     pub configured_status:     Option<String>,
     pub runtime_state:         FeedRuntimeState,
@@ -102,6 +104,7 @@ pub(super) enum SubscriptionHealth {
     Ok,
     NeedsData,
     NeedsRuntime,
+    SelectorMismatch,
     Unconfigured,
 }
 
@@ -112,6 +115,14 @@ pub(super) enum FeedRuntimeState {
     Stopped,
     Disabled,
     NotRegistered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FeedSelectorCoverage {
+    Covered,
+    MissingSelectors,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -244,12 +255,8 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
         as_of: Timestamp,
         stale_after_secs: Option<u64>,
     ) -> anyhow::Result<CandleSubscriptionDiagnostic> {
-        let feed_sources = self.feed_diagnostics(
-            &subscription.source_names,
-            feeds_by_name,
-            event_summaries,
-            as_of,
-        );
+        let feed_sources =
+            self.feed_diagnostics(&subscription, feeds_by_name, event_summaries, as_of);
         let streams = self
             .stream_diagnostics(&subscription, as_of, stale_after_secs)
             .await?;
@@ -270,12 +277,13 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
 
     fn feed_diagnostics(
         &self,
-        source_names: &[String],
+        subscription: &FinanceSubscription,
         feeds_by_name: &HashMap<String, DataFeedConfig>,
         event_summaries: &HashMap<String, FeedEventSummary>,
         as_of: Timestamp,
     ) -> Vec<FeedSourceDiagnostic> {
-        source_names
+        subscription
+            .source_names
             .iter()
             .map(|source_name| {
                 let feed = feeds_by_name.get(source_name);
@@ -283,20 +291,32 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                 let last_event_at = event_summary.and_then(|summary| summary.last_event_at);
                 let lag_seconds =
                     last_event_at.map(|timestamp| as_of.duration_since(timestamp).as_secs().max(0));
+                let configured_venue = feed
+                    .and_then(|feed| feed.transport.get("venue"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let configured_symbols = feed.map_or_else(Vec::new, |feed| {
+                    transport_string_array(&feed.transport, "symbols", true)
+                });
+                let configured_timeframes = feed.map_or_else(Vec::new, |feed| {
+                    transport_string_array(&feed.transport, "timeframes", false)
+                });
+                let (selector_coverage, selector_diagnostic) = feed_selector_coverage(
+                    feed,
+                    configured_venue.as_deref(),
+                    &configured_symbols,
+                    &configured_timeframes,
+                    subscription,
+                );
                 FeedSourceDiagnostic {
                     source_name: source_name.clone(),
                     feed_id: feed.map(|feed| feed.id.clone()),
                     feed_type: feed.map(|feed| feed.feed_type.to_string()),
-                    configured_venue: feed
-                        .and_then(|feed| feed.transport.get("venue"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned),
-                    configured_symbols: feed.map_or_else(Vec::new, |feed| {
-                        transport_string_array(&feed.transport, "symbols", true)
-                    }),
-                    configured_timeframes: feed.map_or_else(Vec::new, |feed| {
-                        transport_string_array(&feed.transport, "timeframes", false)
-                    }),
+                    configured_venue,
+                    configured_symbols,
+                    configured_timeframes,
+                    selector_coverage,
+                    selector_diagnostic,
                     enabled: feed.map(|feed| feed.enabled),
                     configured_status: feed.map(|feed| feed.status.to_string()),
                     runtime_state: runtime_state(
@@ -449,6 +469,93 @@ fn transport_string_array(
         .collect()
 }
 
+fn feed_selector_coverage(
+    feed: Option<&DataFeedConfig>,
+    configured_venue: Option<&str>,
+    configured_symbols: &[String],
+    configured_timeframes: &[String],
+    subscription: &FinanceSubscription,
+) -> (FeedSelectorCoverage, Option<String>) {
+    let Some(_feed) = feed else {
+        return (
+            FeedSelectorCoverage::Unavailable,
+            Some("feed source is not registered".to_owned()),
+        );
+    };
+
+    let mut diagnostics = Vec::new();
+    let subscription_venues = normalize_lowercase(&subscription.venues);
+    if !subscription_venues.is_empty() {
+        match configured_venue.map(normalize_scalar_lowercase) {
+            Some(configured) if subscription_venues.iter().any(|venue| venue == &configured) => {}
+            Some(configured) => diagnostics.push(format!(
+                "configured venue {configured} does not cover subscription venues: {}",
+                subscription_venues.join(", ")
+            )),
+            None => diagnostics.push(format!(
+                "missing venue for subscription venues: {}",
+                subscription_venues.join(", ")
+            )),
+        }
+    }
+
+    let missing_symbols = missing_values(
+        &normalize_uppercase(&subscription.symbols),
+        configured_symbols,
+    );
+    if !missing_symbols.is_empty() {
+        diagnostics.push(format!("missing symbols: {}", missing_symbols.join(", ")));
+    }
+
+    let missing_timeframes = missing_values(
+        &normalize_lowercase(&subscription.timeframes),
+        configured_timeframes,
+    );
+    if !missing_timeframes.is_empty() {
+        diagnostics.push(format!(
+            "missing timeframes: {}",
+            missing_timeframes.join(", ")
+        ));
+    }
+
+    if diagnostics.is_empty() {
+        (FeedSelectorCoverage::Covered, None)
+    } else {
+        (
+            FeedSelectorCoverage::MissingSelectors,
+            Some(diagnostics.join("; ")),
+        )
+    }
+}
+
+fn normalize_uppercase(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect()
+}
+
+fn normalize_lowercase(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn normalize_scalar_lowercase(value: &str) -> String { value.trim().to_ascii_lowercase() }
+
+fn missing_values(required: &[String], configured: &[String]) -> Vec<String> {
+    required
+        .iter()
+        .filter(|required| !configured.iter().any(|configured| configured == *required))
+        .cloned()
+        .collect()
+}
+
 fn invalid_stream(
     source_name: Option<String>,
     venue: &str,
@@ -532,6 +639,12 @@ fn subscription_health(
     }
     if feed_sources
         .iter()
+        .any(|feed| feed.selector_coverage == FeedSelectorCoverage::MissingSelectors)
+    {
+        return SubscriptionHealth::SelectorMismatch;
+    }
+    if feed_sources
+        .iter()
         .any(|feed| feed.runtime_state != FeedRuntimeState::Running)
     {
         return SubscriptionHealth::NeedsRuntime;
@@ -576,8 +689,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        CandleStreamStatus, FeedRuntimeState, FinanceDiagnoseCandleSubscriptionsParams,
-        FinanceDiagnoseCandleSubscriptionsTool, SubscriptionHealth,
+        CandleStreamStatus, FeedRuntimeState, FeedSelectorCoverage,
+        FinanceDiagnoseCandleSubscriptionsParams, FinanceDiagnoseCandleSubscriptionsTool,
+        SubscriptionHealth,
     };
 
     fn context() -> ToolContext {
@@ -805,6 +919,11 @@ mod tests {
         );
         assert_eq!(sub.feed_sources[0].configured_timeframes, ["1m".to_owned()]);
         assert_eq!(
+            sub.feed_sources[0].selector_coverage,
+            FeedSelectorCoverage::Covered
+        );
+        assert_eq!(sub.feed_sources[0].selector_diagnostic, None);
+        assert_eq!(
             sub.feed_sources[0].last_event_at.as_deref(),
             Some("2026-07-10T08:30:30Z")
         );
@@ -817,6 +936,58 @@ mod tests {
                 .as_ref()
                 .map(|candle| candle.close.as_str()),
             Some("61610.30")
+        );
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_selector_mismatch_when_feed_transport_does_not_cover_subscription() {
+        let (tool, finance_registry, data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        let id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id,
+                owner: UserId(ctx.user_id.clone()),
+                session_key: ctx.session_key,
+                event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+                source_names: vec!["finance-binance-market-candles".to_owned()],
+                category_tags: Vec::new(),
+                watch_terms: Vec::new(),
+                venues: vec!["binance".to_owned()],
+                symbols: vec!["ETHUSDT".to_owned()],
+                timeframes: vec!["5m".to_owned()],
+                delivery: FinanceDelivery::Silent,
+                cooldown_secs: 900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+        data_feed_registry.set_running(
+            "finance-binance-market-candles".to_owned(),
+            CancellationToken::new(),
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  Some(id),
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: Some(120),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::SelectorMismatch);
+        assert_eq!(
+            sub.feed_sources[0].selector_coverage,
+            FeedSelectorCoverage::MissingSelectors
+        );
+        assert_eq!(
+            sub.feed_sources[0].selector_diagnostic.as_deref(),
+            Some("missing symbols: ETHUSDT; missing timeframes: 5m")
         );
     }
 
@@ -889,6 +1060,14 @@ mod tests {
         assert_eq!(
             sub.feed_sources[0].runtime_state,
             FeedRuntimeState::NotRegistered
+        );
+        assert_eq!(
+            sub.feed_sources[0].selector_coverage,
+            FeedSelectorCoverage::Unavailable
+        );
+        assert_eq!(
+            sub.feed_sources[0].selector_diagnostic.as_deref(),
+            Some("feed source is not registered")
         );
         assert_eq!(sub.feed_sources[0].feed_id, None);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);

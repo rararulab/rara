@@ -234,6 +234,10 @@ subscription diagnostic includes:
 
 - feed config/runtime state, including whether the source is registered and
   running, plus configured `venue`, `symbols`, and `timeframes`;
+- selector coverage (`covered`, `missing_selectors`, or `unavailable`) with a
+  deterministic diagnostic such as `missing symbols: ETHUSDT; missing
+  timeframes: 5m`, so a fresh-runtime/no-data case can be separated from a
+  feed configuration that cannot emit the subscribed stream;
 - persisted feed-event summary (`event_count`, `last_event_at`, and
   `lag_seconds`) to confirm the source is emitting events;
 - latest stored closed candle and freshness per
@@ -278,7 +282,8 @@ Use this checklist before considering a deployment ready:
    recent persisted events for the subscribed source, including filtered views
    by `event_kinds`.
 8. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
-   recent feed event, and a fresh latest candle for the subscribed stream.
+   recent feed event, `selector_coverage = covered`, and a fresh latest candle
+   for the subscribed stream.
 9. Confirm `finance_get_latest_candle` returns the latest stored closed candle
    for the subscribed `(venue, symbol, timeframe)`.
 10. Confirm
