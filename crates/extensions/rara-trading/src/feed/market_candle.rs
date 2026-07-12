@@ -307,12 +307,14 @@ impl MarketCandleSource {
         if !self.symbols.contains(&symbol) || !self.timeframes.contains(&timeframe) {
             return None;
         }
+        let open_time = raw.open_time.parse::<Timestamp>().ok()?.to_string();
+        let close_time = raw.close_time.parse::<Timestamp>().ok()?.to_string();
         Some(ParsedCandle {
             venue,
             symbol,
             timeframe,
-            open_time: raw.open_time,
-            close_time: raw.close_time,
+            open_time,
+            close_time,
             open: Decimal::from_str(&raw.open).ok()?,
             high: Decimal::from_str(&raw.high).ok()?,
             low: Decimal::from_str(&raw.low).ok()?,
@@ -811,6 +813,47 @@ mod tests {
       "open_time": "2026-07-10T08:15:00Z",
       "close_time": "2026-07-10T08:30:00Z",
       "open": "not-a-decimal",
+      "high": "3510.00",
+      "low": "3490.00",
+      "close": "3505.25",
+      "volume": "991.5",
+      "closed": true
+    }
+  ]
+}"#,
+            )
+            .expect("payload should parse while invalid candles are skipped");
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn invalid_timestamp_candles_are_not_emitted() {
+        let source = candle_source();
+        let events = source
+            .parse_normalized_candle_events(
+                br#"{
+  "candles": [
+    {
+      "venue": "binance",
+      "symbol": "BTCUSDT",
+      "timeframe": "15m",
+      "open_time": "not-a-timestamp",
+      "close_time": "2026-07-10T08:30:00Z",
+      "open": "61500.12",
+      "high": "61640.00",
+      "low": "61480.50",
+      "close": "61610.30",
+      "volume": "124.551",
+      "closed": true
+    },
+    {
+      "venue": "binance",
+      "symbol": "ETHUSDT",
+      "timeframe": "15m",
+      "open_time": "2026-07-10T08:15:00Z",
+      "close_time": "not-a-timestamp",
+      "open": "3500.00",
       "high": "3510.00",
       "low": "3490.00",
       "close": "3505.25",
