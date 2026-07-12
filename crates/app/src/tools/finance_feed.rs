@@ -41,6 +41,10 @@ use uuid::Uuid;
 
 const MAX_CATALOG_SOURCE_ID_LEN: usize = 128;
 const MAX_FEED_ID_LEN: usize = 128;
+const MAX_NEWS_SOURCE_REFS: usize = 32;
+const MAX_NEWS_CATEGORY_TAGS: usize = 64;
+const MAX_NEWS_WATCH_TERMS: usize = 64;
+const MAX_NEWS_SELECTOR_LEN: usize = 128;
 const MAX_SYMBOLS: usize = 500;
 const MAX_TIMEFRAMES: usize = 32;
 const MAX_INSTRUMENT_SELECTOR_LEN: usize = 64;
@@ -145,6 +149,57 @@ pub(super) struct FinanceRestartFeedSourceResult {
     pub catalog_source_id: Option<String>,
     pub feed_type:         String,
     pub was_running:       bool,
+    pub started:           bool,
+    pub running:           bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceSubscribeNewsParams {
+    /// Built-in RSS source ids from `finance_list_feed_sources`, for example
+    /// `fed-press-releases` or `sec-press-releases`.
+    #[serde(default)]
+    pub catalog_source_ids:     Vec<String>,
+    /// Existing persisted finance RSS DataFeedConfig ids.
+    #[serde(default)]
+    pub feed_ids:               Vec<String>,
+    /// Optional category tag selectors. Values are normalized by the finance
+    /// registry to category tags.
+    #[serde(default)]
+    pub category_tags:          Vec<String>,
+    /// Literal title/summary terms to match.
+    #[serde(default)]
+    pub watch_terms:            Vec<String>,
+    /// Whether to start inactive feed tasks immediately. Defaults to true.
+    #[serde(default)]
+    pub start_now:              Option<bool>,
+    /// Delivery policy for matched article events. Defaults to silent.
+    #[serde(default)]
+    pub delivery:               Option<FinanceDelivery>,
+    #[serde(default)]
+    pub cooldown_secs:          Option<u64>,
+    #[serde(default)]
+    pub max_immediate_per_hour: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscribeNewsResult {
+    pub subscription_id:        Uuid,
+    pub subscription_created:   bool,
+    pub sources:                Vec<SubscribedNewsSource>,
+    pub source_names:           Vec<String>,
+    pub category_tags:          Vec<String>,
+    pub watch_terms:            Vec<String>,
+    pub delivery:               FinanceDelivery,
+    pub cooldown_secs:          u64,
+    pub max_immediate_per_hour: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SubscribedNewsSource {
+    pub feed_id:           String,
+    pub source_name:       String,
+    pub catalog_source_id: Option<String>,
+    pub feed_change:       FeedChange,
     pub started:           bool,
     pub running:           bool,
 }
@@ -261,6 +316,22 @@ pub(super) struct FinanceRestartFeedSourceTool {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_subscribe_news",
+    description = "Subscribe the current conversation to finance RSS/Atom article updates from \
+                   built-in catalog sources or existing finance RSS feeds. This ensures the \
+                   selected RSS feeds are enabled, optionally starts them, and creates an \
+                   rss_article subscription using ToolContext identity/session. It never accepts \
+                   arbitrary URLs and never places trades.",
+    tier = "deferred"
+)]
+pub(super) struct FinanceSubscribeNewsTool {
+    data_feed_svc:      DataFeedSvc,
+    data_feed_registry: Arc<DataFeedRegistry>,
+    finance_registry:   Arc<FinanceSubscriptionRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_subscribe_instruments",
     description = "Subscribe the current conversation to closed market-candle updates for \
                    specific instruments. This ensures the selected market-candle feed source is \
@@ -296,6 +367,20 @@ impl FinanceDisableFeedSourceTool {
 impl FinanceRestartFeedSourceTool {
     pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
         Self { svc, registry }
+    }
+}
+
+impl FinanceSubscribeNewsTool {
+    pub(super) fn new(
+        data_feed_svc: DataFeedSvc,
+        data_feed_registry: Arc<DataFeedRegistry>,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+    ) -> Self {
+        Self {
+            data_feed_svc,
+            data_feed_registry,
+            finance_registry,
+        }
     }
 }
 
@@ -533,6 +618,260 @@ impl FinanceRestartFeedSourceTool {
         source_ref: SourceRef,
     ) -> anyhow::Result<(DataFeedConfig, Option<String>)> {
         resolve_existing_finance_feed(&self.svc, source_ref).await
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceSubscribeNewsTool {
+    type Output = FinanceSubscribeNewsResult;
+    type Params = FinanceSubscribeNewsParams;
+
+    async fn run(
+        &self,
+        params: FinanceSubscribeNewsParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceSubscribeNewsResult> {
+        let start_now = params.start_now.unwrap_or(true);
+        let catalog_source_ids = normalize_string_refs(
+            "catalog_source_ids",
+            params.catalog_source_ids,
+            MAX_NEWS_SOURCE_REFS,
+            MAX_CATALOG_SOURCE_ID_LEN,
+        )?;
+        let feed_ids = normalize_string_refs(
+            "feed_ids",
+            params.feed_ids,
+            MAX_NEWS_SOURCE_REFS,
+            MAX_FEED_ID_LEN,
+        )?;
+        anyhow::ensure!(
+            !catalog_source_ids.is_empty() || !feed_ids.is_empty(),
+            "catalog_source_ids or feed_ids is required"
+        );
+        anyhow::ensure!(
+            catalog_source_ids.len() + feed_ids.len() <= MAX_NEWS_SOURCE_REFS,
+            "too many news feed sources"
+        );
+
+        let category_tags = normalize_news_category_tags(params.category_tags)?;
+        let watch_terms = normalize_news_watch_terms(params.watch_terms)?;
+        let delivery = params.delivery.unwrap_or(FinanceDelivery::Silent);
+        let cooldown_secs = params.cooldown_secs.unwrap_or(DEFAULT_COOLDOWN_SECS);
+        anyhow::ensure!(cooldown_secs <= 86_400, "cooldown_secs must be <= 86400");
+        let max_immediate_per_hour = params
+            .max_immediate_per_hour
+            .unwrap_or(DEFAULT_MAX_IMMEDIATE_PER_HOUR);
+        anyhow::ensure!(
+            max_immediate_per_hour <= 60,
+            "max_immediate_per_hour must be <= 60"
+        );
+
+        let mut sources = Vec::new();
+        let mut source_names = Vec::new();
+        for catalog_source_id in catalog_source_ids {
+            let source = self
+                .ensure_catalog_rss_source(catalog_source_id, start_now)
+                .await?;
+            if !source_names.contains(&source.source_name) {
+                source_names.push(source.source_name.clone());
+                sources.push(source);
+            }
+        }
+        for feed_id in feed_ids {
+            let source = self.ensure_existing_rss_source(feed_id, start_now).await?;
+            if !source_names.contains(&source.source_name) {
+                source_names.push(source.source_name.clone());
+                sources.push(source);
+            }
+        }
+
+        let (subscription_id, subscription_created) = self
+            .upsert_news_subscription(
+                context,
+                &source_names,
+                &category_tags,
+                &watch_terms,
+                delivery,
+                cooldown_secs,
+                max_immediate_per_hour,
+            )
+            .await?;
+        let persisted = self
+            .finance_registry
+            .list_for_owner(&UserId(context.user_id.clone()))
+            .await
+            .into_iter()
+            .find(|subscription| subscription.id == subscription_id)
+            .ok_or_else(|| anyhow::anyhow!("created news subscription was not persisted"))?;
+
+        Ok(FinanceSubscribeNewsResult {
+            subscription_id,
+            subscription_created,
+            sources,
+            source_names: persisted.source_names,
+            category_tags: persisted.category_tags,
+            watch_terms: persisted.watch_terms,
+            delivery: persisted.delivery,
+            cooldown_secs: persisted.cooldown_secs,
+            max_immediate_per_hour: persisted.max_immediate_per_hour,
+        })
+    }
+}
+
+impl FinanceSubscribeNewsTool {
+    async fn ensure_catalog_rss_source(
+        &self,
+        catalog_source_id: String,
+        start_now: bool,
+    ) -> anyhow::Result<SubscribedNewsSource> {
+        let source = find_catalog_source(&catalog_source_id)?;
+        anyhow::ensure!(
+            source.can_enable(),
+            "finance feed source {catalog_source_id} requires configuration: {}",
+            source
+                .setup_hint
+                .as_deref()
+                .unwrap_or("configure this provider before enabling it")
+        );
+        anyhow::ensure!(
+            source.feed_type == FeedType::Rss,
+            "catalog source {catalog_source_id} is not an rss source"
+        );
+        let source_name = source.feed_name();
+        let existing = self
+            .data_feed_svc
+            .list_feeds()
+            .await?
+            .into_iter()
+            .find(|feed| feed.name == source_name);
+        let created = existing.is_none();
+        let config = config_from_source(&source, existing)?;
+        self.ensure_rss_config(config, Some(catalog_source_id), created, start_now)
+            .await
+    }
+
+    async fn ensure_existing_rss_source(
+        &self,
+        feed_id: String,
+        start_now: bool,
+    ) -> anyhow::Result<SubscribedNewsSource> {
+        let config = self
+            .data_feed_svc
+            .get_feed(&feed_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
+        ensure_finance_feed_source(&config)?;
+        self.ensure_rss_config(config, None, false, start_now).await
+    }
+
+    async fn ensure_rss_config(
+        &self,
+        mut config: DataFeedConfig,
+        catalog_source_id: Option<String>,
+        created: bool,
+        start_now: bool,
+    ) -> anyhow::Result<SubscribedNewsSource> {
+        anyhow::ensure!(
+            config.feed_type == FeedType::Rss,
+            "finance_subscribe_news requires rss feed sources"
+        );
+        let was_enabled = config.enabled;
+        let had_runtime_error = config.status != FeedStatus::Idle || config.last_error.is_some();
+        let was_running = self.data_feed_registry.is_running(&config.name);
+        config.enabled = true;
+        config.status = FeedStatus::Idle;
+        config.last_error = None;
+        config.updated_at = Timestamp::now();
+
+        let feed_updated = if created {
+            self.data_feed_svc.create_feed(&config).await?;
+            self.data_feed_registry.register(config.clone())?;
+            true
+        } else if !was_enabled || had_runtime_error {
+            anyhow::ensure!(
+                self.data_feed_svc.update_feed(&config).await?,
+                "failed to update RSS feed source: {}",
+                config.name
+            );
+            if was_running {
+                replace_registry_config_preserving_runtime(
+                    &self.data_feed_registry,
+                    config.clone(),
+                )?;
+            } else {
+                replace_registry_config(&self.data_feed_registry, config.clone())?;
+            }
+            true
+        } else if self.data_feed_registry.get(&config.name).is_none() {
+            self.data_feed_registry.register(config.clone())?;
+            false
+        } else {
+            false
+        };
+
+        let started = start_now && !was_running;
+        if started {
+            start_feed_task(&config, &self.data_feed_registry);
+        }
+        let running = self.data_feed_registry.is_running(&config.name);
+
+        Ok(SubscribedNewsSource {
+            feed_id: config.id,
+            source_name: config.name,
+            catalog_source_id,
+            feed_change: if created {
+                FeedChange::Created
+            } else if feed_updated {
+                FeedChange::Updated
+            } else {
+                FeedChange::Unchanged
+            },
+            started,
+            running,
+        })
+    }
+
+    async fn upsert_news_subscription(
+        &self,
+        context: &ToolContext,
+        source_names: &[String],
+        category_tags: &[String],
+        watch_terms: &[String],
+        delivery: FinanceDelivery,
+        cooldown_secs: u64,
+        max_immediate_per_hour: u16,
+    ) -> anyhow::Result<(Uuid, bool)> {
+        let owner = UserId(context.user_id.clone());
+        let existing = self
+            .finance_registry
+            .list_for_owner(&owner)
+            .await
+            .into_iter()
+            .find(|subscription| {
+                subscription.session_key == context.session_key
+                    && set_eq(&subscription.source_names, source_names)
+                    && set_eq(&subscription.category_tags, category_tags)
+                    && set_eq(&subscription.watch_terms, watch_terms)
+                    && set_eq(&subscription.event_kinds, &[FinanceEventKind::RssArticle])
+            });
+        let id = existing.as_ref().map_or_else(Uuid::new_v4, |sub| sub.id);
+        let subscription = FinanceSubscription {
+            id,
+            owner,
+            session_key: context.session_key,
+            event_kinds: vec![FinanceEventKind::RssArticle],
+            source_names: source_names.to_vec(),
+            category_tags: category_tags.to_vec(),
+            watch_terms: watch_terms.to_vec(),
+            venues: Vec::new(),
+            symbols: Vec::new(),
+            timeframes: Vec::new(),
+            delivery,
+            cooldown_secs,
+            max_immediate_per_hour,
+        };
+        let id = self.finance_registry.upsert(subscription).await?;
+        Ok((id, existing.is_none()))
     }
 }
 
@@ -814,6 +1153,107 @@ fn normalize_feed_id(value: String) -> anyhow::Result<String> {
         "feed_id is too long"
     );
     Ok(value.to_owned())
+}
+
+fn normalize_string_refs(
+    name: &str,
+    values: Vec<String>,
+    max_values: usize,
+    max_len: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(values.len() <= max_values, "{name} has too many values");
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let value = value.trim();
+        anyhow::ensure!(!value.is_empty(), "{name} contains an empty value");
+        anyhow::ensure!(value.chars().count() <= max_len, "{name} value is too long");
+        let value = value.to_owned();
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_news_values(
+    name: &str,
+    values: Vec<String>,
+    max_values: usize,
+) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(values.len() <= max_values, "{name} has too many values");
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        anyhow::ensure!(!value.is_empty(), "{name} contains an empty value");
+        anyhow::ensure!(
+            value.chars().count() <= MAX_NEWS_SELECTOR_LEN,
+            "{name} value is too long"
+        );
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn normalize_news_category_tags(values: Vec<String>) -> anyhow::Result<Vec<String>> {
+    normalize_news_values("category_tags", values, MAX_NEWS_CATEGORY_TAGS).map(|values| {
+        dedupe_strings(
+            values
+                .into_iter()
+                .filter_map(|tag| {
+                    let normalized = if tag
+                        .get(.."category:".len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("category:"))
+                    {
+                        normalize_category_tag(&tag["category:".len()..])
+                    } else {
+                        normalize_category_tag(&tag)
+                    };
+                    (!normalized.is_empty()).then(|| format!("category:{normalized}"))
+                })
+                .collect(),
+        )
+    })
+}
+
+fn normalize_news_watch_terms(values: Vec<String>) -> anyhow::Result<Vec<String>> {
+    normalize_news_values("watch_terms", values, MAX_NEWS_WATCH_TERMS).map(|values| {
+        dedupe_strings(
+            values
+                .into_iter()
+                .map(|term| {
+                    term.chars()
+                        .flat_map(char::to_lowercase)
+                        .collect::<String>()
+                })
+                .collect(),
+        )
+    })
+}
+
+fn normalize_category_tag(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn dedupe_strings(mut values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+    values
 }
 
 fn normalize_venue(value: String) -> anyhow::Result<String> {
@@ -1184,6 +1624,7 @@ mod tests {
         FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedSourcesParams,
         FinanceListFeedSourcesTool, FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
+        FinanceSubscribeNewsParams, FinanceSubscribeNewsTool,
     };
 
     fn context() -> ToolContext {
@@ -1882,6 +2323,182 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("is disabled"));
+    }
+
+    #[tokio::test]
+    async fn subscribe_news_enables_rss_catalog_and_creates_subscription() {
+        let (_list, _enable, _disable, _restart, _subscribe, svc, registry, finance_registry) =
+            tool().await;
+        let tool =
+            FinanceSubscribeNewsTool::new(svc.clone(), registry.clone(), finance_registry.clone());
+        let ctx = context();
+
+        let result = tool
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     vec![
+                        "fed-press-releases".to_owned(),
+                        "sec-press-releases".to_owned(),
+                    ],
+                    feed_ids:               Vec::new(),
+                    category_tags:          vec!["Monetary Policy".to_owned()],
+                    watch_terms:            vec![" BTC ".to_owned(), "NVDA".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               Some(FinanceDelivery::Immediate),
+                    cooldown_secs:          Some(120),
+                    max_immediate_per_hour: Some(3),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.subscription_created);
+        assert_eq!(
+            result.source_names,
+            ["finance-fed-press-releases", "finance-sec-press-releases"]
+        );
+        assert_eq!(result.category_tags, ["category:monetary-policy"]);
+        assert_eq!(result.watch_terms, ["btc", "nvda"]);
+        assert_eq!(result.delivery, FinanceDelivery::Immediate);
+        assert_eq!(result.cooldown_secs, 120);
+        assert_eq!(result.max_immediate_per_hour, 3);
+        assert_eq!(result.sources.len(), 2);
+        assert!(result.sources.iter().all(|source| {
+            source.feed_change == FeedChange::Created && !source.started && !source.running
+        }));
+
+        let feeds = svc.list_feeds().await.unwrap();
+        assert_eq!(feeds.len(), 2);
+        assert!(feeds.iter().all(|feed| feed.enabled));
+        assert!(registry.get("finance-fed-press-releases").is_some());
+        assert!(registry.get("finance-sec-press-releases").is_some());
+
+        let subs = finance_registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].event_kinds, [FinanceEventKind::RssArticle]);
+        assert_eq!(subs[0].source_names, result.source_names);
+        assert!(subs[0].venues.is_empty());
+        assert!(subs[0].symbols.is_empty());
+        assert!(subs[0].timeframes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn subscribe_news_is_idempotent_for_same_session_and_selectors() {
+        let (_list, _enable, _disable, _restart, _subscribe, svc, registry, finance_registry) =
+            tool().await;
+        let tool = FinanceSubscribeNewsTool::new(svc.clone(), registry, finance_registry.clone());
+        let ctx = context();
+        let params = |watch_term: &str, category_tag: &str| FinanceSubscribeNewsParams {
+            catalog_source_ids:     vec!["fed-press-releases".to_owned()],
+            feed_ids:               Vec::new(),
+            category_tags:          vec![category_tag.to_owned()],
+            watch_terms:            vec![watch_term.to_owned()],
+            start_now:              Some(false),
+            delivery:               None,
+            cooldown_secs:          None,
+            max_immediate_per_hour: None,
+        };
+
+        let first = tool
+            .run(params("Rate Cut", "Monetary Policy"), &ctx)
+            .await
+            .unwrap();
+        let second = tool
+            .run(params(" rate   cut ", "category:monetary policy"), &ctx)
+            .await
+            .unwrap();
+
+        assert!(first.subscription_created);
+        assert!(!second.subscription_created);
+        assert_eq!(first.subscription_id, second.subscription_id);
+        assert_eq!(svc.list_feeds().await.unwrap().len(), 1);
+        assert_eq!(
+            finance_registry
+                .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+                .await
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_news_accepts_existing_finance_rss_feed_id() {
+        let (_list, _enable, _disable, _restart, _subscribe, svc, registry, finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("custom-rss".to_owned())
+            .name("custom-finance-rss".to_owned())
+            .feed_type(FeedType::Rss)
+            .tags(vec!["finance".to_owned(), "news".to_owned()])
+            .transport(serde_json::json!({
+                "url": "https://example.invalid/feed.xml",
+                "interval_secs": 3600,
+                "headers": {},
+                "max_entries_per_poll": 10
+            }))
+            .enabled(false)
+            .status(FeedStatus::Error)
+            .maybe_last_error(Some("previous failure".to_owned()))
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+        let tool = FinanceSubscribeNewsTool::new(svc.clone(), registry.clone(), finance_registry);
+
+        let result = tool
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     Vec::new(),
+                    feed_ids:               vec!["custom-rss".to_owned()],
+                    category_tags:          Vec::new(),
+                    watch_terms:            Vec::new(),
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.source_names, ["custom-finance-rss"]);
+        assert_eq!(result.sources[0].feed_change, FeedChange::Updated);
+        let feed = svc.get_feed("custom-rss").await.unwrap().unwrap();
+        assert!(feed.enabled);
+        assert_eq!(feed.status, FeedStatus::Idle);
+        assert_eq!(feed.last_error, None);
+        assert!(registry.get("custom-finance-rss").is_some());
+    }
+
+    #[tokio::test]
+    async fn subscribe_news_rejects_market_catalog_source() {
+        let (_list, _enable, _disable, _restart, _subscribe, svc, registry, finance_registry) =
+            tool().await;
+        let tool = FinanceSubscribeNewsTool::new(svc, registry, finance_registry);
+
+        let err = tool
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     vec!["binance-market-candles".to_owned()],
+                    feed_ids:               Vec::new(),
+                    category_tags:          Vec::new(),
+                    watch_terms:            Vec::new(),
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not an rss source"));
     }
 
     #[tokio::test]

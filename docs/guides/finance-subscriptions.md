@@ -140,6 +140,7 @@ checks:
 - `finance_enable_feed_source`
 - `finance_disable_feed_source`
 - `finance_restart_feed_source`
+- `finance_subscribe_news`
 - `finance_subscribe_instruments`
 - `finance_diagnose_candle_subscriptions`
 
@@ -161,6 +162,18 @@ Example article subscription:
 {
   "event_kinds": ["rss_article"],
   "source_names": ["fed-news"],
+  "watch_terms": ["BTC", "NVDA", "Federal Reserve"],
+  "delivery": "immediate"
+}
+```
+
+For built-in RSS sources, `finance_subscribe_news` is the preferred
+conversation entry point because it enables the selected RSS feeds and creates
+the article subscription in one call:
+
+```json
+{
+  "catalog_source_ids": ["fed-press-releases", "sec-press-releases"],
   "watch_terms": ["BTC", "NVDA", "Federal Reserve"],
   "delivery": "immediate"
 }
@@ -210,7 +223,7 @@ Use this checklist before considering a deployment ready:
    `["finance", "market-data"]`.
 3. Confirm each closed candle is upserted into `market_candles` exactly once
    for `(source_name, venue, symbol, timeframe, open_time)`.
-4. Use a conversation to call `finance_subscribe` for article `source_names`
+4. Use a conversation to call `finance_subscribe_news` for article RSS sources
    and `watch_terms`.
 5. Use a conversation to call `finance_subscribe_instruments` for candle
    `symbols` and `timeframes`.

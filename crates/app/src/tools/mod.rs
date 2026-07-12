@@ -82,7 +82,7 @@ use file_stats::FileStatsTool;
 use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
     FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool,
-    FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool,
+    FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -326,6 +326,11 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
             deps.data_feed_registry.clone(),
             deps.finance_registry.clone(),
         )),
+        Arc::new(FinanceSubscribeNewsTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+            deps.finance_registry.clone(),
+        )),
         Arc::new(FinanceDiagnoseCandleSubscriptionsTool::new(
             deps.data_feed_svc,
             deps.data_feed_registry,
@@ -414,6 +419,7 @@ mod tests {
             "finance_disable_feed_source",
             "finance_restart_feed_source",
             "finance_subscribe_instruments",
+            "finance_subscribe_news",
             "finance_diagnose_candle_subscriptions",
             "finance_list_candle_streams",
             "finance_get_latest_candle",
