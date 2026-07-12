@@ -182,11 +182,11 @@ impl ToolExecute for FinanceSubscribeTool {
         let max_immediate_per_hour = params
             .max_immediate_per_hour
             .unwrap_or(DEFAULT_MAX_IMMEDIATE_PER_HOUR);
-        let source_names = params.source_names.clone();
+        let owner = UserId(context.user_id.clone());
 
         let subscription = FinanceSubscription {
             id: Uuid::new_v4(),
-            owner: UserId(context.user_id.clone()),
+            owner: owner.clone(),
             session_key: context.session_key,
             event_kinds: params.event_kinds.unwrap_or_default(),
             source_names: params.source_names,
@@ -200,6 +200,13 @@ impl ToolExecute for FinanceSubscribeTool {
             max_immediate_per_hour,
         };
         let subscription_id = self.registry.upsert(subscription).await?;
+        let source_names = self
+            .registry
+            .list_for_owner(&owner)
+            .await
+            .into_iter()
+            .find(|subscription| subscription.id == subscription_id)
+            .map_or_else(Vec::new, |subscription| subscription.source_names);
 
         Ok(FinanceSubscribeResult {
             subscription_id,
@@ -599,24 +606,26 @@ mod tests {
         let tool = FinanceSubscribeTool::new(registry.clone());
         let ctx = context();
 
-        tool.run(
-            FinanceSubscribeParams {
-                event_kinds:            Some(vec![FinanceEventKind::MarketCandleClosed]),
-                catalog_source_ids:     Vec::new(),
-                source_names:           vec![" finance-binance-market-candles ".to_owned()],
-                category_tags:          vec![" Category:Market Data ".to_owned()],
-                watch_terms:            Vec::new(),
-                venues:                 vec![" Binance ".to_owned()],
-                symbols:                vec![" btcusdt ".to_owned()],
-                timeframes:             vec![" 15M ".to_owned()],
-                delivery:               None,
-                cooldown_secs:          None,
-                max_immediate_per_hour: None,
-            },
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let result = tool
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds:            Some(vec![FinanceEventKind::MarketCandleClosed]),
+                    catalog_source_ids:     Vec::new(),
+                    source_names:           vec![" finance-binance-market-candles ".to_owned()],
+                    category_tags:          vec![" Category:Market Data ".to_owned()],
+                    watch_terms:            Vec::new(),
+                    venues:                 vec![" Binance ".to_owned()],
+                    symbols:                vec![" btcusdt ".to_owned()],
+                    timeframes:             vec![" 15M ".to_owned()],
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.source_names, ["finance-binance-market-candles"]);
 
         let subs = registry
             .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
