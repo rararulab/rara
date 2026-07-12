@@ -102,6 +102,18 @@ export interface EnableCatalogEntryRequest {
   auth?: AuthConfig | null;
 }
 
+export interface UnsubscribeCatalogEntryRequest {
+  subscription_ids?: string[];
+}
+
+export interface UnsubscribeCatalogEntryResponse {
+  catalog_source_id: string;
+  source_name: string;
+  removed_subscription_ids: string[];
+  removed_count: number;
+  remaining_subscription_ids: string[];
+}
+
 // ---------------------------------------------------------------------------
 // API client
 // ---------------------------------------------------------------------------
@@ -129,6 +141,9 @@ export const dataFeedsApi = {
 
   disableCatalogEntry: (id: string) =>
     api.post<DataFeedConfig>(`/api/v1/data-feeds/catalog/${id}/disable`),
+
+  unsubscribeCatalogEntry: (id: string, body?: UnsubscribeCatalogEntryRequest) =>
+    api.post<UnsubscribeCatalogEntryResponse>(`/api/v1/data-feeds/catalog/${id}/unsubscribe`, body),
 
   events: (id: string, params?: { since?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();
