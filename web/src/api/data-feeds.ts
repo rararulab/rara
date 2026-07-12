@@ -149,6 +149,27 @@ export interface FinanceSubscriptionsResponse {
   count: number;
 }
 
+export interface CreateFinanceSubscriptionRequest {
+  session_key: string;
+  event_kinds?: FinanceEventKind[];
+  catalog_source_ids?: string[];
+  source_names?: string[];
+  match_all_sources?: boolean;
+  category_tags?: string[];
+  watch_terms?: string[];
+  venues?: string[];
+  symbols?: string[];
+  timeframes?: string[];
+  delivery?: FinanceDelivery;
+  cooldown_secs?: number;
+  max_immediate_per_hour?: number;
+}
+
+export interface CreateFinanceSubscriptionResponse {
+  subscription: FinanceSubscription;
+  created: boolean;
+}
+
 export interface DeleteFinanceSubscriptionResponse {
   subscription_id: string;
   removed: boolean;
@@ -187,6 +208,9 @@ export const dataFeedsApi = {
 
   financeSubscriptions: () =>
     api.get<FinanceSubscriptionsResponse>('/api/v1/data-feeds/finance/subscriptions'),
+
+  createFinanceSubscription: (body: CreateFinanceSubscriptionRequest) =>
+    api.post<CreateFinanceSubscriptionResponse>('/api/v1/data-feeds/finance/subscriptions', body),
 
   getFinanceSubscription: (id: string) =>
     api.get<FinanceSubscription>(`/api/v1/data-feeds/finance/subscriptions/${id}`),
