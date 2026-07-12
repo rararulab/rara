@@ -1654,16 +1654,19 @@ function FinanceSubscriptionsCard({
 
 function MarketDataStreamsCard({
   streams,
+  queryLimit,
   isLoading,
   isError,
   onRetry,
 }: {
   streams: CandleStream[];
+  queryLimit: number | null;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
 }) {
   const [previewStream, setPreviewStream] = useState<CandleStream | null>(null);
+  const limitReached = queryLimit != null && streams.length >= queryLimit;
   const previewRequest = previewStream ? candlePreviewRequest(previewStream) : null;
   const previewQuery = useQuery({
     queryKey: [
@@ -1743,6 +1746,12 @@ function MarketDataStreamsCard({
             {streams.length} stream{streams.length === 1 ? '' : 's'}
           </Badge>
         </div>
+        {!isLoading && !isError && limitReached && (
+          <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+            Showing the first {queryLimit} streams. Narrow by source, venue, symbol, or timeframe if
+            a watched K-line stream is missing from this overview.
+          </div>
+        )}
         {isLoading ? (
           <div className="space-y-2 px-4 py-4">
             <Skeleton className="h-4 w-1/2" />
@@ -1977,6 +1986,7 @@ function FeedListView({
   feeds,
   summaries,
   candleStreams,
+  candleStreamQueryLimit,
   candleStreamsLoading,
   candleStreamsError,
   onRetryCandleStreams,
@@ -1986,6 +1996,7 @@ function FeedListView({
   feeds: DataFeedConfig[];
   summaries: FeedSummary[];
   candleStreams: CandleStream[];
+  candleStreamQueryLimit: number | null;
   candleStreamsLoading: boolean;
   candleStreamsError: boolean;
   onRetryCandleStreams: () => void;
@@ -2084,6 +2095,7 @@ function FeedListView({
       )}
       <MarketDataStreamsCard
         streams={candleStreams}
+        queryLimit={candleStreamQueryLimit}
         isLoading={candleStreamsLoading}
         isError={candleStreamsError}
         onRetry={onRetryCandleStreams}
@@ -2307,6 +2319,7 @@ export default function DataFeedsPanel({
       feeds={feeds}
       summaries={summaries}
       candleStreams={candleStreamsQuery.data?.streams ?? []}
+      candleStreamQueryLimit={candleStreamsQuery.data?.query_limit ?? null}
       candleStreamsLoading={candleStreamsQuery.isLoading}
       candleStreamsError={candleStreamsQuery.isError}
       onRetryCandleStreams={() => {
