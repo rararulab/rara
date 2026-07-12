@@ -174,8 +174,8 @@ impl ToolExecute for FinanceSubscribeTool {
         context: &ToolContext,
     ) -> anyhow::Result<FinanceSubscribeResult> {
         let mut params = params;
-        let catalog_source_ids = params.catalog_source_ids.clone();
         expand_catalog_source_ids(&mut params)?;
+        let catalog_source_ids = params.catalog_source_ids.clone();
         validate_selectors(&params)?;
         let delivery = params.delivery.unwrap_or(FinanceDelivery::Silent);
         let cooldown_secs = params.cooldown_secs.unwrap_or(DEFAULT_COOLDOWN_SECS);
@@ -346,6 +346,14 @@ fn expand_catalog_source_ids(params: &mut FinanceSubscribeParams) -> anyhow::Res
     }
 
     validate_string_group("catalog_source_ids", &params.catalog_source_ids)?;
+    params.catalog_source_ids = dedupe(
+        params
+            .catalog_source_ids
+            .iter()
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty())
+            .collect(),
+    );
     let sources = default_finance_feed_sources();
     let mut expanded = Vec::with_capacity(params.catalog_source_ids.len());
     for id in &params.catalog_source_ids {
@@ -570,7 +578,10 @@ mod tests {
             .run(
                 FinanceSubscribeParams {
                     event_kinds:            Some(vec![FinanceEventKind::RssArticle]),
-                    catalog_source_ids:     vec!["fed-press-releases".to_owned()],
+                    catalog_source_ids:     vec![
+                        " fed-press-releases ".to_owned(),
+                        "fed-press-releases".to_owned(),
+                    ],
                     source_names:           Vec::new(),
                     category_tags:          Vec::new(),
                     watch_terms:            vec!["rate cut".to_owned()],
