@@ -267,11 +267,16 @@ impl FeedDispatchSink for TestFeedDispatchSink {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use jiff::Timestamp;
     use rara_kernel::{
         data_feed::{FeedEvent, FeedEventId},
         identity::UserId,
+        io::MessageId,
+        queue::{ShardedEventQueue, ShardedEventQueueConfig},
         session::SessionKey,
+        tool::{ToolContext, ToolExecute},
     };
     use rara_trading::{
         finance::registry::{
@@ -279,6 +284,7 @@ mod tests {
         },
         market_data::{
             CandleLatestQuery, InMemoryMarketDataRepository, MarketDataRepository, Timeframe,
+            tools::{FinanceGetLatestCandleParams, FinanceGetLatestCandleTool},
         },
     };
 
@@ -286,6 +292,25 @@ mod tests {
     use crate::feed_store::InMemoryFeedStore;
 
     fn ts(value: &str) -> Timestamp { value.parse().expect("timestamp fixture should parse") }
+
+    fn tool_context() -> ToolContext {
+        ToolContext {
+            user_id:               "alice".to_owned(),
+            session_key:           SessionKey::new(),
+            origin_endpoint:       None,
+            origin_user_id:        None,
+            event_queue:           Arc::new(ShardedEventQueue::new(ShardedEventQueueConfig {
+                num_shards:      0,
+                shard_capacity:  1,
+                global_capacity: 16,
+            })),
+            rara_turn_id:          MessageId::new(),
+            context_window_tokens: 0,
+            tool_registry:         None,
+            stream_handle:         None,
+            tool_call_id:          None,
+        }
+    }
 
     fn article(title: &str) -> FeedEvent {
         FeedEvent::builder()
@@ -499,6 +524,42 @@ mod tests {
         assert_eq!(candle.symbol, "BTCUSDT");
         assert_eq!(candle.timeframe.to_string(), "15m");
         assert_eq!(sink.synthetic_turns().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn closed_candle_dispatch_is_queryable_through_latest_candle_tool() {
+        let session = SessionKey::new();
+        let market_repo = Arc::new(InMemoryMarketDataRepository::default());
+        let sink = TestFeedDispatchSink::new([session]);
+        dispatch_feed_event(
+            &candle_with_selectors(" Binance ", " btcusdt ", " 15M "),
+            &InMemoryFeedStore::default(),
+            market_repo.as_ref(),
+            &registry_for(candle_sub(session, FinanceDelivery::Silent)).await,
+            &sink,
+        )
+        .await
+        .unwrap();
+
+        let result = FinanceGetLatestCandleTool::new(market_repo)
+            .run(
+                FinanceGetLatestCandleParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       " Binance ".to_owned(),
+                    symbol:      " btcusdt ".to_owned(),
+                    timeframe:   " 15M ".to_owned(),
+                },
+                &tool_context(),
+            )
+            .await
+            .unwrap();
+        let candle = result.candle.expect("latest candle should be queryable");
+
+        assert_eq!(candle.source_name, "binance-spot");
+        assert_eq!(candle.venue, "binance");
+        assert_eq!(candle.symbol, "BTCUSDT");
+        assert_eq!(candle.timeframe, "15m");
+        assert_eq!(candle.close, "61610.30");
     }
 
     #[tokio::test]
