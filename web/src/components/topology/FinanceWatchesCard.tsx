@@ -52,6 +52,14 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
     },
   });
+  const enableMutation = useMutation({
+    mutationFn: (entry: FeedCatalogEntry) => dataFeedsApi.enableCatalogEntry(entry.id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+    },
+  });
   const unsubscribeMutation = useMutation({
     mutationFn: ({
       entry,
@@ -74,6 +82,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
   const error =
     catalogQuery.error?.message ??
     subscriptionsQuery.error?.message ??
+    enableMutation.error?.message ??
     subscribeMutation.error?.message ??
     unsubscribeMutation.error?.message ??
     null;
@@ -111,10 +120,19 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                 subscriptionMatchesEntry(subscription, entry),
               );
               const subscribed = matchingSubscriptions.length > 0;
+              const canEnableInline = !entry.enabled && !entry.requires_configuration;
+              const needsConfiguration = !entry.enabled && entry.requires_configuration;
               const pending =
+                (enableMutation.isPending && enableMutation.variables?.id === entry.id) ||
                 (subscribeMutation.isPending && subscribeMutation.variables?.id === entry.id) ||
                 (unsubscribeMutation.isPending &&
                   unsubscribeMutation.variables?.entry.id === entry.id);
+              const actionLabel = financeWatchActionLabel({
+                pending,
+                canEnableInline,
+                needsConfiguration,
+                subscribed,
+              });
               return (
                 <div key={entry.id} className="rounded-md border bg-background/60 px-3 py-2">
                   <div className="flex items-start justify-between gap-2">
@@ -126,7 +144,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                         </Badge>
                         {!entry.enabled && (
                           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-                            source off
+                            {needsConfiguration ? 'needs config' : 'source off'}
                           </Badge>
                         )}
                         {subscribed && (
@@ -143,9 +161,11 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                       size="sm"
                       variant={subscribed ? 'outline' : 'default'}
                       className="h-7 shrink-0 px-2 text-[11px]"
-                      disabled={pending}
+                      disabled={pending || needsConfiguration}
                       onClick={() => {
-                        if (subscribed) {
+                        if (canEnableInline) {
+                          enableMutation.mutate(entry);
+                        } else if (subscribed) {
                           unsubscribeMutation.mutate({
                             entry,
                             subscriptionIds: matchingSubscriptions.map(
@@ -157,13 +177,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                         }
                       }}
                     >
-                      {pending
-                        ? subscribed
-                          ? 'Removing…'
-                          : 'Adding…'
-                        : subscribed
-                          ? 'Unwatch'
-                          : 'Watch'}
+                      {actionLabel}
                     </Button>
                   </div>
                 </div>
@@ -183,6 +197,26 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
 
 function isFinanceWatchableEntry(entry: FeedCatalogEntry): boolean {
   return entry.feed_type === 'rss' || entry.feed_type === 'market_candle';
+}
+
+function financeWatchActionLabel({
+  pending,
+  canEnableInline,
+  needsConfiguration,
+  subscribed,
+}: {
+  pending: boolean;
+  canEnableInline: boolean;
+  needsConfiguration: boolean;
+  subscribed: boolean;
+}): string {
+  if (pending) {
+    if (canEnableInline) return 'Enabling…';
+    return subscribed ? 'Removing…' : 'Adding…';
+  }
+  if (needsConfiguration) return 'Configure';
+  if (canEnableInline) return 'Enable source';
+  return subscribed ? 'Unwatch' : 'Watch';
 }
 
 function subscriptionRequestForEntry(
