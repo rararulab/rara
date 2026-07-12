@@ -17,6 +17,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  CANDLE_STREAM_OVERVIEW_LIMIT,
   dataFeedsApi,
   type CandleStream,
   type CreateFinanceSubscriptionRequest,
@@ -49,7 +50,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
   });
   const candleStreamsQuery = useQuery({
     queryKey: ['market-data-candle-streams'],
-    queryFn: () => dataFeedsApi.candleStreams({ limit: 100 }),
+    queryFn: () => dataFeedsApi.candleStreams({ limit: CANDLE_STREAM_OVERVIEW_LIMIT }),
     refetchInterval: 30_000,
     staleTime: 30_000,
   });

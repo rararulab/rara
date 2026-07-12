@@ -36,6 +36,7 @@ const unsubscribeCatalogEntryMock = vi.fn();
 const openSettingsMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
+  CANDLE_STREAM_OVERVIEW_LIMIT: 500,
   dataFeedsApi: {
     catalog: (...args: unknown[]) => catalogMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
@@ -365,7 +366,7 @@ describe('FinanceWatchesCard', () => {
     expect(await screen.findByText('Data Fresh')).toBeInTheDocument();
     expect(screen.getByText('2/2 expected streams fresh.')).toBeInTheDocument();
     await waitFor(() => {
-      expect(candleStreamsMock).toHaveBeenCalledWith({ limit: 100 });
+      expect(candleStreamsMock).toHaveBeenCalledWith({ limit: 500 });
     });
   });
 
