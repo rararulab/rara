@@ -1036,29 +1036,47 @@ fn config_from_source(
     existing: Option<DataFeedConfig>,
 ) -> anyhow::Result<DataFeedConfig> {
     let now = Timestamp::now();
-    let transport = source
-        .transport
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("finance feed source {} has no transport", source.id))?;
     let id = existing
         .as_ref()
         .map(|feed| feed.id.clone())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let created_at = existing.as_ref().map(|feed| feed.created_at).unwrap_or(now);
+    let transport = existing
+        .as_ref()
+        .map(|feed| feed.transport.clone())
+        .or_else(|| source.transport.clone())
+        .ok_or_else(|| anyhow::anyhow!("finance feed source {} has no transport", source.id))?;
+    let auth = existing
+        .as_ref()
+        .and_then(|feed| feed.auth.clone())
+        .or_else(|| source.auth.clone());
+    let tags = existing.as_ref().map_or_else(
+        || source.tags.clone(),
+        |feed| merge_tags(source.tags.clone(), &feed.tags),
+    );
 
     Ok(DataFeedConfig::builder()
         .id(id)
         .name(source.feed_name())
         .feed_type(source.feed_type)
-        .tags(source.tags.clone())
+        .tags(tags)
         .transport(transport)
-        .maybe_auth(source.auth.clone())
+        .maybe_auth(auth)
         .enabled(true)
         .status(FeedStatus::Idle)
         .maybe_last_error(None)
         .created_at(created_at)
         .updated_at(now)
         .build())
+}
+
+fn merge_tags(mut tags: Vec<String>, existing: &[String]) -> Vec<String> {
+    for tag in existing {
+        if !tags.contains(tag) {
+            tags.push(tag.clone());
+        }
+    }
+    tags
 }
 
 fn replace_registry_config(
@@ -1409,6 +1427,55 @@ mod tests {
         }
 
         assert_eq!(svc.list_feeds().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn enable_feed_source_preserves_existing_persisted_transport() {
+        let (_list, tool, _disable, _restart, _subscribe, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let existing = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "custom-watchlist".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": ["SOLUSDT"],
+                "timeframes": ["5m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(false)
+            .status(FeedStatus::Error)
+            .maybe_last_error(Some("previous failure".to_owned()))
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&existing).await.unwrap();
+
+        let result = tool
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "binance-market-candles".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert!(!result.created);
+        let feed = svc.get_feed("existing-binance").await.unwrap().unwrap();
+        assert!(feed.enabled);
+        assert_eq!(feed.status, FeedStatus::Idle);
+        assert_eq!(feed.last_error, None);
+        assert_eq!(feed.transport["symbols"], serde_json::json!(["SOLUSDT"]));
+        assert_eq!(feed.transport["timeframes"], serde_json::json!(["5m"]));
+        assert!(feed.tags.iter().any(|tag| tag == "custom-watchlist"));
     }
 
     #[tokio::test]
@@ -1764,6 +1831,57 @@ mod tests {
                 .await
                 .len(),
             2
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_preserves_existing_catalog_feed_selection() {
+        let (_list, _enable, _disable, _restart, tool, svc, _registry, _finance_registry) =
+            tool().await;
+        let ctx = context();
+
+        tool.run(
+            FinanceSubscribeInstrumentsParams {
+                catalog_source_id:      Some("binance-market-candles".to_owned()),
+                feed_id:                None,
+                venue:                  None,
+                symbols:                vec!["SOLUSDT".to_owned()],
+                timeframes:             vec!["5m".to_owned()],
+                start_now:              Some(false),
+                delivery:               None,
+                cooldown_secs:          None,
+                max_immediate_per_hour: None,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+        tool.run(
+            FinanceSubscribeInstrumentsParams {
+                catalog_source_id:      Some("binance-market-candles".to_owned()),
+                feed_id:                None,
+                venue:                  None,
+                symbols:                vec!["XRPUSDT".to_owned()],
+                timeframes:             vec!["15m".to_owned()],
+                start_now:              Some(false),
+                delivery:               None,
+                cooldown_secs:          None,
+                max_immediate_per_hour: None,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        let feeds = svc.list_feeds().await.unwrap();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(
+            feeds[0].transport["symbols"],
+            serde_json::json!(["SOLUSDT", "XRPUSDT"])
+        );
+        assert_eq!(
+            feeds[0].transport["timeframes"],
+            serde_json::json!(["5m", "15m"])
         );
     }
 
