@@ -142,6 +142,7 @@ beforeEach(() => {
     count: 0,
     query_limit: 50,
     has_more: false,
+    next_start: null,
   } satisfies MarketCandlesResponse);
   candleFreshnessMock.mockResolvedValue({
     latest: null,
@@ -390,6 +391,7 @@ describe('DataFeedsPanel', () => {
       count: 2,
       query_limit: 50,
       has_more: false,
+      next_start: null,
     } satisfies MarketCandlesResponse);
     candleFreshnessMock.mockResolvedValue({
       latest: {
@@ -499,6 +501,7 @@ describe('DataFeedsPanel', () => {
       count: 50,
       query_limit: 50,
       has_more: true,
+      next_start: '2026-07-12T00:50:00Z',
     } satisfies MarketCandlesResponse);
 
     renderPanel();
@@ -511,5 +514,7 @@ describe('DataFeedsPanel', () => {
     expect(
       await screen.findByText(/Showing the first 50 candles in this preview/),
     ).toBeInTheDocument();
+    expect(screen.getByText(/Next page starts at/)).toBeInTheDocument();
+    expect(screen.getByText('2026-07-12T00:50:00Z')).toBeInTheDocument();
   });
 });

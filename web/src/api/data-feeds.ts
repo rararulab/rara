@@ -112,6 +112,7 @@ export interface MarketCandlesResponse {
   count: number;
   query_limit: number;
   has_more: boolean;
+  next_start: string | null;
 }
 
 export interface MarketCandleFreshnessResponse {
