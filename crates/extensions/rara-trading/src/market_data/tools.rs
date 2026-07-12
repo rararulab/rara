@@ -28,6 +28,7 @@ use super::{
 
 const DEFAULT_CANDLE_LIMIT: usize = 500;
 const MAX_CANDLE_LIMIT: usize = 10_000;
+const MAX_CANDLE_STREAM_LIMIT: usize = MAX_CANDLE_LIMIT - 1;
 const MAX_SELECTOR_LEN: usize = 128;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -131,6 +132,7 @@ pub struct FinanceListCandleStreamsResult {
     pub streams:     Vec<FinanceCandleStream>,
     pub count:       usize,
     pub query_limit: usize,
+    pub has_more:    bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,20 +194,24 @@ impl ToolExecute for FinanceListCandleStreamsTool {
         params: FinanceListCandleStreamsParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceListCandleStreamsResult> {
-        let limit = validate_limit(params.limit)?;
+        let limit = validate_stream_limit(params.limit)?;
+        let query_limit = limit.saturating_add(1);
         let query = CandleStreamListQuery {
             source_name: normalize_optional_source_name_selector(params.source_name)?,
-            venue: normalize_optional_venue_selector(params.venue)?,
-            symbol: normalize_optional_symbol_selector(params.symbol)?,
-            timeframe: normalize_optional_timeframe_selector(params.timeframe)?,
-            limit,
+            venue:       normalize_optional_venue_selector(params.venue)?,
+            symbol:      normalize_optional_symbol_selector(params.symbol)?,
+            timeframe:   normalize_optional_timeframe_selector(params.timeframe)?,
+            limit:       query_limit,
         };
-        let streams = self.repository.candle_streams(query).await?;
+        let mut streams = self.repository.candle_streams(query).await?;
+        let has_more = streams.len() > limit;
+        streams.truncate(limit);
         let count = streams.len();
         Ok(FinanceListCandleStreamsResult {
             streams: streams.into_iter().map(FinanceCandleStream::from).collect(),
             count,
             query_limit: limit,
+            has_more,
         })
     }
 }
@@ -279,7 +285,7 @@ impl ToolExecute for FinanceQueryCandlesTool {
         params: FinanceQueryCandlesParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceQueryCandlesResult> {
-        let limit = validate_limit(params.limit)?;
+        let limit = validate_candle_limit(params.limit)?;
         let start = parse_timestamp("start", &params.start)?;
         let end = parse_timestamp("end", &params.end)?;
         anyhow::ensure!(start < end, "start must be before end");
@@ -529,12 +535,22 @@ fn normalize_optional_timeframe_selector(
     value.map(normalize_required_timeframe_selector).transpose()
 }
 
-fn validate_limit(limit: Option<usize>) -> anyhow::Result<usize> {
+fn validate_candle_limit(limit: Option<usize>) -> anyhow::Result<usize> {
     let limit = limit.unwrap_or(DEFAULT_CANDLE_LIMIT);
     anyhow::ensure!(limit > 0, "limit must be positive");
     anyhow::ensure!(
         limit <= MAX_CANDLE_LIMIT,
         "limit must be <= {MAX_CANDLE_LIMIT}"
+    );
+    Ok(limit)
+}
+
+fn validate_stream_limit(limit: Option<usize>) -> anyhow::Result<usize> {
+    let limit = limit.unwrap_or(DEFAULT_CANDLE_LIMIT);
+    anyhow::ensure!(limit > 0, "limit must be positive");
+    anyhow::ensure!(
+        limit <= MAX_CANDLE_STREAM_LIMIT,
+        "limit must be <= {MAX_CANDLE_STREAM_LIMIT}"
     );
     Ok(limit)
 }
@@ -720,6 +736,54 @@ mod tests {
         assert_eq!(result.count, 1);
         assert_eq!(result.streams[0].symbol, "BTCUSDT");
         assert_eq!(result.streams[0].candle_count, 2);
+    }
+
+    #[tokio::test]
+    async fn list_candle_streams_tool_reports_when_more_streams_match() {
+        let repository = repository_with_multiple_streams().await;
+        let tool = FinanceListCandleStreamsTool::new(repository);
+        let result = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       Some("binance".to_owned()),
+                    symbol:      None,
+                    timeframe:   Some("1m".to_owned()),
+                    limit:       Some(1),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.query_limit, 1);
+        assert!(result.has_more);
+        assert_eq!(result.streams[0].symbol, "ETHUSDT");
+    }
+
+    #[tokio::test]
+    async fn list_candle_streams_tool_rejects_unprobeable_limit() {
+        let repository = repository_with_multiple_streams().await;
+        let tool = FinanceListCandleStreamsTool::new(repository);
+        let error = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: None,
+                    venue:       None,
+                    symbol:      None,
+                    timeframe:   None,
+                    limit:       Some(10_000),
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("limit must be <= 9999"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]

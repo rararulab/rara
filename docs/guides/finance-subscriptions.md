@@ -232,7 +232,11 @@ stored streams, `finance_get_latest_candle` for the newest closed bar, and
 `finance_query_candles` for bounded historical windows. `finance_find_candle_gaps`
 checks completeness over a bounded range, while `finance_get_candle_freshness`
 answers whether a stream is currently stale. All prices and volumes are returned
-as strings to preserve decimal precision.
+as strings to preserve decimal precision. `finance_list_candle_streams` returns
+`has_more` when additional streams match the selectors beyond the returned
+`query_limit`; narrow by `source_name`, `venue`, `symbol`, or `timeframe` before
+assuming a broad stream overview is exhaustive. The stream-list limit is capped
+at 9,999 so the tool can probe one extra row and report `has_more` accurately.
 
 ## Acceptance checklist
 
