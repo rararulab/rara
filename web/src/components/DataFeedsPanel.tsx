@@ -1682,6 +1682,50 @@ function MarketDataStreamsCard({
     enabled: previewRequest != null,
     refetchInterval: previewRequest != null ? 30_000 : false,
   });
+  const freshnessQuery = useQuery({
+    queryKey: [
+      'market-data-candle-freshness-preview',
+      previewRequest?.source_name,
+      previewRequest?.venue,
+      previewRequest?.symbol,
+      previewRequest?.timeframe,
+    ],
+    queryFn: () => {
+      if (!previewRequest) throw new Error('Missing candle freshness request');
+      return dataFeedsApi.candleFreshness({
+        source_name: previewRequest.source_name,
+        venue: previewRequest.venue,
+        symbol: previewRequest.symbol,
+        timeframe: previewRequest.timeframe,
+      });
+    },
+    enabled: previewRequest != null,
+    refetchInterval: previewRequest != null ? 30_000 : false,
+  });
+  const gapsQuery = useQuery({
+    queryKey: [
+      'market-data-candle-gaps-preview',
+      previewRequest?.source_name,
+      previewRequest?.venue,
+      previewRequest?.symbol,
+      previewRequest?.timeframe,
+      previewRequest?.start,
+      previewRequest?.end,
+    ],
+    queryFn: () => {
+      if (!previewRequest) throw new Error('Missing candle gaps request');
+      return dataFeedsApi.candleGaps({
+        source_name: previewRequest.source_name,
+        venue: previewRequest.venue,
+        symbol: previewRequest.symbol,
+        timeframe: previewRequest.timeframe,
+        start: previewRequest.start,
+        end: previewRequest.end,
+      });
+    },
+    enabled: previewRequest != null,
+    refetchInterval: previewRequest != null ? 30_000 : false,
+  });
   const previewCandles = previewQuery.data?.candles ?? [];
 
   return (
@@ -1828,6 +1872,60 @@ function MarketDataStreamsCard({
                     Query limit
                   </div>
                   <div className="text-sm font-medium">{previewQuery.data?.query_limit}</div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-md border px-3 py-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      Freshness
+                    </div>
+                    {freshnessQuery.data ? (
+                      <Badge
+                        variant={freshnessQuery.data.is_stale ? 'destructive' : 'outline'}
+                        className="text-[11px]"
+                      >
+                        {freshnessQuery.data.status}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {freshnessQuery.isLoading ? (
+                    <Skeleton className="h-4 w-32" />
+                  ) : freshnessQuery.isError ? (
+                    <div className="text-xs text-destructive">Freshness check failed.</div>
+                  ) : freshnessQuery.data ? (
+                    <div className="text-xs text-muted-foreground">
+                      {freshnessQuery.data.lag_secs == null
+                        ? 'No latest candle found.'
+                        : `${freshnessQuery.data.lag_secs}s lag · stale after ${freshnessQuery.data.stale_after_secs}s`}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="rounded-md border px-3 py-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      Gaps
+                    </div>
+                    {gapsQuery.data ? (
+                      <Badge
+                        variant={gapsQuery.data.complete ? 'outline' : 'destructive'}
+                        className="text-[11px]"
+                      >
+                        {gapsQuery.data.complete ? 'complete' : 'missing'}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {gapsQuery.isLoading ? (
+                    <Skeleton className="h-4 w-32" />
+                  ) : gapsQuery.isError ? (
+                    <div className="text-xs text-destructive">Gap check failed.</div>
+                  ) : gapsQuery.data ? (
+                    <div className="text-xs text-muted-foreground">
+                      {gapsQuery.data.missing_count}/{gapsQuery.data.expected_count} missing in
+                      preview window
+                    </div>
+                  ) : null}
                 </div>
               </div>
 

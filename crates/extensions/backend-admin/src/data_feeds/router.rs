@@ -28,6 +28,8 @@
 //! | GET    | `/api/v1/data-feeds/finance/subscriptions` | list current user's finance subscriptions |
 //! | POST   | `/api/v1/data-feeds/finance/subscriptions` | create/update current user's finance subscription |
 //! | GET    | `/api/v1/data-feeds/market-data/candle-streams` | list stored market-data candle streams |
+//! | GET    | `/api/v1/data-feeds/market-data/candles/freshness` | check stored candle freshness |
+//! | GET    | `/api/v1/data-feeds/market-data/candles/gaps` | find missing stored candle open times |
 //!
 //! All mutations synchronise both the database (via [`DataFeedSvc`]) and the
 //! in-memory [`DataFeedRegistry`]. When an active feed is created and
@@ -82,6 +84,7 @@ const DEFAULT_MARKET_DATA_STREAM_LIMIT: usize = 500;
 const MAX_MARKET_DATA_STREAM_LIMIT: usize = 10_000;
 const DEFAULT_MARKET_DATA_CANDLE_LIMIT: usize = 500;
 const MAX_MARKET_DATA_CANDLE_LIMIT: usize = 10_000;
+const MAX_MARKET_DATA_FRESHNESS_STALE_AFTER_SECS: u64 = 31_536_000;
 const MAX_MARKET_DATA_SELECTOR_LEN: usize = 128;
 
 /// Shared state for data feed routes.
@@ -133,6 +136,14 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         .route(
             "/api/v1/data-feeds/market-data/candles/latest",
             get(get_latest_market_data_candle),
+        )
+        .route(
+            "/api/v1/data-feeds/market-data/candles/freshness",
+            get(get_market_data_candle_freshness),
+        )
+        .route(
+            "/api/v1/data-feeds/market-data/candles/gaps",
+            get(find_market_data_candle_gaps),
         )
         .route(
             "/api/v1/data-feeds/market-data/candles",
@@ -284,6 +295,28 @@ struct CandleRangeQueryParams {
     limit:       Option<usize>,
 }
 
+/// Query parameters for stored closed-candle freshness.
+#[derive(Debug, Deserialize)]
+struct CandleFreshnessQueryParams {
+    source_name:      Option<String>,
+    venue:            String,
+    symbol:           String,
+    timeframe:        String,
+    as_of:            Option<String>,
+    stale_after_secs: Option<u64>,
+}
+
+/// Query parameters for stored closed-candle gap detection.
+#[derive(Debug, Deserialize)]
+struct CandleGapsQueryParams {
+    source_name: Option<String>,
+    venue:       String,
+    symbol:      String,
+    timeframe:   String,
+    start:       String,
+    end:         String,
+}
+
 #[derive(Debug, Serialize)]
 struct CandleLatestResponse {
     candle: Option<CandleResponse>,
@@ -294,6 +327,24 @@ struct CandleRangeResponse {
     candles:     Vec<CandleResponse>,
     count:       usize,
     query_limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleFreshnessResponse {
+    latest:           Option<CandleResponse>,
+    as_of:            String,
+    stale_after_secs: u64,
+    lag_secs:         Option<i64>,
+    is_stale:         bool,
+    status:           String,
+}
+
+#[derive(Debug, Serialize)]
+struct CandleGapsResponse {
+    missing_open_times: Vec<String>,
+    missing_count:      usize,
+    expected_count:     usize,
+    complete:           bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1203,6 +1254,111 @@ async fn get_latest_market_data_candle(
     }))
 }
 
+/// `GET /api/v1/data-feeds/market-data/candles/freshness` — report whether
+/// the newest stored closed candle is fresh relative to `as_of`.
+async fn get_market_data_candle_freshness(
+    State(state): State<DataFeedRouterState>,
+    Query(params): Query<CandleFreshnessQueryParams>,
+) -> Result<Json<CandleFreshnessResponse>, ProblemDetails> {
+    let timeframe = normalize_required_market_data_timeframe(params.timeframe)?;
+    let default_stale_after_secs = u64::try_from(
+        timeframe
+            .step()
+            .map_err(|err| ProblemDetails::bad_request(format!("invalid timeframe: {err}")))?
+            .as_secs(),
+    )
+    .map_err(|err| ProblemDetails::bad_request(format!("invalid timeframe step: {err}")))?
+    .saturating_mul(2);
+    let stale_after_secs = params.stale_after_secs.unwrap_or(default_stale_after_secs);
+    validate_market_data_stale_after_secs(stale_after_secs)?;
+    let as_of = params
+        .as_of
+        .map(|value| parse_market_data_timestamp("as_of", value))
+        .transpose()?
+        .unwrap_or_else(Timestamp::now);
+
+    let query = CandleLatestQuery {
+        source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
+        venue: normalize_required_market_data_venue(params.venue)?,
+        symbol: normalize_required_market_data_symbol(params.symbol)?,
+        timeframe,
+    };
+    let latest = state
+        .market_data_repo
+        .latest_closed_candle(query)
+        .await
+        .map_err(|err| {
+            ProblemDetails::internal(format!("failed to get candle freshness: {err}"))
+        })?;
+    let Some(candle) = latest else {
+        return Ok(Json(CandleFreshnessResponse {
+            latest: None,
+            as_of: as_of.to_string(),
+            stale_after_secs,
+            lag_secs: None,
+            is_stale: true,
+            status: "missing".to_owned(),
+        }));
+    };
+
+    let lag_secs = as_of.as_second() - candle.close_time.as_second();
+    let is_stale = lag_secs >= 0 && lag_secs as u64 > stale_after_secs;
+    let status = if lag_secs < 0 {
+        "future"
+    } else if is_stale {
+        "stale"
+    } else {
+        "fresh"
+    };
+
+    Ok(Json(CandleFreshnessResponse {
+        latest: Some(CandleResponse::from(candle)),
+        as_of: as_of.to_string(),
+        stale_after_secs,
+        lag_secs: Some(lag_secs),
+        is_stale,
+        status: status.to_owned(),
+    }))
+}
+
+/// `GET /api/v1/data-feeds/market-data/candles/gaps` — find missing expected
+/// open times for a stored closed-candle stream.
+async fn find_market_data_candle_gaps(
+    State(state): State<DataFeedRouterState>,
+    Query(params): Query<CandleGapsQueryParams>,
+) -> Result<Json<CandleGapsResponse>, ProblemDetails> {
+    let timeframe = normalize_required_market_data_timeframe(params.timeframe)?;
+    let start = parse_market_data_timestamp("start", params.start)?;
+    let end = parse_market_data_timestamp("end", params.end)?;
+    if end <= start {
+        return Err(ProblemDetails::bad_request("end must be after start"));
+    }
+    let expected_count = expected_market_data_open_time_count(&timeframe, start, end)?;
+
+    let query = CandleRangeQuery {
+        source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
+        venue: normalize_required_market_data_venue(params.venue)?,
+        symbol: normalize_required_market_data_symbol(params.symbol)?,
+        timeframe,
+        start,
+        end,
+        limit: expected_count,
+    };
+    let missing = state
+        .market_data_repo
+        .missing_open_times(query)
+        .await
+        .map_err(|err| ProblemDetails::internal(format!("failed to find candle gaps: {err}")))?;
+    let missing_count = missing.len();
+
+    Ok(Json(CandleGapsResponse {
+        missing_open_times: missing.into_iter().map(|ts| ts.to_string()).collect(),
+        missing_count,
+        expected_count,
+        complete: missing_count == 0,
+    }))
+}
+
 /// `GET /api/v1/data-feeds/market-data/candles` — query a bounded ordered
 /// range of stored closed candles for a stream.
 async fn query_market_data_candles(
@@ -1388,6 +1544,46 @@ fn validate_market_data_candle_limit(limit: Option<usize>) -> Result<usize, Prob
         )));
     }
     Ok(limit)
+}
+
+fn validate_market_data_stale_after_secs(value: u64) -> Result<(), ProblemDetails> {
+    if value == 0 {
+        return Err(ProblemDetails::bad_request(
+            "stale_after_secs must be positive",
+        ));
+    }
+    if value > MAX_MARKET_DATA_FRESHNESS_STALE_AFTER_SECS {
+        return Err(ProblemDetails::bad_request(format!(
+            "stale_after_secs must be <= {MAX_MARKET_DATA_FRESHNESS_STALE_AFTER_SECS}"
+        )));
+    }
+    Ok(())
+}
+
+fn expected_market_data_open_time_count(
+    timeframe: &Timeframe,
+    start: Timestamp,
+    end: Timestamp,
+) -> Result<usize, ProblemDetails> {
+    let step = timeframe
+        .step()
+        .map_err(|err| ProblemDetails::bad_request(format!("invalid timeframe: {err}")))?;
+    let mut cursor = start;
+    let mut count = 0usize;
+
+    while cursor < end {
+        count = count.saturating_add(1);
+        if count > MAX_MARKET_DATA_CANDLE_LIMIT {
+            return Err(ProblemDetails::bad_request(format!(
+                "range contains more than {MAX_MARKET_DATA_CANDLE_LIMIT} expected candles"
+            )));
+        }
+        cursor = cursor.checked_add(step).map_err(|err| {
+            ProblemDetails::bad_request(format!("timeframe addition overflowed: {err}"))
+        })?;
+    }
+
+    Ok(count)
 }
 
 fn parse_market_data_timestamp(name: &str, value: String) -> Result<Timestamp, ProblemDetails> {
@@ -3211,6 +3407,91 @@ mod tests {
         assert_eq!(result["candles"][0]["close"], "1005.00");
         assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:01:00Z");
         assert_eq!(result["candles"][1]["close"], "1006.25");
+    }
+
+    #[tokio::test]
+    async fn market_data_candle_gaps_endpoint_reports_missing_open_times() {
+        let market_data_repo = test_market_data_repo();
+        for (open_time, close_time, close) in [
+            ("2026-07-10T08:00:00Z", "2026-07-10T08:01:00Z", "1005.00"),
+            ("2026-07-10T08:02:00Z", "2026-07-10T08:03:00Z", "1007.75"),
+        ] {
+            market_data_repo
+                .upsert_closed_candle(market_data_candle(open_time, close_time, close, None))
+                .await
+                .unwrap();
+        }
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles/gaps?venue=binance&symbol=BTCUSDT&\
+                         timeframe=1m&start=2026-07-10T08:00:00Z&end=2026-07-10T08:03:00Z",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(result["expected_count"], 3);
+        assert_eq!(result["missing_count"], 1);
+        assert_eq!(result["complete"], false);
+        assert_eq!(result["missing_open_times"][0], "2026-07-10T08:01:00Z");
+    }
+
+    #[tokio::test]
+    async fn market_data_candle_freshness_endpoint_reports_latest_status() {
+        let market_data_repo = test_market_data_repo();
+        market_data_repo
+            .upsert_closed_candle(market_data_candle(
+                "2026-07-10T08:01:00Z",
+                "2026-07-10T08:02:00Z",
+                "1006.25",
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles/freshness?venue=BINANCE&\
+                         symbol=btcusdt&timeframe=1M&as_of=2026-07-10T08:03:00Z&\
+                         stale_after_secs=120",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(result["status"], "fresh");
+        assert_eq!(result["is_stale"], false);
+        assert_eq!(result["lag_secs"], 60);
+        assert_eq!(result["stale_after_secs"], 120);
+        assert_eq!(result["latest"]["open_time"], "2026-07-10T08:01:00Z");
+        assert_eq!(result["latest"]["close"], "1006.25");
     }
 
     #[tokio::test]

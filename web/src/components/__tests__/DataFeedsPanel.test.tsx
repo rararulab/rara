@@ -26,6 +26,8 @@ import type {
   FeedCatalogEntry,
   FinanceSubscription,
   FinanceSubscriptionsResponse,
+  MarketCandleFreshnessResponse,
+  MarketCandleGapsResponse,
   MarketCandlesResponse,
 } from '@/api/data-feeds';
 
@@ -35,6 +37,8 @@ const catalogMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const candleStreamsMock = vi.fn();
 const candlesMock = vi.fn();
+const candleFreshnessMock = vi.fn();
+const candleGapsMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
   dataFeedsApi: {
@@ -44,6 +48,8 @@ vi.mock('@/api/data-feeds', () => ({
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
     candles: (...args: unknown[]) => candlesMock(...args),
+    candleFreshness: (...args: unknown[]) => candleFreshnessMock(...args),
+    candleGaps: (...args: unknown[]) => candleGapsMock(...args),
     toggle: vi.fn(),
     delete: vi.fn(),
     enableCatalogEntry: vi.fn(),
@@ -114,6 +120,8 @@ beforeEach(() => {
   financeSubscriptionsMock.mockReset();
   candleStreamsMock.mockReset();
   candlesMock.mockReset();
+  candleFreshnessMock.mockReset();
+  candleGapsMock.mockReset();
 
   listMock.mockResolvedValue([]);
   summariesMock.mockResolvedValue([]);
@@ -132,6 +140,20 @@ beforeEach(() => {
     count: 0,
     query_limit: 50,
   } satisfies MarketCandlesResponse);
+  candleFreshnessMock.mockResolvedValue({
+    latest: null,
+    as_of: '2026-07-12T00:50:00Z',
+    stale_after_secs: 120,
+    lag_secs: null,
+    is_stale: true,
+    status: 'missing',
+  } satisfies MarketCandleFreshnessResponse);
+  candleGapsMock.mockResolvedValue({
+    missing_open_times: [],
+    missing_count: 0,
+    expected_count: 50,
+    complete: true,
+  } satisfies MarketCandleGapsResponse);
 });
 
 afterEach(() => {
@@ -281,6 +303,34 @@ describe('DataFeedsPanel', () => {
       count: 2,
       query_limit: 50,
     } satisfies MarketCandlesResponse);
+    candleFreshnessMock.mockResolvedValue({
+      latest: {
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        symbol: 'BTCUSDT',
+        timeframe: '1m',
+        open_time: '2026-07-12T00:49:00Z',
+        close_time: '2026-07-12T00:49:59Z',
+        open: '64110.50',
+        high: '64150.00',
+        low: '64105.00',
+        close: '64140.25',
+        volume: '8.75',
+        ingested_at: '2026-07-12T00:50:02Z',
+        provider_sequence: null,
+      },
+      as_of: '2026-07-12T00:50:30Z',
+      stale_after_secs: 120,
+      lag_secs: 31,
+      is_stale: false,
+      status: 'fresh',
+    } satisfies MarketCandleFreshnessResponse);
+    candleGapsMock.mockResolvedValue({
+      missing_open_times: [],
+      missing_count: 0,
+      expected_count: 50,
+      complete: true,
+    } satisfies MarketCandleGapsResponse);
 
     renderPanel();
 
@@ -300,7 +350,25 @@ describe('DataFeedsPanel', () => {
         limit: 50,
       });
     });
+    await waitFor(() => {
+      expect(candleFreshnessMock).toHaveBeenCalledWith({
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        symbol: 'BTCUSDT',
+        timeframe: '1m',
+      });
+      expect(candleGapsMock).toHaveBeenCalledWith({
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        symbol: 'BTCUSDT',
+        timeframe: '1m',
+        start: '2026-07-12T00:00:00.000Z',
+        end: '2026-07-12T00:50:00.000Z',
+      });
+    });
     expect(await screen.findByText('Recent candles · BINANCE · BTCUSDT · 1m')).toBeInTheDocument();
+    expect(screen.getByText('31s lag · stale after 120s')).toBeInTheDocument();
+    expect(screen.getByText('0/50 missing in preview window')).toBeInTheDocument();
     expect(screen.getAllByText('64140.25').length).toBeGreaterThan(0);
     expect(screen.getByText('12.34')).toBeInTheDocument();
   });
