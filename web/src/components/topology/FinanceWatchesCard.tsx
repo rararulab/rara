@@ -159,6 +159,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                 (subscribeMutation.isPending && subscribeMutation.variables?.id === entry.id) ||
                 (unsubscribeMutation.isPending &&
                   unsubscribeMutation.variables?.entry.id === entry.id);
+              const provider = catalogProvider(entry);
               const actionLabel = financeWatchActionLabel({
                 pending,
                 canEnableInline,
@@ -174,6 +175,14 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                         <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
                           {entry.feed_type === 'rss' ? 'News' : 'K-line'}
                         </Badge>
+                        {provider && (
+                          <Badge
+                            variant="outline"
+                            className="px-1.5 py-0 text-[10px] text-muted-foreground"
+                          >
+                            Provider {provider}
+                          </Badge>
+                        )}
                         {!entry.enabled && (
                           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                             {needsConfiguration ? 'needs config' : 'source off'}
@@ -307,6 +316,10 @@ function catalogSourceName(entry: FeedCatalogEntry): string {
 
 function catalogVenue(entry: FeedCatalogEntry): string | null {
   return entry.venue?.trim() || transportString(entry, 'venue');
+}
+
+function catalogProvider(entry: FeedCatalogEntry): string | null {
+  return entry.provider?.trim() || null;
 }
 
 function catalogSymbols(entry: FeedCatalogEntry): string[] {
