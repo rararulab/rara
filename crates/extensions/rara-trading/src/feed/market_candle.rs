@@ -44,6 +44,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 
+use crate::market_data::Timeframe;
+
 const MAX_CANDLES_PER_POLL: usize = 10_000;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
@@ -111,7 +113,9 @@ struct ParsedCandle {
 
 impl MarketCandleSource {
     pub fn from_config(config: &DataFeedConfig) -> anyhow::Result<Self> {
-        let transport: MarketCandleTransport = serde_json::from_value(config.transport.clone())?;
+        let mut transport: MarketCandleTransport =
+            serde_json::from_value(config.transport.clone())?;
+        normalize_transport(&mut transport)?;
         validate_transport(&transport)?;
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -286,23 +290,26 @@ impl MarketCandleSource {
         if !raw.closed {
             return None;
         }
-        if raw.venue != self.transport.venue {
+        let venue = normalize_venue(raw.venue).ok()?;
+        let symbol = normalize_symbol(raw.symbol).ok()?;
+        let timeframe = normalize_timeframe(raw.timeframe).ok()?;
+        if venue != self.transport.venue {
             return None;
         }
-        if !self.symbols.contains(&raw.symbol) || !self.timeframes.contains(&raw.timeframe) {
+        if !self.symbols.contains(&symbol) || !self.timeframes.contains(&timeframe) {
             return None;
         }
         Some(ParsedCandle {
-            venue:      raw.venue,
-            symbol:     raw.symbol,
-            timeframe:  raw.timeframe,
-            open_time:  raw.open_time,
+            venue,
+            symbol,
+            timeframe,
+            open_time: raw.open_time,
             close_time: raw.close_time,
-            open:       Decimal::from_str(&raw.open).ok()?,
-            high:       Decimal::from_str(&raw.high).ok()?,
-            low:        Decimal::from_str(&raw.low).ok()?,
-            close:      Decimal::from_str(&raw.close).ok()?,
-            volume:     Decimal::from_str(&raw.volume).ok()?,
+            open: Decimal::from_str(&raw.open).ok()?,
+            high: Decimal::from_str(&raw.high).ok()?,
+            low: Decimal::from_str(&raw.low).ok()?,
+            close: Decimal::from_str(&raw.close).ok()?,
+            volume: Decimal::from_str(&raw.volume).ok()?,
         })
     }
 
@@ -520,6 +527,56 @@ impl DataFeed for MarketCandleSource {
 
         Ok(())
     }
+}
+
+fn normalize_transport(transport: &mut MarketCandleTransport) -> anyhow::Result<()> {
+    transport.provider = transport
+        .provider
+        .take()
+        .map(|provider| {
+            normalize_selector("provider", provider).map(|value| value.to_ascii_lowercase())
+        })
+        .transpose()?;
+    transport.venue = normalize_venue(std::mem::take(&mut transport.venue))?;
+    transport.symbols = normalize_symbols(std::mem::take(&mut transport.symbols))?;
+    transport.timeframes = normalize_timeframes(std::mem::take(&mut transport.timeframes))?;
+    Ok(())
+}
+
+fn normalize_symbols(values: Vec<String>) -> anyhow::Result<Vec<String>> {
+    let mut values = values
+        .into_iter()
+        .map(normalize_symbol)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    dedupe_sort(&mut values);
+    Ok(values)
+}
+
+fn normalize_timeframes(values: Vec<String>) -> anyhow::Result<Vec<String>> {
+    let mut values = values
+        .into_iter()
+        .map(normalize_timeframe)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    dedupe_sort(&mut values);
+    Ok(values)
+}
+
+fn normalize_venue(value: String) -> anyhow::Result<String> {
+    Ok(normalize_selector("venue", value)?.to_ascii_lowercase())
+}
+
+fn normalize_symbol(value: String) -> anyhow::Result<String> {
+    Ok(normalize_selector("symbol", value)?.to_ascii_uppercase())
+}
+
+fn normalize_timeframe(value: String) -> anyhow::Result<String> {
+    Ok(Timeframe::parse(normalize_selector("timeframe", value)?.to_ascii_lowercase())?.to_string())
+}
+
+fn normalize_selector(name: &str, value: String) -> anyhow::Result<String> {
+    let value = value.trim();
+    anyhow::ensure!(!value.is_empty(), "{name} must not be empty");
+    Ok(value.to_owned())
 }
 
 fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
@@ -771,6 +828,71 @@ mod tests {
             url.as_str(),
             "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=2"
         );
+    }
+
+    #[test]
+    fn binance_provider_normalizes_config_selectors() {
+        let config = DataFeedConfig::builder()
+            .id("binance-candles-test".to_owned())
+            .name("binance-public".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "crypto".to_owned()])
+            .transport(serde_json::json!({
+                "provider": " Binance ",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "venue": " Binance ",
+                "symbols": [" btcusdt ", "BTCUSDT"],
+                "timeframes": [" 1M ", "1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build();
+
+        let source = MarketCandleSource::from_config(&config).expect("config should parse");
+
+        assert_eq!(source.transport.provider.as_deref(), Some("binance"));
+        assert_eq!(source.transport.venue, "binance");
+        assert_eq!(source.transport.symbols, ["BTCUSDT"]);
+        assert_eq!(source.transport.timeframes, ["1m"]);
+    }
+
+    #[test]
+    fn normalized_endpoint_candles_are_matched_and_emitted_with_canonical_selectors() {
+        let source = candle_source();
+        let events = source
+            .parse_normalized_candle_events(
+                br#"{
+  "candles": [
+    {
+      "venue": " Binance ",
+      "symbol": " btcusdt ",
+      "timeframe": " 15M ",
+      "open_time": "2026-07-10T08:15:00Z",
+      "close_time": "2026-07-10T08:30:00Z",
+      "open": "61500.12",
+      "high": "61640.00",
+      "low": "61480.50",
+      "close": "61610.30",
+      "volume": "124.551",
+      "closed": true
+    }
+  ]
+}"#,
+            )
+            .expect("candles should parse");
+
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert!(event.tags.contains(&"venue:binance".to_owned()));
+        assert!(event.tags.contains(&"symbol:BTCUSDT".to_owned()));
+        assert!(event.tags.contains(&"timeframe:15m".to_owned()));
+        assert_eq!(event.payload["venue"], "binance");
+        assert_eq!(event.payload["symbol"], "BTCUSDT");
+        assert_eq!(event.payload["timeframe"], "15m");
     }
 
     #[test]
