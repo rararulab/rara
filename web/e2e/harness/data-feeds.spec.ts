@@ -62,6 +62,9 @@ interface FeedCatalogEntry {
   requires_configuration: boolean;
   setup_hint: string | null;
   transport_template: Record<string, unknown> | null;
+  venue?: string | null;
+  configured_symbols?: string[];
+  configured_timeframes?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +494,10 @@ test.describe('Data Feeds Management', () => {
     await goToDataFeeds(page);
 
     await expect(page.getByText('Default finance sources')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('News feeds', { exact: true })).toBeVisible();
+    await expect(page.getByText('K-line feeds', { exact: true })).toBeVisible();
     await expect(page.getByText('Federal Reserve Press Releases', { exact: true })).toBeVisible();
+    await expect(page.getByText('binance · BTCUSDT, ETHUSDT · 1m')).toBeVisible();
 
     const fedEntry = page
       .getByText('Federal Reserve Press Releases', { exact: true })

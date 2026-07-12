@@ -85,6 +85,9 @@ export interface FeedCatalogEntry {
   requires_configuration: boolean;
   setup_hint: string | null;
   transport_template: Record<string, unknown> | null;
+  venue?: string | null;
+  configured_symbols?: string[];
+  configured_timeframes?: string[];
 }
 
 export interface EnableCatalogEntryRequest {

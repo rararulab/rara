@@ -139,6 +139,59 @@ function typeLabel(t: DataFeedConfig['feed_type']): string {
   }
 }
 
+function transportString(entry: FeedCatalogEntry, key: string): string | null {
+  const value = entry.transport_template?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function transportStringList(entry: FeedCatalogEntry, key: string): string[] {
+  const value = entry.transport_template?.[key];
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function catalogVenue(entry: FeedCatalogEntry): string | null {
+  return entry.venue?.trim() || transportString(entry, 'venue');
+}
+
+function catalogSymbols(entry: FeedCatalogEntry): string[] {
+  return entry.configured_symbols?.length
+    ? entry.configured_symbols
+    : transportStringList(entry, 'symbols');
+}
+
+function catalogTimeframes(entry: FeedCatalogEntry): string[] {
+  return entry.configured_timeframes?.length
+    ? entry.configured_timeframes
+    : transportStringList(entry, 'timeframes');
+}
+
+function summarizeList(values: string[], max = 4): string {
+  if (values.length <= max) return values.join(', ');
+  return `${values.slice(0, max).join(', ')} +${values.length - max}`;
+}
+
+function catalogCoverageLabel(entry: FeedCatalogEntry): string | null {
+  if (entry.feed_type === 'market_candle') {
+    const parts = [
+      catalogVenue(entry),
+      summarizeList(catalogSymbols(entry)),
+      summarizeList(catalogTimeframes(entry), 3),
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(' · ') : null;
+  }
+
+  if (entry.feed_type === 'rss') {
+    const tags = entry.tags.filter((tag) => tag !== 'finance' && tag !== 'news');
+    return tags.length > 0 ? `RSS news · ${tags.join(' · ')}` : 'RSS news';
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Status badge
 // ---------------------------------------------------------------------------
@@ -1182,13 +1235,17 @@ function FeedCatalogCard({
 
   if (entries.length === 0) return null;
 
-  const readyEntries = entries.filter((entry) => !entry.requires_configuration);
+  const newsEntries = entries.filter((entry) => entry.feed_type === 'rss');
+  const candleEntries = entries.filter(
+    (entry) => entry.feed_type === 'market_candle' && !entry.requires_configuration,
+  );
   const providerEntries = entries.filter((entry) => entry.requires_configuration);
 
   const renderEntry = (entry: FeedCatalogEntry) => {
     const pending =
       (enableMutation.isPending && enableMutation.variables?.id === entry.id) ||
       (disableMutation.isPending && disableMutation.variables === entry.id);
+    const coverage = catalogCoverageLabel(entry);
 
     return (
       <div
@@ -1214,7 +1271,7 @@ function FeedCatalogCard({
           </div>
           <p className="text-xs text-muted-foreground">{entry.description}</p>
           {entry.setup_hint && <p className="text-xs text-muted-foreground">{entry.setup_hint}</p>}
-          <p className="text-[11px] text-muted-foreground">Tags: {entry.tags.join(' · ')}</p>
+          {coverage && <p className="text-[11px] text-muted-foreground">{coverage}</p>}
         </div>
         {entry.requires_configuration ? (
           <div className="flex shrink-0 gap-2">
@@ -1265,17 +1322,23 @@ function FeedCatalogCard({
         <div className="border-b px-4 py-3">
           <h3 className="text-sm font-semibold">Default finance sources</h3>
           <p className="text-xs text-muted-foreground">
-            Ready sources can run immediately. Provider presets need your own endpoint or
-            credentials.
+            Enable built-in news and K-line feeds, or configure provider presets with your own
+            endpoint.
           </p>
         </div>
         <div className="divide-y">
-          {readyEntries.length > 0 && (
+          {newsEntries.length > 0 && (
+            <div>
+              <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">News feeds</div>
+              {newsEntries.map(renderEntry)}
+            </div>
+          )}
+          {candleEntries.length > 0 && (
             <div>
               <div className="px-4 pt-3 text-xs font-medium text-muted-foreground">
-                Ready to enable
+                K-line feeds
               </div>
-              {readyEntries.map(renderEntry)}
+              {candleEntries.map(renderEntry)}
             </div>
           )}
           {providerEntries.length > 0 && (
