@@ -66,6 +66,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub can_enable:             bool,
     pub setup_hint:             Option<String>,
     pub runtime:                FinanceFeedSourceRuntime,
+    pub subscriptions:          FinanceFeedSourceSubscriptions,
     pub venue:                  Option<String>,
     pub configured_symbols:     Vec<String>,
     pub configured_timeframes:  Vec<String>,
@@ -82,6 +83,14 @@ pub(super) struct FinanceFeedSourceRuntime {
     pub event_count:   i64,
     pub last_event_at: Option<String>,
     pub lag_seconds:   Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceSubscriptions {
+    pub user_subscribed:          bool,
+    pub session_subscribed:       bool,
+    pub user_subscription_ids:    Vec<Uuid>,
+    pub session_subscription_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -268,8 +277,9 @@ pub(super) enum FeedChange {
     concurrency_safe
 )]
 pub(super) struct FinanceListFeedSourcesTool {
-    svc:      DataFeedSvc,
-    registry: Arc<DataFeedRegistry>,
+    svc:              DataFeedSvc,
+    registry:         Arc<DataFeedRegistry>,
+    finance_registry: Arc<FinanceSubscriptionRegistry>,
 }
 
 #[derive(ToolDef)]
@@ -347,8 +357,16 @@ pub(super) struct FinanceSubscribeInstrumentsTool {
 }
 
 impl FinanceListFeedSourcesTool {
-    pub(super) fn new(svc: DataFeedSvc, registry: Arc<DataFeedRegistry>) -> Self {
-        Self { svc, registry }
+    pub(super) fn new(
+        svc: DataFeedSvc,
+        registry: Arc<DataFeedRegistry>,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+    ) -> Self {
+        Self {
+            svc,
+            registry,
+            finance_registry,
+        }
     }
 }
 
@@ -406,7 +424,7 @@ impl ToolExecute for FinanceListFeedSourcesTool {
     async fn run(
         &self,
         _params: FinanceListFeedSourcesParams,
-        _context: &ToolContext,
+        context: &ToolContext,
     ) -> anyhow::Result<FinanceListFeedSourcesResult> {
         let feeds = self.svc.list_feeds().await?;
         let summaries = self
@@ -416,6 +434,8 @@ impl ToolExecute for FinanceListFeedSourcesTool {
             .into_iter()
             .map(|summary| (summary.source_name.clone(), summary))
             .collect::<HashMap<_, _>>();
+        let owner = UserId(context.user_id.clone());
+        let subscriptions = self.finance_registry.list_for_owner(&owner).await;
         let now = Timestamp::now();
 
         Ok(FinanceListFeedSourcesResult {
@@ -435,6 +455,11 @@ impl ToolExecute for FinanceListFeedSourcesTool {
                         summary.map_or(0, |summary| summary.event_count),
                         last_event_at.map(|timestamp| timestamp.to_string()),
                         lag_seconds,
+                        source_subscription_summary(
+                            &subscriptions,
+                            context.session_key,
+                            &source_name,
+                        ),
                     )
                 })
                 .collect(),
@@ -1457,6 +1482,7 @@ fn feed_source_entry(
     event_count: i64,
     last_event_at: Option<String>,
     lag_seconds: Option<i64>,
+    subscriptions: FinanceFeedSourceSubscriptions,
 ) -> FinanceFeedSourceEntry {
     let source_name = source.feed_name();
     let transport = persisted
@@ -1484,6 +1510,7 @@ fn feed_source_entry(
             last_event_at,
             lag_seconds,
         },
+        subscriptions,
         venue: transport
             .and_then(|value| value.get("venue"))
             .and_then(serde_json::Value::as_str)
@@ -1494,6 +1521,36 @@ fn feed_source_entry(
         configured_timeframes: transport.map_or_else(Vec::new, |value| {
             extract_normalized_string_array(value, "timeframes", false)
         }),
+    }
+}
+
+fn source_subscription_summary(
+    subscriptions: &[FinanceSubscription],
+    session_key: rara_kernel::session::SessionKey,
+    source_name: &str,
+) -> FinanceFeedSourceSubscriptions {
+    let mut user_subscription_ids = Vec::new();
+    let mut session_subscription_ids = Vec::new();
+
+    for subscription in subscriptions {
+        if !subscription
+            .source_names
+            .iter()
+            .any(|value| value == source_name)
+        {
+            continue;
+        }
+        user_subscription_ids.push(subscription.id);
+        if subscription.session_key == session_key {
+            session_subscription_ids.push(subscription.id);
+        }
+    }
+
+    FinanceFeedSourceSubscriptions {
+        user_subscribed: !user_subscription_ids.is_empty(),
+        session_subscribed: !session_subscription_ids.is_empty(),
+        user_subscription_ids,
+        session_subscription_ids,
     }
 }
 
@@ -1667,7 +1724,11 @@ mod tests {
         ));
         let finance_registry = Arc::new(FinanceSubscriptionRegistry::load(finance_path));
         (
-            FinanceListFeedSourcesTool::new(svc.clone(), registry.clone()),
+            FinanceListFeedSourcesTool::new(
+                svc.clone(),
+                registry.clone(),
+                finance_registry.clone(),
+            ),
             FinanceEnableFeedSourceTool::new(svc.clone(), registry.clone()),
             FinanceDisableFeedSourceTool::new(svc.clone(), registry.clone()),
             FinanceRestartFeedSourceTool::new(svc.clone(), registry.clone()),
@@ -1744,6 +1805,10 @@ mod tests {
         assert_eq!(fed.runtime.event_count, 0);
         assert_eq!(fed.runtime.last_event_at, None);
         assert_eq!(fed.runtime.lag_seconds, None);
+        assert!(!fed.subscriptions.user_subscribed);
+        assert!(!fed.subscriptions.session_subscribed);
+        assert!(fed.subscriptions.user_subscription_ids.is_empty());
+        assert!(fed.subscriptions.session_subscription_ids.is_empty());
 
         let binance = result
             .sources
@@ -1802,7 +1867,12 @@ mod tests {
         let store = crate::feed_store::SqliteFeedStore::new(pools);
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
         let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
-        let list = FinanceListFeedSourcesTool::new(svc.clone(), registry.clone());
+        let finance_path = std::env::temp_dir().join(format!(
+            "rara-finance-subscriptions-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let finance_registry = Arc::new(FinanceSubscriptionRegistry::load(finance_path));
+        let list = FinanceListFeedSourcesTool::new(svc.clone(), registry.clone(), finance_registry);
         let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
         enable
             .run(
@@ -1847,6 +1917,7 @@ mod tests {
     async fn list_feed_sources_reports_subscribed_market_instruments() {
         let (list, _enable, _disable, _restart, subscribe, _svc, _registry, _finance_registry) =
             tool().await;
+        let ctx = context();
         subscribe
             .run(
                 FinanceSubscribeInstrumentsParams {
@@ -1860,13 +1931,13 @@ mod tests {
                     cooldown_secs:          None,
                     max_immediate_per_hour: None,
                 },
-                &context(),
+                &ctx,
             )
             .await
             .unwrap();
 
         let result = list
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams {}, &ctx)
             .await
             .unwrap();
         let binance = result
@@ -1879,6 +1950,13 @@ mod tests {
         assert!(binance.runtime.enabled);
         assert_eq!(binance.configured_symbols, ["SOLUSDT", "BTCUSDT"]);
         assert_eq!(binance.configured_timeframes, ["15m", "1m"]);
+        assert!(binance.subscriptions.user_subscribed);
+        assert!(binance.subscriptions.session_subscribed);
+        assert_eq!(binance.subscriptions.user_subscription_ids.len(), 1);
+        assert_eq!(
+            binance.subscriptions.session_subscription_ids,
+            binance.subscriptions.user_subscription_ids
+        );
     }
 
     #[tokio::test]
