@@ -283,8 +283,12 @@ impl DataFeedSvc {
     pub async fn event_summaries(&self) -> Result<Vec<EventSummary>> {
         let mut conn = self.pools.reader.get().await.context(PoolAcquireSnafu)?;
         let rows: Vec<EventSummaryRow> = diesel::sql_query(
-            "SELECT source_name, COUNT(*) AS event_count, MAX(received_at) AS last_event_at FROM \
-             data_feed_events GROUP BY source_name",
+            "SELECT summary.source_name, summary.event_count, summary.last_event_at, (SELECT \
+             latest.event_type FROM data_feed_events latest WHERE latest.source_name = \
+             summary.source_name ORDER BY latest.received_at DESC, latest.created_at DESC, \
+             latest.id DESC LIMIT 1) AS last_event_type FROM (SELECT source_name, COUNT(*) AS \
+             event_count, MAX(received_at) AS last_event_at FROM data_feed_events GROUP BY \
+             source_name) summary",
         )
         .load(&mut *conn)
         .await
@@ -329,11 +333,13 @@ pub struct EventPage {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EventSummary {
     /// Feed source name.
-    pub source_name:   String,
+    pub source_name:     String,
     /// Number of persisted events for this source.
-    pub event_count:   i64,
+    pub event_count:     i64,
+    /// Event type for the most recent persisted event, if any.
+    pub last_event_type: Option<String>,
     /// Most recent persisted event receive time, if any.
-    pub last_event_at: Option<Timestamp>,
+    pub last_event_at:   Option<Timestamp>,
 }
 
 // ---------------------------------------------------------------------------
@@ -414,11 +420,13 @@ struct EventRow {
 #[derive(QueryableByName)]
 struct EventSummaryRow {
     #[diesel(sql_type = Text)]
-    source_name:   String,
+    source_name:     String,
     #[diesel(sql_type = BigInt)]
-    event_count:   i64,
+    event_count:     i64,
     #[diesel(sql_type = Nullable<Text>)]
-    last_event_at: Option<String>,
+    last_event_type: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    last_event_at:   Option<String>,
 }
 
 impl EventSummaryRow {
@@ -434,6 +442,7 @@ impl EventSummaryRow {
         Ok(EventSummary {
             source_name: self.source_name,
             event_count: self.event_count,
+            last_event_type: self.last_event_type,
             last_event_at,
         })
     }

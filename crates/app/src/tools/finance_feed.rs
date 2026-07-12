@@ -81,15 +81,16 @@ pub(super) struct FinanceFeedSourceEntry {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedSourceRuntime {
-    pub persisted:     bool,
-    pub feed_id:       Option<String>,
-    pub enabled:       bool,
-    pub running:       bool,
-    pub status:        Option<String>,
-    pub last_error:    Option<String>,
-    pub event_count:   i64,
-    pub last_event_at: Option<String>,
-    pub lag_seconds:   Option<i64>,
+    pub persisted:       bool,
+    pub feed_id:         Option<String>,
+    pub enabled:         bool,
+    pub running:         bool,
+    pub status:          Option<String>,
+    pub last_error:      Option<String>,
+    pub event_count:     i64,
+    pub last_event_type: Option<String>,
+    pub last_event_at:   Option<String>,
+    pub lag_seconds:     Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -677,6 +678,7 @@ impl ToolExecute for FinanceListFeedSourcesTool {
                         persisted,
                         self.registry.is_running(&source_name),
                         summary.map_or(0, |summary| summary.event_count),
+                        summary.and_then(|summary| summary.last_event_type.clone()),
                         last_event_at.map(|timestamp| timestamp.to_string()),
                         lag_seconds,
                         source_subscription_summary(
@@ -2129,6 +2131,7 @@ fn feed_source_entry(
     persisted: Option<&DataFeedConfig>,
     running: bool,
     event_count: i64,
+    last_event_type: Option<String>,
     last_event_at: Option<String>,
     lag_seconds: Option<i64>,
     subscriptions: FinanceFeedSourceSubscriptions,
@@ -2156,6 +2159,7 @@ fn feed_source_entry(
             status: persisted.map(|feed| feed.status.to_string()),
             last_error: persisted.and_then(|feed| feed.last_error.clone()),
             event_count,
+            last_event_type,
             last_event_at,
             lag_seconds,
         },
@@ -2542,6 +2546,7 @@ mod tests {
         assert!(!fed.runtime.running);
         assert_eq!(fed.runtime.status, None);
         assert_eq!(fed.runtime.event_count, 0);
+        assert_eq!(fed.runtime.last_event_type, None);
         assert_eq!(fed.runtime.last_event_at, None);
         assert_eq!(fed.runtime.lag_seconds, None);
         assert!(!fed.subscriptions.user_subscribed);
@@ -2994,6 +2999,7 @@ mod tests {
             .expect("fed source should be listed");
 
         assert_eq!(fed.runtime.event_count, 1);
+        assert_eq!(fed.runtime.last_event_type.as_deref(), Some("rss_article"));
         assert_eq!(fed.runtime.last_event_at, Some(received_at.to_string()));
         assert!(fed.runtime.lag_seconds.is_some_and(|lag| lag >= 0));
     }
