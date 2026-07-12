@@ -242,9 +242,35 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
     }
 
     async fn missing_open_times(&self, query: CandleRangeQuery) -> anyhow::Result<Vec<Timestamp>> {
-        let rows = self.candles(query.clone()).await?;
-        let present: std::collections::HashSet<Timestamp> =
-            rows.into_iter().map(|row| row.open_time).collect();
+        let rows = sqlx_core::query::query(
+            r#"
+            SELECT open_time::text AS open_time
+            FROM market_candles
+            WHERE ($1::text IS NULL OR source_name = $1)
+              AND venue = $2
+              AND symbol = $3
+              AND timeframe = $4
+              AND open_time >= $5::timestamptz
+              AND open_time < $6::timestamptz
+            ORDER BY open_time ASC
+            "#,
+        )
+        .bind(query.source_name.as_deref())
+        .bind(&query.venue)
+        .bind(&query.symbol)
+        .bind(query.timeframe.as_str())
+        .bind(query.start.to_string())
+        .bind(query.end.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let present: std::collections::HashSet<Timestamp> = rows
+            .into_iter()
+            .map(|row| {
+                row.try_get::<String, _>("open_time")?
+                    .parse()
+                    .map_err(Into::into)
+            })
+            .collect::<anyhow::Result<_>>()?;
         let step = query.timeframe.step()?;
         let mut missing = Vec::new();
         let mut cursor = query.start;
