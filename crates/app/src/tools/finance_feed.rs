@@ -573,6 +573,10 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
             "finance_subscribe_instruments requires a market_candle feed source"
         );
 
+        let original_transport = config.transport.clone();
+        normalize_finance_feed_config(&mut config)?;
+        let normalized_transport_changed = config.transport != original_transport;
+
         let requested_venue = params.venue.map(normalize_venue).transpose()?;
         let venue = requested_venue.unwrap_or_else(|| {
             config
@@ -601,7 +605,7 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
             self.data_feed_svc.create_feed(&config).await?;
             self.data_feed_registry.register(config.clone())?;
             true
-        } else if transport_changed || !was_enabled {
+        } else if normalized_transport_changed || transport_changed || !was_enabled {
             anyhow::ensure!(
                 self.data_feed_svc.update_feed(&config).await?,
                 "failed to update market candle feed source: {}",
@@ -2244,6 +2248,75 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_normalizes_existing_feed_id_transport() {
+        let (_list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("custom-feed".to_owned())
+            .name("custom-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": " BINANCE ",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": " BINANCE ",
+                "symbols": [" btcusdt ", "BTCUSDT"],
+                "timeframes": [" 1M ", "1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let result = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      None,
+                    feed_id:                Some("custom-feed".to_owned()),
+                    venue:                  None,
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.feed_id, "custom-feed");
+        assert_eq!(result.feed_change, FeedChange::Updated);
+        assert_eq!(result.venue, "binance");
+        assert_eq!(result.symbols, ["BTCUSDT"]);
+        assert_eq!(result.timeframes, ["1m"]);
+
+        let feed = svc.get_feed("custom-feed").await.unwrap().unwrap();
+        assert_eq!(feed.transport["provider"], "binance");
+        assert_eq!(feed.transport["venue"], "binance");
+        assert_eq!(feed.transport["symbols"], serde_json::json!(["BTCUSDT"]));
+        assert_eq!(feed.transport["timeframes"], serde_json::json!(["1m"]));
+
+        let registered = registry
+            .get("custom-market-candles")
+            .expect("subscribe should register normalized config");
+        assert_eq!(registered.transport, feed.transport);
+
+        let subs = finance_registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].venues, ["binance"]);
     }
 
     #[tokio::test]
