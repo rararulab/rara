@@ -52,6 +52,19 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
     },
   });
+  const unsubscribeMutation = useMutation({
+    mutationFn: ({
+      entry,
+      subscriptionIds,
+    }: {
+      entry: FeedCatalogEntry;
+      subscriptionIds: string[];
+    }) => dataFeedsApi.unsubscribeCatalogEntry(entry.id, { subscription_ids: subscriptionIds }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
+      void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+    },
+  });
 
   const entries = (catalogQuery.data ?? []).filter(isFinanceWatchableEntry);
   const sessionSubscriptions = (subscriptionsQuery.data?.subscriptions ?? []).filter(
@@ -62,6 +75,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
     catalogQuery.error?.message ??
     subscriptionsQuery.error?.message ??
     subscribeMutation.error?.message ??
+    unsubscribeMutation.error?.message ??
     null;
 
   return (
@@ -93,11 +107,14 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
         ) : (
           <div className="space-y-2">
             {entries.map((entry) => {
-              const subscribed = sessionSubscriptions.some((subscription) =>
+              const matchingSubscriptions = sessionSubscriptions.filter((subscription) =>
                 subscriptionMatchesEntry(subscription, entry),
               );
+              const subscribed = matchingSubscriptions.length > 0;
               const pending =
-                subscribeMutation.isPending && subscribeMutation.variables?.id === entry.id;
+                (subscribeMutation.isPending && subscribeMutation.variables?.id === entry.id) ||
+                (unsubscribeMutation.isPending &&
+                  unsubscribeMutation.variables?.entry.id === entry.id);
               return (
                 <div key={entry.id} className="rounded-md border bg-background/60 px-3 py-2">
                   <div className="flex items-start justify-between gap-2">
@@ -126,10 +143,27 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                       size="sm"
                       variant={subscribed ? 'outline' : 'default'}
                       className="h-7 shrink-0 px-2 text-[11px]"
-                      disabled={subscribed || pending}
-                      onClick={() => subscribeMutation.mutate(entry)}
+                      disabled={pending}
+                      onClick={() => {
+                        if (subscribed) {
+                          unsubscribeMutation.mutate({
+                            entry,
+                            subscriptionIds: matchingSubscriptions.map(
+                              (subscription) => subscription.subscription_id,
+                            ),
+                          });
+                        } else {
+                          subscribeMutation.mutate(entry);
+                        }
+                      }}
                     >
-                      {subscribed ? 'Watching' : pending ? 'Adding…' : 'Watch'}
+                      {pending
+                        ? subscribed
+                          ? 'Removing…'
+                          : 'Adding…'
+                        : subscribed
+                          ? 'Unwatch'
+                          : 'Watch'}
                     </Button>
                   </div>
                 </div>

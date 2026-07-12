@@ -25,12 +25,14 @@ import type { FeedCatalogEntry, FinanceSubscriptionsResponse } from '@/api/data-
 const catalogMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const createFinanceSubscriptionMock = vi.fn();
+const unsubscribeCatalogEntryMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
   dataFeedsApi: {
     catalog: (...args: unknown[]) => catalogMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     createFinanceSubscription: (...args: unknown[]) => createFinanceSubscriptionMock(...args),
+    unsubscribeCatalogEntry: (...args: unknown[]) => unsubscribeCatalogEntryMock(...args),
   },
 }));
 
@@ -81,6 +83,7 @@ beforeEach(() => {
   catalogMock.mockReset();
   financeSubscriptionsMock.mockReset();
   createFinanceSubscriptionMock.mockReset();
+  unsubscribeCatalogEntryMock.mockReset();
 });
 
 afterEach(() => {
@@ -146,7 +149,7 @@ describe('FinanceWatchesCard', () => {
     });
   });
 
-  it('marks_existing_session_subscription_as_watching', async () => {
+  it('removes_existing_session_watch_by_subscription_id', async () => {
     catalogMock.mockResolvedValue([
       catalogEntry({
         id: 'fed-press-releases',
@@ -175,10 +178,23 @@ describe('FinanceWatchesCard', () => {
         },
       ],
     } satisfies FinanceSubscriptionsResponse);
+    unsubscribeCatalogEntryMock.mockResolvedValue({
+      catalog_source_id: 'fed-press-releases',
+      source_name: 'finance-fed-press-releases',
+      removed_subscription_ids: ['sub-1'],
+      removed_count: 1,
+      remaining_subscription_ids: [],
+    });
 
     renderCard('session-1');
 
     expect(await screen.findByText('watching')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Watching' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Unwatch' }));
+
+    await waitFor(() => {
+      expect(unsubscribeCatalogEntryMock).toHaveBeenCalledWith('fed-press-releases', {
+        subscription_ids: ['sub-1'],
+      });
+    });
   });
 });
