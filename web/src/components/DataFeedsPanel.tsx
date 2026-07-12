@@ -231,6 +231,114 @@ function streamLabel(stream: CandleStream): string {
   return `${stream.venue.toUpperCase()} · ${stream.symbol} · ${stream.timeframe}`;
 }
 
+type CandleSubscriptionStreamHealth = {
+  status: 'fresh' | 'stale' | 'missing';
+  label: string;
+  detail: string;
+};
+
+function normalizedSelectorSet(
+  values: string[],
+  mode: 'lower' | 'upper' | 'timeframe',
+): Set<string> {
+  return new Set(
+    values
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => {
+        if (mode === 'lower') return value.toLowerCase();
+        if (mode === 'upper') return value.toUpperCase();
+        return value.toLowerCase();
+      }),
+  );
+}
+
+function streamMatchesSubscription(
+  stream: CandleStream,
+  subscription: FinanceSubscription,
+): boolean {
+  const sourceNames = normalizedSelectorSet(subscription.source_names, 'lower');
+  const venues = normalizedSelectorSet(subscription.venues, 'lower');
+  const symbols = normalizedSelectorSet(subscription.symbols, 'upper');
+  const timeframes = normalizedSelectorSet(subscription.timeframes, 'timeframe');
+
+  if (
+    sourceNames.size > 0 &&
+    !subscription.matches_all_sources &&
+    !sourceNames.has(stream.source_name.toLowerCase())
+  ) {
+    return false;
+  }
+  if (venues.size > 0 && !venues.has(stream.venue.toLowerCase())) return false;
+  if (symbols.size > 0 && !symbols.has(stream.symbol.toUpperCase())) return false;
+  if (timeframes.size > 0 && !timeframes.has(stream.timeframe.toLowerCase())) return false;
+  return true;
+}
+
+function timeframeSeconds(timeframe: string): number | null {
+  const match = /^(\d+)([smhd])$/i.exec(timeframe.trim());
+  if (!match) return null;
+  const [, amountText, unit] = match;
+  if (!amountText || !unit) return null;
+  const amount = Number(amountText);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  switch (unit.toLowerCase()) {
+    case 's':
+      return amount;
+    case 'm':
+      return amount * 60;
+    case 'h':
+      return amount * 60 * 60;
+    case 'd':
+      return amount * 24 * 60 * 60;
+    default:
+      return null;
+  }
+}
+
+function isStaleStream(stream: CandleStream): boolean {
+  const stepSeconds = timeframeSeconds(stream.timeframe);
+  if (stepSeconds == null) return false;
+  const latestCloseMs = new Date(stream.latest_close_time).getTime();
+  if (!Number.isFinite(latestCloseMs)) return false;
+  const lagSeconds = Math.floor((Date.now() - latestCloseMs) / 1000);
+  return lagSeconds > stepSeconds * 2;
+}
+
+function candleSubscriptionStreamHealth(
+  subscription: FinanceSubscription,
+  streams: CandleStream[],
+): CandleSubscriptionStreamHealth | null {
+  if (!subscription.event_kinds.includes('market_candle_closed')) return null;
+
+  const matchingStreams = streams.filter((stream) =>
+    streamMatchesSubscription(stream, subscription),
+  );
+  if (matchingStreams.length === 0) {
+    return {
+      status: 'missing',
+      label: 'Missing',
+      detail: 'No stored K-line stream matches this subscription yet.',
+    };
+  }
+
+  const staleCount = matchingStreams.filter(isStaleStream).length;
+  if (staleCount === matchingStreams.length) {
+    return {
+      status: 'stale',
+      label: 'Stale',
+      detail: `${staleCount} matched stream${staleCount === 1 ? '' : 's'} past the freshness window.`,
+    };
+  }
+
+  const freshCount = matchingStreams.length - staleCount;
+  return {
+    status: 'fresh',
+    label: 'Fresh',
+    detail: `${freshCount}/${matchingStreams.length} matched stream${matchingStreams.length === 1 ? '' : 's'} fresh.`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Status badge
 // ---------------------------------------------------------------------------
@@ -1459,7 +1567,13 @@ function FeedCatalogCard({
   );
 }
 
-function FinanceSubscriptionsCard({ result }: { result: FinanceSubscriptionsResponse }) {
+function FinanceSubscriptionsCard({
+  result,
+  candleStreams,
+}: {
+  result: FinanceSubscriptionsResponse;
+  candleStreams: CandleStream[];
+}) {
   const queryClient = useQueryClient();
   const deleteMutation = useMutation({
     mutationFn: (id: string) => dataFeedsApi.deleteFinanceSubscription(id),
@@ -1487,6 +1601,7 @@ function FinanceSubscriptionsCard({ result }: { result: FinanceSubscriptionsResp
           {result.subscriptions.map((subscription) => {
             const deleting =
               deleteMutation.isPending && deleteMutation.variables === subscription.subscription_id;
+            const streamHealth = candleSubscriptionStreamHealth(subscription, candleStreams);
             return (
               <div
                 key={subscription.subscription_id}
@@ -1504,6 +1619,23 @@ function FinanceSubscriptionsCard({ result }: { result: FinanceSubscriptionsResp
                   <p className="text-xs text-muted-foreground">
                     {financeSubscriptionSelectors(subscription).join(' · ')}
                   </p>
+                  {streamHealth && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <Badge
+                        variant={streamHealth.status === 'missing' ? 'secondary' : 'outline'}
+                        className={
+                          streamHealth.status === 'fresh'
+                            ? 'text-foreground'
+                            : streamHealth.status === 'stale'
+                              ? 'text-amber-600'
+                              : 'text-muted-foreground'
+                        }
+                      >
+                        K-line {streamHealth.label}
+                      </Badge>
+                      <span>{streamHealth.detail}</span>
+                    </div>
+                  )}
                   <p className="font-mono text-[11px] text-muted-foreground">
                     {subscription.subscription_id}
                   </p>
@@ -1719,7 +1851,10 @@ function FeedListView({
         />
       )}
       {financeSubscriptionsQuery.data && (
-        <FinanceSubscriptionsCard result={financeSubscriptionsQuery.data} />
+        <FinanceSubscriptionsCard
+          result={financeSubscriptionsQuery.data}
+          candleStreams={candleStreams}
+        />
       )}
       <MarketDataStreamsCard
         streams={candleStreams}

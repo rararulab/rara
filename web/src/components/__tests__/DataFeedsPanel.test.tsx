@@ -24,6 +24,7 @@ import type {
   CandleStreamsResponse,
   DataFeedConfig,
   FeedCatalogEntry,
+  FinanceSubscription,
   FinanceSubscriptionsResponse,
 } from '@/api/data-feeds';
 
@@ -84,6 +85,25 @@ function feed(partial: Partial<DataFeedConfig> = {}): DataFeedConfig {
   };
 }
 
+function candleSubscription(partial: Partial<FinanceSubscription> = {}): FinanceSubscription {
+  return {
+    subscription_id: partial.subscription_id ?? 'sub-1',
+    session_key: partial.session_key ?? 'session-1',
+    event_kinds: partial.event_kinds ?? ['market_candle_closed'],
+    source_names: partial.source_names ?? ['finance-binance-market-candles'],
+    matches_all_sources: partial.matches_all_sources ?? false,
+    sources: partial.sources ?? [],
+    category_tags: partial.category_tags ?? [],
+    watch_terms: partial.watch_terms ?? [],
+    venues: partial.venues ?? ['binance'],
+    symbols: partial.symbols ?? ['BTCUSDT'],
+    timeframes: partial.timeframes ?? ['1m'],
+    delivery: partial.delivery ?? 'silent',
+    cooldown_secs: partial.cooldown_secs ?? 900,
+    max_immediate_per_hour: partial.max_immediate_per_hour ?? 6,
+  };
+}
+
 beforeEach(() => {
   listMock.mockReset();
   summariesMock.mockReset();
@@ -107,6 +127,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe('DataFeedsPanel', () => {
@@ -150,6 +171,50 @@ describe('DataFeedsPanel', () => {
       screen.getByText(
         'No closed candles have been stored yet. Enable a K-line feed and wait for the first persisted candle.',
       ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows fresh health for a K-line subscription with a matching stored stream', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [candleSubscription()],
+      count: 1,
+    } satisfies FinanceSubscriptionsResponse);
+    candleStreamsMock.mockResolvedValue({
+      streams: [
+        {
+          source_name: 'finance-binance-market-candles',
+          venue: 'binance',
+          symbol: 'BTCUSDT',
+          timeframe: '1m',
+          candle_count: 42,
+          first_open_time: '2026-07-12T00:00:00Z',
+          latest_open_time: '2026-07-12T00:41:00Z',
+          latest_close_time: '2026-07-12T00:41:59Z',
+          latest_ingested_at: '2026-07-12T00:42:02Z',
+        },
+      ],
+      count: 1,
+      query_limit: 100,
+    } satisfies CandleStreamsResponse);
+
+    renderPanel();
+
+    expect(await screen.findByText('K-line Fresh')).toBeInTheDocument();
+    expect(screen.getByText('1/1 matched stream fresh.')).toBeInTheDocument();
+  });
+
+  it('shows missing health before a K-line subscription has stored candles', async () => {
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [candleSubscription({ symbols: ['SOLUSDT'] })],
+      count: 1,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderPanel();
+
+    expect(await screen.findByText('K-line Missing')).toBeInTheDocument();
+    expect(
+      screen.getByText('No stored K-line stream matches this subscription yet.'),
     ).toBeInTheDocument();
   });
 });
