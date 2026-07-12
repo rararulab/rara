@@ -87,6 +87,7 @@ function catalogEntry(partial: Partial<FeedCatalogEntry> & { id: string }): Feed
     transport_template: partial.transport_template ?? null,
   };
   if (partial.source_name !== undefined) entry.source_name = partial.source_name;
+  if (partial.provider !== undefined) entry.provider = partial.provider;
   if (partial.venue !== undefined) entry.venue = partial.venue;
   if (partial.configured_symbols !== undefined)
     entry.configured_symbols = partial.configured_symbols;
@@ -138,6 +139,40 @@ afterEach(() => {
 });
 
 describe('FinanceWatchesCard', () => {
+  it('shows_provider_metadata_for_catalog_watch_sources', async () => {
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        feed_type: 'market_candle',
+        provider: 'binance',
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT', 'ETHUSDT'],
+        configured_timeframes: ['1m'],
+      }),
+      catalogEntry({
+        id: 'longbridge-market-candles',
+        name: 'Longbridge Market Data',
+        feed_type: 'market_candle',
+        provider: 'longbridge',
+        enabled: false,
+        requires_configuration: true,
+        venue: 'longbridge',
+        configured_symbols: ['AAPL.US', 'NVDA.US'],
+        configured_timeframes: ['1d'],
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('Provider binance')).toBeInTheDocument();
+    expect(screen.getByText('Provider longbridge')).toBeInTheDocument();
+  });
+
   it('creates_session_watch_from_catalog_kline_source_with_configured_selectors', async () => {
     const binance = catalogEntry({
       id: 'binance-market-candles',
