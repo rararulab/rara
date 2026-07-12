@@ -289,6 +289,64 @@ function candlePreviewRequest(stream: CandleStream) {
   };
 }
 
+type CandleStreamFilters = {
+  sourceName: string;
+  venue: string;
+  symbol: string;
+  timeframe: string;
+};
+
+const emptyCandleStreamFilters: CandleStreamFilters = {
+  sourceName: '',
+  venue: '',
+  symbol: '',
+  timeframe: '',
+};
+
+function normalizeCandleStreamFilters(filters: CandleStreamFilters): CandleStreamFilters {
+  return {
+    sourceName: filters.sourceName.trim(),
+    venue: filters.venue.trim(),
+    symbol: filters.symbol.trim(),
+    timeframe: filters.timeframe.trim(),
+  };
+}
+
+function hasCandleStreamFilters(filters: CandleStreamFilters) {
+  return (
+    filters.sourceName !== '' ||
+    filters.venue !== '' ||
+    filters.symbol !== '' ||
+    filters.timeframe !== ''
+  );
+}
+
+function candleStreamFiltersEqual(left: CandleStreamFilters, right: CandleStreamFilters) {
+  return (
+    left.sourceName === right.sourceName &&
+    left.venue === right.venue &&
+    left.symbol === right.symbol &&
+    left.timeframe === right.timeframe
+  );
+}
+
+function candleStreamQueryParams(filters: CandleStreamFilters) {
+  const params: {
+    source_name?: string;
+    venue?: string;
+    symbol?: string;
+    timeframe?: string;
+    limit: number;
+  } = { limit: CANDLE_STREAM_OVERVIEW_LIMIT };
+
+  if (filters.sourceName !== '') params.source_name = filters.sourceName;
+  if (filters.venue !== '') params.venue = filters.venue;
+  if (filters.symbol !== '') params.symbol = filters.symbol;
+  if (filters.timeframe !== '') params.timeframe = filters.timeframe;
+
+  return params;
+}
+
 function CandleCloseSparkline({ candles }: { candles: MarketCandle[] }) {
   const values = candles.map((candle) => Number(candle.close)).filter(Number.isFinite);
 
@@ -1656,18 +1714,31 @@ function MarketDataStreamsCard({
   streams,
   queryLimit,
   hasMore,
+  filters,
+  appliedFilters,
   isLoading,
   isError,
+  onFilterChange,
+  onApplyFilters,
+  onClearFilters,
   onRetry,
 }: {
   streams: CandleStream[];
   queryLimit: number | null;
   hasMore: boolean;
+  filters: CandleStreamFilters;
+  appliedFilters: CandleStreamFilters;
   isLoading: boolean;
   isError: boolean;
+  onFilterChange: (field: keyof CandleStreamFilters, value: string) => void;
+  onApplyFilters: () => void;
+  onClearFilters: () => void;
   onRetry: () => void;
 }) {
   const [previewStream, setPreviewStream] = useState<CandleStream | null>(null);
+  const normalizedFilters = normalizeCandleStreamFilters(filters);
+  const filtersActive = hasCandleStreamFilters(appliedFilters);
+  const filtersDirty = !candleStreamFiltersEqual(normalizedFilters, appliedFilters);
   const previewRequest = previewStream ? candlePreviewRequest(previewStream) : null;
   const previewQuery = useQuery({
     queryKey: [
@@ -1747,10 +1818,83 @@ function MarketDataStreamsCard({
             {streams.length} stream{streams.length === 1 ? '' : 's'}
           </Badge>
         </div>
+        <div className="border-b bg-muted/10 px-4 py-3">
+          <div className="grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
+            <div className="space-y-1.5">
+              <Label htmlFor="candle-stream-source" className="text-[11px]">
+                K-line source
+              </Label>
+              <Input
+                id="candle-stream-source"
+                value={filters.sourceName}
+                onChange={(event) => onFilterChange('sourceName', event.target.value)}
+                placeholder="finance-binance-market-candles"
+                className="h-8 font-mono text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="candle-stream-venue" className="text-[11px]">
+                K-line venue
+              </Label>
+              <Input
+                id="candle-stream-venue"
+                value={filters.venue}
+                onChange={(event) => onFilterChange('venue', event.target.value)}
+                placeholder="Filter venue"
+                className="h-8 font-mono text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="candle-stream-symbol" className="text-[11px]">
+                K-line symbol
+              </Label>
+              <Input
+                id="candle-stream-symbol"
+                value={filters.symbol}
+                onChange={(event) => onFilterChange('symbol', event.target.value)}
+                placeholder="BTCUSDT"
+                className="h-8 font-mono text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="candle-stream-timeframe" className="text-[11px]">
+                K-line timeframe
+              </Label>
+              <Input
+                id="candle-stream-timeframe"
+                value={filters.timeframe}
+                onChange={(event) => onFilterChange('timeframe', event.target.value)}
+                placeholder="1m"
+                className="h-8 font-mono text-xs"
+              />
+            </div>
+            <div className="flex items-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                disabled={!filtersDirty}
+                onClick={onApplyFilters}
+              >
+                Apply filters
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                disabled={!filtersActive && !hasCandleStreamFilters(normalizedFilters)}
+                onClick={onClearFilters}
+              >
+                Clear filters
+              </Button>
+            </div>
+          </div>
+        </div>
         {!isLoading && !isError && hasMore && queryLimit != null && (
           <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-            Showing the first {queryLimit} streams. Narrow by source, venue, symbol, or timeframe if
-            a watched K-line stream is missing from this overview.
+            Showing the first {queryLimit} {filtersActive ? 'matching ' : ''}streams. Narrow by
+            source, venue, symbol, or timeframe if a watched K-line stream is missing from this
+            overview.
           </div>
         )}
         {isLoading ? (
@@ -1989,8 +2133,13 @@ function FeedListView({
   candleStreams,
   candleStreamQueryLimit,
   candleStreamHasMore,
+  candleStreamFilters,
+  appliedCandleStreamFilters,
   candleStreamsLoading,
   candleStreamsError,
+  onCandleStreamFilterChange,
+  onApplyCandleStreamFilters,
+  onClearCandleStreamFilters,
   onRetryCandleStreams,
   onSelectFeed,
   focusCatalogEntryId,
@@ -2000,8 +2149,13 @@ function FeedListView({
   candleStreams: CandleStream[];
   candleStreamQueryLimit: number | null;
   candleStreamHasMore: boolean;
+  candleStreamFilters: CandleStreamFilters;
+  appliedCandleStreamFilters: CandleStreamFilters;
   candleStreamsLoading: boolean;
   candleStreamsError: boolean;
+  onCandleStreamFilterChange: (field: keyof CandleStreamFilters, value: string) => void;
+  onApplyCandleStreamFilters: () => void;
+  onClearCandleStreamFilters: () => void;
   onRetryCandleStreams: () => void;
   onSelectFeed: (feed: DataFeedConfig) => void;
   focusCatalogEntryId?: string | undefined;
@@ -2100,8 +2254,13 @@ function FeedListView({
         streams={candleStreams}
         queryLimit={candleStreamQueryLimit}
         hasMore={candleStreamHasMore}
+        filters={candleStreamFilters}
+        appliedFilters={appliedCandleStreamFilters}
         isLoading={candleStreamsLoading}
         isError={candleStreamsError}
+        onFilterChange={onCandleStreamFilterChange}
+        onApplyFilters={onApplyCandleStreamFilters}
+        onClearFilters={onClearCandleStreamFilters}
         onRetry={onRetryCandleStreams}
       />
 
@@ -2268,6 +2427,13 @@ export default function DataFeedsPanel({
   focusCatalogEntryId?: string | undefined;
 } = {}) {
   const [view, setView] = useState<View>({ kind: 'list' });
+  const [draftCandleStreamFilters, setDraftCandleStreamFilters] =
+    useState<CandleStreamFilters>(emptyCandleStreamFilters);
+  const [appliedCandleStreamFilters, setAppliedCandleStreamFilters] =
+    useState<CandleStreamFilters>(emptyCandleStreamFilters);
+  const normalizedAppliedCandleStreamFilters = normalizeCandleStreamFilters(
+    appliedCandleStreamFilters,
+  );
 
   const feedsQuery = useQuery({
     queryKey: ['data-feeds'],
@@ -2279,8 +2445,15 @@ export default function DataFeedsPanel({
     refetchInterval: 30_000,
   });
   const candleStreamsQuery = useQuery({
-    queryKey: ['market-data-candle-streams'],
-    queryFn: () => dataFeedsApi.candleStreams({ limit: CANDLE_STREAM_OVERVIEW_LIMIT }),
+    queryKey: [
+      'market-data-candle-streams',
+      normalizedAppliedCandleStreamFilters.sourceName,
+      normalizedAppliedCandleStreamFilters.venue,
+      normalizedAppliedCandleStreamFilters.symbol,
+      normalizedAppliedCandleStreamFilters.timeframe,
+    ],
+    queryFn: () =>
+      dataFeedsApi.candleStreams(candleStreamQueryParams(normalizedAppliedCandleStreamFilters)),
     refetchInterval: 30_000,
   });
 
@@ -2325,8 +2498,20 @@ export default function DataFeedsPanel({
       candleStreams={candleStreamsQuery.data?.streams ?? []}
       candleStreamQueryLimit={candleStreamsQuery.data?.query_limit ?? null}
       candleStreamHasMore={candleStreamsQuery.data?.has_more ?? false}
+      candleStreamFilters={draftCandleStreamFilters}
+      appliedCandleStreamFilters={normalizedAppliedCandleStreamFilters}
       candleStreamsLoading={candleStreamsQuery.isLoading}
       candleStreamsError={candleStreamsQuery.isError}
+      onCandleStreamFilterChange={(field, value) => {
+        setDraftCandleStreamFilters((filters) => ({ ...filters, [field]: value }));
+      }}
+      onApplyCandleStreamFilters={() => {
+        setAppliedCandleStreamFilters(normalizeCandleStreamFilters(draftCandleStreamFilters));
+      }}
+      onClearCandleStreamFilters={() => {
+        setDraftCandleStreamFilters(emptyCandleStreamFilters);
+        setAppliedCandleStreamFilters(emptyCandleStreamFilters);
+      }}
       onRetryCandleStreams={() => {
         void candleStreamsQuery.refetch();
       }}

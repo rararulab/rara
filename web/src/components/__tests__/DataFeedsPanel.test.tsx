@@ -238,6 +238,57 @@ describe('DataFeedsPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('applies stored K-line stream filters before querying watermarks', async () => {
+    renderPanel();
+
+    expect(await screen.findByText('Stored K-line streams')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('K-line source'), {
+      target: { value: 'finance-binance-market-candles' },
+    });
+    fireEvent.change(screen.getByLabelText('K-line venue'), {
+      target: { value: 'binance' },
+    });
+    fireEvent.change(screen.getByLabelText('K-line symbol'), {
+      target: { value: 'ETHUSDT' },
+    });
+    fireEvent.change(screen.getByLabelText('K-line timeframe'), {
+      target: { value: '1m' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    await waitFor(() => {
+      expect(candleStreamsMock).toHaveBeenCalledWith({
+        source_name: 'finance-binance-market-candles',
+        venue: 'binance',
+        symbol: 'ETHUSDT',
+        timeframe: '1m',
+        limit: 500,
+      });
+    });
+  });
+
+  it('clears stored K-line stream filters back to the default overview', async () => {
+    renderPanel();
+
+    expect(await screen.findByText('Stored K-line streams')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('K-line venue'), {
+      target: { value: 'binance' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    await waitFor(() => {
+      expect(candleStreamsMock).toHaveBeenCalledWith({ venue: 'binance', limit: 500 });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await waitFor(() => {
+      expect(candleStreamsMock).toHaveBeenLastCalledWith({ limit: 500 });
+    });
+  });
+
   it('shows fresh health for a K-line subscription with a matching stored stream', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
     financeSubscriptionsMock.mockResolvedValue({
