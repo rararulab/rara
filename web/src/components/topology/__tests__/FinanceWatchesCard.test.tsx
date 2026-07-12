@@ -128,6 +128,7 @@ beforeEach(() => {
     streams: [],
     count: 0,
     query_limit: 100,
+    has_more: false,
   } satisfies CandleStreamsResponse);
 });
 
@@ -358,6 +359,7 @@ describe('FinanceWatchesCard', () => {
       ],
       count: 2,
       query_limit: 100,
+      has_more: false,
     } satisfies CandleStreamsResponse);
 
     renderCard('session-1');
@@ -409,6 +411,7 @@ describe('FinanceWatchesCard', () => {
       ],
       count: 1,
       query_limit: 100,
+      has_more: false,
     } satisfies CandleStreamsResponse);
 
     renderCard('session-1');
@@ -459,6 +462,7 @@ describe('FinanceWatchesCard', () => {
       ],
       count: 1,
       query_limit: 1,
+      has_more: true,
     } satisfies CandleStreamsResponse);
 
     renderCard('session-1');
@@ -515,6 +519,7 @@ describe('FinanceWatchesCard', () => {
       ],
       count: 1,
       query_limit: 100,
+      has_more: false,
     } satisfies CandleStreamsResponse);
 
     renderCard('session-1');
