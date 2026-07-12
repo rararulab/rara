@@ -114,6 +114,46 @@ export interface UnsubscribeCatalogEntryResponse {
   remaining_subscription_ids: string[];
 }
 
+export type FinanceEventKind = 'rss_article' | 'market_candle_closed';
+export type FinanceDelivery = 'immediate' | 'silent';
+
+export interface FinanceSubscriptionSource {
+  source_name: string;
+  catalog_source_id: string | null;
+  catalog_name: string | null;
+  feed_id: string | null;
+  feed_type: FeedType | null;
+  enabled: boolean | null;
+  status: DataFeedConfig['status'] | null;
+}
+
+export interface FinanceSubscription {
+  subscription_id: string;
+  session_key: string;
+  event_kinds: FinanceEventKind[];
+  source_names: string[];
+  matches_all_sources: boolean;
+  sources: FinanceSubscriptionSource[];
+  category_tags: string[];
+  watch_terms: string[];
+  venues: string[];
+  symbols: string[];
+  timeframes: string[];
+  delivery: FinanceDelivery;
+  cooldown_secs: number;
+  max_immediate_per_hour: number;
+}
+
+export interface FinanceSubscriptionsResponse {
+  subscriptions: FinanceSubscription[];
+  count: number;
+}
+
+export interface DeleteFinanceSubscriptionResponse {
+  subscription_id: string;
+  removed: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // API client
 // ---------------------------------------------------------------------------
@@ -144,6 +184,15 @@ export const dataFeedsApi = {
 
   unsubscribeCatalogEntry: (id: string, body?: UnsubscribeCatalogEntryRequest) =>
     api.post<UnsubscribeCatalogEntryResponse>(`/api/v1/data-feeds/catalog/${id}/unsubscribe`, body),
+
+  financeSubscriptions: () =>
+    api.get<FinanceSubscriptionsResponse>('/api/v1/data-feeds/finance/subscriptions'),
+
+  getFinanceSubscription: (id: string) =>
+    api.get<FinanceSubscription>(`/api/v1/data-feeds/finance/subscriptions/${id}`),
+
+  deleteFinanceSubscription: (id: string) =>
+    api.del<DeleteFinanceSubscriptionResponse>(`/api/v1/data-feeds/finance/subscriptions/${id}`),
 
   events: (id: string, params?: { since?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams();
