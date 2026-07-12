@@ -24,6 +24,7 @@
 //! | PUT    | `/api/v1/data-feeds/{id}/toggle`             | enable/disable feed |
 //! | GET    | `/api/v1/data-feeds/{id}/events`             | query feed events   |
 //! | GET    | `/api/v1/data-feeds/{id}/events/{event_id}` | get single event    |
+//! | POST   | `/api/v1/data-feeds/catalog/{id}/unsubscribe` | remove current user's catalog subscriptions |
 //!
 //! All mutations synchronise both the database (via [`DataFeedSvc`]) and the
 //! in-memory [`DataFeedRegistry`]. When an active feed is created and
@@ -91,6 +92,10 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
             post(disable_catalog_feed),
         )
         .route(
+            "/api/v1/data-feeds/catalog/{id}/unsubscribe",
+            post(unsubscribe_catalog_feed),
+        )
+        .route(
             "/api/v1/data-feeds/{id}",
             get(get_feed)
                 .put(update_feed)
@@ -141,6 +146,24 @@ struct UpdateFeedRequest {
 struct EnableCatalogFeedRequest {
     transport: Option<serde_json::Value>,
     auth:      Option<serde_json::Value>,
+}
+
+/// Optional request body for removing current user's subscriptions to a
+/// built-in catalog source. Empty means remove every current-user subscription
+/// that explicitly names the source.
+#[derive(Debug, Default, Deserialize)]
+struct UnsubscribeCatalogFeedRequest {
+    #[serde(default)]
+    subscription_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+struct UnsubscribeCatalogFeedResponse {
+    catalog_source_id:          String,
+    source_name:                String,
+    removed_subscription_ids:   Vec<Uuid>,
+    removed_count:              usize,
+    remaining_subscription_ids: Vec<Uuid>,
 }
 
 /// Deserialize a double-`Option` field so that:
@@ -402,6 +425,71 @@ async fn disable_catalog_feed(
     sync_registry_and_maybe_start(&updated, &state.registry);
 
     Ok(Json(updated))
+}
+
+/// `POST /api/v1/data-feeds/catalog/{id}/unsubscribe` — remove the current
+/// user's finance subscriptions that explicitly name this built-in source.
+async fn unsubscribe_catalog_feed(
+    State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<Principal<Resolved>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<UnsubscribeCatalogFeedResponse>, ProblemDetails> {
+    let source = find_catalog_source(&id)?;
+    let source_name = source.feed_name();
+    let request = parse_unsubscribe_catalog_feed_request(&body)?;
+    let owner = UserId(principal.user_id.0);
+    let subscriptions = state.finance_registry.list_for_owner(&owner).await;
+    let mut matched_ids = subscriptions
+        .iter()
+        .filter(|subscription| {
+            subscription
+                .source_names
+                .iter()
+                .any(|name| name == &source_name)
+        })
+        .map(|subscription| subscription.id)
+        .collect::<Vec<_>>();
+
+    if !request.subscription_ids.is_empty() {
+        matched_ids.retain(|id| request.subscription_ids.contains(id));
+    }
+
+    let mut removed_subscription_ids = Vec::new();
+    for subscription_id in matched_ids {
+        if state
+            .finance_registry
+            .remove(&owner, subscription_id)
+            .await
+            .map_err(|err| {
+                ProblemDetails::internal(format!("failed to remove finance subscription: {err}"))
+            })?
+        {
+            removed_subscription_ids.push(subscription_id);
+        }
+    }
+
+    let remaining_subscription_ids = state
+        .finance_registry
+        .list_for_owner(&owner)
+        .await
+        .into_iter()
+        .filter(|subscription| {
+            subscription
+                .source_names
+                .iter()
+                .any(|name| name == &source_name)
+        })
+        .map(|subscription| subscription.id)
+        .collect::<Vec<_>>();
+
+    Ok(Json(UnsubscribeCatalogFeedResponse {
+        catalog_source_id: id,
+        source_name,
+        removed_count: removed_subscription_ids.len(),
+        removed_subscription_ids,
+        remaining_subscription_ids,
+    }))
 }
 
 /// `POST /api/v1/data-feeds` — create a new feed, sync registry, start task.
@@ -945,6 +1033,16 @@ fn parse_enable_catalog_feed_request(
         .map_err(|e| ProblemDetails::bad_request(format!("invalid catalog enable body: {e}")))
 }
 
+fn parse_unsubscribe_catalog_feed_request(
+    body: &[u8],
+) -> Result<UnsubscribeCatalogFeedRequest, ProblemDetails> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(UnsubscribeCatalogFeedRequest::default());
+    }
+    serde_json::from_slice(body)
+        .map_err(|e| ProblemDetails::bad_request(format!("invalid catalog unsubscribe body: {e}")))
+}
+
 fn catalog_transport(
     template: Option<serde_json::Value>,
     override_value: Option<serde_json::Value>,
@@ -1467,6 +1565,90 @@ mod tests {
             sec["subscriptions"]["user_subscription_ids"],
             serde_json::json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_unsubscribe_removes_only_current_user_source_subscriptions() {
+        let finance_registry = test_finance_registry();
+        let alice_fed = Uuid::new_v4();
+        let alice_sec = Uuid::new_v4();
+        let admin_fed = Uuid::new_v4();
+
+        for (id, owner, source_name) in [
+            (
+                alice_fed,
+                UserId("alice".to_owned()),
+                "finance-fed-press-releases",
+            ),
+            (
+                alice_sec,
+                UserId("alice".to_owned()),
+                "finance-sec-press-releases",
+            ),
+            (
+                admin_fed,
+                UserId("admin".to_owned()),
+                "finance-fed-press-releases",
+            ),
+        ] {
+            finance_registry
+                .upsert(FinanceSubscription {
+                    id,
+                    owner,
+                    session_key: SessionKey::new(),
+                    event_kinds: vec![FinanceEventKind::RssArticle],
+                    source_names: vec![source_name.to_owned()],
+                    category_tags: Vec::new(),
+                    watch_terms: Vec::new(),
+                    venues: Vec::new(),
+                    symbols: Vec::new(),
+                    timeframes: Vec::new(),
+                    delivery: FinanceDelivery::Silent,
+                    cooldown_secs: 900,
+                    max_immediate_per_hour: 6,
+                })
+                .await
+                .unwrap();
+        }
+
+        let app =
+            app_with_user_and_finance_registry(user_of(Role::User), finance_registry.clone()).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/fed-press-releases/unsubscribe")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["source_name"], "finance-fed-press-releases");
+        assert_eq!(
+            result["removed_subscription_ids"],
+            serde_json::json!([alice_fed])
+        );
+        assert_eq!(result["removed_count"], 1);
+        assert_eq!(result["remaining_subscription_ids"], serde_json::json!([]));
+
+        let alice_subscriptions = finance_registry
+            .list_for_owner(&UserId("alice".to_owned()))
+            .await;
+        assert_eq!(alice_subscriptions.len(), 1);
+        assert_eq!(alice_subscriptions[0].id, alice_sec);
+
+        let admin_subscriptions = finance_registry
+            .list_for_owner(&UserId("admin".to_owned()))
+            .await;
+        assert_eq!(admin_subscriptions.len(), 1);
+        assert_eq!(admin_subscriptions[0].id, admin_fed);
     }
 
     #[tokio::test]

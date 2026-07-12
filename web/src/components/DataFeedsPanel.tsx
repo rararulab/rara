@@ -1237,6 +1237,11 @@ function FeedCatalogCard({
     onSuccess: refresh,
   });
 
+  const unsubscribeMutation = useMutation({
+    mutationFn: (id: string) => dataFeedsApi.unsubscribeCatalogEntry(id),
+    onSuccess: refresh,
+  });
+
   if (entries.length === 0) return null;
 
   const newsEntries = entries.filter((entry) => entry.feed_type === 'rss');
@@ -1248,8 +1253,21 @@ function FeedCatalogCard({
   const renderEntry = (entry: FeedCatalogEntry) => {
     const pending =
       (enableMutation.isPending && enableMutation.variables?.id === entry.id) ||
-      (disableMutation.isPending && disableMutation.variables === entry.id);
+      (disableMutation.isPending && disableMutation.variables === entry.id) ||
+      (unsubscribeMutation.isPending && unsubscribeMutation.variables === entry.id);
     const coverage = catalogCoverageLabel(entry);
+    const subscribed = entry.subscriptions?.user_subscribed === true;
+    const unsubscribeButton = subscribed ? (
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8 shrink-0"
+        onClick={() => unsubscribeMutation.mutate(entry.id)}
+        disabled={pending}
+      >
+        {pending && unsubscribeMutation.variables === entry.id ? 'Unsubscribing...' : 'Unsubscribe'}
+      </Button>
+    ) : null;
 
     return (
       <div
@@ -1267,7 +1285,7 @@ function FeedCatalogCard({
                 Enabled
               </Badge>
             )}
-            {entry.subscriptions?.user_subscribed && (
+            {subscribed && (
               <Badge variant="outline" className="text-xs text-foreground">
                 Subscribed
               </Badge>
@@ -1287,6 +1305,7 @@ function FeedCatalogCard({
         </div>
         {entry.requires_configuration ? (
           <div className="flex shrink-0 gap-2">
+            {unsubscribeButton}
             <Button
               size="sm"
               className="h-8"
@@ -1305,24 +1324,30 @@ function FeedCatalogCard({
             </Button>
           </div>
         ) : entry.enabled ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 shrink-0"
-            onClick={() => disableMutation.mutate(entry.id)}
-            disabled={pending}
-          >
-            {pending ? 'Disabling...' : 'Disable'}
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            {unsubscribeButton}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8"
+              onClick={() => disableMutation.mutate(entry.id)}
+              disabled={pending}
+            >
+              {pending && disableMutation.variables === entry.id ? 'Disabling...' : 'Disable'}
+            </Button>
+          </div>
         ) : (
-          <Button
-            size="sm"
-            className="h-8 shrink-0"
-            onClick={() => enableMutation.mutate({ id: entry.id })}
-            disabled={pending}
-          >
-            {pending ? 'Enabling...' : 'Enable'}
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            {unsubscribeButton}
+            <Button
+              size="sm"
+              className="h-8"
+              onClick={() => enableMutation.mutate({ id: entry.id })}
+              disabled={pending}
+            >
+              {pending && enableMutation.variables?.id === entry.id ? 'Enabling...' : 'Enable'}
+            </Button>
+          </div>
         )}
       </div>
     );
