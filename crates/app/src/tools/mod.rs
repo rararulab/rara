@@ -83,7 +83,7 @@ use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
     FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedSourcesTool,
     FinanceListSubscriptionsTool, FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool,
-    FinanceSubscribeNewsTool,
+    FinanceSubscribeNewsTool, FinanceUnsubscribeTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -104,7 +104,7 @@ use mita_update_soul_state::UpdateSoulStateTool;
 use mita_write_skill_draft::WriteSkillDraftTool;
 use mita_write_user_note::MitaWriteUserNoteTool;
 use multi_edit::MultiEditTool;
-use rara_trading::finance::tools::{FinanceSubscribeTool, FinanceUnsubscribeTool};
+use rara_trading::finance::tools::FinanceSubscribeTool;
 use read_file::ReadFileTool;
 use run_code::RunCodeTool;
 pub use run_code::SandboxCleanupHook;
