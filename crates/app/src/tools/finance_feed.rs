@@ -828,22 +828,26 @@ fn normalize_instrument_values(
     anyhow::ensure!(values.len() <= max_values, "{name} has too many values");
     let mut out = Vec::with_capacity(values.len());
     for value in values {
-        let value = value.trim();
-        anyhow::ensure!(!value.is_empty(), "{name} contains an empty value");
-        anyhow::ensure!(
-            value.chars().count() <= MAX_INSTRUMENT_SELECTOR_LEN,
-            "{name} value is too long"
-        );
-        let normalized = if uppercase {
-            value.to_ascii_uppercase()
-        } else {
-            value.to_ascii_lowercase()
-        };
+        let normalized = normalize_instrument_value(name, &value, uppercase)?;
         if !out.contains(&normalized) {
             out.push(normalized);
         }
     }
     Ok(out)
+}
+
+fn normalize_instrument_value(name: &str, value: &str, uppercase: bool) -> anyhow::Result<String> {
+    let value = value.trim();
+    anyhow::ensure!(!value.is_empty(), "{name} contains an empty value");
+    anyhow::ensure!(
+        value.chars().count() <= MAX_INSTRUMENT_SELECTOR_LEN,
+        "{name} value is too long"
+    );
+    Ok(if uppercase {
+        value.to_ascii_uppercase()
+    } else {
+        value.to_ascii_lowercase()
+    })
 }
 
 fn apply_market_candle_selection(
@@ -859,33 +863,50 @@ fn apply_market_candle_selection(
     object.insert(
         "symbols".to_owned(),
         serde_json::Value::Array(
-            merge_json_string_array(object.get("symbols"), symbols, replace_existing)?
-                .into_iter()
-                .map(serde_json::Value::String)
-                .collect(),
+            merge_json_string_array(
+                "symbols",
+                object.get("symbols"),
+                symbols,
+                replace_existing,
+                true,
+                MAX_SYMBOLS,
+            )?
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect(),
         ),
     );
     object.insert(
         "timeframes".to_owned(),
         serde_json::Value::Array(
-            merge_json_string_array(object.get("timeframes"), timeframes, replace_existing)?
-                .into_iter()
-                .map(serde_json::Value::String)
-                .collect(),
+            merge_json_string_array(
+                "timeframes",
+                object.get("timeframes"),
+                timeframes,
+                replace_existing,
+                false,
+                MAX_TIMEFRAMES,
+            )?
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect(),
         ),
     );
     Ok(*transport != before)
 }
 
 fn merge_json_string_array(
+    name: &str,
     current: Option<&serde_json::Value>,
     requested: &[String],
     replace_existing: bool,
+    uppercase: bool,
+    max_values: usize,
 ) -> anyhow::Result<Vec<String>> {
     if replace_existing {
         return Ok(requested.to_vec());
     }
-    let mut out = match current {
+    let existing = match current {
         Some(serde_json::Value::Array(values)) => values
             .iter()
             .map(|value| {
@@ -897,11 +918,20 @@ fn merge_json_string_array(
         Some(_) => anyhow::bail!("market candle transport arrays must be arrays"),
         None => Vec::new(),
     };
+    let mut out = Vec::new();
+    for value in existing {
+        let normalized = normalize_instrument_value(name, &value, uppercase)?;
+        if !out.contains(&normalized) {
+            out.push(normalized);
+        }
+    }
+    anyhow::ensure!(out.len() <= max_values, "{name} has too many values");
     for value in requested {
         if !out.contains(value) {
             out.push(value.clone());
         }
     }
+    anyhow::ensure!(out.len() <= max_values, "{name} has too many values");
     Ok(out)
 }
 
@@ -2066,6 +2096,77 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_normalizes_existing_feed_selection() {
+        let (list, _enable, _disable, _restart, tool, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": [" btcusdt ", "BTCUSDT"],
+                "timeframes": ["1M", " 5m "],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let result = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      Some("binance-market-candles".to_owned()),
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["ethusdt".to_owned(), " BTCUSDT ".to_owned()],
+                    timeframes:             vec!["15M".to_owned(), "1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.symbols, ["ETHUSDT", "BTCUSDT"]);
+        assert_eq!(result.timeframes, ["15m", "1m"]);
+
+        let feed = svc.get_feed("existing-binance").await.unwrap().unwrap();
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            feed.transport["timeframes"],
+            serde_json::json!(["1m", "5m", "15m"])
+        );
+
+        let listed = list
+            .run(FinanceListFeedSourcesParams {}, &context())
+            .await
+            .unwrap();
+        let binance = listed
+            .sources
+            .iter()
+            .find(|source| source.id == "binance-market-candles")
+            .expect("binance source should be listed");
+        assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
+        assert_eq!(binance.configured_timeframes, ["1m", "5m", "15m"]);
     }
 
     #[tokio::test]
