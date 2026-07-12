@@ -401,17 +401,29 @@ fn candle_fields_match(subscription: &FinanceSubscription, event: &FeedEvent) ->
 }
 
 fn normalize_subscription(mut subscription: FinanceSubscription) -> FinanceSubscription {
-    subscription.source_names = dedupe(subscription.source_names);
+    subscription.source_names = dedupe(
+        subscription
+            .source_names
+            .into_iter()
+            .map(|source_name| source_name.trim().to_owned())
+            .filter(|source_name| !source_name.is_empty())
+            .collect(),
+    );
     subscription.category_tags = dedupe(
         subscription
             .category_tags
             .into_iter()
-            .map(|tag| {
-                if tag.starts_with("category:") {
-                    tag
+            .filter_map(|tag| {
+                let tag = tag.trim();
+                let normalized = if tag
+                    .get(.."category:".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("category:"))
+                {
+                    normalize_tag(&tag["category:".len()..])
                 } else {
-                    format!("category:{}", normalize_tag(&tag))
-                }
+                    normalize_tag(tag)
+                };
+                (!normalized.is_empty()).then(|| format!("category:{normalized}"))
             })
             .collect(),
     );
@@ -423,9 +435,30 @@ fn normalize_subscription(mut subscription: FinanceSubscription) -> FinanceSubsc
             .filter(|term| !term.is_empty())
             .collect(),
     );
-    subscription.venues = dedupe(subscription.venues);
-    subscription.symbols = dedupe(subscription.symbols);
-    subscription.timeframes = dedupe(subscription.timeframes);
+    subscription.venues = dedupe(
+        subscription
+            .venues
+            .into_iter()
+            .map(|venue| venue.trim().to_ascii_lowercase())
+            .filter(|venue| !venue.is_empty())
+            .collect(),
+    );
+    subscription.symbols = dedupe(
+        subscription
+            .symbols
+            .into_iter()
+            .map(|symbol| symbol.trim().to_ascii_uppercase())
+            .filter(|symbol| !symbol.is_empty())
+            .collect(),
+    );
+    subscription.timeframes = dedupe(
+        subscription
+            .timeframes
+            .into_iter()
+            .map(|timeframe| timeframe.trim().to_ascii_lowercase())
+            .filter(|timeframe| !timeframe.is_empty())
+            .collect(),
+    );
     subscription
 }
 
@@ -627,6 +660,35 @@ mod tests {
                 .match_event(&candle("BTCUSDT", "1h"))
                 .await
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn candle_selectors_are_normalized_before_matching() {
+        let (registry, _clock, _tmp) = registry(ts("2026-07-10T08:31:00Z"));
+        let session = SessionKey::new();
+        registry
+            .upsert(FinanceSubscription {
+                id:                     uuid::Uuid::new_v4(),
+                owner:                  owner(),
+                session_key:            session,
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           Vec::new(),
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec![" Binance ".to_owned()],
+                symbols:                vec![" btcusdt ".to_owned()],
+                timeframes:             vec![" 15M ".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            registry.match_event(&candle("BTCUSDT", "15m")).await.len(),
+            1
         );
     }
 

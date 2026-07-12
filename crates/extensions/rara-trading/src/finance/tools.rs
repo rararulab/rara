@@ -589,4 +589,43 @@ mod tests {
         assert_eq!(subs[0].source_names, ["finance-fed-press-releases"]);
         assert_eq!(subs[0].watch_terms, ["rate cut"]);
     }
+
+    #[tokio::test]
+    async fn subscribe_persists_normalized_market_selectors() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeTool::new(registry.clone());
+        let ctx = context();
+
+        tool.run(
+            FinanceSubscribeParams {
+                event_kinds:            Some(vec![FinanceEventKind::MarketCandleClosed]),
+                catalog_source_ids:     Vec::new(),
+                source_names:           vec![" finance-binance-market-candles ".to_owned()],
+                category_tags:          vec![" Category:Market Data ".to_owned()],
+                watch_terms:            Vec::new(),
+                venues:                 vec![" Binance ".to_owned()],
+                symbols:                vec![" btcusdt ".to_owned()],
+                timeframes:             vec![" 15M ".to_owned()],
+                delivery:               None,
+                cooldown_secs:          None,
+                max_immediate_per_hour: None,
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        let subs = registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].source_names, ["finance-binance-market-candles"]);
+        assert_eq!(subs[0].category_tags, ["category:market-data"]);
+        assert_eq!(subs[0].venues, ["binance"]);
+        assert_eq!(subs[0].symbols, ["BTCUSDT"]);
+        assert_eq!(subs[0].timeframes, ["15m"]);
+    }
 }
