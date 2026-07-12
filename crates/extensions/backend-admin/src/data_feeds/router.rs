@@ -294,7 +294,7 @@ async fn enable_catalog_feed(
 
     let now = Timestamp::now();
     let (status, config) = if let Some(existing) = existing {
-        let updated = DataFeedConfig::builder()
+        let mut updated = DataFeedConfig::builder()
             .id(existing.id)
             .name(feed_name)
             .feed_type(source.feed_type.clone())
@@ -306,11 +306,11 @@ async fn enable_catalog_feed(
             .created_at(existing.created_at)
             .updated_at(now)
             .build();
-        validate_active_feed_config(&updated)?;
+        normalize_active_feed_config(&mut updated)?;
         state.svc.update_feed(&updated).await?;
         (StatusCode::OK, updated)
     } else {
-        let created = DataFeedConfig::builder()
+        let mut created = DataFeedConfig::builder()
             .id(Uuid::new_v4().to_string())
             .name(feed_name)
             .feed_type(source.feed_type.clone())
@@ -322,7 +322,7 @@ async fn enable_catalog_feed(
             .created_at(now)
             .updated_at(now)
             .build();
-        validate_active_feed_config(&created)?;
+        normalize_active_feed_config(&mut created)?;
         state.svc.create_feed(&created).await?;
         (StatusCode::CREATED, created)
     };
@@ -407,7 +407,7 @@ async fn create_feed(
         .map_err(|e| ProblemDetails::bad_request(format!("invalid auth config: {e}")))?;
 
     let now = Timestamp::now();
-    let config = DataFeedConfig::builder()
+    let mut config = DataFeedConfig::builder()
         .id(Uuid::new_v4().to_string())
         .name(body.name)
         .feed_type(body.feed_type)
@@ -419,6 +419,7 @@ async fn create_feed(
         .created_at(now)
         .updated_at(now)
         .build();
+    normalize_active_feed_config(&mut config)?;
 
     // 1. Persist to database.
     state.svc.create_feed(&config).await?;
@@ -490,7 +491,7 @@ async fn update_feed(
         ),
     };
 
-    let updated = DataFeedConfig::builder()
+    let mut updated = DataFeedConfig::builder()
         .id(id)
         .name(new_name.clone())
         .feed_type(body.feed_type.unwrap_or(existing.feed_type))
@@ -503,6 +504,7 @@ async fn update_feed(
         .created_at(existing.created_at)
         .updated_at(Timestamp::now())
         .build();
+    normalize_active_feed_config(&mut updated)?;
 
     // 1. Persist to database.
     state.svc.update_feed(&updated).await?;
@@ -886,7 +888,7 @@ fn catalog_transport(
     }
 }
 
-fn validate_active_feed_config(config: &DataFeedConfig) -> Result<(), ProblemDetails> {
+fn normalize_active_feed_config(config: &mut DataFeedConfig) -> Result<(), ProblemDetails> {
     match config.feed_type {
         FeedType::Polling => PollingSource::from_config(config)
             .map(|_| ())
@@ -894,13 +896,9 @@ fn validate_active_feed_config(config: &DataFeedConfig) -> Result<(), ProblemDet
         FeedType::Rss => RssSource::from_config(config)
             .map(|_| ())
             .map_err(|e| ProblemDetails::bad_request(format!("invalid rss feed config: {e}"))),
-        FeedType::MarketCandle => {
-            MarketCandleSource::from_config(config)
-                .map(|_| ())
-                .map_err(|e| {
-                    ProblemDetails::bad_request(format!("invalid market candle feed config: {e}"))
-                })
-        }
+        FeedType::MarketCandle => MarketCandleSource::normalize_config(config).map_err(|e| {
+            ProblemDetails::bad_request(format!("invalid market candle feed config: {e}"))
+        }),
         FeedType::Webhook | FeedType::WebSocket => Ok(()),
     }
 }
@@ -1120,6 +1118,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_create_market_candle_feed_normalizes_transport() {
+        let app = app_with_user(user_of(Role::Admin)).await;
+        let body = serde_json::json!({
+            "name": "binance-spot",
+            "feed_type": "market_candle",
+            "tags": ["finance", "market-data"],
+            "transport": {
+                "provider": " BINANCE ",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": " BINANCE ",
+                "symbols": [" btcusdt ", "BTCUSDT", "ethusdt"],
+                "timeframes": [" 15M ", "15m", "1H"],
+                "max_candles_per_poll": 1000
+            }
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(feed.feed_type, FeedType::MarketCandle);
+        assert_eq!(feed.transport["provider"], "binance");
+        assert_eq!(feed.transport["venue"], "binance");
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            feed.transport["timeframes"],
+            serde_json::json!(["15m", "1h"])
+        );
+    }
+
+    #[tokio::test]
     async fn finance_catalog_lists_default_sources() {
         let app = app_with_user(user_of(Role::Admin)).await;
         let res = app
@@ -1259,9 +1308,9 @@ mod tests {
                                 "url": "https://market-data.local/longbridge/candles/latest",
                                 "interval_secs": 120,
                                 "headers": {},
-                                "venue": "longbridge",
-                                "symbols": ["AAPL.US", "NVDA.US"],
-                                "timeframes": ["1d"],
+                                "venue": " LONGBRIDGE ",
+                                "symbols": [" nvda.us ", "AAPL.US", "aapl.us"],
+                                "timeframes": [" 1D ", "1d"],
                                 "max_candles_per_poll": 500
                             }
                         })
@@ -1282,8 +1331,11 @@ mod tests {
         assert_eq!(feed.name, "finance-longbridge-market-candles");
         assert_eq!(feed.feed_type, FeedType::MarketCandle);
         assert_eq!(feed.transport["venue"], "longbridge");
-        assert_eq!(feed.transport["symbols"][0], "AAPL.US");
-        assert_eq!(feed.transport["timeframes"][0], "1d");
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["AAPL.US", "NVDA.US"])
+        );
+        assert_eq!(feed.transport["timeframes"], serde_json::json!(["1d"]));
         assert_eq!(feed.transport["interval_secs"], 120);
         assert!(feed.enabled);
     }
