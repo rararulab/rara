@@ -24,6 +24,7 @@ import type { FeedCatalogEntry, FinanceSubscriptionsResponse } from '@/api/data-
 
 const catalogMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
+const enableCatalogEntryMock = vi.fn();
 const createFinanceSubscriptionMock = vi.fn();
 const unsubscribeCatalogEntryMock = vi.fn();
 
@@ -31,6 +32,7 @@ vi.mock('@/api/data-feeds', () => ({
   dataFeedsApi: {
     catalog: (...args: unknown[]) => catalogMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
+    enableCatalogEntry: (...args: unknown[]) => enableCatalogEntryMock(...args),
     createFinanceSubscription: (...args: unknown[]) => createFinanceSubscriptionMock(...args),
     unsubscribeCatalogEntry: (...args: unknown[]) => unsubscribeCatalogEntryMock(...args),
   },
@@ -82,6 +84,7 @@ function catalogEntry(partial: Partial<FeedCatalogEntry> & { id: string }): Feed
 beforeEach(() => {
   catalogMock.mockReset();
   financeSubscriptionsMock.mockReset();
+  enableCatalogEntryMock.mockReset();
   createFinanceSubscriptionMock.mockReset();
   unsubscribeCatalogEntryMock.mockReset();
 });
@@ -147,6 +150,43 @@ describe('FinanceWatchesCard', () => {
         timeframes: ['1m'],
       });
     });
+  });
+
+  it('enables_ready_source_before_allowing_session_watch', async () => {
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'fed-press-releases',
+        name: 'Federal Reserve Press Releases',
+        source_name: 'finance-fed-press-releases',
+        enabled: false,
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+    enableCatalogEntryMock.mockResolvedValue({
+      id: 'feed-1',
+      name: 'finance-fed-press-releases',
+      feed_type: 'rss',
+      tags: ['finance', 'news'],
+      transport: {},
+      auth: null,
+      enabled: true,
+      status: 'idle',
+      last_error: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+
+    renderCard('session-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable source' }));
+
+    await waitFor(() => {
+      expect(enableCatalogEntryMock).toHaveBeenCalledWith('fed-press-releases');
+    });
+    expect(createFinanceSubscriptionMock).not.toHaveBeenCalled();
   });
 
   it('removes_existing_session_watch_by_subscription_id', async () => {
