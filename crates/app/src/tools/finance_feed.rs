@@ -502,6 +502,7 @@ impl ToolExecute for FinanceRestartFeedSourceTool {
         );
         let was_running = self.registry.is_running(&config.name);
 
+        normalize_finance_feed_config(&mut config)?;
         config.status = FeedStatus::Idle;
         config.last_error = None;
         config.updated_at = Timestamp::now();
@@ -1717,6 +1718,81 @@ mod tests {
             .await
             .unwrap();
         assert!(!registry.is_running("custom-finance-rss"));
+    }
+
+    #[tokio::test]
+    async fn restart_feed_source_normalizes_existing_market_candle_transport() {
+        let (_list, _enable, disable, restart, _subscribe, svc, registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": " BINANCE ",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": " BINANCE ",
+                "symbols": [" ethusdt ", "BTCUSDT", "btcusdt"],
+                "timeframes": [" 1M ", "15m", "1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Error)
+            .maybe_last_error(Some("previous failure".to_owned()))
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let result = restart
+            .run(
+                FinanceRestartFeedSourceParams {
+                    catalog_source_id: Some("binance-market-candles".to_owned()),
+                    feed_id:           None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.feed_id, "existing-binance");
+        assert!(result.started);
+        assert!(result.running);
+
+        let feed = svc.get_feed("existing-binance").await.unwrap().unwrap();
+        assert_eq!(feed.status, FeedStatus::Idle);
+        assert_eq!(feed.last_error, None);
+        assert_eq!(feed.transport["provider"], "binance");
+        assert_eq!(feed.transport["venue"], "binance");
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            feed.transport["timeframes"],
+            serde_json::json!(["15m", "1m"])
+        );
+
+        let registered = registry
+            .get("finance-binance-market-candles")
+            .expect("restart should register normalized config");
+        assert_eq!(registered.transport, feed.transport);
+
+        disable
+            .run(
+                FinanceDisableFeedSourceParams {
+                    catalog_source_id: Some("binance-market-candles".to_owned()),
+                    feed_id:           None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert!(!registry.is_running("finance-binance-market-candles"));
     }
 
     #[tokio::test]
