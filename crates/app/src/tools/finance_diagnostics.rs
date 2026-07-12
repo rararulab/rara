@@ -71,6 +71,7 @@ pub(super) struct FeedSourceDiagnostic {
     pub source_name:           String,
     pub feed_id:               Option<String>,
     pub feed_type:             Option<String>,
+    pub configured_provider:   Option<String>,
     pub configured_venue:      Option<String>,
     pub configured_symbols:    Vec<String>,
     pub configured_timeframes: Vec<String>,
@@ -294,10 +295,10 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                 let last_event_at = event_summary.and_then(|summary| summary.last_event_at);
                 let lag_seconds =
                     last_event_at.map(|timestamp| as_of.duration_since(timestamp).as_secs().max(0));
-                let configured_venue = feed
-                    .and_then(|feed| feed.transport.get("venue"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
+                let configured_provider =
+                    feed.and_then(|feed| transport_string(&feed.transport, "provider"));
+                let configured_venue =
+                    feed.and_then(|feed| transport_string(&feed.transport, "venue"));
                 let configured_symbols = feed.map_or_else(Vec::new, |feed| {
                     transport_string_array(&feed.transport, "symbols", true)
                 });
@@ -315,6 +316,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     source_name: source_name.clone(),
                     feed_id: feed.map(|feed| feed.id.clone()),
                     feed_type: feed.map(|feed| feed.feed_type.to_string()),
+                    configured_provider,
                     configured_venue,
                     configured_symbols,
                     configured_timeframes,
@@ -449,6 +451,15 @@ fn optional_source_names(source_names: &[String]) -> Vec<Option<String>> {
     } else {
         source_names.iter().cloned().map(Some).collect()
     }
+}
+
+fn transport_string(transport: &serde_json::Value, key: &str) -> Option<String> {
+    transport
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn transport_string_array(
@@ -920,6 +931,10 @@ mod tests {
         );
         assert_eq!(
             sub.feed_sources[0].configured_venue.as_deref(),
+            Some("binance")
+        );
+        assert_eq!(
+            sub.feed_sources[0].configured_provider.as_deref(),
             Some("binance")
         );
         assert_eq!(
