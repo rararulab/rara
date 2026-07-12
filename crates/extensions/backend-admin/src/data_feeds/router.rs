@@ -330,6 +330,7 @@ struct CandleRangeResponse {
     count:       usize,
     query_limit: usize,
     has_more:    bool,
+    next_start:  Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1396,6 +1397,9 @@ async fn query_market_data_candles(
         .await
         .map_err(|err| ProblemDetails::internal(format!("failed to query candles: {err}")))?;
     let has_more = candles.len() > limit;
+    let next_start = candles
+        .get(limit)
+        .map(|candle| candle.open_time.to_string());
     candles.truncate(limit);
     let count = candles.len();
 
@@ -1404,6 +1408,7 @@ async fn query_market_data_candles(
         count,
         query_limit: limit,
         has_more,
+        next_start,
     }))
 }
 
@@ -3469,6 +3474,7 @@ mod tests {
         assert_eq!(result["count"], 2);
         assert_eq!(result["query_limit"], 2);
         assert_eq!(result["has_more"], true);
+        assert_eq!(result["next_start"], "2026-07-10T08:02:00Z");
         assert_eq!(result["candles"][0]["open_time"], "2026-07-10T08:00:00Z");
         assert_eq!(result["candles"][0]["close"], "1005.00");
         assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:01:00Z");

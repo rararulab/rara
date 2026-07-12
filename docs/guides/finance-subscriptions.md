@@ -236,8 +236,10 @@ as strings to preserve decimal precision. `finance_list_candle_streams` and
 `finance_query_candles` return `has_more` when additional rows match the
 selectors beyond the returned `query_limit`; narrow by `source_name`, `venue`,
 `symbol`, `timeframe`, or time range before assuming a broad query is exhaustive.
-The stream-list and candle-range limits are capped at 9,999 so the tools can
-probe one extra row and report `has_more` accurately.
+When `finance_query_candles.has_more` is true, `next_start` contains the next
+candle open time to use as the following query's inclusive `start`. The
+stream-list and candle-range limits are capped at 9,999 so the tools can probe
+one extra row and report pagination state accurately.
 
 ## Acceptance checklist
 

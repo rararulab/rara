@@ -2031,10 +2031,20 @@ function MarketDataStreamsCard({
               </div>
 
               {previewQuery.data?.has_more ? (
-                <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
-                  Showing the first {previewQuery.data.query_limit} candles in this preview. Narrow
-                  the time range before treating it as exhaustive.
+                  <div className="space-y-1">
+                    <div>
+                      Showing the first {previewQuery.data.query_limit} candles in this preview.
+                      Narrow the time range before treating it as exhaustive.
+                    </div>
+                    {previewQuery.data.next_start ? (
+                      <div>
+                        Next page starts at{' '}
+                        <span className="font-mono">{previewQuery.data.next_start}</span>.
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
 

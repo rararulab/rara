@@ -67,6 +67,7 @@ pub struct FinanceQueryCandlesResult {
     pub count:       usize,
     pub query_limit: usize,
     pub has_more:    bool,
+    pub next_start:  Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -304,6 +305,9 @@ impl ToolExecute for FinanceQueryCandlesTool {
         };
         let mut candles = self.repository.candles(query).await?;
         let has_more = candles.len() > limit;
+        let next_start = candles
+            .get(limit)
+            .map(|candle| candle.open_time.to_string());
         candles.truncate(limit);
         let count = candles.len();
         Ok(FinanceQueryCandlesResult {
@@ -311,6 +315,7 @@ impl ToolExecute for FinanceQueryCandlesTool {
             count,
             query_limit: limit,
             has_more,
+            next_start,
         })
     }
 }
@@ -887,6 +892,7 @@ mod tests {
         assert_eq!(result.count, 2);
         assert_eq!(result.query_limit, 10);
         assert!(!result.has_more);
+        assert_eq!(result.next_start, None);
         assert_eq!(
             result
                 .candles
@@ -920,6 +926,7 @@ mod tests {
         assert_eq!(result.count, 1);
         assert_eq!(result.query_limit, 1);
         assert!(result.has_more);
+        assert_eq!(result.next_start.as_deref(), Some("2026-07-10T08:01:00Z"));
         assert_eq!(result.candles[0].open_time, "2026-07-10T08:00:00Z");
     }
 
