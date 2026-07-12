@@ -586,19 +586,21 @@ async fn toggle_feed(
         "toggle_feed"
     );
 
-    let toggled = state.svc.toggle_feed(&id).await?;
-
-    if !toggled {
-        return Err(ProblemDetails::not_found(
-            "Feed Not Found",
-            format!("no feed with id: {id}"),
-        ));
-    }
-
-    // Fetch updated config.
-    let feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
+    let mut feed = state.svc.get_feed(&id).await?.ok_or_else(|| {
         ProblemDetails::not_found("Feed Not Found", format!("no feed with id: {id}"))
     })?;
+    feed.enabled = !feed.enabled;
+    feed.updated_at = Timestamp::now();
+
+    if feed.enabled {
+        normalize_active_feed_config(&mut feed)?;
+    }
+    if !state.svc.update_feed(&feed).await? {
+        return Err(ProblemDetails::internal(format!(
+            "failed to update data feed: {}",
+            feed.name
+        )));
+    }
 
     // Sync registry: remove (cancels running task), re-register with new state.
     let _ = state.registry.remove(&feed.name);
@@ -1166,6 +1168,69 @@ mod tests {
             feed.transport["timeframes"],
             serde_json::json!(["15m", "1h"])
         );
+    }
+
+    #[tokio::test]
+    async fn toggle_market_candle_feed_normalizes_legacy_transport_before_enabling() {
+        let (app, pools) = app_with_user_and_pools(user_of(Role::Admin)).await;
+        let svc = DataFeedSvc::new(pools);
+        let now = Timestamp::now();
+        let legacy = DataFeedConfig::builder()
+            .id("legacy-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": " BINANCE ",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": " BINANCE ",
+                "symbols": [" ethusdt ", "BTCUSDT", "btcusdt"],
+                "timeframes": [" 15M ", "1m", "15m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&legacy).await.unwrap();
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/data-feeds/legacy-binance/toggle")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let feed: DataFeedConfig = serde_json::from_slice(&body).unwrap();
+
+        assert!(feed.enabled);
+        assert_eq!(feed.transport["provider"], "binance");
+        assert_eq!(feed.transport["venue"], "binance");
+        assert_eq!(
+            feed.transport["symbols"],
+            serde_json::json!(["BTCUSDT", "ETHUSDT"])
+        );
+        assert_eq!(
+            feed.transport["timeframes"],
+            serde_json::json!(["15m", "1m"])
+        );
+
+        let persisted = svc.get_feed("legacy-binance").await.unwrap().unwrap();
+        assert!(persisted.enabled);
+        assert_eq!(persisted.transport, feed.transport);
     }
 
     #[tokio::test]
