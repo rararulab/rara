@@ -710,7 +710,7 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
             let cancel = CancellationToken::new();
             // set_running also fires a Running transition through the
             // reporter, so GET /api/v1/data-feeds reflects the spawn.
-            registry.set_running(config.name.clone(), cancel.clone());
+            let run_id = registry.set_running(config.name.clone(), cancel.clone());
 
             let event_tx = registry.event_tx();
             let name = config.name.clone();
@@ -718,10 +718,12 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
 
             tokio::spawn(async move {
                 match source.run(event_tx, cancel).await {
-                    Ok(()) => registry.clear_running(&name),
+                    Ok(()) => {
+                        registry.clear_running_if_current(&name, run_id);
+                    }
                     Err(e) => {
                         warn!(feed = %name, error = %e, "feed task exited with error");
-                        registry.report_error(&name, e.to_string());
+                        registry.report_error_if_current(&name, run_id, e.to_string());
                     }
                 }
                 info!(feed = %name, "polling feed task stopped");
@@ -746,7 +748,7 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
             };
 
             let cancel = CancellationToken::new();
-            registry.set_running(config.name.clone(), cancel.clone());
+            let run_id = registry.set_running(config.name.clone(), cancel.clone());
 
             let event_tx = registry.event_tx();
             let name = config.name.clone();
@@ -754,10 +756,12 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
 
             tokio::spawn(async move {
                 match source.run(event_tx, cancel).await {
-                    Ok(()) => registry.clear_running(&name),
+                    Ok(()) => {
+                        registry.clear_running_if_current(&name, run_id);
+                    }
                     Err(err) => {
                         warn!(feed = %name, error = %err, "feed task exited with error");
-                        registry.report_error(&name, err.to_string());
+                        registry.report_error_if_current(&name, run_id, err.to_string());
                     }
                 }
                 info!(feed = %name, "rss feed task stopped");
@@ -782,7 +786,7 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
             };
 
             let cancel = CancellationToken::new();
-            registry.set_running(config.name.clone(), cancel.clone());
+            let run_id = registry.set_running(config.name.clone(), cancel.clone());
 
             let event_tx = registry.event_tx();
             let name = config.name.clone();
@@ -790,10 +794,12 @@ pub fn start_feed_task(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>
 
             tokio::spawn(async move {
                 match source.run(event_tx, cancel).await {
-                    Ok(()) => registry.clear_running(&name),
+                    Ok(()) => {
+                        registry.clear_running_if_current(&name, run_id);
+                    }
                     Err(err) => {
                         warn!(feed = %name, error = %err, "feed task exited with error");
-                        registry.report_error(&name, err.to_string());
+                        registry.report_error_if_current(&name, run_id, err.to_string());
                     }
                 }
                 info!(feed = %name, "market candle feed task stopped");

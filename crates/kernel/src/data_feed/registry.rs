@@ -35,8 +35,15 @@ use snafu::whatever;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+use uuid::Uuid;
 
 use super::{DataFeedConfig, FeedEvent, StatusReporterRef};
+
+#[derive(Debug)]
+struct RunningFeed {
+    token:  CancellationToken,
+    run_id: Uuid,
+}
 
 /// Manages registered data feeds and their runtime state.
 ///
@@ -49,7 +56,7 @@ pub struct DataFeedRegistry {
     event_tx: mpsc::Sender<FeedEvent>,
     /// Cancel tokens for running feed tasks, keyed by feed name.
     /// Populated externally when a concrete feed task is spawned.
-    running:  Arc<Mutex<HashMap<String, CancellationToken>>>,
+    running:  Arc<Mutex<HashMap<String, RunningFeed>>>,
     /// Optional hook for persisting status transitions to the `data_feeds`
     /// table. When absent, runtime status lives only in memory — callers
     /// can still drive DB writes manually, but the kernel will not nudge
@@ -123,9 +130,9 @@ impl DataFeedRegistry {
     pub fn remove(&self, name: &str) -> crate::Result<()> {
         // Cancel running task first (if any). Extract from lock before
         // acting on it to avoid holding the guard across cancel/log.
-        let token = self.running.lock().remove(name);
-        if let Some(token) = token {
-            token.cancel();
+        let running = self.running.lock().remove(name);
+        if let Some(running) = running {
+            running.token.cancel();
             info!(name, "cancelled running data feed task");
         }
 
@@ -178,9 +185,18 @@ impl DataFeedRegistry {
     /// installed, this spawns a best-effort report of
     /// [`FeedStatus::Running`](super::FeedStatus::Running) so the DB
     /// reflects reality.
-    pub fn set_running(&self, name: String, token: CancellationToken) {
-        self.running.lock().insert(name.clone(), token);
+    pub fn set_running(&self, name: String, token: CancellationToken) -> Uuid {
+        let run_id = Uuid::new_v4();
+        let previous = self
+            .running
+            .lock()
+            .insert(name.clone(), RunningFeed { token, run_id });
+        if let Some(previous) = previous {
+            previous.token.cancel();
+            info!(name = %name, "cancelled previous data feed task before replacing runtime");
+        }
         self.spawn_report(name, super::FeedStatus::Running, None);
+        run_id
     }
 
     /// Check whether a feed has a running task.
@@ -197,11 +213,59 @@ impl DataFeedRegistry {
         self.spawn_report(name.to_owned(), super::FeedStatus::Idle, None);
     }
 
+    /// Remove the cancellation token for a feed if the caller owns the
+    /// currently recorded runtime.
+    ///
+    /// This prevents a previous feed task that is exiting after a restart
+    /// from clearing the newer task's runtime state.
+    pub fn clear_running_if_current(&self, name: &str, run_id: Uuid) -> bool {
+        let removed = {
+            let mut running = self.running.lock();
+            if running
+                .get(name)
+                .is_some_and(|running| running.run_id == run_id)
+            {
+                running.remove(name);
+                true
+            } else {
+                false
+            }
+        };
+        if removed {
+            self.spawn_report(name.to_owned(), super::FeedStatus::Idle, None);
+        }
+        removed
+    }
+
     /// Report a terminal error for a feed's runtime. Clears the cancel
     /// token and persists `FeedStatus::Error` with `last_error = message`.
     pub fn report_error(&self, name: &str, message: String) {
         self.running.lock().remove(name);
         self.spawn_report(name.to_owned(), super::FeedStatus::Error, Some(message));
+    }
+
+    /// Report a terminal error only if the caller owns the currently recorded
+    /// runtime.
+    ///
+    /// This prevents stale tasks from overwriting the status of a newer
+    /// restarted feed.
+    pub fn report_error_if_current(&self, name: &str, run_id: Uuid, message: String) -> bool {
+        let removed = {
+            let mut running = self.running.lock();
+            if running
+                .get(name)
+                .is_some_and(|running| running.run_id == run_id)
+            {
+                running.remove(name);
+                true
+            } else {
+                false
+            }
+        };
+        if removed {
+            self.spawn_report(name.to_owned(), super::FeedStatus::Error, Some(message));
+        }
+        removed
     }
 
     /// Spawn a fire-and-forget status report. Does nothing when no
@@ -310,6 +374,60 @@ mod tests {
             registry.get("alpha").unwrap().tags,
             ["test".to_owned(), "updated".to_owned()]
         );
+    }
+
+    #[test]
+    fn replacing_running_task_cancels_previous_token() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+
+        let first = CancellationToken::new();
+        let first_clone = first.clone();
+        let second = CancellationToken::new();
+        let second_clone = second.clone();
+
+        registry.set_running("alpha".to_owned(), first);
+        registry.set_running("alpha".to_owned(), second);
+
+        assert!(first_clone.is_cancelled());
+        assert!(!second_clone.is_cancelled());
+        assert!(registry.is_running("alpha"));
+    }
+
+    #[test]
+    fn stale_task_cannot_clear_restarted_runtime() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+
+        let first_run_id = registry.set_running("alpha".to_owned(), CancellationToken::new());
+        let second_run_id = registry.set_running("alpha".to_owned(), CancellationToken::new());
+
+        assert!(!registry.clear_running_if_current("alpha", first_run_id));
+        assert!(registry.is_running("alpha"));
+        assert!(registry.clear_running_if_current("alpha", second_run_id));
+        assert!(!registry.is_running("alpha"));
+    }
+
+    #[test]
+    fn stale_task_cannot_report_error_for_restarted_runtime() {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = DataFeedRegistry::new(tx);
+
+        let first_run_id = registry.set_running("alpha".to_owned(), CancellationToken::new());
+        let second_run_id = registry.set_running("alpha".to_owned(), CancellationToken::new());
+
+        assert!(!registry.report_error_if_current(
+            "alpha",
+            first_run_id,
+            "stale failure".to_owned()
+        ));
+        assert!(registry.is_running("alpha"));
+        assert!(registry.report_error_if_current(
+            "alpha",
+            second_run_id,
+            "current failure".to_owned()
+        ));
+        assert!(!registry.is_running("alpha"));
     }
 
     #[test]
