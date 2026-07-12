@@ -99,6 +99,52 @@ pub(super) struct FinanceListFeedSourcesResult {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinanceListSubscriptionsParams {
+    /// Only return subscriptions bound to the current conversation/session.
+    #[serde(default)]
+    pub current_session_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceListSubscriptionsResult {
+    pub subscriptions: Vec<FinanceSubscriptionEntry>,
+    pub count:         usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionEntry {
+    pub subscription_id:        Uuid,
+    pub current_session:        bool,
+    pub session_key:            String,
+    pub event_kinds:            Vec<FinanceEventKind>,
+    pub source_names:           Vec<String>,
+    pub matches_all_sources:    bool,
+    pub sources:                Vec<FinanceSubscriptionSource>,
+    pub category_tags:          Vec<String>,
+    pub watch_terms:            Vec<String>,
+    pub venues:                 Vec<String>,
+    pub symbols:                Vec<String>,
+    pub timeframes:             Vec<String>,
+    pub delivery:               FinanceDelivery,
+    pub cooldown_secs:          u64,
+    pub max_immediate_per_hour: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionSource {
+    pub source_name:       String,
+    pub catalog_source_id: Option<String>,
+    pub catalog_name:      Option<String>,
+    pub feed_id:           Option<String>,
+    pub feed_type:         Option<String>,
+    pub persisted:         bool,
+    pub enabled:           Option<bool>,
+    pub running:           bool,
+    pub status:            Option<String>,
+    pub last_error:        Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceEnableFeedSourceParams {
     /// Built-in source id from `finance_list_feed_sources`.
     pub catalog_source_id: String,
@@ -284,6 +330,24 @@ pub(super) struct FinanceListFeedSourcesTool {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_list_subscriptions",
+    description = "List finance information subscriptions owned by the current user with \
+                   conversation/session ownership, source catalog ids, persisted feed config, and \
+                   runtime status. Use this before finance_unsubscribe when the user asks what \
+                   they are watching or wants to cancel a finance subscription. This is read-only \
+                   and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub(super) struct FinanceListSubscriptionsTool {
+    svc:              DataFeedSvc,
+    registry:         Arc<DataFeedRegistry>,
+    finance_registry: Arc<FinanceSubscriptionRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_enable_feed_source",
     description = "Enable one built-in finance feed source from finance_list_feed_sources. This \
                    persists a DataFeedConfig and optionally starts the runtime feed task. It only \
@@ -357,6 +421,20 @@ pub(super) struct FinanceSubscribeInstrumentsTool {
 }
 
 impl FinanceListFeedSourcesTool {
+    pub(super) fn new(
+        svc: DataFeedSvc,
+        registry: Arc<DataFeedRegistry>,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+    ) -> Self {
+        Self {
+            svc,
+            registry,
+            finance_registry,
+        }
+    }
+}
+
+impl FinanceListSubscriptionsTool {
     pub(super) fn new(
         svc: DataFeedSvc,
         registry: Arc<DataFeedRegistry>,
@@ -463,6 +541,54 @@ impl ToolExecute for FinanceListFeedSourcesTool {
                     )
                 })
                 .collect(),
+        })
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceListSubscriptionsTool {
+    type Output = FinanceListSubscriptionsResult;
+    type Params = FinanceListSubscriptionsParams;
+
+    async fn run(
+        &self,
+        params: FinanceListSubscriptionsParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceListSubscriptionsResult> {
+        let current_session_only = params.current_session_only.unwrap_or(false);
+        let owner = UserId(context.user_id.clone());
+        let feeds = self.svc.list_feeds().await?;
+        let feeds_by_name = feeds
+            .iter()
+            .map(|feed| (feed.name.clone(), feed))
+            .collect::<HashMap<_, _>>();
+        let catalog_by_source_name = default_finance_feed_sources()
+            .into_iter()
+            .map(|source| (source.feed_name(), source))
+            .collect::<HashMap<_, _>>();
+
+        let subscriptions = self
+            .finance_registry
+            .list_for_owner(&owner)
+            .await
+            .into_iter()
+            .filter(|subscription| {
+                !current_session_only || subscription.session_key == context.session_key
+            })
+            .map(|subscription| {
+                subscription_entry(
+                    subscription,
+                    context.session_key,
+                    &feeds_by_name,
+                    &catalog_by_source_name,
+                    &self.registry,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        Ok(FinanceListSubscriptionsResult {
+            count: subscriptions.len(),
+            subscriptions,
         })
     }
 }
@@ -1524,6 +1650,66 @@ fn feed_source_entry(
     }
 }
 
+fn subscription_entry(
+    subscription: FinanceSubscription,
+    current_session: rara_kernel::session::SessionKey,
+    feeds_by_name: &HashMap<String, &DataFeedConfig>,
+    catalog_by_source_name: &HashMap<String, DefaultFeedSource>,
+    registry: &DataFeedRegistry,
+) -> FinanceSubscriptionEntry {
+    let matches_all_sources = subscription.source_names.is_empty();
+    let sources = subscription
+        .source_names
+        .iter()
+        .map(|source_name| {
+            subscription_source_entry(
+                source_name,
+                feeds_by_name.get(source_name).copied(),
+                catalog_by_source_name.get(source_name),
+                registry,
+            )
+        })
+        .collect();
+
+    FinanceSubscriptionEntry {
+        subscription_id: subscription.id,
+        current_session: subscription.session_key == current_session,
+        session_key: subscription.session_key.to_string(),
+        event_kinds: subscription.event_kinds,
+        source_names: subscription.source_names,
+        matches_all_sources,
+        sources,
+        category_tags: subscription.category_tags,
+        watch_terms: subscription.watch_terms,
+        venues: subscription.venues,
+        symbols: subscription.symbols,
+        timeframes: subscription.timeframes,
+        delivery: subscription.delivery,
+        cooldown_secs: subscription.cooldown_secs,
+        max_immediate_per_hour: subscription.max_immediate_per_hour,
+    }
+}
+
+fn subscription_source_entry(
+    source_name: &str,
+    feed: Option<&DataFeedConfig>,
+    catalog_source: Option<&DefaultFeedSource>,
+    registry: &DataFeedRegistry,
+) -> FinanceSubscriptionSource {
+    FinanceSubscriptionSource {
+        source_name:       source_name.to_owned(),
+        catalog_source_id: catalog_source.map(|source| source.id.clone()),
+        catalog_name:      catalog_source.map(|source| source.name.clone()),
+        feed_id:           feed.map(|feed| feed.id.clone()),
+        feed_type:         feed.map(|feed| feed.feed_type.to_string()),
+        persisted:         feed.is_some(),
+        enabled:           feed.map(|feed| feed.enabled),
+        running:           registry.is_running(source_name),
+        status:            feed.map(|feed| feed.status.to_string()),
+        last_error:        feed.and_then(|feed| feed.last_error.clone()),
+    }
+}
+
 fn source_subscription_summary(
     subscriptions: &[FinanceSubscription],
     session_key: rara_kernel::session::SessionKey,
@@ -1667,19 +1853,22 @@ mod tests {
     use diesel_async::RunQueryDsl;
     use rara_kernel::{
         data_feed::{DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedStore, FeedType},
+        identity::UserId,
         io::MessageId,
         queue::{ShardedEventQueue, ShardedEventQueueConfig},
         session::SessionKey,
         tool::{AgentTool, ToolContext, ToolExecute},
     };
     use rara_trading::finance::registry::{
-        FinanceDelivery, FinanceEventKind, FinanceSubscriptionRegistry,
+        FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     };
+    use uuid::Uuid;
 
     use super::{
         FeedChange, FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
         FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedSourcesParams,
-        FinanceListFeedSourcesTool, FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
+        FinanceListFeedSourcesTool, FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
+        FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
         FinanceSubscribeNewsParams, FinanceSubscribeNewsTool,
     };
@@ -1857,6 +2046,156 @@ mod tests {
         assert_eq!(fed.runtime.status.as_deref(), Some("idle"));
         assert_eq!(fed.runtime.last_error, None);
         assert_eq!(fed.runtime.event_count, 0);
+    }
+
+    #[tokio::test]
+    async fn list_subscriptions_enriches_source_runtime_state() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            svc,
+            registry,
+            finance_registry,
+        ) = tool().await;
+        let subscribe_news =
+            FinanceSubscribeNewsTool::new(svc.clone(), registry.clone(), finance_registry.clone());
+        let list = FinanceListSubscriptionsTool::new(svc, registry, finance_registry);
+        let ctx = context();
+        let subscribed = subscribe_news
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     vec!["fed-press-releases".to_owned()],
+                    feed_ids:               Vec::new(),
+                    category_tags:          vec!["monetary policy".to_owned()],
+                    watch_terms:            vec!["rate decision".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               Some(FinanceDelivery::Immediate),
+                    cooldown_secs:          Some(120),
+                    max_immediate_per_hour: Some(2),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let result = list
+            .run(
+                FinanceListSubscriptionsParams {
+                    current_session_only: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        let subscription = &result.subscriptions[0];
+        assert_eq!(subscription.subscription_id, subscribed.subscription_id);
+        assert!(subscription.current_session);
+        assert_eq!(subscription.session_key, ctx.session_key.to_string());
+        assert_eq!(subscription.event_kinds, [FinanceEventKind::RssArticle]);
+        assert_eq!(subscription.source_names, ["finance-fed-press-releases"]);
+        assert!(!subscription.matches_all_sources);
+        assert_eq!(subscription.category_tags, ["category:monetary-policy"]);
+        assert_eq!(subscription.watch_terms, ["rate decision"]);
+        assert_eq!(subscription.delivery, FinanceDelivery::Immediate);
+        assert_eq!(subscription.cooldown_secs, 120);
+        assert_eq!(subscription.max_immediate_per_hour, 2);
+
+        let source = &subscription.sources[0];
+        assert_eq!(source.source_name, "finance-fed-press-releases");
+        assert_eq!(
+            source.catalog_source_id.as_deref(),
+            Some("fed-press-releases")
+        );
+        assert_eq!(
+            source.catalog_name.as_deref(),
+            Some("Federal Reserve Press Releases")
+        );
+        assert!(source.feed_id.as_deref().is_some_and(|id| !id.is_empty()));
+        assert_eq!(source.feed_type.as_deref(), Some("rss"));
+        assert!(source.persisted);
+        assert_eq!(source.enabled, Some(true));
+        assert!(!source.running);
+        assert_eq!(source.status.as_deref(), Some("idle"));
+        assert_eq!(source.last_error, None);
+    }
+
+    #[tokio::test]
+    async fn list_subscriptions_can_filter_to_current_session() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            svc,
+            registry,
+            finance_registry,
+        ) = tool().await;
+        let list = FinanceListSubscriptionsTool::new(svc, registry, finance_registry.clone());
+        let ctx = context();
+        let other_session = SessionKey::new();
+        let owner = UserId(ctx.user_id.clone());
+
+        for session_key in [ctx.session_key, other_session] {
+            finance_registry
+                .upsert(FinanceSubscription {
+                    id: Uuid::new_v4(),
+                    owner: owner.clone(),
+                    session_key,
+                    event_kinds: vec![FinanceEventKind::RssArticle],
+                    source_names: vec!["custom-news".to_owned()],
+                    category_tags: Vec::new(),
+                    watch_terms: Vec::new(),
+                    venues: Vec::new(),
+                    symbols: Vec::new(),
+                    timeframes: Vec::new(),
+                    delivery: FinanceDelivery::Silent,
+                    cooldown_secs: 900,
+                    max_immediate_per_hour: 6,
+                })
+                .await
+                .unwrap();
+        }
+
+        let all = list
+            .run(
+                FinanceListSubscriptionsParams {
+                    current_session_only: Some(false),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(all.count, 2);
+
+        let current = list
+            .run(
+                FinanceListSubscriptionsParams {
+                    current_session_only: Some(true),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(current.count, 1);
+        assert!(current.subscriptions[0].current_session);
+        assert_eq!(
+            current.subscriptions[0].session_key,
+            ctx.session_key.to_string()
+        );
+        assert_eq!(
+            current.subscriptions[0].sources[0].source_name,
+            "custom-news"
+        );
+        assert!(!current.subscriptions[0].sources[0].persisted);
+        assert_eq!(current.subscriptions[0].sources[0].catalog_source_id, None);
+        assert_eq!(current.subscriptions[0].sources[0].enabled, None);
+        assert!(!current.subscriptions[0].sources[0].running);
     }
 
     #[tokio::test]
