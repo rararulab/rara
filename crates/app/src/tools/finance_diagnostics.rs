@@ -486,6 +486,12 @@ fn subscription_health(
     }
     if feed_sources
         .iter()
+        .any(|feed| feed.runtime_state == FeedRuntimeState::NotRegistered)
+    {
+        return SubscriptionHealth::Unconfigured;
+    }
+    if feed_sources
+        .iter()
         .any(|feed| feed.runtime_state != FeedRuntimeState::Running)
     {
         return SubscriptionHealth::NeedsRuntime;
@@ -791,6 +797,52 @@ mod tests {
         assert_eq!(sub.feed_sources[0].lag_seconds, None);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
         assert!(sub.streams[0].latest.is_none());
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_unconfigured_when_feed_source_is_not_registered() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        let id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id,
+                owner: UserId(ctx.user_id.clone()),
+                session_key: ctx.session_key,
+                event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+                source_names: vec!["finance-missing-market-candles".to_owned()],
+                category_tags: Vec::new(),
+                watch_terms: Vec::new(),
+                venues: vec!["binance".to_owned()],
+                symbols: vec!["BTCUSDT".to_owned()],
+                timeframes: vec!["1m".to_owned()],
+                delivery: FinanceDelivery::Silent,
+                cooldown_secs: 900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  Some(id),
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(
+            sub.feed_sources[0].runtime_state,
+            FeedRuntimeState::NotRegistered
+        );
+        assert_eq!(sub.feed_sources[0].feed_id, None);
+        assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
     }
 
     #[tokio::test]
