@@ -163,6 +163,10 @@ function catalogVenue(entry: FeedCatalogEntry): string | null {
   return entry.venue?.trim() || transportString(entry, 'venue');
 }
 
+function catalogProvider(entry: FeedCatalogEntry): string | null {
+  return entry.provider?.trim() || null;
+}
+
 function catalogSymbols(entry: FeedCatalogEntry): string[] {
   return entry.configured_symbols?.length
     ? entry.configured_symbols
@@ -1461,6 +1465,7 @@ function FeedCatalogCard({
       (disableMutation.isPending && disableMutation.variables === entry.id) ||
       (unsubscribeMutation.isPending && unsubscribeMutation.variables === entry.id);
     const coverage = catalogCoverageLabel(entry);
+    const provider = catalogProvider(entry);
     const subscribed = entry.subscriptions?.user_subscribed === true;
     const unsubscribeButton = subscribed ? (
       <Button
@@ -1485,6 +1490,11 @@ function FeedCatalogCard({
             <Badge variant="outline" className="text-xs">
               {typeLabel(entry.feed_type)}
             </Badge>
+            {provider && (
+              <Badge variant="outline" className="text-xs text-muted-foreground">
+                Provider {provider}
+              </Badge>
+            )}
             {entry.enabled && (
               <Badge variant="secondary" className="text-xs text-foreground">
                 Enabled

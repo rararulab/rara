@@ -56,6 +56,7 @@ interface FeedCatalogEntry {
   name: string;
   description: string;
   feed_type: DataFeedConfig['feed_type'];
+  provider?: string | null;
   tags: string[];
   source_name?: string;
   enabled: boolean;
@@ -640,6 +641,7 @@ test.describe('Data Feeds Management', () => {
           name: 'Binance Market Candles',
           description: 'Public Binance spot OHLCV feed.',
           feed_type: 'market_candle',
+          provider: 'binance',
           tags: ['finance', 'market-data', 'crypto', 'binance'],
           enabled: false,
           feed_id: null,
@@ -666,6 +668,7 @@ test.describe('Data Feeds Management', () => {
     await expect(page.getByText('Federal Reserve Press Releases', { exact: true })).toBeVisible();
     await expect(page.getByText('Source finance-fed-press-releases')).toBeVisible();
     await expect(page.getByText('Subscribed')).toBeVisible();
+    await expect(page.getByText('Provider binance')).toBeVisible();
     await expect(page.getByText('binance · BTCUSDT, ETHUSDT · 1m')).toBeVisible();
 
     const fedEntry = page
@@ -689,6 +692,7 @@ test.describe('Data Feeds Management', () => {
           name: 'Longbridge Market Data',
           description: 'Preset for Longbridge equities market data.',
           feed_type: 'market_candle',
+          provider: 'longbridge',
           tags: ['finance', 'market-data', 'equities', 'longbridge'],
           enabled: false,
           feed_id: null,
@@ -710,6 +714,7 @@ test.describe('Data Feeds Management', () => {
 
     await expect(page.getByText(/^Provider presets$/)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('Longbridge Market Data')).toBeVisible();
+    await expect(page.getByText('Provider longbridge')).toBeVisible();
 
     await page.getByRole('button', { name: 'Use template' }).click();
 
