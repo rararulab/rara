@@ -400,17 +400,19 @@ pub(super) struct FinanceSubscribeInstrumentsParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscribeInstrumentsResult {
-    pub subscription_id:      Uuid,
+    pub subscription_id: Uuid,
     pub subscription_created: bool,
-    pub feed_id:              String,
-    pub source_name:          String,
-    pub catalog_source_id:    Option<String>,
-    pub venue:                String,
-    pub symbols:              Vec<String>,
-    pub timeframes:           Vec<String>,
-    pub feed_change:          FeedChange,
-    pub feed_restarted:       bool,
-    pub running:              bool,
+    pub diagnostic_tool: Option<String>,
+    pub diagnostic_subscription_id: Option<Uuid>,
+    pub feed_id: String,
+    pub source_name: String,
+    pub catalog_source_id: Option<String>,
+    pub venue: String,
+    pub symbols: Vec<String>,
+    pub timeframes: Vec<String>,
+    pub feed_change: FeedChange,
+    pub feed_restarted: bool,
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1399,6 +1401,8 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
         Ok(FinanceSubscribeInstrumentsResult {
             subscription_id,
             subscription_created,
+            diagnostic_tool: Some("finance_diagnose_candle_subscriptions".to_owned()),
+            diagnostic_subscription_id: Some(subscription_id),
             feed_id: config.id,
             source_name: config.name.clone(),
             catalog_source_id,
@@ -3900,6 +3904,14 @@ mod tests {
         assert_eq!(result.feed_change, FeedChange::Created);
         assert!(!result.feed_restarted);
         assert!(!result.running);
+        assert_eq!(
+            result.diagnostic_tool.as_deref(),
+            Some("finance_diagnose_candle_subscriptions")
+        );
+        assert_eq!(
+            result.diagnostic_subscription_id,
+            Some(result.subscription_id)
+        );
         assert_eq!(result.source_name, "finance-binance-market-candles");
         assert_eq!(result.venue, "binance");
         assert_eq!(result.symbols, ["BTCUSDT", "SOLUSDT"]);
