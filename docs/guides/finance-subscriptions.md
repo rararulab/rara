@@ -153,6 +153,8 @@ current user/session and returns action hints for the next safe step:
 `finance_subscribe_news`; market-candle sources use
 `finance_subscribe_instruments`. Sources that require operator credentials or a
 custom endpoint do not expose `enable_hint`; they keep `setup_hint` instead.
+Persisted sources also expose `restart_hint` and `disable_hint` for runtime
+operations.
 
 `finance_list_subscriptions` is the preferred status view after a subscription
 exists. Each subscription includes source/runtime details, an

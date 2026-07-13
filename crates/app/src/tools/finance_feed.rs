@@ -72,6 +72,8 @@ pub(super) struct FinanceFeedSourceEntry {
     pub subscription_hint:      Option<FinanceFeedSourceSubscriptionHint>,
     pub enable_hint:            Option<FinanceFeedSourceEnableHint>,
     pub events_hint:            Option<FinanceFeedSourceEventsHint>,
+    pub restart_hint:           Option<FinanceFeedSourceRuntimeActionHint>,
+    pub disable_hint:           Option<FinanceFeedSourceRuntimeActionHint>,
     pub provider:               Option<String>,
     pub tags:                   Vec<String>,
     pub source_name:            String,
@@ -104,6 +106,14 @@ pub(super) struct FinanceFeedSourceEnableHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedSourceEventsHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceRuntimeActionHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2324,6 +2334,25 @@ fn events_hint_for_source(
     })
 }
 
+fn runtime_action_hint_for_source(
+    tool: &str,
+    catalog_source_id: &str,
+    persisted: bool,
+) -> Option<FinanceFeedSourceRuntimeActionHint> {
+    if !persisted {
+        return None;
+    }
+
+    Some(FinanceFeedSourceRuntimeActionHint {
+        tool:            tool.to_owned(),
+        default_params:  serde_json::json!({
+            "catalog_source_id": catalog_source_id,
+        }),
+        required_params: Vec::new(),
+        optional_params: Vec::new(),
+    })
+}
+
 fn feed_source_entry(
     source: DefaultFeedSource,
     persisted: Option<&DataFeedConfig>,
@@ -2340,8 +2369,13 @@ fn feed_source_entry(
         .or(source.transport.as_ref());
     let subscription_hint = subscription_hint_for_source(&source.id, source.feed_type, transport);
     let can_enable = source.can_enable();
-    let enable_hint = enable_hint_for_source(&source.id, can_enable, persisted.is_some());
+    let is_persisted = persisted.is_some();
+    let enable_hint = enable_hint_for_source(&source.id, can_enable, is_persisted);
     let events_hint = events_hint_for_source(&source.id, source.feed_type);
+    let restart_hint =
+        runtime_action_hint_for_source("finance_restart_feed_source", &source.id, is_persisted);
+    let disable_hint =
+        runtime_action_hint_for_source("finance_disable_feed_source", &source.id, is_persisted);
     let provider = source.provider.clone().or_else(|| {
         transport
             .and_then(|value| value.get("provider"))
@@ -2357,6 +2391,8 @@ fn feed_source_entry(
         subscription_hint,
         enable_hint,
         events_hint,
+        restart_hint,
+        disable_hint,
         provider,
         tags: source.tags,
         source_name,
@@ -2364,7 +2400,7 @@ fn feed_source_entry(
         can_enable,
         setup_hint: source.setup_hint,
         runtime: FinanceFeedSourceRuntime {
-            persisted: persisted.is_some(),
+            persisted: is_persisted,
             feed_id: persisted.map(|feed| feed.id.clone()),
             enabled: persisted.is_some_and(|feed| feed.enabled),
             running,
@@ -2894,6 +2930,8 @@ mod tests {
         assert!(fed_hint.optional_params.contains(&"watch_terms".to_owned()));
         assert_eq!(fed_hint.diagnostic_tool, None);
         assert_fed_source_action_hints(fed);
+        assert!(fed.restart_hint.is_none());
+        assert!(fed.disable_hint.is_none());
         assert!(fed.can_enable);
         assert!(!fed.runtime.persisted);
         assert_eq!(fed.runtime.feed_id, None);
@@ -3039,6 +3077,32 @@ mod tests {
                 "limit": 20
             })
         );
+        let restart_hint = fed
+            .restart_hint
+            .as_ref()
+            .expect("persisted source should include restart hint");
+        assert_eq!(restart_hint.tool, "finance_restart_feed_source");
+        assert_eq!(
+            restart_hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "fed-press-releases"
+            })
+        );
+        assert!(restart_hint.required_params.is_empty());
+        assert!(restart_hint.optional_params.is_empty());
+        let disable_hint = fed
+            .disable_hint
+            .as_ref()
+            .expect("persisted source should include disable hint");
+        assert_eq!(disable_hint.tool, "finance_disable_feed_source");
+        assert_eq!(
+            disable_hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "fed-press-releases"
+            })
+        );
+        assert!(disable_hint.required_params.is_empty());
+        assert!(disable_hint.optional_params.is_empty());
     }
 
     #[tokio::test]
