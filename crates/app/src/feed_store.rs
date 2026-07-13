@@ -137,7 +137,10 @@ struct FeedEventRow {
 
 impl FeedEventRow {
     fn into_feed_event(self) -> rara_kernel::Result<FeedEvent> {
-        let id = FeedEventId::deterministic(&self.id);
+        let id =
+            FeedEventId::try_from_raw(&self.id).map_err(|e| rara_kernel::KernelError::Other {
+                message: format!("invalid feed event id: {e}").into(),
+            })?;
         let tags: Vec<String> = serde_json::from_str(&self.tags).unwrap_or_default();
         let payload: serde_json::Value =
             serde_json::from_str(&self.payload).unwrap_or(serde_json::Value::Null);
@@ -194,5 +197,95 @@ impl FeedStore for InMemoryFeedStore {
             .take(filter.limit)
             .cloned()
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use diesel_async::RunQueryDsl;
+    use rara_kernel::data_feed::{FeedEvent, FeedEventId, FeedFilter, FeedStore};
+
+    use super::SqliteFeedStore;
+
+    fn ts(value: &str) -> jiff::Timestamp { value.parse().expect("timestamp fixture should parse") }
+
+    fn event() -> FeedEvent {
+        FeedEvent::builder()
+            .id(FeedEventId::deterministic("fed-news:btc-liquidity-note"))
+            .source_name("fed-news".to_owned())
+            .event_type("rss_article".to_owned())
+            .tags(vec!["finance".to_owned(), "source:fed-news".to_owned()])
+            .payload(serde_json::json!({
+                "title": "BTC liquidity note",
+                "url": "https://example.com/article",
+            }))
+            .received_at(ts("2026-07-10T08:30:00Z"))
+            .build()
+    }
+
+    async fn store() -> SqliteFeedStore {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        let mut conn = pools.writer.get().await.expect("pool conn");
+        for ddl in [
+            "CREATE TABLE data_feed_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                source_name TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                payload TEXT NOT NULL DEFAULT '{}',
+                received_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )",
+            "CREATE INDEX idx_data_feed_events_source ON data_feed_events(source_name)",
+            "CREATE INDEX idx_data_feed_events_received ON data_feed_events(received_at)",
+        ] {
+            diesel::sql_query(ddl)
+                .execute(&mut *conn)
+                .await
+                .expect("bootstrap data feed events schema");
+        }
+        drop(conn);
+        SqliteFeedStore::new(pools)
+    }
+
+    #[tokio::test]
+    async fn sqlite_feed_store_round_trips_event_id() {
+        let store = store().await;
+        let event = event();
+
+        store.append(&event).await.unwrap();
+        let events = store
+            .query(FeedFilter {
+                source_name: Some("fed-news".to_owned()),
+                tags:        Vec::new(),
+                since:       None,
+                limit:       10,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, event.id);
+    }
+
+    #[tokio::test]
+    async fn sqlite_feed_store_append_is_idempotent_on_event_id() {
+        let store = store().await;
+        let event = event();
+
+        store.append(&event).await.unwrap();
+        store.append(&event).await.unwrap();
+        let events = store
+            .query(FeedFilter {
+                source_name: Some("fed-news".to_owned()),
+                tags:        Vec::new(),
+                since:       None,
+                limit:       10,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, event.id);
     }
 }
