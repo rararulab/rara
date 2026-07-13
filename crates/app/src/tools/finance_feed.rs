@@ -282,6 +282,7 @@ pub(super) struct FinanceSubscriptionEntry {
     pub recent_candles_hint:        Option<FinanceSubscriptionRecentCandlesHint>,
     pub freshness_hint:             Option<FinanceSubscriptionFreshnessHint>,
     pub gaps_hint:                  Option<FinanceSubscriptionGapsHint>,
+    pub query_candles_hint:         Option<FinanceSubscriptionQueryCandlesHint>,
     pub source_names:               Vec<String>,
     pub matches_all_sources:        bool,
     pub sources:                    Vec<FinanceSubscriptionSource>,
@@ -345,6 +346,14 @@ pub(super) struct FinanceSubscriptionFreshnessHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscriptionGapsHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionQueryCandlesHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2552,6 +2561,7 @@ fn subscription_entry(
     let recent_candles_hint = recent_candles_hint_for_subscription(&subscription);
     let freshness_hint = freshness_hint_for_subscription(&subscription);
     let gaps_hint = gaps_hint_for_subscription(&subscription);
+    let query_candles_hint = query_candles_hint_for_subscription(&subscription);
 
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
@@ -2567,6 +2577,7 @@ fn subscription_entry(
         recent_candles_hint,
         freshness_hint,
         gaps_hint,
+        query_candles_hint,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2758,6 +2769,32 @@ fn gaps_hint_for_subscription(
         }),
         required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
         optional_params: Vec::new(),
+    })
+}
+
+fn query_candles_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceSubscriptionQueryCandlesHint> {
+    if !subscription_is_market_candle(subscription) {
+        return None;
+    }
+
+    let source_name = single_selector_value(&subscription.source_names)?;
+    let venue = single_selector_value(&subscription.venues)?;
+    let symbol = single_selector_value(&subscription.symbols)?;
+    let timeframe = single_selector_value(&subscription.timeframes)?;
+
+    Some(FinanceSubscriptionQueryCandlesHint {
+        tool:            "finance_query_candles".to_owned(),
+        default_params:  serde_json::json!({
+            "source_name": source_name,
+            "venue": venue,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "limit": DEFAULT_FEED_EVENT_LIMIT,
+        }),
+        required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
+        optional_params: ["limit"].into_iter().map(str::to_owned).collect(),
     })
 }
 
@@ -4772,6 +4809,10 @@ mod tests {
             listed.subscriptions[0].gaps_hint.is_none(),
             "multi-symbol/timeframe subscriptions should not expose a direct gaps hint"
         );
+        assert!(
+            listed.subscriptions[0].query_candles_hint.is_none(),
+            "multi-symbol/timeframe subscriptions should not expose a direct query-candles hint"
+        );
         assert_eq!(
             listed.subscriptions[0].sources[0].provider.as_deref(),
             Some("binance")
@@ -4907,6 +4948,23 @@ mod tests {
         );
         assert_eq!(gaps_hint.required_params, ["start", "end"]);
         assert!(gaps_hint.optional_params.is_empty());
+        let query_candles_hint = listed.subscriptions[0]
+            .query_candles_hint
+            .as_ref()
+            .expect("single-stream market subscription should include query-candles hint");
+        assert_eq!(query_candles_hint.tool, "finance_query_candles");
+        assert_eq!(
+            query_candles_hint.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+                "limit": 20,
+            })
+        );
+        assert_eq!(query_candles_hint.required_params, ["start", "end"]);
+        assert_eq!(query_candles_hint.optional_params, ["limit"]);
     }
 
     #[tokio::test]
