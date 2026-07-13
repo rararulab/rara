@@ -267,7 +267,6 @@ pub(super) struct FinanceUnsubscribeResult {
 pub(super) struct FinanceUnsubscribeMatch {
     pub subscription_id: Uuid,
     pub current_session: bool,
-    pub session_key:     String,
     pub event_kinds:     Vec<FinanceEventKind>,
     pub source_names:    Vec<String>,
     pub venues:          Vec<String>,
@@ -280,7 +279,6 @@ pub(super) struct FinanceUnsubscribeMatch {
 pub(super) struct FinanceSubscriptionEntry {
     pub subscription_id:            Uuid,
     pub current_session:            bool,
-    pub session_key:                String,
     pub event_kinds:                Vec<FinanceEventKind>,
     pub diagnostic_tool:            Option<String>,
     pub diagnostic_subscription_id: Option<Uuid>,
@@ -2287,7 +2285,6 @@ fn unsubscribe_match(
     FinanceUnsubscribeMatch {
         subscription_id: subscription.id,
         current_session: subscription.session_key == current_session,
-        session_key:     subscription.session_key.to_string(),
         event_kinds:     subscription.event_kinds,
         source_names:    subscription.source_names,
         venues:          subscription.venues,
@@ -2661,7 +2658,6 @@ fn subscription_entry(
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
         current_session: subscription.session_key == current_session,
-        session_key: subscription.session_key.to_string(),
         event_kinds: subscription.event_kinds,
         diagnostic_tool,
         diagnostic_subscription_id,
@@ -3739,10 +3735,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.count, 1);
+        let serialized = serde_json::to_value(&result).unwrap();
+        assert!(serialized.pointer("/subscriptions/0/session_key").is_none());
         let subscription = &result.subscriptions[0];
         assert_eq!(subscription.subscription_id, subscribed.subscription_id);
         assert!(subscription.current_session);
-        assert_eq!(subscription.session_key, ctx.session_key.to_string());
         assert_eq!(subscription.event_kinds, [FinanceEventKind::RssArticle]);
         assert_eq!(subscription.diagnostic_tool, None);
         assert_eq!(subscription.diagnostic_subscription_id, None);
@@ -3863,10 +3860,8 @@ mod tests {
             .unwrap();
         assert_eq!(current.count, 1);
         assert!(current.subscriptions[0].current_session);
-        assert_eq!(
-            current.subscriptions[0].session_key,
-            ctx.session_key.to_string()
-        );
+        let serialized = serde_json::to_value(&current).unwrap();
+        assert!(serialized.pointer("/subscriptions/0/session_key").is_none());
         assert_eq!(
             current.subscriptions[0].sources[0].source_name,
             "custom-news"
@@ -4023,6 +4018,10 @@ mod tests {
         assert_eq!(result.matched_count, 1);
         assert_eq!(result.removed_count, 0);
         assert!(result.removed_subscription_ids.is_empty());
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.matches[0].current_session);
+        let serialized = serde_json::to_value(&result).unwrap();
+        assert!(serialized.pointer("/matches/0/session_key").is_none());
         let remaining = finance_registry
             .list_for_owner(&UserId(ctx.user_id.clone()))
             .await;
