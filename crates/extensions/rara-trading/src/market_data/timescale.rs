@@ -204,8 +204,9 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
                 AND venue = $2
                 AND symbol = $3
                 AND timeframe = $4
+                AND ($5::timestamptz IS NULL OR open_time < $5::timestamptz)
               ORDER BY open_time DESC
-              LIMIT $5
+              LIMIT $6
             ) recent
             ORDER BY open_time ASC
             "#,
@@ -214,6 +215,7 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
         .bind(&query.venue)
         .bind(&query.symbol)
         .bind(query.timeframe.as_str())
+        .bind(query.end.map(|end| end.to_string()))
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;

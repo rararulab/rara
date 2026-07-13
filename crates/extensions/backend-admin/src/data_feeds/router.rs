@@ -303,6 +303,7 @@ struct CandleRecentQueryParams {
     symbol:      String,
     timeframe:   String,
     limit:       Option<usize>,
+    end:         Option<String>,
 }
 
 /// Query parameters for a bounded stored closed-candle range.
@@ -1311,12 +1312,18 @@ async fn get_recent_market_data_candles(
 ) -> Result<Json<CandleRecentResponse>, ProblemDetails> {
     let limit = validate_market_data_candle_range_limit(params.limit)?;
     let probe_limit = limit.saturating_add(1);
+    let end = params
+        .end
+        .as_deref()
+        .map(|value| parse_market_data_timestamp("end", value.to_owned()))
+        .transpose()?;
     let query = CandleRecentQuery {
         source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
-        venue:       normalize_required_market_data_venue(params.venue)?,
-        symbol:      normalize_required_market_data_symbol(params.symbol)?,
-        timeframe:   normalize_required_market_data_timeframe(params.timeframe)?,
-        limit:       probe_limit,
+        venue: normalize_required_market_data_venue(params.venue)?,
+        symbol: normalize_required_market_data_symbol(params.symbol)?,
+        timeframe: normalize_required_market_data_timeframe(params.timeframe)?,
+        limit: probe_limit,
+        end,
     };
 
     let mut candles = state
@@ -3819,6 +3826,7 @@ mod tests {
 
         let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
         let res = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -3847,6 +3855,32 @@ mod tests {
         assert_eq!(result["candles"][0]["close"], "1006.25");
         assert_eq!(result["candles"][1]["open_time"], "2026-07-10T08:02:00Z");
         assert_eq!(result["candles"][1]["close"], "1007.75");
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/data-feeds/market-data/candles/recent?venue=binance&\
+                         symbol=BTCUSDT&timeframe=1m&limit=2&end=2026-07-10T08:01:00Z",
+                    )
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["query_limit"], 2);
+        assert_eq!(result["has_more"], false);
+        assert_eq!(result["next_end"], serde_json::Value::Null);
+        assert_eq!(result["candles"][0]["open_time"], "2026-07-10T08:00:00Z");
     }
 
     #[tokio::test]

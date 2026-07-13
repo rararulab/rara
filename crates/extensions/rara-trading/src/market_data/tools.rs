@@ -56,6 +56,9 @@ pub struct FinanceGetRecentCandlesParams {
     pub timeframe:   String,
     #[serde(default)]
     pub limit:       Option<usize>,
+    /// Exclusive candle open-time upper bound for paging older candles.
+    #[serde(default)]
+    pub end:         Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -368,12 +371,18 @@ impl ToolExecute for FinanceGetRecentCandlesTool {
         let venue = normalize_required_venue_selector(params.venue)?;
         let symbol = normalize_required_symbol_selector(params.symbol)?;
         let timeframe = normalize_required_timeframe_selector(params.timeframe)?;
+        let end = params
+            .end
+            .as_deref()
+            .map(|value| parse_timestamp("end", value))
+            .transpose()?;
         let query = CandleRecentQuery {
             source_name: source_name.clone(),
-            venue:       venue.clone(),
-            symbol:      symbol.clone(),
-            timeframe:   timeframe.clone(),
-            limit:       probe_limit,
+            venue: venue.clone(),
+            symbol: symbol.clone(),
+            timeframe: timeframe.clone(),
+            limit: probe_limit,
+            end,
         };
         let mut candles = self.repository.recent_candles(query).await?;
         let has_more = candles.len() > limit;
@@ -687,7 +696,7 @@ fn recent_candles_hint_for_stream(
         tool:            "finance_get_recent_candles".to_owned(),
         default_params:  serde_json::Value::Object(default_params),
         required_params: Vec::new(),
-        optional_params: vec!["limit".to_owned()],
+        optional_params: ["end", "limit"].into_iter().map(str::to_owned).collect(),
     }
 }
 
@@ -821,9 +830,9 @@ fn recent_candles_next_page_hint(
     default_params.insert("limit".to_owned(), serde_json::json!(limit));
 
     Some(FinanceCandleNextPageHint {
-        tool:            "finance_query_candles".to_owned(),
+        tool:            "finance_get_recent_candles".to_owned(),
         default_params:  serde_json::Value::Object(default_params),
-        required_params: vec!["start".to_owned()],
+        required_params: Vec::new(),
         optional_params: ["end", "limit"].into_iter().map(str::to_owned).collect(),
     })
 }
@@ -1193,6 +1202,10 @@ mod tests {
             })
         );
         assert_eq!(
+            result.streams[0].recent_candles_hint.optional_params,
+            ["end", "limit"]
+        );
+        assert_eq!(
             result.streams[0].freshness_hint.default_params,
             serde_json::json!({
                 "source_name": "binance-spot",
@@ -1436,6 +1449,7 @@ mod tests {
                     symbol:      "BTCUSDT".to_owned(),
                     timeframe:   "1m".to_owned(),
                     limit:       Some(1),
+                    end:         None,
                 },
                 &context(),
             )
@@ -1450,7 +1464,7 @@ mod tests {
             .next_page_hint
             .as_ref()
             .expect("paginated recent-candle result should include next-page hint");
-        assert_eq!(next_page_hint.tool, "finance_query_candles");
+        assert_eq!(next_page_hint.tool, "finance_get_recent_candles");
         assert_eq!(
             next_page_hint.default_params,
             serde_json::json!({
@@ -1462,10 +1476,31 @@ mod tests {
                 "limit": 1,
             })
         );
-        assert_eq!(next_page_hint.required_params, ["start"]);
+        assert!(next_page_hint.required_params.is_empty());
         assert_eq!(next_page_hint.optional_params, ["end", "limit"]);
         assert_eq!(result.candles[0].open_time, "2026-07-10T08:01:00Z");
         assert_eq!(result.candles[0].close, "61520.00");
+
+        let older_page = tool
+            .run(
+                FinanceGetRecentCandlesParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       "binance".to_owned(),
+                    symbol:      "BTCUSDT".to_owned(),
+                    timeframe:   "1m".to_owned(),
+                    limit:       Some(1),
+                    end:         Some("2026-07-10T08:01:00Z".to_owned()),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(older_page.count, 1);
+        assert_eq!(older_page.query_limit, 1);
+        assert!(!older_page.has_more);
+        assert_eq!(older_page.next_end, None);
+        assert!(older_page.next_page_hint.is_none());
+        assert_eq!(older_page.candles[0].open_time, "2026-07-10T08:00:00Z");
     }
 
     #[tokio::test]

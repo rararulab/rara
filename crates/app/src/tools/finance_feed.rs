@@ -2863,7 +2863,7 @@ fn recent_candles_hint_for_subscription(
             "limit": DEFAULT_FEED_EVENT_LIMIT,
         }),
         required_params: Vec::new(),
-        optional_params: ["limit"].into_iter().map(str::to_owned).collect(),
+        optional_params: ["end", "limit"].into_iter().map(str::to_owned).collect(),
     })
 }
 
@@ -5208,7 +5208,7 @@ mod tests {
             })
         );
         assert!(recent_candles_hint.required_params.is_empty());
-        assert_eq!(recent_candles_hint.optional_params, ["limit"]);
+        assert_eq!(recent_candles_hint.optional_params, ["end", "limit"]);
         let freshness_hint = listed.subscriptions[0]
             .freshness_hint
             .as_ref()
