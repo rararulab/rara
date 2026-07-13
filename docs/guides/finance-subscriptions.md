@@ -158,6 +158,13 @@ operations. Market-candle sources expose `market_data_hint` for
 `finance_list_candle_streams` so rara can move from source status to stored
 TSDB stream discovery before querying latest or historical candles.
 
+`finance_subscribe_instruments` returns the same market-data and single-stream
+candle hints immediately after creating or updating a subscription. For broad
+subscriptions, use the returned `market_data_hint` to discover stored streams.
+For a single `(source_name, venue, symbol, timeframe)` subscription, the result
+also includes direct hints for latest, recent, freshness, gap, and bounded range
+candle tools.
+
 `finance_list_subscriptions` is the preferred status view after a subscription
 exists. Each subscription includes source/runtime details, an
 `unsubscribe_hint` for `finance_unsubscribe`, and an `events_hint` for
