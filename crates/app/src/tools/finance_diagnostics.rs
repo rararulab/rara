@@ -56,16 +56,25 @@ pub(super) struct FinanceDiagnoseCandleSubscriptionsResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CandleSubscriptionDiagnostic {
-    pub subscription_id: Uuid,
-    pub source_names:    Vec<String>,
-    pub venues:          Vec<String>,
-    pub symbols:         Vec<String>,
-    pub timeframes:      Vec<String>,
-    pub delivery:        String,
-    pub status:          SubscriptionHealth,
-    pub diagnostic:      Option<String>,
-    pub feed_sources:    Vec<FeedSourceDiagnostic>,
-    pub streams:         Vec<CandleStreamDiagnostic>,
+    pub subscription_id:  Uuid,
+    pub source_names:     Vec<String>,
+    pub venues:           Vec<String>,
+    pub symbols:          Vec<String>,
+    pub timeframes:       Vec<String>,
+    pub delivery:         String,
+    pub status:           SubscriptionHealth,
+    pub diagnostic:       Option<String>,
+    pub next_action_hint: Option<FinanceDiagnosticNextActionHint>,
+    pub feed_sources:     Vec<FeedSourceDiagnostic>,
+    pub streams:          Vec<CandleStreamDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceDiagnosticNextActionHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,6 +279,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
             .await?;
         let status = subscription_health(&subscription, &feed_sources, &streams);
         let diagnostic = subscription_diagnostic(&subscription, status, &feed_sources, &streams);
+        let next_action_hint = next_action_hint(status, &feed_sources, &streams);
 
         Ok(CandleSubscriptionDiagnostic {
             subscription_id: subscription.id,
@@ -280,6 +290,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
             delivery: format!("{:?}", subscription.delivery),
             status,
             diagnostic,
+            next_action_hint,
             feed_sources,
             streams,
         })
@@ -763,6 +774,101 @@ fn subscription_diagnostic(
     }
 }
 
+fn next_action_hint(
+    status: SubscriptionHealth,
+    feed_sources: &[FeedSourceDiagnostic],
+    streams: &[CandleStreamDiagnostic],
+) -> Option<FinanceDiagnosticNextActionHint> {
+    match status {
+        SubscriptionHealth::Ok
+        | SubscriptionHealth::SelectorMismatch
+        | SubscriptionHealth::Unconfigured => {
+            feed_sources
+                .iter()
+                .find_map(|feed| match feed.runtime_state {
+                    FeedRuntimeState::Disabled => enable_feed_source_hint(feed),
+                    FeedRuntimeState::NotRegistered
+                    | FeedRuntimeState::Running
+                    | FeedRuntimeState::Stopped => None,
+                })
+        }
+        SubscriptionHealth::NeedsRuntime => feed_sources.iter().find_map(|feed| {
+            (feed.runtime_state == FeedRuntimeState::Stopped)
+                .then(|| restart_feed_source_hint(feed))
+                .flatten()
+        }),
+        SubscriptionHealth::NeedsData => feed_events_hint(feed_sources, streams),
+    }
+}
+
+fn enable_feed_source_hint(feed: &FeedSourceDiagnostic) -> Option<FinanceDiagnosticNextActionHint> {
+    let catalog_source_id = feed.catalog_source_id.as_ref()?;
+    Some(FinanceDiagnosticNextActionHint {
+        tool:            "finance_enable_feed_source".to_owned(),
+        default_params:  serde_json::json!({
+            "catalog_source_id": catalog_source_id,
+            "start_now": true
+        }),
+        required_params: Vec::new(),
+        optional_params: vec!["start_now".to_owned()],
+    })
+}
+
+fn restart_feed_source_hint(
+    feed: &FeedSourceDiagnostic,
+) -> Option<FinanceDiagnosticNextActionHint> {
+    if let Some(catalog_source_id) = &feed.catalog_source_id {
+        return Some(FinanceDiagnosticNextActionHint {
+            tool:            "finance_restart_feed_source".to_owned(),
+            default_params:  serde_json::json!({
+                "catalog_source_id": catalog_source_id
+            }),
+            required_params: Vec::new(),
+            optional_params: vec!["feed_id".to_owned()],
+        });
+    }
+
+    feed.feed_id
+        .as_ref()
+        .map(|feed_id| FinanceDiagnosticNextActionHint {
+            tool:            "finance_restart_feed_source".to_owned(),
+            default_params:  serde_json::json!({
+                "feed_id": feed_id
+            }),
+            required_params: Vec::new(),
+            optional_params: vec!["catalog_source_id".to_owned()],
+        })
+}
+
+fn feed_events_hint(
+    feed_sources: &[FeedSourceDiagnostic],
+    streams: &[CandleStreamDiagnostic],
+) -> Option<FinanceDiagnosticNextActionHint> {
+    let source_names = feed_sources
+        .iter()
+        .filter(|feed| feed.runtime_state == FeedRuntimeState::Running)
+        .map(|feed| feed.source_name.clone())
+        .collect::<Vec<_>>();
+    if source_names.is_empty()
+        || streams
+            .iter()
+            .all(|stream| stream.status == CandleStreamStatus::Fresh)
+    {
+        return None;
+    }
+
+    Some(FinanceDiagnosticNextActionHint {
+        tool:            "finance_list_feed_events".to_owned(),
+        default_params:  serde_json::json!({
+            "source_names": source_names,
+            "event_types": ["market_candle_closed"],
+            "limit": 20
+        }),
+        required_params: Vec::new(),
+        optional_params: ["after", "before", "offset"].map(str::to_owned).to_vec(),
+    })
+}
+
 impl FeedRuntimeState {
     fn as_diagnostic_str(self) -> &'static str {
         match self {
@@ -1241,6 +1347,17 @@ mod tests {
             sub.diagnostic.as_deref(),
             Some("feed source finance-binance-market-candles is stopped")
         );
+        let next_action = sub
+            .next_action_hint
+            .as_ref()
+            .expect("stopped feed should expose a restart hint");
+        assert_eq!(next_action.tool, "finance_restart_feed_source");
+        assert_eq!(
+            next_action.default_params,
+            serde_json::json!({"catalog_source_id": "binance-market-candles"})
+        );
+        assert_eq!(next_action.required_params, Vec::<String>::new());
+        assert_eq!(next_action.optional_params, ["feed_id".to_owned()]);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Stopped);
         assert_eq!(sub.feed_sources[0].event_count, 0);
         assert_eq!(sub.feed_sources[0].last_event_type, None);
@@ -1280,6 +1397,24 @@ mod tests {
                 "stream finance-binance-market-candles/binance/BTCUSDT/1m is missing: no stored \
                  closed candle matched this stream"
             )
+        );
+        let next_action = sub
+            .next_action_hint
+            .as_ref()
+            .expect("running feed without candles should expose an event-inspection hint");
+        assert_eq!(next_action.tool, "finance_list_feed_events");
+        assert_eq!(
+            next_action.default_params,
+            serde_json::json!({
+                "source_names": ["finance-binance-market-candles"],
+                "event_types": ["market_candle_closed"],
+                "limit": 20
+            })
+        );
+        assert_eq!(next_action.required_params, Vec::<String>::new());
+        assert_eq!(
+            next_action.optional_params,
+            ["after", "before", "offset"].map(str::to_owned)
         );
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
@@ -1383,6 +1518,20 @@ mod tests {
             sub.feed_sources[0].runtime_state,
             FeedRuntimeState::Disabled
         );
+        let next_action = sub
+            .next_action_hint
+            .as_ref()
+            .expect("disabled feed should expose an enable hint");
+        assert_eq!(next_action.tool, "finance_enable_feed_source");
+        assert_eq!(
+            next_action.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "start_now": true
+            })
+        );
+        assert_eq!(next_action.required_params, Vec::<String>::new());
+        assert_eq!(next_action.optional_params, ["start_now".to_owned()]);
     }
 
     #[tokio::test]

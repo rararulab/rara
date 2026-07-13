@@ -327,7 +327,11 @@ subscription diagnostic includes:
   `last_event_at`, and `lag_seconds`) to confirm the source is emitting the
   expected event kind;
 - latest stored closed candle and freshness per
-  `(source_name, venue, symbol, timeframe)`.
+  `(source_name, venue, symbol, timeframe)`;
+- a `next_action_hint` when there is an obvious follow-up: disabled built-in
+  sources point to `finance_enable_feed_source`, stopped sources point to
+  `finance_restart_feed_source`, and running sources with missing/stale candle
+  data point to `finance_list_feed_events` for raw event inspection.
 
 For ad hoc market-data inspection, use `finance_list_candle_streams` to discover
 stored streams, `finance_get_latest_candle` for one newest closed bar,
