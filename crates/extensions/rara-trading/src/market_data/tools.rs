@@ -174,6 +174,7 @@ pub struct FinanceListCandleStreamsParams {
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceListCandleStreamsResult {
     pub streams:        Vec<FinanceCandleStream>,
+    pub filters:        FinanceCandleStreamFilters,
     pub count:          usize,
     pub query_limit:    usize,
     pub query_offset:   usize,
@@ -240,6 +241,14 @@ pub struct FinanceCandleSelector {
     pub timeframe:   String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FinanceCandleStreamFilters {
+    pub source_name: Option<String>,
+    pub venue:       Option<String>,
+    pub symbol:      Option<String>,
+    pub timeframe:   Option<String>,
+}
+
 #[derive(ToolDef)]
 #[tool(
     name = "finance_list_candle_streams",
@@ -276,6 +285,12 @@ impl ToolExecute for FinanceListCandleStreamsTool {
         let venue = normalize_optional_venue_selector(params.venue)?;
         let symbol = normalize_optional_symbol_selector(params.symbol)?;
         let timeframe = normalize_optional_timeframe_selector(params.timeframe)?;
+        let filters = FinanceCandleStreamFilters {
+            source_name: source_name.clone(),
+            venue:       venue.clone(),
+            symbol:      symbol.clone(),
+            timeframe:   timeframe.clone().map(|timeframe| timeframe.to_string()),
+        };
         let query = CandleStreamListQuery {
             source_name: source_name.clone(),
             venue: venue.clone(),
@@ -299,6 +314,7 @@ impl ToolExecute for FinanceListCandleStreamsTool {
         );
         Ok(FinanceListCandleStreamsResult {
             streams: streams.into_iter().map(FinanceCandleStream::from).collect(),
+            filters,
             count,
             query_limit: limit,
             query_offset: offset,
@@ -1139,8 +1155,8 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::{
-        FinanceCandleSelector, FinanceFindCandleGapsParams, FinanceFindCandleGapsTool,
-        FinanceGetCandleFreshnessParams, FinanceGetCandleFreshnessTool,
+        FinanceCandleSelector, FinanceCandleStreamFilters, FinanceFindCandleGapsParams,
+        FinanceFindCandleGapsTool, FinanceGetCandleFreshnessParams, FinanceGetCandleFreshnessTool,
         FinanceGetLatestCandleParams, FinanceGetLatestCandleTool, FinanceGetRecentCandlesParams,
         FinanceGetRecentCandlesTool, FinanceListCandleStreamsParams, FinanceListCandleStreamsTool,
         FinanceQueryCandlesParams, FinanceQueryCandlesTool,
@@ -1241,6 +1257,20 @@ mod tests {
         }
     }
 
+    fn normalized_stream_filters(
+        source_name: Option<&str>,
+        venue: Option<&str>,
+        symbol: Option<&str>,
+        timeframe: Option<&str>,
+    ) -> FinanceCandleStreamFilters {
+        FinanceCandleStreamFilters {
+            source_name: source_name.map(str::to_owned),
+            venue:       venue.map(str::to_owned),
+            symbol:      symbol.map(str::to_owned),
+            timeframe:   timeframe.map(str::to_owned),
+        }
+    }
+
     #[tokio::test]
     async fn list_candle_streams_tool_returns_available_stream_watermarks() {
         let repository = repository_with_multiple_streams().await;
@@ -1261,6 +1291,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.count, 2);
+        assert_eq!(
+            result.filters,
+            normalized_stream_filters(Some("binance-spot"), Some("binance"), None, Some("1m"))
+        );
         assert_eq!(result.query_limit, 10);
         assert_eq!(result.streams[0].symbol, "ETHUSDT");
         assert_eq!(result.streams[0].candle_count, 1);
@@ -1344,6 +1378,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.count, 1);
+        assert_eq!(
+            result.filters,
+            normalized_stream_filters(None, Some("binance"), Some("BTCUSDT"), Some("1m"))
+        );
         assert_eq!(result.streams[0].symbol, "BTCUSDT");
         assert_eq!(result.streams[0].candle_count, 2);
     }
@@ -1467,10 +1505,55 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.count, 1);
+        assert_eq!(
+            result.filters,
+            normalized_stream_filters(
+                Some("binance-spot"),
+                Some("binance"),
+                Some("BTCUSDT"),
+                Some("1m")
+            )
+        );
         assert_eq!(result.streams[0].venue, "binance");
         assert_eq!(result.streams[0].symbol, "BTCUSDT");
         assert_eq!(result.streams[0].timeframe, "1m");
         assert_eq!(result.streams[0].candle_count, 2);
+    }
+
+    #[tokio::test]
+    async fn list_candle_streams_tool_echoes_filters_when_no_streams_match() {
+        let repository = repository_with_multiple_streams().await;
+        let tool = FinanceListCandleStreamsTool::new(repository);
+        let result = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: Some(" binance-spot ".to_owned()),
+                    venue:       Some(" Binance ".to_owned()),
+                    symbol:      Some(" dogeusdt ".to_owned()),
+                    timeframe:   Some(" 1M ".to_owned()),
+                    limit:       Some(10),
+                    offset:      None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 0);
+        assert!(result.streams.is_empty());
+        assert_eq!(
+            result.filters,
+            normalized_stream_filters(
+                Some("binance-spot"),
+                Some("binance"),
+                Some("DOGEUSDT"),
+                Some("1m")
+            )
+        );
+        assert_eq!(result.query_limit, 10);
+        assert_eq!(result.query_offset, 0);
+        assert!(!result.has_more);
+        assert!(result.next_page_hint.is_none());
     }
 
     #[tokio::test]

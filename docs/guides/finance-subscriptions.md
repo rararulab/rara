@@ -303,8 +303,10 @@ answers whether a stream is currently stale. All prices and volumes are returned
 as strings to preserve decimal precision. Single-stream candle tools return a
 normalized `selector` (`source_name`, `venue`, `symbol`, `timeframe`) even when
 no rows match, so rara can tie empty or missing results back to the stream it
-checked. Each stream returned by
-`finance_list_candle_streams` includes ready-to-call hints for
+checked. `finance_list_candle_streams` returns normalized `filters` with the
+same fields, including for empty broad-discovery results, so rara can explain
+which stream set it inspected before narrowing to a single stream. Each stream
+returned by `finance_list_candle_streams` includes ready-to-call hints for
 `finance_get_latest_candle`, `finance_get_recent_candles`,
 `finance_get_candle_freshness`, `finance_find_candle_gaps`, and
 `finance_query_candles`; range tools still require explicit `start`/`end`.
