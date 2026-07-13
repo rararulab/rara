@@ -562,4 +562,121 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn finance_agent_tools_do_not_accept_provider_configuration_fields() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        let data_feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let data_feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let finance_registry = Arc::new(
+            rara_trading::finance::registry::FinanceSubscriptionRegistry::load(
+                tmp.path().join("finance-subscriptions.json"),
+            ),
+        );
+        let market_data_repo: rara_trading::market_data::MarketDataRepositoryRef =
+            Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default());
+
+        let mut tools: Vec<AgentToolRef> = vec![
+            Arc::new(FinanceListFeedSourcesTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
+            Arc::new(FinanceListFeedEventsTool::new(data_feed_svc.clone())),
+            Arc::new(FinanceListSubscriptionsTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
+            Arc::new(FinanceEnableFeedSourceTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+            )),
+            Arc::new(FinanceDisableFeedSourceTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+            )),
+            Arc::new(FinanceRestartFeedSourceTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+            )),
+            Arc::new(FinanceSubscribeInstrumentsTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
+            Arc::new(FinanceSubscribeNewsTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
+            Arc::new(FinanceDiagnoseCandleSubscriptionsTool::new(
+                data_feed_svc,
+                data_feed_registry,
+                finance_registry.clone(),
+                market_data_repo.clone(),
+            )),
+            Arc::new(FinanceSubscribeTool::new(finance_registry.clone())),
+            Arc::new(FinanceUnsubscribeTool::new(finance_registry)),
+        ];
+        tools.extend(finance_market_data_tools(&market_data_repo));
+
+        let forbidden_fields = [
+            "account",
+            "account_id",
+            "auth",
+            "credential",
+            "credentials",
+            "deployment",
+            "endpoint",
+            "endpoints",
+            "header",
+            "headers",
+            "order",
+            "orders",
+            "provider_url",
+            "transport",
+            "url",
+            "urls",
+        ];
+
+        for tool in tools {
+            assert!(
+                tool.name().starts_with("finance_"),
+                "test should only cover finance tools, got {}",
+                tool.name()
+            );
+            let mut fields = Vec::new();
+            collect_schema_property_names(&tool.parameters_schema(), &mut fields);
+            for field in forbidden_fields {
+                assert!(
+                    !fields.iter().any(|candidate| candidate == field),
+                    "finance tool {} exposes provider/configuration field `{field}` in schema \
+                     properties {fields:?}",
+                    tool.name()
+                );
+            }
+        }
+    }
+
+    fn collect_schema_property_names(schema: &serde_json::Value, fields: &mut Vec<String>) {
+        match schema {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Object(properties)) = map.get("properties") {
+                    fields.extend(properties.keys().cloned());
+                }
+                for value in map.values() {
+                    collect_schema_property_names(value, fields);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    collect_schema_property_names(value, fields);
+                }
+            }
+            _ => {}
+        }
+    }
 }
