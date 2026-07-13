@@ -195,8 +195,10 @@ call.
 exists. Each subscription includes source/runtime details, an
 `unsubscribe_hint` for `finance_unsubscribe`, and an `events_hint` for
 `finance_list_feed_events`. Market-candle subscriptions also include a
-`market_data_hint` for `finance_list_candle_streams`, defaulting only to
-selectors that are unambiguous for the subscription. Fully specified
+`diagnostic_hint` for `finance_diagnose_candle_subscriptions`, prefilled with
+the subscription id, and a `market_data_hint` for
+`finance_list_candle_streams`, defaulting only to selectors that are
+unambiguous for the subscription. Fully specified
 single-stream market-candle subscriptions also include `latest_candle_hint` for
 `finance_get_latest_candle`, so rara can jump directly from the subscription to
 the latest stored bar without first discovering streams, `recent_candles_hint`
