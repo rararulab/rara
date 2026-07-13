@@ -173,13 +173,14 @@ pub struct FinanceListCandleStreamsParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceListCandleStreamsResult {
-    pub streams:        Vec<FinanceCandleStream>,
-    pub filters:        FinanceCandleStreamFilters,
-    pub count:          usize,
-    pub query_limit:    usize,
-    pub query_offset:   usize,
-    pub has_more:       bool,
-    pub next_page_hint: Option<FinanceCandleStreamNextPageHint>,
+    pub streams:         Vec<FinanceCandleStream>,
+    pub filters:         FinanceCandleStreamFilters,
+    pub count:           usize,
+    pub query_limit:     usize,
+    pub query_offset:    usize,
+    pub has_more:        bool,
+    pub next_page_hint:  Option<FinanceCandleStreamNextPageHint>,
+    pub diagnostic_hint: Option<FinanceCandleStreamDiagnosticHint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,6 +211,14 @@ pub struct FinanceCandleStreamToolHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceCandleStreamNextPageHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceCandleStreamDiagnosticHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -312,6 +321,7 @@ impl ToolExecute for FinanceListCandleStreamsTool {
             offset,
             has_more,
         );
+        let diagnostic_hint = stream_list_empty_diagnostic_hint(source_name.as_deref(), count == 0);
         Ok(FinanceListCandleStreamsResult {
             streams: streams.into_iter().map(FinanceCandleStream::from).collect(),
             filters,
@@ -320,6 +330,7 @@ impl ToolExecute for FinanceListCandleStreamsTool {
             query_offset: offset,
             has_more,
             next_page_hint,
+            diagnostic_hint,
         })
     }
 }
@@ -881,6 +892,31 @@ fn stream_list_next_page_hint(
             "timeframe",
             "limit",
             "offset",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+    })
+}
+
+fn stream_list_empty_diagnostic_hint(
+    source_name: Option<&str>,
+    is_empty: bool,
+) -> Option<FinanceCandleStreamDiagnosticHint> {
+    let source_name = source_name.filter(|_| is_empty)?;
+    Some(FinanceCandleStreamDiagnosticHint {
+        tool:            "finance_diagnose_candle_subscriptions".to_owned(),
+        default_params:  serde_json::json!({
+            "source_names": [source_name],
+        }),
+        required_params: Vec::new(),
+        optional_params: [
+            "subscription_id",
+            "catalog_source_ids",
+            "source_names",
+            "feed_ids",
+            "as_of",
+            "stale_after_secs",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -1554,6 +1590,32 @@ mod tests {
         assert_eq!(result.query_offset, 0);
         assert!(!result.has_more);
         assert!(result.next_page_hint.is_none());
+        let diagnostic_hint = result
+            .diagnostic_hint
+            .as_ref()
+            .expect("empty source-scoped stream list should point back to candle diagnostics");
+        assert_eq!(
+            diagnostic_hint.tool,
+            "finance_diagnose_candle_subscriptions"
+        );
+        assert_eq!(
+            diagnostic_hint.default_params,
+            serde_json::json!({
+                "source_names": ["binance-spot"],
+            })
+        );
+        assert!(diagnostic_hint.required_params.is_empty());
+        assert_eq!(
+            diagnostic_hint.optional_params,
+            [
+                "subscription_id",
+                "catalog_source_ids",
+                "source_names",
+                "feed_ids",
+                "as_of",
+                "stale_after_secs"
+            ]
+        );
     }
 
     #[tokio::test]
