@@ -131,6 +131,7 @@ The app registers feed-oriented tools for finance data source discovery,
 runtime control, subscription management, and inspection:
 
 - `finance_list_feed_sources`
+- `finance_list_feed_bundles`
 - `finance_list_feed_events`
 - `finance_enable_feed_source`
 - `finance_disable_feed_source`
@@ -140,6 +141,20 @@ runtime control, subscription management, and inspection:
 - `finance_list_subscriptions`
 - `finance_unsubscribe`
 - `finance_diagnose_candle_subscriptions`
+
+`finance_list_feed_bundles` is the preferred discovery view when the user asks
+what default finance data feeding rara can provide. It groups built-in catalog
+sources into curated presets such as `macro-news`, `binance-spot-starter`,
+`binance-major-crypto-15m`, and `longbridge-equities-daily`. Each bundle echoes
+its `catalog_source_ids`, feed types, aggregate persisted/running/subscribed
+counts, setup hints for operator-only presets, and action hints:
+`list_sources_hint` for drilling into per-source status, `enable_hints` for
+ready sources that are not persisted yet, and `subscription_hint` when the whole
+bundle can be subscribed with one specialized tool call. Macro/news bundles use
+`finance_subscribe_news` with multiple RSS `catalog_source_ids`; single-source
+market-data bundles use `finance_subscribe_instruments` with the preset
+symbols/timeframes. Use the `bundle_ids`, `feed_types`, `can_enable`, and
+`requires_configuration` filters to narrow the recommendation list.
 
 `finance_list_feed_sources` is the preferred status view before and after
 subscription changes. It combines the built-in source catalog, persisted feed
@@ -409,18 +424,20 @@ Use this checklist before considering a deployment ready:
    and `watch_terms`.
 5. Use a conversation to call `finance_subscribe_instruments` for candle
    `symbols` and `timeframes`.
-6. Confirm `finance_list_feed_sources` reports the subscribed source with
+6. Confirm `finance_list_feed_bundles` returns the expected default data
+   feeding presets and exposes actionable subscription hints.
+7. Confirm `finance_list_feed_sources` reports the subscribed source with
    `subscriptions.session_subscribed = true`.
-7. Confirm the admin event endpoint stores one event per article and one event
+8. Confirm the admin event endpoint stores one event per article and one event
    per closed candle across two polls, and `finance_list_feed_events` returns
    recent persisted events for the subscribed source, including filtered views
    by `event_kinds`.
-8. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
+9. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
    recent feed event, `selector_coverage = covered`, and a fresh latest candle
    for the subscribed stream.
-9. Confirm `finance_get_latest_candle` returns the latest stored closed candle
+10. Confirm `finance_get_latest_candle` returns the latest stored closed candle
    for the subscribed `(venue, symbol, timeframe)`.
-10. Confirm
+11. Confirm
    `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
    returns the stored stream watermark.
 11. Confirm `finance_get_recent_candles`,

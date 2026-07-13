@@ -30,7 +30,10 @@ use rara_kernel::{
 use rara_tool_macro::ToolDef;
 use rara_trading::{
     feed::{
-        catalog::{DefaultFeedSource, default_finance_feed_sources},
+        catalog::{
+            DefaultFeedBundle, DefaultFeedSource, default_finance_feed_bundles,
+            default_finance_feed_sources,
+        },
         market_candle::MarketCandleSource,
     },
     finance::registry::{
@@ -60,6 +63,102 @@ const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 const DEFAULT_FEED_EVENT_LIMIT: i64 = 20;
 const MAX_FEED_EVENT_LIMIT: i64 = 200;
 const DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID: &str = "binance-market-candles";
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct FinanceListFeedBundlesParams {
+    /// Optional built-in bundle ids such as macro-news or
+    /// binance-major-crypto-15m.
+    #[serde(default)]
+    pub bundle_ids:             Vec<String>,
+    /// Optional feed types such as rss or market_candle.
+    #[serde(default)]
+    pub feed_types:             Vec<String>,
+    /// When set, include only bundles whose sources can or cannot be enabled
+    /// directly without operator configuration.
+    #[serde(default)]
+    pub can_enable:             Option<bool>,
+    /// When set, include only bundles that do or do not require operator
+    /// configuration before enabling.
+    #[serde(default)]
+    pub requires_configuration: Option<bool>,
+}
+
+#[derive(Debug)]
+struct FinanceFeedBundleFilters {
+    bundle_ids:             Vec<String>,
+    feed_types:             Vec<String>,
+    can_enable:             Option<bool>,
+    requires_configuration: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceListFeedBundlesResult {
+    pub bundles: Vec<FinanceFeedBundleEntry>,
+    pub count:   usize,
+    pub filters: FinanceFeedBundleFiltersEcho,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FinanceFeedBundleFiltersEcho {
+    pub bundle_ids:             Vec<String>,
+    pub feed_types:             Vec<String>,
+    pub can_enable:             Option<bool>,
+    pub requires_configuration: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub feed_types: Vec<String>,
+    pub catalog_source_ids: Vec<String>,
+    pub source_count: usize,
+    pub persisted_count: usize,
+    pub running_count: usize,
+    pub subscribed_count: usize,
+    pub can_enable: bool,
+    pub requires_configuration: bool,
+    pub setup_hints: Vec<String>,
+    pub sources: Vec<FinanceFeedBundleSource>,
+    pub list_sources_hint: FinanceFeedBundleListSourcesHint,
+    pub enable_hints: Vec<FinanceFeedSourceEnableHint>,
+    pub subscription_hint: Option<FinanceFeedSourceSubscriptionHint>,
+    pub source_subscription_hints: Vec<FinanceFeedSourceSubscriptionHint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleSource {
+    pub catalog_source_id: String,
+    pub source_name:       String,
+    pub name:              String,
+    pub feed_type:         String,
+    pub provider:          Option<String>,
+    pub readiness:         FinanceFeedBundleSourceReadiness,
+    pub runtime:           FinanceFeedBundleSourceRuntime,
+    pub subscribed:        bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleSourceReadiness {
+    pub requires_configuration: bool,
+    pub can_enable:             bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleSourceRuntime {
+    pub persisted: bool,
+    pub running:   bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleListSourcesHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(super) struct FinanceListFeedSourcesParams {
@@ -701,6 +800,23 @@ pub(super) enum FeedChange {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_list_feed_bundles",
+    description = "List curated built-in finance data feed bundles such as macro news, Binance \
+                   crypto candles, and Longbridge equities presets. Use this when the user asks \
+                   what default finance feeds rara can enable or subscribe to. This is read-only \
+                   and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub(super) struct FinanceListFeedBundlesTool {
+    svc:              DataFeedSvc,
+    registry:         Arc<DataFeedRegistry>,
+    finance_registry: Arc<FinanceSubscriptionRegistry>,
+}
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_list_feed_sources",
     description = "List built-in finance data feed source catalog entries with current persisted \
                    config and runtime status. Use this before enable or subscribe operations for \
@@ -840,6 +956,20 @@ pub(super) struct FinanceSubscribeInstrumentsTool {
     finance_registry:   Arc<FinanceSubscriptionRegistry>,
 }
 
+impl FinanceListFeedBundlesTool {
+    pub(super) fn new(
+        svc: DataFeedSvc,
+        registry: Arc<DataFeedRegistry>,
+        finance_registry: Arc<FinanceSubscriptionRegistry>,
+    ) -> Self {
+        Self {
+            svc,
+            registry,
+            finance_registry,
+        }
+    }
+}
+
 impl FinanceListFeedSourcesTool {
     pub(super) fn new(
         svc: DataFeedSvc,
@@ -921,6 +1051,77 @@ impl FinanceSubscribeInstrumentsTool {
             data_feed_registry,
             finance_registry,
         }
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceListFeedBundlesTool {
+    type Output = FinanceListFeedBundlesResult;
+    type Params = FinanceListFeedBundlesParams;
+
+    async fn run(
+        &self,
+        params: FinanceListFeedBundlesParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceListFeedBundlesResult> {
+        let filters = FinanceFeedBundleFilters::from_params(params)?;
+        let feeds = self.svc.list_feeds().await?;
+        let summaries = self
+            .svc
+            .event_summaries()
+            .await?
+            .into_iter()
+            .map(|summary| (summary.source_name.clone(), summary))
+            .collect::<HashMap<_, _>>();
+        let owner = UserId(context.user_id.clone());
+        let subscriptions = self.finance_registry.list_for_owner(&owner).await;
+        let now = Timestamp::now();
+
+        let sources_by_id = default_finance_feed_sources()
+            .into_iter()
+            .map(|source| {
+                let source_name = source.feed_name();
+                let persisted = feeds.iter().find(|feed| feed.name == source_name);
+                let summary = summaries.get(&source_name);
+                let last_event_at = summary.and_then(|summary| summary.last_event_at);
+                let lag_seconds = last_event_at
+                    .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+                let entry = feed_source_entry(
+                    source,
+                    persisted,
+                    self.registry.is_running(&source_name),
+                    summary.map_or(0, |summary| summary.event_count),
+                    summary.and_then(|summary| summary.last_event_type.clone()),
+                    last_event_at.map(|timestamp| timestamp.to_string()),
+                    lag_seconds,
+                    source_subscription_summary(&subscriptions, context.session_key, &source_name),
+                );
+                (entry.id.clone(), entry)
+            })
+            .collect::<HashMap<_, _>>();
+
+        let bundles = default_finance_feed_bundles()
+            .into_iter()
+            .filter_map(|bundle| {
+                let source_entries = bundle
+                    .catalog_source_ids
+                    .iter()
+                    .filter_map(|source_id| sources_by_id.get(source_id).cloned())
+                    .collect::<Vec<_>>();
+                if source_entries.len() != bundle.catalog_source_ids.len() {
+                    return None;
+                }
+                let entry = feed_bundle_entry(bundle, source_entries);
+                filters.matches(&entry).then_some(entry)
+            })
+            .collect::<Vec<_>>();
+        let count = bundles.len();
+
+        Ok(FinanceListFeedBundlesResult {
+            bundles,
+            count,
+            filters: filters.echo(),
+        })
     }
 }
 
@@ -1117,6 +1318,75 @@ fn payload_string(payload: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+impl FinanceFeedBundleFilters {
+    fn from_params(params: FinanceListFeedBundlesParams) -> anyhow::Result<Self> {
+        let bundle_ids = params
+            .bundle_ids
+            .into_iter()
+            .map(normalize_bundle_id)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            bundle_ids.len() <= MAX_FEED_SOURCE_FILTERS,
+            "bundle_ids has too many values"
+        );
+        let feed_types = normalize_feed_type_filters(params.feed_types)?;
+
+        Ok(Self {
+            bundle_ids,
+            feed_types,
+            can_enable: params.can_enable,
+            requires_configuration: params.requires_configuration,
+        })
+    }
+
+    fn echo(&self) -> FinanceFeedBundleFiltersEcho {
+        FinanceFeedBundleFiltersEcho {
+            bundle_ids:             self.bundle_ids.clone(),
+            feed_types:             self.feed_types.clone(),
+            can_enable:             self.can_enable,
+            requires_configuration: self.requires_configuration,
+        }
+    }
+
+    fn matches(&self, entry: &FinanceFeedBundleEntry) -> bool {
+        if !self.bundle_ids.is_empty() && !self.bundle_ids.iter().any(|id| id == &entry.id) {
+            return false;
+        }
+        if !self.feed_types.is_empty()
+            && !entry
+                .feed_types
+                .iter()
+                .any(|feed_type| self.feed_types.iter().any(|value| value == feed_type))
+        {
+            return false;
+        }
+        if self
+            .can_enable
+            .is_some_and(|expected| expected != entry.can_enable)
+        {
+            return false;
+        }
+        if self
+            .requires_configuration
+            .is_some_and(|expected| expected != entry.requires_configuration)
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
+fn normalize_bundle_id(value: String) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    anyhow::ensure!(!normalized.is_empty(), "bundle_id cannot be empty");
+    anyhow::ensure!(
+        normalized.len() <= MAX_CATALOG_SOURCE_ID_LEN,
+        "bundle_id is too long"
+    );
+    Ok(normalized)
 }
 
 impl FinanceFeedSourceFilters {
@@ -3042,6 +3312,149 @@ fn feed_source_entry(
     }
 }
 
+fn feed_bundle_entry(
+    bundle: DefaultFeedBundle,
+    source_entries: Vec<FinanceFeedSourceEntry>,
+) -> FinanceFeedBundleEntry {
+    let mut feed_types = Vec::new();
+    for source in &source_entries {
+        if !feed_types.contains(&source.feed_type) {
+            feed_types.push(source.feed_type.clone());
+        }
+    }
+    let source_count = source_entries.len();
+    let persisted_count = source_entries
+        .iter()
+        .filter(|source| source.runtime.persisted)
+        .count();
+    let running_count = source_entries
+        .iter()
+        .filter(|source| source.runtime.running)
+        .count();
+    let subscribed_count = source_entries
+        .iter()
+        .filter(|source| source.subscriptions.user_subscribed)
+        .count();
+    let can_enable = source_entries.iter().all(|source| source.can_enable);
+    let requires_configuration = source_entries
+        .iter()
+        .any(|source| source.requires_configuration);
+    let setup_hints = source_entries
+        .iter()
+        .filter_map(|source| source.setup_hint.clone())
+        .collect::<Vec<_>>();
+    let enable_hints = source_entries
+        .iter()
+        .filter_map(|source| source.enable_hint.clone())
+        .collect::<Vec<_>>();
+    let source_subscription_hints = source_entries
+        .iter()
+        .filter_map(|source| source.subscription_hint.clone())
+        .collect::<Vec<_>>();
+    let subscription_hint = bundle_subscription_hint(&source_entries);
+    let sources = source_entries
+        .iter()
+        .map(|source| FinanceFeedBundleSource {
+            catalog_source_id: source.id.clone(),
+            source_name:       source.source_name.clone(),
+            name:              source.name.clone(),
+            feed_type:         source.feed_type.clone(),
+            provider:          source.provider.clone(),
+            readiness:         FinanceFeedBundleSourceReadiness {
+                requires_configuration: source.requires_configuration,
+                can_enable:             source.can_enable,
+            },
+            runtime:           FinanceFeedBundleSourceRuntime {
+                persisted: source.runtime.persisted,
+                running:   source.runtime.running,
+            },
+            subscribed:        source.subscriptions.user_subscribed,
+        })
+        .collect();
+
+    FinanceFeedBundleEntry {
+        id: bundle.id,
+        name: bundle.name,
+        description: bundle.description,
+        tags: bundle.tags,
+        feed_types,
+        catalog_source_ids: bundle.catalog_source_ids.clone(),
+        source_count,
+        persisted_count,
+        running_count,
+        subscribed_count,
+        can_enable,
+        requires_configuration,
+        setup_hints,
+        sources,
+        list_sources_hint: FinanceFeedBundleListSourcesHint {
+            tool:            "finance_list_feed_sources".to_owned(),
+            default_params:  serde_json::json!({
+                "catalog_source_ids": bundle.catalog_source_ids
+            }),
+            required_params: Vec::new(),
+            optional_params: [
+                "feed_types",
+                "can_enable",
+                "requires_configuration",
+                "persisted",
+                "enabled",
+                "running",
+                "subscribed",
+                "current_session_subscribed",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        },
+        enable_hints,
+        subscription_hint,
+        source_subscription_hints,
+    }
+}
+
+fn bundle_subscription_hint(
+    source_entries: &[FinanceFeedSourceEntry],
+) -> Option<FinanceFeedSourceSubscriptionHint> {
+    if source_entries.is_empty() {
+        return None;
+    }
+    if source_entries
+        .iter()
+        .all(|source| source.feed_type == FeedType::Rss.to_string())
+    {
+        return Some(FinanceFeedSourceSubscriptionHint {
+            tool:            "finance_subscribe_news".to_owned(),
+            default_params:  serde_json::json!({
+                "catalog_source_ids": source_entries
+                    .iter()
+                    .map(|source| source.id.as_str())
+                    .collect::<Vec<_>>()
+            }),
+            required_params: Vec::new(),
+            optional_params: [
+                "category_tags",
+                "watch_terms",
+                "delivery",
+                "start_now",
+                "cooldown_secs",
+                "max_immediate_per_hour",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            diagnostic_tool: None,
+        });
+    }
+    if source_entries.len() == 1
+        && source_entries[0].feed_type == FeedType::MarketCandle.to_string()
+    {
+        return source_entries[0].subscription_hint.clone();
+    }
+
+    None
+}
+
 fn subscription_entry(
     subscription: FinanceSubscription,
     current_session: rara_kernel::session::SessionKey,
@@ -3606,10 +4019,10 @@ mod tests {
     use super::{
         DEFAULT_COOLDOWN_SECS, DEFAULT_MAX_IMMEDIATE_PER_HOUR, FeedChange,
         FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
-        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedEventsParams,
-        FinanceListFeedEventsTool, FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
-        FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
-        FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
+        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedBundlesParams,
+        FinanceListFeedBundlesTool, FinanceListFeedEventsParams, FinanceListFeedEventsTool,
+        FinanceListFeedSourcesParams, FinanceListFeedSourcesTool, FinanceListSubscriptionsParams,
+        FinanceListSubscriptionsTool, FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsResult,
         FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsParams, FinanceSubscribeNewsResult,
         FinanceSubscribeNewsTool, FinanceUnsubscribeParams, FinanceUnsubscribeTool,
@@ -3672,6 +4085,137 @@ mod tests {
             registry,
             finance_registry,
         )
+    }
+
+    #[tokio::test]
+    async fn list_feed_bundles_returns_actionable_default_data_feeding_presets() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            svc,
+            registry,
+            finance_registry,
+        ) = tool().await;
+        let bundles = FinanceListFeedBundlesTool::new(svc, registry, finance_registry);
+
+        let result = bundles
+            .run(FinanceListFeedBundlesParams::default(), &context())
+            .await
+            .expect("list feed bundles");
+
+        assert!(result.count >= 3);
+        let macro_news = result
+            .bundles
+            .iter()
+            .find(|bundle| bundle.id == "macro-news")
+            .expect("macro-news bundle should exist");
+        assert_eq!(
+            macro_news.catalog_source_ids,
+            [
+                "fed-press-releases",
+                "fed-h15-announcements",
+                "fed-h10-announcements",
+                "sec-press-releases"
+            ]
+        );
+        assert!(macro_news.can_enable);
+        assert!(!macro_news.requires_configuration);
+        let macro_subscribe = macro_news
+            .subscription_hint
+            .as_ref()
+            .expect("macro-news should expose bundle subscribe hint");
+        assert_eq!(macro_subscribe.tool, "finance_subscribe_news");
+        assert_eq!(
+            macro_subscribe.default_params,
+            serde_json::json!({
+                "catalog_source_ids": [
+                    "fed-press-releases",
+                    "fed-h15-announcements",
+                    "fed-h10-announcements",
+                    "sec-press-releases"
+                ]
+            })
+        );
+        assert_eq!(macro_news.enable_hints.len(), 4);
+
+        let crypto = result
+            .bundles
+            .iter()
+            .find(|bundle| bundle.id == "binance-major-crypto-15m")
+            .expect("binance crypto bundle should exist");
+        assert_eq!(crypto.feed_types, ["market_candle"]);
+        assert_eq!(crypto.catalog_source_ids, ["binance-major-crypto-15m"]);
+        let crypto_subscribe = crypto
+            .subscription_hint
+            .as_ref()
+            .expect("binance crypto bundle should expose instrument subscribe hint");
+        assert_eq!(crypto_subscribe.tool, "finance_subscribe_instruments");
+        assert_eq!(
+            crypto_subscribe.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-major-crypto-15m",
+                "venue": "binance",
+                "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"],
+                "timeframes": ["15m"]
+            })
+        );
+
+        let longbridge = result
+            .bundles
+            .iter()
+            .find(|bundle| bundle.id == "longbridge-equities-daily")
+            .expect("longbridge bundle should exist");
+        assert!(longbridge.requires_configuration);
+        assert!(!longbridge.can_enable);
+        assert!(longbridge.enable_hints.is_empty());
+        assert!(
+            longbridge
+                .setup_hints
+                .iter()
+                .any(|hint| hint.contains("Longbridge"))
+        );
+    }
+
+    #[tokio::test]
+    async fn list_feed_bundles_can_filter_by_bundle_ids_and_feed_type() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            svc,
+            registry,
+            finance_registry,
+        ) = tool().await;
+        let bundles = FinanceListFeedBundlesTool::new(svc, registry, finance_registry);
+
+        let result = bundles
+            .run(
+                FinanceListFeedBundlesParams {
+                    bundle_ids:             vec![
+                        " macro-news ".to_owned(),
+                        "binance-major-crypto-15m".to_owned(),
+                    ],
+                    feed_types:             vec![" market_candle ".to_owned()],
+                    can_enable:             None,
+                    requires_configuration: None,
+                },
+                &context(),
+            )
+            .await
+            .expect("filtered bundles");
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.bundles[0].id, "binance-major-crypto-15m");
+        assert_eq!(
+            result.filters.bundle_ids,
+            ["macro-news", "binance-major-crypto-15m"]
+        );
+        assert_eq!(result.filters.feed_types, ["market_candle"]);
     }
 
     #[tokio::test]
