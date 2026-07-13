@@ -2525,7 +2525,7 @@ fn market_data_hint_for_source(
         tool:            "finance_list_candle_streams".to_owned(),
         default_params:  serde_json::Value::Object(default_params),
         required_params: Vec::new(),
-        optional_params: ["symbol", "timeframe", "limit"]
+        optional_params: ["symbol", "timeframe", "limit", "offset"]
             .into_iter()
             .map(str::to_owned)
             .collect(),
@@ -2802,10 +2802,17 @@ fn market_data_hint_for_subscription(
         tool:            "finance_list_candle_streams".to_owned(),
         default_params:  serde_json::Value::Object(default_params),
         required_params: Vec::new(),
-        optional_params: ["source_name", "venue", "symbol", "timeframe", "limit"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+        optional_params: [
+            "source_name",
+            "venue",
+            "symbol",
+            "timeframe",
+            "limit",
+            "offset",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
     })
 }
 
@@ -3472,7 +3479,7 @@ mod tests {
         assert!(market_data_hint.required_params.is_empty());
         assert_eq!(
             market_data_hint.optional_params,
-            ["symbol", "timeframe", "limit"]
+            ["symbol", "timeframe", "limit", "offset"]
         );
     }
 
@@ -5072,7 +5079,14 @@ mod tests {
         assert!(market_data_hint.required_params.is_empty());
         assert_eq!(
             market_data_hint.optional_params,
-            ["source_name", "venue", "symbol", "timeframe", "limit"]
+            [
+                "source_name",
+                "venue",
+                "symbol",
+                "timeframe",
+                "limit",
+                "offset"
+            ]
         );
         assert!(
             listed.subscriptions[0].latest_candle_hint.is_none(),

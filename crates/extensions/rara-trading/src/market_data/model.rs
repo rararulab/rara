@@ -160,6 +160,7 @@ pub struct CandleStreamListQuery {
     pub symbol:      Option<String>,
     pub timeframe:   Option<Timeframe>,
     pub limit:       usize,
+    pub offset:      usize,
 }
 
 /// Aggregated summary for one `(source, venue, symbol, timeframe)` candle

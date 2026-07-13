@@ -226,6 +226,7 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
         query: CandleStreamListQuery,
     ) -> anyhow::Result<Vec<CandleStreamSummary>> {
         let limit = i64::try_from(query.limit.min(10_000))?;
+        let offset = i64::try_from(query.offset.min(10_000))?;
         let rows = sqlx_core::query::query(
             r#"
             WITH grouped AS (
@@ -267,6 +268,7 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
                      grouped.timeframe ASC,
                      grouped.source_name ASC
             LIMIT $5
+            OFFSET $6
             "#,
         )
         .bind(query.source_name.as_deref())
@@ -274,6 +276,7 @@ impl MarketDataRepository for TimescaleMarketDataRepository {
         .bind(query.symbol.as_deref())
         .bind(query.timeframe.as_ref().map(Timeframe::as_str))
         .bind(limit)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await?;
 

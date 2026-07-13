@@ -119,6 +119,7 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
             symbol:      None,
             timeframe:   Some(Timeframe::parse("15m")?),
             limit:       10,
+            offset:      0,
         })
         .await?;
     assert_eq!(streams.len(), 2);
@@ -130,6 +131,19 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
     assert_eq!(streams[1].candle_count, 2);
     assert_eq!(streams[1].first_open_time, ts("2026-07-10T08:15:00Z"));
     assert_eq!(streams[1].latest_open_time, ts("2026-07-10T08:30:00Z"));
+
+    let second_stream_page = repo
+        .candle_streams(CandleStreamListQuery {
+            source_name: Some("timescale-container-contract".to_owned()),
+            venue:       Some("binance".to_owned()),
+            symbol:      None,
+            timeframe:   Some(Timeframe::parse("15m")?),
+            limit:       1,
+            offset:      1,
+        })
+        .await?;
+    assert_eq!(second_stream_page.len(), 1);
+    assert_eq!(second_stream_page[0].symbol, "BTCUSDT");
 
     let missing = repo
         .missing_open_times(CandleRangeQuery {

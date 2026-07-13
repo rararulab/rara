@@ -260,15 +260,17 @@ struct CandleStreamQueryParams {
     symbol:      Option<String>,
     timeframe:   Option<String>,
     limit:       Option<usize>,
+    offset:      Option<usize>,
 }
 
 /// Stored market-data candle stream inventory response.
 #[derive(Debug, Serialize)]
 struct CandleStreamListResponse {
-    streams:     Vec<CandleStreamResponse>,
-    count:       usize,
-    query_limit: usize,
-    has_more:    bool,
+    streams:      Vec<CandleStreamResponse>,
+    count:        usize,
+    query_limit:  usize,
+    query_offset: usize,
+    has_more:     bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1245,13 +1247,15 @@ async fn list_market_data_candle_streams(
     Query(params): Query<CandleStreamQueryParams>,
 ) -> Result<Json<CandleStreamListResponse>, ProblemDetails> {
     let limit = validate_market_data_stream_limit(params.limit)?;
+    let offset = params.offset.unwrap_or(0);
     let probe_limit = limit.saturating_add(1);
     let query = CandleStreamListQuery {
         source_name: normalize_optional_market_data_selector("source_name", params.source_name)?,
-        venue:       normalize_optional_market_data_venue(params.venue)?,
-        symbol:      normalize_optional_market_data_symbol(params.symbol)?,
-        timeframe:   normalize_optional_market_data_timeframe(params.timeframe)?,
-        limit:       probe_limit,
+        venue: normalize_optional_market_data_venue(params.venue)?,
+        symbol: normalize_optional_market_data_symbol(params.symbol)?,
+        timeframe: normalize_optional_market_data_timeframe(params.timeframe)?,
+        limit: probe_limit,
+        offset,
     };
 
     let mut streams = state
@@ -1270,6 +1274,7 @@ async fn list_market_data_candle_streams(
             .collect(),
         count,
         query_limit: limit,
+        query_offset: offset,
         has_more,
     }))
 }
@@ -3648,6 +3653,7 @@ mod tests {
 
         let app = app_with_user_and_market_data_repo(user_of(Role::Admin), market_data_repo).await;
         let res = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -3667,8 +3673,32 @@ mod tests {
 
         assert_eq!(result["count"], 1);
         assert_eq!(result["query_limit"], 1);
+        assert_eq!(result["query_offset"], 0);
         assert_eq!(result["has_more"], true);
         assert_eq!(result["streams"].as_array().unwrap().len(), 1);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/market-data/candle-streams?limit=1&offset=1")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["query_limit"], 1);
+        assert_eq!(result["query_offset"], 1);
+        assert_eq!(result["has_more"], false);
+        assert_eq!(result["streams"][0]["symbol"], "BTCUSDT");
     }
 
     #[tokio::test]

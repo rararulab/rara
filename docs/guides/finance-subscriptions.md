@@ -309,10 +309,12 @@ as strings to preserve decimal precision. Each stream returned by
 `finance_query_candles` return `has_more` when additional rows match the
 selectors beyond the returned `query_limit`; narrow by `source_name`, `venue`,
 `symbol`, `timeframe`, or time range before assuming a broad query is
-exhaustive. When `finance_query_candles.has_more` is true, `next_start` contains
-the next candle open time to use as the following query's inclusive `start`,
-and `next_page_hint` calls `finance_query_candles` with that `start`, the same
-selectors, the same exclusive `end`, and the same limit.
+exhaustive. `finance_list_candle_streams` also returns `query_offset`; when
+`has_more` is true, `next_page_hint` calls the same tool with the same filters
+and the next `offset`. When `finance_query_candles.has_more` is true,
+`next_start` contains the next candle open time to use as the following query's
+inclusive `start`, and `next_page_hint` calls `finance_query_candles` with that
+`start`, the same selectors, the same exclusive `end`, and the same limit.
 When `finance_get_recent_candles.has_more` is true, `next_end` contains the
 oldest returned candle open time to use as an exclusive `end` when paging older
 history via `finance_query_candles`; its `next_page_hint` pre-fills that
