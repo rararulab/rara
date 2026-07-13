@@ -25,6 +25,7 @@
 //! | GET    | `/api/v1/data-feeds/{id}/events`             | query feed events   |
 //! | GET    | `/api/v1/data-feeds/{id}/events/{event_id}` | get single event    |
 //! | POST   | `/api/v1/data-feeds/catalog/{id}/unsubscribe` | remove current user's catalog subscriptions |
+//! | GET    | `/api/v1/data-feeds/finance/bundles` | list curated finance feed bundles |
 //! | GET    | `/api/v1/data-feeds/finance/subscriptions` | list current user's finance subscriptions |
 //! | POST   | `/api/v1/data-feeds/finance/subscriptions` | create/update current user's finance subscription |
 //! | GET    | `/api/v1/data-feeds/market-data/candle-streams` | list stored market-data candle streams |
@@ -59,7 +60,10 @@ use rara_kernel::{
 };
 use rara_trading::{
     feed::{
-        catalog::{DefaultFeedSource, default_finance_feed_sources},
+        catalog::{
+            DefaultFeedBundle, DefaultFeedSource, default_finance_feed_bundles,
+            default_finance_feed_sources,
+        },
         market_candle::MarketCandleSource,
         rss::RssSource,
     },
@@ -126,6 +130,10 @@ pub fn data_feed_routes(state: DataFeedRouterState) -> Router {
         .route(
             "/api/v1/data-feeds/finance/subscriptions",
             get(list_finance_subscriptions).post(create_finance_subscription),
+        )
+        .route(
+            "/api/v1/data-feeds/finance/bundles",
+            get(list_finance_feed_bundles),
         )
         .route(
             "/api/v1/data-feeds/finance/subscriptions/{id}",
@@ -418,7 +426,7 @@ struct FeedSummaryResponse {
 }
 
 /// Built-in feed catalog entry plus current materialized state.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct FeedCatalogEntryResponse {
     id:                     String,
     name:                   String,
@@ -439,10 +447,34 @@ struct FeedCatalogEntryResponse {
 }
 
 /// Current user's finance subscription status for a built-in feed source.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct FeedCatalogSubscriptionResponse {
     user_subscribed:       bool,
     user_subscription_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+struct FinanceFeedBundleListResponse {
+    bundles: Vec<FinanceFeedBundleResponse>,
+    count:   usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FinanceFeedBundleResponse {
+    id:                     String,
+    name:                   String,
+    description:            String,
+    tags:                   Vec<String>,
+    catalog_source_ids:     Vec<String>,
+    feed_types:             Vec<FeedType>,
+    providers:              Vec<String>,
+    source_count:           usize,
+    enabled_source_count:   usize,
+    ready_source_count:     usize,
+    requires_configuration: bool,
+    can_enable:             bool,
+    sources:                Vec<FeedCatalogEntryResponse>,
+    subscriptions:          FeedCatalogSubscriptionResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -540,6 +572,31 @@ async fn list_feed_catalog(
     let owner = UserId(principal.user_id.0);
     let subscriptions = state.finance_registry.list_for_owner(&owner).await;
     Ok(Json(catalog_response(&feeds, &subscriptions)))
+}
+
+/// `GET /api/v1/data-feeds/finance/bundles` — list curated finance feed
+/// bundles expanded to catalog source entries plus current-user subscription
+/// status.
+async fn list_finance_feed_bundles(
+    State(state): State<DataFeedRouterState>,
+    axum::Extension(principal): axum::Extension<Principal<Resolved>>,
+) -> Result<Json<FinanceFeedBundleListResponse>, ProblemDetails> {
+    let feeds = state.svc.list_feeds().await?;
+    let owner = UserId(principal.user_id.0);
+    let subscriptions = state.finance_registry.list_for_owner(&owner).await;
+    let catalog = catalog_response(&feeds, &subscriptions)
+        .into_iter()
+        .map(|entry| (entry.id.clone(), entry))
+        .collect::<HashMap<_, _>>();
+    let bundles = default_finance_feed_bundles()
+        .into_iter()
+        .map(|bundle| finance_feed_bundle_response(bundle, &catalog, &subscriptions))
+        .collect::<Vec<_>>();
+
+    Ok(Json(FinanceFeedBundleListResponse {
+        count: bundles.len(),
+        bundles,
+    }))
 }
 
 /// `GET /api/v1/data-feeds/finance/subscriptions` — list current user's
@@ -1899,6 +1956,91 @@ fn catalog_subscription_response(
     }
 }
 
+fn finance_feed_bundle_response(
+    bundle: DefaultFeedBundle,
+    catalog: &HashMap<String, FeedCatalogEntryResponse>,
+    subscriptions: &[FinanceSubscription],
+) -> FinanceFeedBundleResponse {
+    let sources = bundle
+        .catalog_source_ids
+        .iter()
+        .filter_map(|source_id| catalog.get(source_id).cloned())
+        .collect::<Vec<_>>();
+    let feed_types =
+        sources
+            .iter()
+            .map(|source| source.feed_type)
+            .fold(Vec::new(), |mut values, feed_type| {
+                if !values.contains(&feed_type) {
+                    values.push(feed_type);
+                }
+                values
+            });
+    let providers = sources
+        .iter()
+        .filter_map(|source| source.provider.clone())
+        .fold(Vec::new(), |mut values, provider| {
+            if !values.contains(&provider) {
+                values.push(provider);
+            }
+            values
+        });
+    let enabled_source_count = sources.iter().filter(|source| source.enabled).count();
+    let ready_source_count = sources
+        .iter()
+        .filter(|source| !source.requires_configuration && source.transport_template.is_some())
+        .count();
+    let requires_configuration = sources.iter().any(|source| source.requires_configuration);
+    let can_enable = sources.len() == bundle.catalog_source_ids.len()
+        && sources.iter().all(|source| {
+            source.enabled
+                || (!source.requires_configuration && source.transport_template.is_some())
+        });
+    let source_names = sources
+        .iter()
+        .map(|source| source.source_name.as_str())
+        .collect::<Vec<_>>();
+
+    FinanceFeedBundleResponse {
+        id: bundle.id,
+        name: bundle.name,
+        description: bundle.description,
+        tags: bundle.tags,
+        catalog_source_ids: bundle.catalog_source_ids,
+        feed_types,
+        providers,
+        source_count: sources.len(),
+        enabled_source_count,
+        ready_source_count,
+        requires_configuration,
+        can_enable,
+        subscriptions: bundle_subscription_response(subscriptions, &source_names),
+        sources,
+    }
+}
+
+fn bundle_subscription_response(
+    subscriptions: &[FinanceSubscription],
+    source_names: &[&str],
+) -> FeedCatalogSubscriptionResponse {
+    let source_names = source_names.iter().copied().collect::<HashSet<_>>();
+    let user_subscription_ids = subscriptions
+        .iter()
+        .filter(|subscription| {
+            subscription
+                .source_names
+                .iter()
+                .any(|name| source_names.contains(name.as_str()))
+        })
+        .map(|subscription| subscription.id)
+        .collect::<Vec<_>>();
+
+    FeedCatalogSubscriptionResponse {
+        user_subscribed: !user_subscription_ids.is_empty(),
+        user_subscription_ids,
+    }
+}
+
 fn resolve_finance_subscription_source_names(
     catalog_source_ids: &[String],
     source_names: &[String],
@@ -2756,6 +2898,95 @@ mod tests {
             sec["subscriptions"]["user_subscription_ids"],
             serde_json::json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn finance_feed_bundles_list_expands_sources_and_subscription_status() {
+        let finance_registry = test_finance_registry();
+        let subscription_id = Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id:                     subscription_id,
+                owner:                  UserId("admin".to_owned()),
+                session_key:            SessionKey::new(),
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           vec!["finance-binance-major-crypto-15m".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["binance".to_owned()],
+                symbols:                vec!["BTCUSDT".to_owned(), "ETHUSDT".to_owned()],
+                timeframes:             vec!["15m".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let app = app_with_user_and_finance_registry(user_of(Role::Admin), finance_registry).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/data-feeds/finance/bundles")
+                    .header("Authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["count"], 4);
+
+        let bundles = result["bundles"].as_array().unwrap();
+        let macro_news = bundles
+            .iter()
+            .find(|bundle| bundle["id"] == "macro-news")
+            .unwrap();
+        assert_eq!(
+            macro_news["catalog_source_ids"],
+            serde_json::json!([
+                "fed-press-releases",
+                "fed-h15-announcements",
+                "fed-h10-announcements",
+                "sec-press-releases"
+            ])
+        );
+        assert_eq!(macro_news["feed_types"], serde_json::json!(["rss"]));
+        assert_eq!(macro_news["source_count"], 4);
+        assert_eq!(macro_news["ready_source_count"], 4);
+        assert_eq!(macro_news["requires_configuration"], false);
+        assert_eq!(macro_news["can_enable"], true);
+
+        let binance = bundles
+            .iter()
+            .find(|bundle| bundle["id"] == "binance-major-crypto-15m")
+            .unwrap();
+        assert_eq!(binance["providers"], serde_json::json!(["binance"]));
+        assert_eq!(binance["feed_types"], serde_json::json!(["market_candle"]));
+        assert_eq!(binance["source_count"], 1);
+        assert_eq!(
+            binance["sources"][0]["source_name"],
+            "finance-binance-major-crypto-15m"
+        );
+        assert_eq!(binance["subscriptions"]["user_subscribed"], true);
+        assert_eq!(
+            binance["subscriptions"]["user_subscription_ids"],
+            serde_json::json!([subscription_id])
+        );
+
+        let longbridge = bundles
+            .iter()
+            .find(|bundle| bundle["id"] == "longbridge-equities-daily")
+            .unwrap();
+        assert_eq!(longbridge["requires_configuration"], true);
+        assert_eq!(longbridge["can_enable"], false);
     }
 
     #[tokio::test]

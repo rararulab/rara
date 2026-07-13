@@ -23,27 +23,32 @@ import { FinanceWatchesCard } from '../FinanceWatchesCard';
 import type {
   CandleStreamsResponse,
   FeedCatalogEntry,
+  FinanceFeedBundle,
   FinanceSubscription,
   FinanceSubscriptionsResponse,
 } from '@/api/data-feeds';
 
 const catalogMock = vi.fn();
+const financeBundlesMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const candleStreamsMock = vi.fn();
 const enableCatalogEntryMock = vi.fn();
 const createFinanceSubscriptionMock = vi.fn();
 const unsubscribeCatalogEntryMock = vi.fn();
+const deleteFinanceSubscriptionMock = vi.fn();
 const openSettingsMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
   CANDLE_STREAM_OVERVIEW_LIMIT: 500,
   dataFeedsApi: {
     catalog: (...args: unknown[]) => catalogMock(...args),
+    financeBundles: (...args: unknown[]) => financeBundlesMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
     enableCatalogEntry: (...args: unknown[]) => enableCatalogEntryMock(...args),
     createFinanceSubscription: (...args: unknown[]) => createFinanceSubscriptionMock(...args),
     unsubscribeCatalogEntry: (...args: unknown[]) => unsubscribeCatalogEntryMock(...args),
+    deleteFinanceSubscription: (...args: unknown[]) => deleteFinanceSubscriptionMock(...args),
   },
 }));
 
@@ -117,14 +122,61 @@ function financeSubscription(partial: Partial<FinanceSubscription> = {}): Financ
   };
 }
 
+function financeBundle(partial: Partial<FinanceFeedBundle> & { id: string }): FinanceFeedBundle {
+  const sources = partial.sources ?? [
+    catalogEntry({
+      id: 'fed-press-releases',
+      name: 'Federal Reserve Press Releases',
+      source_name: 'finance-fed-press-releases',
+      enabled: true,
+    }),
+    catalogEntry({
+      id: 'sec-press-releases',
+      name: 'SEC Press Releases',
+      source_name: 'finance-sec-press-releases',
+      enabled: true,
+    }),
+  ];
+  return {
+    id: partial.id,
+    name: partial.name ?? partial.id,
+    description: partial.description ?? 'bundle description',
+    tags: partial.tags ?? ['finance', 'news'],
+    catalog_source_ids: partial.catalog_source_ids ?? sources.map((source) => source.id),
+    feed_types: partial.feed_types ?? ['rss'],
+    providers: partial.providers ?? [],
+    source_count: partial.source_count ?? sources.length,
+    enabled_source_count:
+      partial.enabled_source_count ?? sources.filter((source) => source.enabled).length,
+    ready_source_count:
+      partial.ready_source_count ??
+      sources.filter(
+        (source) => !source.requires_configuration && source.transport_template != null,
+      ).length,
+    requires_configuration: partial.requires_configuration ?? false,
+    can_enable: partial.can_enable ?? true,
+    sources,
+    subscriptions: partial.subscriptions ?? {
+      user_subscribed: false,
+      user_subscription_ids: [],
+    },
+  };
+}
+
 beforeEach(() => {
   catalogMock.mockReset();
+  financeBundlesMock.mockReset();
   financeSubscriptionsMock.mockReset();
   candleStreamsMock.mockReset();
   enableCatalogEntryMock.mockReset();
   createFinanceSubscriptionMock.mockReset();
   unsubscribeCatalogEntryMock.mockReset();
+  deleteFinanceSubscriptionMock.mockReset();
   openSettingsMock.mockReset();
+  financeBundlesMock.mockResolvedValue({
+    bundles: [],
+    count: 0,
+  });
   candleStreamsMock.mockResolvedValue({
     streams: [],
     count: 0,
@@ -139,6 +191,115 @@ afterEach(() => {
 });
 
 describe('FinanceWatchesCard', () => {
+  it('creates_session_watch_from_curated_kline_bundle_with_configured_selectors', async () => {
+    const source = catalogEntry({
+      id: 'binance-major-crypto-15m',
+      name: 'Binance Major Crypto 15m',
+      feed_type: 'market_candle',
+      source_name: 'finance-binance-major-crypto-15m',
+      provider: 'binance',
+      venue: 'binance',
+      configured_symbols: ['BTCUSDT', 'ETHUSDT'],
+      configured_timeframes: ['15m'],
+      tags: ['finance', 'market-data', 'crypto', 'binance'],
+      transport_template: {
+        venue: 'binance',
+        symbols: ['BTCUSDT', 'ETHUSDT'],
+        timeframes: ['15m'],
+      },
+    });
+    catalogMock.mockResolvedValue([]);
+    financeBundlesMock.mockResolvedValue({
+      bundles: [
+        financeBundle({
+          id: 'binance-major-crypto-15m',
+          name: 'Binance Major Crypto 15m',
+          feed_types: ['market_candle'],
+          providers: ['binance'],
+          catalog_source_ids: ['binance-major-crypto-15m'],
+          sources: [source],
+        }),
+      ],
+      count: 1,
+    });
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+    createFinanceSubscriptionMock.mockResolvedValue({
+      created: true,
+      subscription: financeSubscription({
+        subscription_id: 'sub-bundle',
+        source_names: ['finance-binance-major-crypto-15m'],
+        venues: ['binance'],
+        symbols: ['BTCUSDT', 'ETHUSDT'],
+        timeframes: ['15m'],
+      }),
+    });
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('Curated bundles')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Watch bundle' }));
+
+    await waitFor(() => {
+      expect(createFinanceSubscriptionMock).toHaveBeenCalledWith({
+        session_key: 'session-1',
+        catalog_source_ids: ['binance-major-crypto-15m'],
+        delivery: 'silent',
+        venues: ['binance'],
+        symbols: ['BTCUSDT', 'ETHUSDT'],
+        timeframes: ['15m'],
+      });
+    });
+  });
+
+  it('enables_all_ready_sources_in_a_curated_bundle_before_watch', async () => {
+    const fed = catalogEntry({
+      id: 'fed-press-releases',
+      name: 'Federal Reserve Press Releases',
+      source_name: 'finance-fed-press-releases',
+      enabled: false,
+      transport_template: { url: 'https://www.federalreserve.gov/feeds/press_all.xml' },
+    });
+    const sec = catalogEntry({
+      id: 'sec-press-releases',
+      name: 'SEC Press Releases',
+      source_name: 'finance-sec-press-releases',
+      enabled: false,
+      transport_template: { url: 'https://www.sec.gov/news/pressreleases.rss' },
+    });
+    catalogMock.mockResolvedValue([]);
+    financeBundlesMock.mockResolvedValue({
+      bundles: [
+        financeBundle({
+          id: 'macro-news',
+          name: 'Macro News',
+          sources: [fed, sec],
+          enabled_source_count: 0,
+          ready_source_count: 2,
+          catalog_source_ids: ['fed-press-releases', 'sec-press-releases'],
+        }),
+      ],
+      count: 1,
+    });
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+    enableCatalogEntryMock.mockResolvedValue({});
+
+    renderCard('session-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable bundle' }));
+
+    await waitFor(() => {
+      expect(enableCatalogEntryMock).toHaveBeenCalledWith('fed-press-releases');
+      expect(enableCatalogEntryMock).toHaveBeenCalledWith('sec-press-releases');
+    });
+    expect(createFinanceSubscriptionMock).not.toHaveBeenCalled();
+  });
+
   it('shows_provider_metadata_for_catalog_watch_sources', async () => {
     catalogMock.mockResolvedValue([
       catalogEntry({

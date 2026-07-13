@@ -106,6 +106,31 @@ interface FinanceSubscriptionsResponse {
   count: number;
 }
 
+interface FinanceFeedBundle {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  catalog_source_ids: string[];
+  feed_types: DataFeedConfig['feed_type'][];
+  providers: string[];
+  source_count: number;
+  enabled_source_count: number;
+  ready_source_count: number;
+  requires_configuration: boolean;
+  can_enable: boolean;
+  sources: FeedCatalogEntry[];
+  subscriptions: {
+    user_subscribed: boolean;
+    user_subscription_ids: string[];
+  };
+}
+
+interface FinanceFeedBundlesResponse {
+  bundles: FinanceFeedBundle[];
+  count: number;
+}
+
 interface ChatSession {
   key: string;
   title: string | null;
@@ -289,6 +314,7 @@ async function setupRoutes(
     events: FeedEvent[];
     summaries?: FeedSummary[];
     catalog?: FeedCatalogEntry[];
+    financeBundles?: FinanceFeedBundlesResponse;
     financeSubscriptions?: FinanceSubscriptionsResponse;
     sessions?: ChatSession[];
     lastCatalogEnableBody?: unknown;
@@ -364,6 +390,10 @@ async function setupRoutes(
   // Default feed source catalog.
   await page.route('**/api/v1/data-feeds/catalog', async (route) => {
     await route.fulfill({ json: state.catalog ?? [] });
+  });
+
+  await page.route('**/api/v1/data-feeds/finance/bundles', async (route) => {
+    await route.fulfill({ json: state.financeBundles ?? { bundles: [], count: 0 } });
   });
 
   await page.route('**/api/v1/data-feeds/summary', async (route) => {

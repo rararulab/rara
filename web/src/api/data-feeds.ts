@@ -172,6 +172,28 @@ export interface FeedCatalogSubscriptions {
   user_subscription_ids: string[];
 }
 
+export interface FinanceFeedBundle {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  catalog_source_ids: string[];
+  feed_types: FeedType[];
+  providers: string[];
+  source_count: number;
+  enabled_source_count: number;
+  ready_source_count: number;
+  requires_configuration: boolean;
+  can_enable: boolean;
+  sources: FeedCatalogEntry[];
+  subscriptions: FeedCatalogSubscriptions;
+}
+
+export interface FinanceFeedBundlesResponse {
+  bundles: FinanceFeedBundle[];
+  count: number;
+}
+
 export interface EnableCatalogEntryRequest {
   transport?: Record<string, unknown>;
   auth?: AuthConfig | null;
@@ -399,6 +421,8 @@ export const dataFeedsApi = {
 
   financeSubscriptions: () =>
     api.get<FinanceSubscriptionsResponse>('/api/v1/data-feeds/finance/subscriptions'),
+
+  financeBundles: () => api.get<FinanceFeedBundlesResponse>('/api/v1/data-feeds/finance/bundles'),
 
   createFinanceSubscription: (body: CreateFinanceSubscriptionRequest) =>
     api.post<CreateFinanceSubscriptionResponse>('/api/v1/data-feeds/finance/subscriptions', body),
