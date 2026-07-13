@@ -130,6 +130,10 @@ function lagLabel(summary: FeedSummary | undefined): string {
   return `${Math.floor(hours / 24)}d lag`;
 }
 
+function lastEventTypeLabel(summary: FeedSummary | undefined): string | null {
+  return summary?.last_event_type?.trim() || null;
+}
+
 /** Format type badge label. */
 function typeLabel(t: DataFeedConfig['feed_type']): string {
   switch (t) {
@@ -2405,7 +2409,14 @@ function FeedListView({
                         : undefined
                     }
                   >
-                    {lagLabel(summary)}
+                    <div className="flex flex-col items-end gap-1">
+                      {lastEventTypeLabel(summary) && (
+                        <Badge variant="outline" className="max-w-40 font-mono text-[10px]">
+                          {lastEventTypeLabel(summary)}
+                        </Badge>
+                      )}
+                      <span>{lagLabel(summary)}</span>
+                    </div>
                   </TableCell>
                   <TableCell
                     className="text-right text-xs text-muted-foreground"
