@@ -379,6 +379,11 @@ history via another `finance_get_recent_candles` call; its `next_page_hint`
 pre-fills that exclusive `end`. The
 stream-list, recent-candle, and candle-range limits are capped at 9,999 so the
 tools can probe one extra row and report pagination state accurately.
+When a source-scoped `finance_list_candle_streams` call returns no stored
+streams, the result includes `diagnostic_hint` for
+`finance_diagnose_candle_subscriptions` with the same `source_name`, so rara can
+move from "no TSDB stream exists" to subscription, runtime, raw-event, and
+latest-candle diagnostics without guessing the next tool.
 
 ## Acceptance checklist
 
