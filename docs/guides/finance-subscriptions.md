@@ -170,6 +170,13 @@ For a single `(source_name, venue, symbol, timeframe)` subscription, the result
 also includes direct hints for latest, recent, freshness, gap, and bounded range
 candle tools.
 
+The lower-level `finance_subscribe` tool remains available for callers that
+already know the exact selectors. Its result echoes the persisted normalized
+subscription selectors (`event_kinds`, `source_names`, `category_tags`,
+`watch_terms`, `venues`, `symbols`, and `timeframes`) plus the delivery policy,
+so rara can explain the created subscription without an immediate follow-up list
+call.
+
 `finance_list_subscriptions` is the preferred status view after a subscription
 exists. Each subscription includes source/runtime details, an
 `unsubscribe_hint` for `finance_unsubscribe`, and an `events_hint` for
