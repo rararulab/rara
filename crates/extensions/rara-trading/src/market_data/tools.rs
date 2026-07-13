@@ -44,8 +44,9 @@ pub struct FinanceGetLatestCandleParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceGetLatestCandleResult {
-    pub selector: FinanceCandleSelector,
-    pub candle:   Option<FinanceCandle>,
+    pub selector:        FinanceCandleSelector,
+    pub candle:          Option<FinanceCandle>,
+    pub diagnostic_hint: Option<FinanceCandleStreamDiagnosticHint>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -374,15 +375,18 @@ impl ToolExecute for FinanceGetLatestCandleTool {
             &timeframe,
         );
         let query = CandleLatestQuery {
-            source_name,
+            source_name: source_name.clone(),
             venue,
             symbol,
             timeframe,
         };
         let candle = self.repository.latest_closed_candle(query).await?;
+        let diagnostic_hint =
+            source_scoped_empty_candles_diagnostic_hint(source_name.as_deref(), candle.is_none());
         Ok(FinanceGetLatestCandleResult {
             selector,
             candle: candle.map(FinanceCandle::from),
+            diagnostic_hint,
         })
     }
 }
@@ -900,6 +904,13 @@ fn stream_list_next_page_hint(
 }
 
 fn stream_list_empty_diagnostic_hint(
+    source_name: Option<&str>,
+    is_empty: bool,
+) -> Option<FinanceCandleStreamDiagnosticHint> {
+    source_scoped_empty_candles_diagnostic_hint(source_name, is_empty)
+}
+
+fn source_scoped_empty_candles_diagnostic_hint(
     source_name: Option<&str>,
     is_empty: bool,
 ) -> Option<FinanceCandleStreamDiagnosticHint> {
@@ -1636,6 +1647,7 @@ mod tests {
             .unwrap();
 
         let candle = result.candle.expect("latest candle should exist");
+        assert!(result.diagnostic_hint.is_none());
         assert_eq!(candle.open_time, "2026-07-10T08:01:00Z");
         assert_eq!(candle.close, "61520.00");
         assert_eq!(candle.volume, "124.551");
@@ -1664,6 +1676,61 @@ mod tests {
         assert_eq!(candle.symbol, "BTCUSDT");
         assert_eq!(candle.timeframe, "1m");
         assert_eq!(candle.open_time, "2026-07-10T08:01:00Z");
+    }
+
+    #[tokio::test]
+    async fn latest_candle_tool_returns_diagnostic_hint_when_source_scoped_stream_is_empty() {
+        let repository = repository().await;
+        let tool = FinanceGetLatestCandleTool::new(repository);
+        let result = tool
+            .run(
+                FinanceGetLatestCandleParams {
+                    source_name: Some(" binance-spot ".to_owned()),
+                    venue:       " Binance ".to_owned(),
+                    symbol:      " dogeusdt ".to_owned(),
+                    timeframe:   " 1M ".to_owned(),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.candle.is_none());
+        assert_eq!(
+            result.selector,
+            FinanceCandleSelector {
+                source_name: Some("binance-spot".to_owned()),
+                venue:       "binance".to_owned(),
+                symbol:      "DOGEUSDT".to_owned(),
+                timeframe:   "1m".to_owned(),
+            }
+        );
+        let diagnostic_hint = result
+            .diagnostic_hint
+            .as_ref()
+            .expect("empty source-scoped latest query should point back to candle diagnostics");
+        assert_eq!(
+            diagnostic_hint.tool,
+            "finance_diagnose_candle_subscriptions"
+        );
+        assert_eq!(
+            diagnostic_hint.default_params,
+            serde_json::json!({
+                "source_names": ["binance-spot"],
+            })
+        );
+        assert!(diagnostic_hint.required_params.is_empty());
+        assert_eq!(
+            diagnostic_hint.optional_params,
+            [
+                "subscription_id",
+                "catalog_source_ids",
+                "source_names",
+                "feed_ids",
+                "as_of",
+                "stale_after_secs"
+            ]
+        );
     }
 
     #[tokio::test]
