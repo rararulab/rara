@@ -253,7 +253,11 @@ impl DataFeedSvc {
         }
         let rows: Vec<EventRow> = rows_q
             .select(EventRow::as_select())
-            .order(data_feed_events::received_at.desc())
+            .order((
+                data_feed_events::received_at.desc(),
+                data_feed_events::created_at.desc(),
+                data_feed_events::id.desc(),
+            ))
             .limit(limit)
             .offset(offset)
             .load(&mut *conn)

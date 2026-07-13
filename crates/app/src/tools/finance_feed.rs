@@ -3150,6 +3150,7 @@ fn replace_registry_config_preserving_runtime(
 mod tests {
     use std::sync::Arc;
 
+    use diesel::{ExpressionMethods, QueryDsl};
     use diesel_async::RunQueryDsl;
     use rara_kernel::{
         data_feed::{DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedStore, FeedType},
@@ -3159,6 +3160,7 @@ mod tests {
         session::SessionKey,
         tool::{AgentTool, ToolContext, ToolExecute},
     };
+    use rara_model::schema::data_feed_events;
     use rara_trading::finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     };
@@ -3500,6 +3502,21 @@ mod tests {
                 .await
                 .expect("bootstrap data feed schema");
         }
+    }
+
+    async fn set_feed_event_created_at(
+        pools: &yunara_store::diesel_pool::DieselSqlitePools,
+        event_id: &FeedEventId,
+        created_at: &str,
+    ) {
+        let mut conn = pools.writer.get().await.expect("pool conn");
+        diesel::update(
+            data_feed_events::table.filter(data_feed_events::id.eq(event_id.to_string())),
+        )
+        .set(data_feed_events::created_at.eq(created_at))
+        .execute(&mut *conn)
+        .await
+        .expect("set feed event created_at");
     }
 
     fn assert_fed_source_action_hints(fed: &super::FinanceFeedSourceEntry) {
@@ -4380,6 +4397,100 @@ mod tests {
         assert_eq!(page.events.len(), 1);
         assert_eq!(page.events[0].event_type, "market_candle_closed");
         assert_eq!(page.events[0].payload["title"], "BTCUSDT candle");
+    }
+
+    #[tokio::test]
+    async fn list_feed_events_paginates_same_timestamp_events_stably() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools.clone());
+        let store = crate::feed_store::SqliteFeedStore::new(pools.clone());
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let mut tied = Vec::new();
+        for (id_seed, title, created_at) in [
+            ("stable-page-old-a", "Old tie A", "2026-07-12T08:00:00Z"),
+            ("stable-page-old-b", "Old tie B", "2026-07-12T08:00:00Z"),
+            (
+                "stable-page-newer-created",
+                "Newer created",
+                "2026-07-12T08:00:01Z",
+            ),
+        ] {
+            let id = FeedEventId::deterministic(id_seed);
+            let event = FeedEvent::builder()
+                .id(id)
+                .source_name("finance-fed-press-releases".to_owned())
+                .event_type("rss_article".to_owned())
+                .tags(vec!["finance".to_owned(), "fed".to_owned()])
+                .payload(serde_json::json!({ "title": title }))
+                .received_at("2026-07-12T09:00:00Z".parse().unwrap())
+                .build();
+            store.append(&event).await.unwrap();
+            set_feed_event_created_at(&pools, &id, created_at).await;
+            if created_at == "2026-07-12T08:00:00Z" {
+                tied.push((id.to_string(), title));
+            }
+        }
+        tied.sort_by(|left, right| right.0.cmp(&left.0));
+
+        let tool = FinanceListFeedEventsTool::new(svc);
+        let first_page = tool
+            .run(
+                FinanceListFeedEventsParams {
+                    catalog_source_ids: vec!["fed-press-releases".to_owned()],
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    event_kinds:        vec![FinanceEventKind::RssArticle],
+                    since:              None,
+                    limit:              Some(2),
+                    offset:             Some(0),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let first_page = &first_page.sources[0];
+
+        assert_eq!(first_page.total, 3);
+        assert!(first_page.has_more);
+        assert_eq!(first_page.events.len(), 2);
+        assert_eq!(first_page.events[0].payload["title"], "Newer created");
+        assert_eq!(first_page.events[1].payload["title"], tied[0].1);
+
+        let second_page = tool
+            .run(
+                FinanceListFeedEventsParams {
+                    catalog_source_ids: vec!["fed-press-releases".to_owned()],
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    event_kinds:        vec![FinanceEventKind::RssArticle],
+                    since:              None,
+                    limit:              Some(2),
+                    offset:             Some(2),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        let second_page = &second_page.sources[0];
+
+        assert_eq!(second_page.total, 3);
+        assert!(!second_page.has_more);
+        assert_eq!(second_page.events.len(), 1);
+        assert_eq!(second_page.events[0].payload["title"], tied[1].1);
     }
 
     #[tokio::test]
