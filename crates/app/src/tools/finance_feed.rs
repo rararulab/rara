@@ -278,6 +278,7 @@ pub(super) struct FinanceSubscriptionEntry {
     pub unsubscribe_hint:           Option<FinanceSubscriptionUnsubscribeHint>,
     pub events_hint:                Option<FinanceSubscriptionEventsHint>,
     pub market_data_hint:           Option<FinanceSubscriptionMarketDataHint>,
+    pub latest_candle_hint:         Option<FinanceSubscriptionLatestCandleHint>,
     pub source_names:               Vec<String>,
     pub matches_all_sources:        bool,
     pub sources:                    Vec<FinanceSubscriptionSource>,
@@ -309,6 +310,14 @@ pub(super) struct FinanceSubscriptionEventsHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscriptionMarketDataHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionLatestCandleHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2512,6 +2521,7 @@ fn subscription_entry(
     let unsubscribe_hint = Some(unsubscribe_hint_for_subscription(subscription.id));
     let events_hint = events_hint_for_subscription(&subscription);
     let market_data_hint = market_data_hint_for_subscription(&subscription);
+    let latest_candle_hint = latest_candle_hint_for_subscription(&subscription);
 
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
@@ -2523,6 +2533,7 @@ fn subscription_entry(
         unsubscribe_hint,
         events_hint,
         market_data_hint,
+        latest_candle_hint,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2610,6 +2621,31 @@ fn market_data_hint_for_subscription(
             .into_iter()
             .map(str::to_owned)
             .collect(),
+    })
+}
+
+fn latest_candle_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceSubscriptionLatestCandleHint> {
+    if !subscription_is_market_candle(subscription) {
+        return None;
+    }
+
+    let source_name = single_selector_value(&subscription.source_names)?;
+    let venue = single_selector_value(&subscription.venues)?;
+    let symbol = single_selector_value(&subscription.symbols)?;
+    let timeframe = single_selector_value(&subscription.timeframes)?;
+
+    Some(FinanceSubscriptionLatestCandleHint {
+        tool:            "finance_get_latest_candle".to_owned(),
+        default_params:  serde_json::json!({
+            "source_name": source_name,
+            "venue": venue,
+            "symbol": symbol,
+            "timeframe": timeframe,
+        }),
+        required_params: Vec::new(),
+        optional_params: Vec::new(),
     })
 }
 
@@ -4608,6 +4644,10 @@ mod tests {
             market_data_hint.optional_params,
             ["source_name", "venue", "symbol", "timeframe", "limit"]
         );
+        assert!(
+            listed.subscriptions[0].latest_candle_hint.is_none(),
+            "multi-symbol/timeframe subscriptions should not expose a direct latest-candle hint"
+        );
         assert_eq!(
             listed.subscriptions[0].sources[0].provider.as_deref(),
             Some("binance")
@@ -4618,6 +4658,11 @@ mod tests {
     async fn subscribe_instruments_defaults_to_binance_market_feed() {
         let (_list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
             tool().await;
+        let list = FinanceListSubscriptionsTool::new(
+            svc.clone(),
+            registry.clone(),
+            finance_registry.clone(),
+        );
         let ctx = context();
 
         let result = tool
@@ -4659,6 +4704,33 @@ mod tests {
             .await;
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].source_names, ["finance-binance-market-candles"]);
+
+        let listed = list
+            .run(
+                FinanceListSubscriptionsParams {
+                    current_session_only: Some(true),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.count, 1);
+        let latest_candle_hint = listed.subscriptions[0]
+            .latest_candle_hint
+            .as_ref()
+            .expect("single-stream market subscription should include latest-candle hint");
+        assert_eq!(latest_candle_hint.tool, "finance_get_latest_candle");
+        assert_eq!(
+            latest_candle_hint.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+            })
+        );
+        assert!(latest_candle_hint.required_params.is_empty());
+        assert!(latest_candle_hint.optional_params.is_empty());
     }
 
     #[tokio::test]
