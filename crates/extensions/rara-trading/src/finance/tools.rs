@@ -116,7 +116,22 @@ pub struct FinanceListSubscriptionsParams {}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceListSubscriptionsResult {
-    pub subscriptions: Vec<FinanceSubscription>,
+    pub subscriptions: Vec<FinanceSubscriptionView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceSubscriptionView {
+    pub id:                     Uuid,
+    pub event_kinds:            Vec<FinanceEventKind>,
+    pub source_names:           Vec<String>,
+    pub category_tags:          Vec<String>,
+    pub watch_terms:            Vec<String>,
+    pub venues:                 Vec<String>,
+    pub symbols:                Vec<String>,
+    pub timeframes:             Vec<String>,
+    pub delivery:               FinanceDelivery,
+    pub cooldown_secs:          u64,
+    pub max_immediate_per_hour: u16,
 }
 
 #[derive(ToolDef)]
@@ -299,8 +314,32 @@ impl ToolExecute for FinanceListSubscriptionsTool {
     ) -> anyhow::Result<FinanceListSubscriptionsResult> {
         let owner = UserId(context.user_id.clone());
         Ok(FinanceListSubscriptionsResult {
-            subscriptions: self.registry.list_for_owner(&owner).await,
+            subscriptions: self
+                .registry
+                .list_for_owner(&owner)
+                .await
+                .into_iter()
+                .map(FinanceSubscriptionView::from)
+                .collect(),
         })
+    }
+}
+
+impl From<FinanceSubscription> for FinanceSubscriptionView {
+    fn from(subscription: FinanceSubscription) -> Self {
+        Self {
+            id:                     subscription.id,
+            event_kinds:            subscription.event_kinds,
+            source_names:           subscription.source_names,
+            category_tags:          subscription.category_tags,
+            watch_terms:            subscription.watch_terms,
+            venues:                 subscription.venues,
+            symbols:                subscription.symbols,
+            timeframes:             subscription.timeframes,
+            delivery:               subscription.delivery,
+            cooldown_secs:          subscription.cooldown_secs,
+            max_immediate_per_hour: subscription.max_immediate_per_hour,
+        }
     }
 }
 
@@ -486,9 +525,9 @@ mod tests {
     };
 
     use super::{
-        FinanceListFeedSourcesParams, FinanceListFeedSourcesTool, FinanceListSubscriptionsTool,
-        FinanceSubscribeParams, FinanceSubscribeTool, FinanceUnsubscribeParams,
-        FinanceUnsubscribeTool,
+        FinanceListFeedSourcesParams, FinanceListFeedSourcesTool, FinanceListSubscriptionsParams,
+        FinanceListSubscriptionsTool, FinanceSubscribeParams, FinanceSubscribeTool,
+        FinanceUnsubscribeParams, FinanceUnsubscribeTool,
     };
     use crate::finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscriptionRegistry,
@@ -616,6 +655,69 @@ mod tests {
         assert!(!schema_json.contains("owner"));
         assert!(!schema_json.contains("session"));
         assert!(tool.is_read_only(&serde_json::json!({})));
+    }
+
+    #[tokio::test]
+    async fn list_subscriptions_omits_owner_and_session_from_output() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let subscribe = FinanceSubscribeTool::new(registry.clone());
+        let list = FinanceListSubscriptionsTool::new(registry);
+        let ctx = context();
+
+        let subscribed = subscribe
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds:            Some(vec![FinanceEventKind::MarketCandleClosed]),
+                    catalog_source_ids:     Vec::new(),
+                    source_names:           vec![" finance-binance-market-candles ".to_owned()],
+                    category_tags:          Vec::new(),
+                    watch_terms:            Vec::new(),
+                    venues:                 vec![" Binance ".to_owned()],
+                    symbols:                vec![" btcusdt ".to_owned()],
+                    timeframes:             vec![" 15M ".to_owned()],
+                    delivery:               Some(FinanceDelivery::Immediate),
+                    cooldown_secs:          Some(60),
+                    max_immediate_per_hour: Some(2),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let result = list
+            .run(FinanceListSubscriptionsParams {}, &ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(result.subscriptions.len(), 1);
+        let subscription = &result.subscriptions[0];
+        assert_eq!(subscription.id, subscribed.subscription_id);
+        assert_eq!(
+            subscription.event_kinds,
+            [FinanceEventKind::MarketCandleClosed]
+        );
+        assert_eq!(
+            subscription.source_names,
+            ["finance-binance-market-candles"]
+        );
+        assert_eq!(subscription.venues, ["binance"]);
+        assert_eq!(subscription.symbols, ["BTCUSDT"]);
+        assert_eq!(subscription.timeframes, ["15m"]);
+        assert_eq!(subscription.delivery, FinanceDelivery::Immediate);
+        assert_eq!(subscription.cooldown_secs, 60);
+        assert_eq!(subscription.max_immediate_per_hour, 2);
+
+        let json = serde_json::to_value(&result).expect("list result should serialize");
+        assert!(json.get("subscriptions").is_some());
+        assert!(json.get("owner").is_none());
+        assert!(json.get("session_key").is_none());
+        let serialized = json.to_string();
+        assert!(!serialized.contains("owner"));
+        assert!(!serialized.contains("session_key"));
+        assert!(!serialized.contains("alice"));
     }
 
     #[tokio::test]
