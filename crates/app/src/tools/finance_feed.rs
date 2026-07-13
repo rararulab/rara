@@ -254,6 +254,23 @@ pub(super) struct FinanceListFeedEventsParams {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceListFeedEventsResult {
     pub sources: Vec<FinanceFeedEventPage>,
+    pub query:   FinanceListFeedEventsQuery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FinanceListFeedEventsQuery {
+    pub sources:      Vec<FinanceFeedEventSourceQuery>,
+    pub event_kinds:  Vec<String>,
+    pub since:        Option<String>,
+    pub query_limit:  i64,
+    pub query_offset: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FinanceFeedEventSourceQuery {
+    pub source_name:       String,
+    pub catalog_source_id: Option<String>,
+    pub feed_id:           Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -971,6 +988,20 @@ impl ToolExecute for FinanceListFeedEventsTool {
             .map(finance_event_kind_type)
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
+        let query = FinanceListFeedEventsQuery {
+            sources:      source_refs
+                .iter()
+                .map(|source_ref| FinanceFeedEventSourceQuery {
+                    source_name:       source_ref.source_name.clone(),
+                    catalog_source_id: source_ref.catalog_source_id.clone(),
+                    feed_id:           source_ref.feed_id.clone(),
+                })
+                .collect(),
+            event_kinds:  event_types.clone(),
+            since:        since_param.clone(),
+            query_limit:  limit,
+            query_offset: offset,
+        };
 
         let mut sources = Vec::with_capacity(source_refs.len());
         for source_ref in source_refs {
@@ -1003,7 +1034,7 @@ impl ToolExecute for FinanceListFeedEventsTool {
             });
         }
 
-        Ok(FinanceListFeedEventsResult { sources })
+        Ok(FinanceListFeedEventsResult { sources, query })
     }
 }
 
@@ -4705,6 +4736,63 @@ mod tests {
         );
         assert!(next_page_hint.required_params.is_empty());
         assert_eq!(next_page_hint.optional_params, ["since", "limit", "offset"]);
+    }
+
+    #[tokio::test]
+    async fn list_feed_events_echoes_normalized_query() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "fed-press-releases".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let tool = FinanceListFeedEventsTool::new(svc);
+        let result = tool
+            .run(
+                FinanceListFeedEventsParams {
+                    catalog_source_ids: vec![" fed-press-releases ".to_owned()],
+                    source_names:       vec![" finance-fed-press-releases ".to_owned()],
+                    feed_ids:           Vec::new(),
+                    event_kinds:        vec![
+                        FinanceEventKind::RssArticle,
+                        FinanceEventKind::RssArticle,
+                        FinanceEventKind::MarketCandleClosed,
+                    ],
+                    since:              None,
+                    limit:              Some(999),
+                    offset:             Some(-10),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.sources.len(), 1);
+        assert_eq!(
+            result.query,
+            super::FinanceListFeedEventsQuery {
+                sources:      vec![super::FinanceFeedEventSourceQuery {
+                    source_name:       "finance-fed-press-releases".to_owned(),
+                    catalog_source_id: Some("fed-press-releases".to_owned()),
+                    feed_id:           result.sources[0].feed_id.clone(),
+                }],
+                event_kinds:  vec!["rss_article".to_owned(), "market_candle_closed".to_owned(),],
+                since:        None,
+                query_limit:  super::MAX_FEED_EVENT_LIMIT,
+                query_offset: 0,
+            }
+        );
     }
 
     #[tokio::test]
