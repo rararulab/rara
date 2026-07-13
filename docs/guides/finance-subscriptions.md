@@ -225,7 +225,11 @@ diagnosis. Candle diagnostics echo a normalized `query` with the requested
 `subscription_id`, `catalog_source_ids`, `source_names`, `feed_ids`,
 `stale_after_secs`, and the resolved unique `resolved_source_names`, so rara can
 state whether it diagnosed all current-user candle subscriptions or only the
-sources selected by the empty event query. The event result also echoes a
+sources selected by the empty event query. Fully specified single-stream candle
+diagnostics also include `latest_candle_hint`, `recent_candles_hint`,
+`freshness_hint`, `gaps_hint`, and `query_candles_hint`, so rara can move from
+subscription health directly to the exact TSDB candle query without
+reconstructing selectors. The event result also echoes a
 normalized `query` with resolved unique sources, event-kind strings, `since`,
 `query_limit`, and `query_offset`, so rara can explain empty pages or paginated
 event lookups without reconstructing the request. Top-level `source_count`,
