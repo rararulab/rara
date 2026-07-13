@@ -238,6 +238,7 @@ pub(super) struct FinanceSubscriptionEntry {
     pub event_kinds:                Vec<FinanceEventKind>,
     pub diagnostic_tool:            Option<String>,
     pub diagnostic_subscription_id: Option<Uuid>,
+    pub unsubscribe_hint:           Option<FinanceSubscriptionUnsubscribeHint>,
     pub source_names:               Vec<String>,
     pub matches_all_sources:        bool,
     pub sources:                    Vec<FinanceSubscriptionSource>,
@@ -249,6 +250,14 @@ pub(super) struct FinanceSubscriptionEntry {
     pub delivery:                   FinanceDelivery,
     pub cooldown_secs:              u64,
     pub max_immediate_per_hour:     u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionUnsubscribeHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2327,6 +2336,7 @@ fn subscription_entry(
     let diagnostic_tool = subscription_is_market_candle(&subscription)
         .then(|| "finance_diagnose_candle_subscriptions".to_owned());
     let diagnostic_subscription_id = diagnostic_tool.as_ref().map(|_| subscription.id);
+    let unsubscribe_hint = Some(unsubscribe_hint_for_subscription(subscription.id));
 
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
@@ -2335,6 +2345,7 @@ fn subscription_entry(
         event_kinds: subscription.event_kinds,
         diagnostic_tool,
         diagnostic_subscription_id,
+        unsubscribe_hint,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2346,6 +2357,17 @@ fn subscription_entry(
         delivery: subscription.delivery,
         cooldown_secs: subscription.cooldown_secs,
         max_immediate_per_hour: subscription.max_immediate_per_hour,
+    }
+}
+
+fn unsubscribe_hint_for_subscription(subscription_id: Uuid) -> FinanceSubscriptionUnsubscribeHint {
+    FinanceSubscriptionUnsubscribeHint {
+        tool:            "finance_unsubscribe".to_owned(),
+        default_params:  serde_json::json!({
+            "subscription_ids": [subscription_id],
+        }),
+        required_params: Vec::new(),
+        optional_params: vec!["dry_run".to_owned()],
     }
 }
 
@@ -2884,6 +2906,19 @@ mod tests {
         assert_eq!(subscription.event_kinds, [FinanceEventKind::RssArticle]);
         assert_eq!(subscription.diagnostic_tool, None);
         assert_eq!(subscription.diagnostic_subscription_id, None);
+        let unsubscribe_hint = subscription
+            .unsubscribe_hint
+            .as_ref()
+            .expect("subscription should include unsubscribe hint");
+        assert_eq!(unsubscribe_hint.tool, "finance_unsubscribe");
+        assert_eq!(
+            unsubscribe_hint.default_params,
+            serde_json::json!({
+                "subscription_ids": [subscribed.subscription_id],
+            })
+        );
+        assert!(unsubscribe_hint.required_params.is_empty());
+        assert_eq!(unsubscribe_hint.optional_params, ["dry_run"]);
         assert_eq!(subscription.source_names, ["finance-fed-press-releases"]);
         assert!(!subscription.matches_all_sources);
         assert_eq!(subscription.category_tags, ["category:monetary-policy"]);
@@ -4124,6 +4159,17 @@ mod tests {
         assert_eq!(
             listed.subscriptions[0].diagnostic_subscription_id,
             Some(result.subscription_id)
+        );
+        let unsubscribe_hint = listed.subscriptions[0]
+            .unsubscribe_hint
+            .as_ref()
+            .expect("market subscription should include unsubscribe hint");
+        assert_eq!(unsubscribe_hint.tool, "finance_unsubscribe");
+        assert_eq!(
+            unsubscribe_hint.default_params,
+            serde_json::json!({
+                "subscription_ids": [result.subscription_id],
+            })
         );
         assert_eq!(
             listed.subscriptions[0].sources[0].provider.as_deref(),
