@@ -72,6 +72,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub subscription_hint:      Option<FinanceFeedSourceSubscriptionHint>,
     pub enable_hint:            Option<FinanceFeedSourceEnableHint>,
     pub events_hint:            Option<FinanceFeedSourceEventsHint>,
+    pub market_data_hint:       Option<FinanceFeedSourceMarketDataHint>,
     pub restart_hint:           Option<FinanceFeedSourceRuntimeActionHint>,
     pub disable_hint:           Option<FinanceFeedSourceRuntimeActionHint>,
     pub provider:               Option<String>,
@@ -106,6 +107,14 @@ pub(super) struct FinanceFeedSourceEnableHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedSourceEventsHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceMarketDataHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2334,6 +2343,46 @@ fn events_hint_for_source(
     })
 }
 
+fn market_data_hint_for_source(
+    source_name: &str,
+    feed_type: FeedType,
+    transport: Option<&serde_json::Value>,
+) -> Option<FinanceFeedSourceMarketDataHint> {
+    if feed_type != FeedType::MarketCandle {
+        return None;
+    }
+
+    let mut default_params = serde_json::Map::from_iter([
+        (
+            "source_name".to_owned(),
+            serde_json::Value::String(source_name.to_owned()),
+        ),
+        (
+            "limit".to_owned(),
+            serde_json::Value::Number(DEFAULT_FEED_EVENT_LIMIT.into()),
+        ),
+    ]);
+    if let Some(venue) = transport
+        .and_then(|value| value.get("venue"))
+        .and_then(serde_json::Value::as_str)
+    {
+        default_params.insert(
+            "venue".to_owned(),
+            serde_json::Value::String(venue.to_owned()),
+        );
+    }
+
+    Some(FinanceFeedSourceMarketDataHint {
+        tool:            "finance_list_candle_streams".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: ["symbol", "timeframe", "limit"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
 fn runtime_action_hint_for_source(
     tool: &str,
     catalog_source_id: &str,
@@ -2372,6 +2421,7 @@ fn feed_source_entry(
     let is_persisted = persisted.is_some();
     let enable_hint = enable_hint_for_source(&source.id, can_enable, is_persisted);
     let events_hint = events_hint_for_source(&source.id, source.feed_type);
+    let market_data_hint = market_data_hint_for_source(&source_name, source.feed_type, transport);
     let restart_hint =
         runtime_action_hint_for_source("finance_restart_feed_source", &source.id, is_persisted);
     let disable_hint =
@@ -2391,6 +2441,7 @@ fn feed_source_entry(
         subscription_hint,
         enable_hint,
         events_hint,
+        market_data_hint,
         restart_hint,
         disable_hint,
         provider,
@@ -2895,6 +2946,27 @@ mod tests {
         );
     }
 
+    fn assert_binance_source_market_data_hint(binance: &super::FinanceFeedSourceEntry) {
+        let market_data_hint = binance
+            .market_data_hint
+            .as_ref()
+            .expect("binance should include market-data hint");
+        assert_eq!(market_data_hint.tool, "finance_list_candle_streams");
+        assert_eq!(
+            market_data_hint.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "limit": 20
+            })
+        );
+        assert!(market_data_hint.required_params.is_empty());
+        assert_eq!(
+            market_data_hint.optional_params,
+            ["symbol", "timeframe", "limit"]
+        );
+    }
+
     #[tokio::test]
     async fn list_feed_sources_reports_catalog_and_absent_runtime_state() {
         let (tool, _enable, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
@@ -2930,6 +3002,7 @@ mod tests {
         assert!(fed_hint.optional_params.contains(&"watch_terms".to_owned()));
         assert_eq!(fed_hint.diagnostic_tool, None);
         assert_fed_source_action_hints(fed);
+        assert!(fed.market_data_hint.is_none());
         assert!(fed.restart_hint.is_none());
         assert!(fed.disable_hint.is_none());
         assert!(fed.can_enable);
@@ -2977,6 +3050,7 @@ mod tests {
             Some("finance_diagnose_candle_subscriptions")
         );
         assert_binance_source_events_hint(binance);
+        assert_binance_source_market_data_hint(binance);
         assert_eq!(binance.venue.as_deref(), Some("binance"));
         assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
         assert_eq!(binance.configured_timeframes, ["1m"]);
