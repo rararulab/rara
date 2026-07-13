@@ -597,10 +597,11 @@ pub(super) struct FinanceListFeedEventsTool {
 #[tool(
     name = "finance_list_subscriptions",
     description = "List finance information subscriptions owned by the current user with \
-                   conversation/session ownership, source catalog ids, persisted feed config, and \
-                   runtime status. Use this before finance_unsubscribe when the user asks what \
-                   they are watching or wants to cancel a finance subscription. This is read-only \
-                   and never places trades.",
+                   current-session status, source catalog ids, persisted feed status, and runtime \
+                   status. Identity and session routing are taken from ToolContext and internal \
+                   routing fields are not exposed in the result. Use this before \
+                   finance_unsubscribe when the user asks what they are watching or wants to \
+                   cancel a finance subscription. This is read-only and never places trades.",
     tier = "deferred",
     read_only,
     concurrency_safe
@@ -3225,6 +3226,27 @@ mod tests {
             registry,
             finance_registry,
         )
+    }
+
+    #[tokio::test]
+    async fn list_subscriptions_description_matches_public_routing_fields() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            svc,
+            registry,
+            finance_registry,
+        ) = tool().await;
+        let list = FinanceListSubscriptionsTool::new(svc, registry, finance_registry);
+        let description = list.description();
+
+        assert!(description.contains("current-session status"));
+        assert!(description.contains("internal routing fields are not exposed"));
+        assert!(!description.contains("session_key"));
+        assert!(!description.contains("conversation/session ownership"));
     }
 
     fn assert_broad_instrument_result_hints(result: &FinanceSubscribeInstrumentsResult) {
