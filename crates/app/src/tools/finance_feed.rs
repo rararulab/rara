@@ -288,6 +288,7 @@ pub(super) struct FinanceFeedEventPage {
     pub query_limit:       i64,
     pub query_offset:      i64,
     pub next_page_hint:    Option<FinanceFeedEventNextPageHint>,
+    pub diagnostic_hint:   Option<FinanceFeedEventDiagnosticHint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -318,6 +319,14 @@ pub(super) struct FinanceFeedEventSummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedEventNextPageHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedEventDiagnosticHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -1031,6 +1040,8 @@ impl ToolExecute for FinanceListFeedEventsTool {
                 offset,
                 page.has_more,
             );
+            let diagnostic_hint =
+                empty_candle_feed_events_diagnostic_hint(&source_ref, &event_types, page.total);
             sources.push(FinanceFeedEventPage {
                 source_name: source_ref.source_name,
                 catalog_source_id: source_ref.catalog_source_id,
@@ -1045,6 +1056,7 @@ impl ToolExecute for FinanceListFeedEventsTool {
                 query_limit: limit,
                 query_offset: offset,
                 next_page_hint,
+                diagnostic_hint,
             });
         }
 
@@ -2086,6 +2098,7 @@ struct FeedEventSourceRef {
     source_name:       String,
     catalog_source_id: Option<String>,
     feed_id:           Option<String>,
+    feed_type:         Option<FeedType>,
 }
 
 async fn resolve_feed_event_sources(
@@ -2134,27 +2147,30 @@ async fn resolve_feed_event_sources(
                 source_name,
                 catalog_source_id: Some(catalog_source_id),
                 feed_id,
+                feed_type: Some(catalog_source.feed_type),
             },
         );
     }
 
     for source_name in source_names {
         let feed = feeds.iter().find(|feed| feed.name == source_name);
+        let catalog_source = catalog_by_source_name.get(&source_name);
         if let Some(feed) = feed {
             ensure_finance_feed_source(feed)?;
         } else {
             anyhow::ensure!(
-                catalog_by_source_name.contains_key(&source_name),
+                catalog_source.is_some(),
                 "source_name is not a known finance feed source: {source_name}"
             );
         }
         push_unique_feed_event_source(
             &mut refs,
             FeedEventSourceRef {
-                catalog_source_id: catalog_by_source_name
-                    .get(&source_name)
-                    .map(|source| source.id.clone()),
+                catalog_source_id: catalog_source.map(|source| source.id.clone()),
                 feed_id: feed.map(|feed| feed.id.clone()),
+                feed_type: feed
+                    .map(|feed| feed.feed_type)
+                    .or_else(|| catalog_source.map(|source| source.feed_type)),
                 source_name,
             },
         );
@@ -2175,6 +2191,7 @@ async fn resolve_feed_event_sources(
                 source_name: config.name,
                 catalog_source_id,
                 feed_id: Some(feed_id),
+                feed_type: Some(config.feed_type),
             },
         );
     }
@@ -2239,6 +2256,33 @@ fn next_feed_events_page_hint(
         default_params:  serde_json::Value::Object(default_params),
         required_params: Vec::new(),
         optional_params: ["since", "limit", "offset"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
+fn empty_candle_feed_events_diagnostic_hint(
+    source_ref: &FeedEventSourceRef,
+    event_types: &[String],
+    total: i64,
+) -> Option<FinanceFeedEventDiagnosticHint> {
+    if total != 0 || source_ref.feed_type != Some(FeedType::MarketCandle) {
+        return None;
+    }
+    if !event_types.is_empty()
+        && !event_types
+            .iter()
+            .any(|event_type| event_type == "market_candle_closed")
+    {
+        return None;
+    }
+
+    Some(FinanceFeedEventDiagnosticHint {
+        tool:            "finance_diagnose_candle_subscriptions".to_owned(),
+        default_params:  serde_json::json!({}),
+        required_params: Vec::new(),
+        optional_params: ["subscription_id", "as_of", "stale_after_secs"]
             .into_iter()
             .map(str::to_owned)
             .collect(),
@@ -5044,6 +5088,72 @@ mod tests {
             .expect("K-line event should include a compact summary");
         assert_eq!(summary.title, "BINANCE · BTCUSDT · 1m");
         assert_eq!(summary.detail.as_deref(), Some("close 61610.30"));
+    }
+
+    #[tokio::test]
+    async fn list_feed_events_returns_candle_diagnostic_hint_when_empty() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        bootstrap_data_feed_schema(&pools).await;
+        let svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let enable = FinanceEnableFeedSourceTool::new(svc.clone(), registry);
+        enable
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "binance-market-candles".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        let tool = FinanceListFeedEventsTool::new(svc);
+        let result = tool
+            .run(
+                FinanceListFeedEventsParams {
+                    catalog_source_ids: vec!["binance-market-candles".to_owned()],
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    event_kinds:        vec![FinanceEventKind::MarketCandleClosed],
+                    since:              Some("24h".to_owned()),
+                    limit:              Some(20),
+                    offset:             None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.source_count, 1);
+        assert_eq!(result.event_count, 0);
+        assert_eq!(result.total, 0);
+        let page = &result.sources[0];
+        assert_eq!(
+            page.catalog_source_id.as_deref(),
+            Some("binance-market-candles")
+        );
+        assert_eq!(page.total, 0);
+        assert!(page.events.is_empty());
+        assert!(
+            page.next_page_hint.is_none(),
+            "empty feed-event page should not include pagination hint"
+        );
+        let diagnostic_hint = page
+            .diagnostic_hint
+            .as_ref()
+            .expect("empty market-candle event page should include diagnostic hint");
+        assert_eq!(
+            diagnostic_hint.tool,
+            "finance_diagnose_candle_subscriptions"
+        );
+        assert_eq!(diagnostic_hint.default_params, serde_json::json!({}));
+        assert!(diagnostic_hint.required_params.is_empty());
+        assert_eq!(
+            diagnostic_hint.optional_params,
+            ["subscription_id", "as_of", "stale_after_secs"]
+        );
     }
 
     #[tokio::test]
