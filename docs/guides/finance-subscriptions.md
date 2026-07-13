@@ -191,7 +191,10 @@ hint when the user asks what closed candle streams are stored in the TSDB before
 picking a stream. Event queries read persisted events by
 `catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
 `event_kinds` (`rss_article`, `market_candle_closed`), and return per-source
-pages with `total`, `has_more`, `query_limit`, and `query_offset`.
+pages with `total`, `has_more`, `query_limit`, and `query_offset`. Pages with
+`has_more=true` also include `next_page_hint`, which calls
+`finance_list_feed_events` with the same source selector and filters plus the
+next `offset`.
 
 For built-in catalog entries, `provider` is catalog metadata used by the agent
 and UI to label fixed data sources such as Binance and Longbridge. It is

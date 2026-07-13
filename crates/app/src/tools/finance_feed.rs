@@ -196,6 +196,15 @@ pub(super) struct FinanceFeedEventPage {
     pub has_more:          bool,
     pub query_limit:       i64,
     pub query_offset:      i64,
+    pub next_page_hint:    Option<FinanceFeedEventNextPageHint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedEventNextPageHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -839,6 +848,7 @@ impl ToolExecute for FinanceListFeedEventsTool {
         params: FinanceListFeedEventsParams,
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceListFeedEventsResult> {
+        let since_param = params.since.clone();
         let source_refs = resolve_feed_event_sources(
             &self.svc,
             params.catalog_source_ids,
@@ -846,8 +856,7 @@ impl ToolExecute for FinanceListFeedEventsTool {
             params.feed_ids,
         )
         .await?;
-        let since = params
-            .since
+        let since = since_param
             .as_deref()
             .map(parse_duration_ago)
             .transpose()
@@ -869,15 +878,24 @@ impl ToolExecute for FinanceListFeedEventsTool {
                 .svc
                 .query_events(&source_ref.source_name, since, &event_types, limit, offset)
                 .await?;
+            let next_page_hint = next_feed_events_page_hint(
+                &source_ref,
+                &event_types,
+                since_param.as_deref(),
+                limit,
+                offset,
+                page.has_more,
+            );
             sources.push(FinanceFeedEventPage {
-                source_name:       source_ref.source_name,
+                source_name: source_ref.source_name,
                 catalog_source_id: source_ref.catalog_source_id,
-                feed_id:           source_ref.feed_id,
-                events:            page.events,
-                total:             page.total,
-                has_more:          page.has_more,
-                query_limit:       limit,
-                query_offset:      offset,
+                feed_id: source_ref.feed_id,
+                events: page.events,
+                total: page.total,
+                has_more: page.has_more,
+                query_limit: limit,
+                query_offset: offset,
+                next_page_hint,
             });
         }
 
@@ -1823,6 +1841,56 @@ fn push_unique_feed_event_source(
         return;
     }
     refs.push(candidate);
+}
+
+fn next_feed_events_page_hint(
+    source_ref: &FeedEventSourceRef,
+    event_types: &[String],
+    since: Option<&str>,
+    limit: i64,
+    offset: i64,
+    has_more: bool,
+) -> Option<FinanceFeedEventNextPageHint> {
+    if !has_more {
+        return None;
+    }
+
+    let mut default_params = serde_json::Map::new();
+    if let Some(catalog_source_id) = &source_ref.catalog_source_id {
+        default_params.insert(
+            "catalog_source_ids".to_owned(),
+            serde_json::json!([catalog_source_id]),
+        );
+    } else if let Some(feed_id) = &source_ref.feed_id {
+        default_params.insert("feed_ids".to_owned(), serde_json::json!([feed_id]));
+    } else {
+        default_params.insert(
+            "source_names".to_owned(),
+            serde_json::json!([source_ref.source_name]),
+        );
+    }
+    default_params.insert("event_kinds".to_owned(), serde_json::json!(event_types));
+    if let Some(since) = since {
+        default_params.insert(
+            "since".to_owned(),
+            serde_json::Value::String(since.to_owned()),
+        );
+    }
+    default_params.insert("limit".to_owned(), serde_json::Value::Number(limit.into()));
+    default_params.insert(
+        "offset".to_owned(),
+        serde_json::Value::Number(offset.saturating_add(limit).into()),
+    );
+
+    Some(FinanceFeedEventNextPageHint {
+        tool:            "finance_list_feed_events".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: ["since", "limit", "offset"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
 }
 
 fn normalize_catalog_source_id(value: String) -> anyhow::Result<String> {
@@ -4120,6 +4188,22 @@ mod tests {
         assert_eq!(page.events.len(), 1);
         assert_eq!(page.events[0].event_type, "rss_article");
         assert_eq!(page.events[0].payload["title"], "Latest Fed update");
+        let next_page_hint = page
+            .next_page_hint
+            .as_ref()
+            .expect("paginated feed-event page should include next-page hint");
+        assert_eq!(next_page_hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            next_page_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": ["fed-press-releases"],
+                "event_kinds": [],
+                "limit": 1,
+                "offset": 1,
+            })
+        );
+        assert!(next_page_hint.required_params.is_empty());
+        assert_eq!(next_page_hint.optional_params, ["since", "limit", "offset"]);
     }
 
     #[tokio::test]
@@ -4188,6 +4272,10 @@ mod tests {
         let page = &result.sources[0];
         assert_eq!(page.total, 1);
         assert!(!page.has_more);
+        assert!(
+            page.next_page_hint.is_none(),
+            "complete feed-event page should not include next-page hint"
+        );
         assert_eq!(page.events.len(), 1);
         assert_eq!(page.events[0].event_type, "market_candle_closed");
         assert_eq!(page.events[0].payload["title"], "BTCUSDT candle");
