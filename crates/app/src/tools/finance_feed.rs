@@ -208,6 +208,22 @@ pub(super) struct FinanceFeedSourceSubscriptions {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceListFeedSourcesResult {
     pub sources: Vec<FinanceFeedSourceEntry>,
+    pub count:   usize,
+    pub filters: FinanceFeedSourceFiltersEcho,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FinanceFeedSourceFiltersEcho {
+    pub catalog_source_ids:         Vec<String>,
+    pub feed_types:                 Vec<String>,
+    pub providers:                  Vec<String>,
+    pub can_enable:                 Option<bool>,
+    pub requires_configuration:     Option<bool>,
+    pub persisted:                  Option<bool>,
+    pub enabled:                    Option<bool>,
+    pub running:                    Option<bool>,
+    pub subscribed:                 Option<bool>,
+    pub current_session_subscribed: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -891,33 +907,33 @@ impl ToolExecute for FinanceListFeedSourcesTool {
         let subscriptions = self.finance_registry.list_for_owner(&owner).await;
         let now = Timestamp::now();
 
+        let sources = default_finance_feed_sources()
+            .into_iter()
+            .filter_map(|source| {
+                let source_name = source.feed_name();
+                let persisted = feeds.iter().find(|feed| feed.name == source_name);
+                let summary = summaries.get(&source_name);
+                let last_event_at = summary.and_then(|summary| summary.last_event_at);
+                let lag_seconds = last_event_at
+                    .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+                let entry = feed_source_entry(
+                    source,
+                    persisted,
+                    self.registry.is_running(&source_name),
+                    summary.map_or(0, |summary| summary.event_count),
+                    summary.and_then(|summary| summary.last_event_type.clone()),
+                    last_event_at.map(|timestamp| timestamp.to_string()),
+                    lag_seconds,
+                    source_subscription_summary(&subscriptions, context.session_key, &source_name),
+                );
+                filters.matches(&entry).then_some(entry)
+            })
+            .collect::<Vec<_>>();
+        let count = sources.len();
         Ok(FinanceListFeedSourcesResult {
-            sources: default_finance_feed_sources()
-                .into_iter()
-                .filter_map(|source| {
-                    let source_name = source.feed_name();
-                    let persisted = feeds.iter().find(|feed| feed.name == source_name);
-                    let summary = summaries.get(&source_name);
-                    let last_event_at = summary.and_then(|summary| summary.last_event_at);
-                    let lag_seconds = last_event_at
-                        .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
-                    let entry = feed_source_entry(
-                        source,
-                        persisted,
-                        self.registry.is_running(&source_name),
-                        summary.map_or(0, |summary| summary.event_count),
-                        summary.and_then(|summary| summary.last_event_type.clone()),
-                        last_event_at.map(|timestamp| timestamp.to_string()),
-                        lag_seconds,
-                        source_subscription_summary(
-                            &subscriptions,
-                            context.session_key,
-                            &source_name,
-                        ),
-                    );
-                    filters.matches(&entry).then_some(entry)
-                })
-                .collect(),
+            sources,
+            count,
+            filters: filters.echo(),
         })
     }
 }
@@ -1068,6 +1084,21 @@ impl FinanceFeedSourceFilters {
             subscribed: params.subscribed,
             current_session_subscribed: params.current_session_subscribed,
         })
+    }
+
+    fn echo(&self) -> FinanceFeedSourceFiltersEcho {
+        FinanceFeedSourceFiltersEcho {
+            catalog_source_ids:         self.catalog_source_ids.clone(),
+            feed_types:                 self.feed_types.clone(),
+            providers:                  self.providers.clone(),
+            can_enable:                 self.can_enable,
+            requires_configuration:     self.requires_configuration,
+            persisted:                  self.persisted,
+            enabled:                    self.enabled,
+            running:                    self.running,
+            subscribed:                 self.subscribed,
+            current_session_subscribed: self.current_session_subscribed,
+        }
     }
 
     fn matches(&self, entry: &FinanceFeedSourceEntry) -> bool {
@@ -3862,6 +3893,17 @@ mod tests {
             .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
+        assert_eq!(result.count, result.sources.len());
+        assert!(result.filters.catalog_source_ids.is_empty());
+        assert!(result.filters.feed_types.is_empty());
+        assert!(result.filters.providers.is_empty());
+        assert_eq!(result.filters.can_enable, None);
+        assert_eq!(result.filters.requires_configuration, None);
+        assert_eq!(result.filters.persisted, None);
+        assert_eq!(result.filters.enabled, None);
+        assert_eq!(result.filters.running, None);
+        assert_eq!(result.filters.subscribed, None);
+        assert_eq!(result.filters.current_session_subscribed, None);
 
         let fed = result
             .sources
@@ -4005,6 +4047,22 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(binance.count, 2);
+        assert_eq!(
+            binance.filters,
+            super::FinanceFeedSourceFiltersEcho {
+                catalog_source_ids:         Vec::new(),
+                feed_types:                 vec!["market_candle".to_owned()],
+                providers:                  vec!["binance".to_owned()],
+                can_enable:                 Some(true),
+                requires_configuration:     Some(false),
+                persisted:                  None,
+                enabled:                    None,
+                running:                    None,
+                subscribed:                 None,
+                current_session_subscribed: None,
+            }
+        );
         assert_eq!(
             binance
                 .sources
