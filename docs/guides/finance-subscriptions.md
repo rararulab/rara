@@ -146,10 +146,13 @@ subscription changes. It combines the built-in source catalog, persisted feed
 runtime state, event watermarks (`event_count`, `last_event_type`,
 `last_event_at`, and `lag_seconds`), configured K-line selectors, and
 provider metadata. It also reports source-name subscription matches for the
-current user/session and returns `subscription_hint` values that tell rara which
-specialized subscribe tool to call next. RSS sources use
+current user/session and returns action hints for the next safe step:
+`enable_hint` for materializing a ready built-in source,
+`subscription_hint` for choosing the specialized subscribe tool, and
+`events_hint` for checking recent persisted events. RSS sources use
 `finance_subscribe_news`; market-candle sources use
-`finance_subscribe_instruments`.
+`finance_subscribe_instruments`. Sources that require operator credentials or a
+custom endpoint do not expose `enable_hint`; they keep `setup_hint` instead.
 
 `finance_list_subscriptions` is the preferred status view after a subscription
 exists. Each subscription includes source/runtime details, an
