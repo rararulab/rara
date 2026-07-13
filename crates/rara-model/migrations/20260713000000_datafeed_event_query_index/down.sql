@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_data_feed_events_source_type_received_created_id;
+DROP INDEX IF EXISTS idx_data_feed_events_source_received_created_id;

@@ -3496,6 +3496,10 @@ mod tests {
             )",
             "CREATE INDEX idx_data_feed_events_source ON data_feed_events(source_name)",
             "CREATE INDEX idx_data_feed_events_received ON data_feed_events(received_at)",
+            "CREATE INDEX idx_data_feed_events_source_received_created_id ON \
+             data_feed_events(source_name, received_at DESC, created_at DESC, id DESC)",
+            "CREATE INDEX idx_data_feed_events_source_type_received_created_id ON \
+             data_feed_events(source_name, event_type, received_at DESC, created_at DESC, id DESC)",
         ] {
             diesel::sql_query(ddl)
                 .execute(&mut *conn)

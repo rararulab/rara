@@ -14,5 +14,9 @@ description = "Database-layer models and SQL migrations shared across domains"
 [dependencies]
 diesel = { workspace = true }
 
+[dev-dependencies]
+diesel_migrations = { workspace = true }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
