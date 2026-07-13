@@ -191,12 +191,38 @@ pub(super) struct FinanceFeedEventPage {
     pub source_name:       String,
     pub catalog_source_id: Option<String>,
     pub feed_id:           Option<String>,
-    pub events:            Vec<FeedEvent>,
+    pub events:            Vec<FinanceFeedEvent>,
     pub total:             i64,
     pub has_more:          bool,
     pub query_limit:       i64,
     pub query_offset:      i64,
     pub next_page_hint:    Option<FinanceFeedEventNextPageHint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedEvent {
+    #[serde(flatten)]
+    pub event:   FeedEvent,
+    pub summary: Option<FinanceFeedEventSummary>,
+}
+
+impl std::ops::Deref for FinanceFeedEvent {
+    type Target = FeedEvent;
+
+    fn deref(&self) -> &Self::Target { &self.event }
+}
+
+impl From<FeedEvent> for FinanceFeedEvent {
+    fn from(event: FeedEvent) -> Self {
+        let summary = summarize_feed_event(&event);
+        Self { event, summary }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FinanceFeedEventSummary {
+    pub title:  String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -892,7 +918,11 @@ impl ToolExecute for FinanceListFeedEventsTool {
                 source_name: source_ref.source_name,
                 catalog_source_id: source_ref.catalog_source_id,
                 feed_id: source_ref.feed_id,
-                events: page.events,
+                events: page
+                    .events
+                    .into_iter()
+                    .map(FinanceFeedEvent::from)
+                    .collect(),
                 total: page.total,
                 has_more: page.has_more,
                 query_limit: limit,
@@ -903,6 +933,49 @@ impl ToolExecute for FinanceListFeedEventsTool {
 
         Ok(FinanceListFeedEventsResult { sources })
     }
+}
+
+fn summarize_feed_event(event: &FeedEvent) -> Option<FinanceFeedEventSummary> {
+    match event.event_type.as_str() {
+        "rss_article" => {
+            let title = payload_string(&event.payload, "title")?;
+            Some(FinanceFeedEventSummary {
+                title,
+                detail: payload_string(&event.payload, "url")
+                    .or_else(|| payload_string(&event.payload, "summary")),
+            })
+        }
+        "market_candle_closed" => {
+            let venue = payload_string(&event.payload, "venue").map(|venue| venue.to_uppercase());
+            let symbol = payload_string(&event.payload, "symbol");
+            let timeframe = payload_string(&event.payload, "timeframe");
+            let title = [venue, symbol, timeframe]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            let title = if title.is_empty() {
+                payload_string(&event.payload, "title")?
+            } else {
+                title
+            };
+            Some(FinanceFeedEventSummary {
+                title,
+                detail: payload_string(&event.payload, "close")
+                    .map(|close| format!("close {close}")),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn payload_string(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[async_trait]
@@ -4310,6 +4383,15 @@ mod tests {
         assert_eq!(page.events.len(), 1);
         assert_eq!(page.events[0].event_type, "rss_article");
         assert_eq!(page.events[0].payload["title"], "Latest Fed update");
+        let summary = page.events[0]
+            .summary
+            .as_ref()
+            .expect("RSS event should include a compact summary");
+        assert_eq!(summary.title, "Latest Fed update");
+        assert_eq!(
+            summary.detail.as_deref(),
+            Some("https://www.federalreserve.gov/example")
+        );
         let next_page_hint = page
             .next_page_hint
             .as_ref()
@@ -4348,17 +4430,22 @@ mod tests {
             .await
             .unwrap();
 
-        for (id, event_type, title, received_at) in [
+        for (id, event_type, payload, received_at) in [
             (
                 "rss-fed-event",
                 "rss_article",
-                "Fed update",
+                serde_json::json!({ "title": "Fed update" }),
                 "2026-07-12T08:00:00Z",
             ),
             (
                 "candle-fed-event",
                 "market_candle_closed",
-                "BTCUSDT candle",
+                serde_json::json!({
+                    "venue": "binance",
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1m",
+                    "close": "61610.30"
+                }),
                 "2026-07-12T08:01:00Z",
             ),
         ] {
@@ -4367,7 +4454,7 @@ mod tests {
                 .source_name("finance-fed-press-releases".to_owned())
                 .event_type(event_type.to_owned())
                 .tags(vec!["finance".to_owned()])
-                .payload(serde_json::json!({ "title": title }))
+                .payload(payload)
                 .received_at(received_at.parse().unwrap())
                 .build();
             store.append(&event).await.unwrap();
@@ -4400,7 +4487,13 @@ mod tests {
         );
         assert_eq!(page.events.len(), 1);
         assert_eq!(page.events[0].event_type, "market_candle_closed");
-        assert_eq!(page.events[0].payload["title"], "BTCUSDT candle");
+        assert_eq!(page.events[0].payload["symbol"], "BTCUSDT");
+        let summary = page.events[0]
+            .summary
+            .as_ref()
+            .expect("K-line event should include a compact summary");
+        assert_eq!(summary.title, "BINANCE · BTCUSDT · 1m");
+        assert_eq!(summary.detail.as_deref(), Some("close 61610.30"));
     }
 
     #[tokio::test]
