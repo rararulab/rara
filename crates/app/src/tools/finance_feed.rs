@@ -471,6 +471,8 @@ pub(super) struct FinanceSubscribeNewsParams {
 pub(super) struct FinanceSubscribeNewsResult {
     pub subscription_id:        Uuid,
     pub subscription_created:   bool,
+    pub unsubscribe_hint:       Option<FinanceSubscriptionUnsubscribeHint>,
+    pub events_hint:            Option<FinanceSubscriptionEventsHint>,
     pub sources:                Vec<SubscribedNewsSource>,
     pub source_names:           Vec<String>,
     pub category_tags:          Vec<String>,
@@ -1239,6 +1241,8 @@ impl ToolExecute for FinanceSubscribeNewsTool {
         Ok(FinanceSubscribeNewsResult {
             subscription_id,
             subscription_created,
+            unsubscribe_hint: Some(unsubscribe_hint_for_subscription(subscription_id)),
+            events_hint: events_hint_for_subscription(&persisted),
             sources,
             source_names: persisted.source_names,
             category_tags: persisted.category_tags,
@@ -3089,8 +3093,8 @@ mod tests {
         FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
         FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsResult,
-        FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsParams, FinanceSubscribeNewsTool,
-        FinanceUnsubscribeParams, FinanceUnsubscribeTool,
+        FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsParams, FinanceSubscribeNewsResult,
+        FinanceSubscribeNewsTool, FinanceUnsubscribeParams, FinanceUnsubscribeTool,
     };
 
     fn context() -> ToolContext {
@@ -3213,6 +3217,42 @@ mod tests {
         assert_eq!(query.default_params, single_stream_params_with_limit());
         assert_eq!(query.required_params, ["start", "end"]);
         assert_eq!(query.optional_params, ["limit"]);
+    }
+
+    fn assert_news_result_hints(result: &FinanceSubscribeNewsResult) {
+        let unsubscribe = result
+            .unsubscribe_hint
+            .as_ref()
+            .expect("news subscribe result should include unsubscribe hint");
+        assert_eq!(unsubscribe.tool, "finance_unsubscribe");
+        assert_eq!(
+            unsubscribe.default_params,
+            serde_json::json!({
+                "subscription_ids": [result.subscription_id],
+            })
+        );
+        assert!(unsubscribe.required_params.is_empty());
+        assert_eq!(unsubscribe.optional_params, ["dry_run"]);
+
+        let events = result
+            .events_hint
+            .as_ref()
+            .expect("news subscribe result should include events hint");
+        assert_eq!(events.tool, "finance_list_feed_events");
+        assert_eq!(
+            events.default_params,
+            serde_json::json!({
+                "source_names": [
+                    "finance-fed-press-releases",
+                    "finance-sec-press-releases"
+                ],
+                "event_kinds": ["rss_article"],
+                "since": "24h",
+                "limit": 20,
+            })
+        );
+        assert!(events.required_params.is_empty());
+        assert_eq!(events.optional_params, ["since", "limit", "offset"]);
     }
 
     fn single_stream_params() -> serde_json::Value {
@@ -4681,6 +4721,7 @@ mod tests {
         assert_eq!(result.delivery, FinanceDelivery::Immediate);
         assert_eq!(result.cooldown_secs, 120);
         assert_eq!(result.max_immediate_per_hour, 3);
+        assert_news_result_hints(&result);
         assert_eq!(result.sources.len(), 2);
         assert!(result.sources.iter().all(|source| {
             source.feed_change == FeedChange::Created && !source.started && !source.running
