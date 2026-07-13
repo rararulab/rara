@@ -81,9 +81,10 @@ use fff_grep::FffGrepTool;
 use file_stats::FileStatsTool;
 use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
-    FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedEventsTool,
-    FinanceListFeedSourcesTool, FinanceListSubscriptionsTool, FinanceRestartFeedSourceTool,
-    FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsTool, FinanceUnsubscribeTool,
+    FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedBundlesTool,
+    FinanceListFeedEventsTool, FinanceListFeedSourcesTool, FinanceListSubscriptionsTool,
+    FinanceRestartFeedSourceTool, FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsTool,
+    FinanceUnsubscribeTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -320,6 +321,11 @@ pub fn register_all(registry: &mut ToolRegistry, deps: ToolDeps) -> ToolRegistra
 
 fn finance_tools(deps: &ToolDeps) -> Vec<AgentToolRef> {
     let mut tools: Vec<AgentToolRef> = vec![
+        Arc::new(FinanceListFeedBundlesTool::new(
+            deps.data_feed_svc.clone(),
+            deps.data_feed_registry.clone(),
+            deps.finance_registry.clone(),
+        )),
         Arc::new(FinanceListFeedSourcesTool::new(
             deps.data_feed_svc.clone(),
             deps.data_feed_registry.clone(),
@@ -465,6 +471,7 @@ mod tests {
             "fff-find",
             "fff-grep",
             "finance_list_feed_sources",
+            "finance_list_feed_bundles",
             "finance_list_feed_events",
             "finance_list_subscriptions",
             "finance_enable_feed_source",
@@ -578,11 +585,16 @@ mod tests {
 
         let mut registry = ToolRegistry::new();
         for tool in [
-            Arc::new(FinanceListFeedSourcesTool::new(
+            Arc::new(FinanceListFeedBundlesTool::new(
                 data_feed_svc.clone(),
                 data_feed_registry.clone(),
                 finance_registry.clone(),
             )) as AgentToolRef,
+            Arc::new(FinanceListFeedSourcesTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
             Arc::new(FinanceSubscribeNewsTool::new(
                 data_feed_svc.clone(),
                 data_feed_registry.clone(),
@@ -612,6 +624,7 @@ mod tests {
         assert_eq!(result.status, DiscoverToolsStatus::Activated);
         let names: Vec<&str> = result.tools.iter().map(|tool| tool.name.as_str()).collect();
         for expected in [
+            "finance_list_feed_bundles",
             "finance_list_feed_sources",
             "finance_subscribe_news",
             "finance_subscribe_instruments",
@@ -639,6 +652,11 @@ mod tests {
             Arc::new(rara_trading::market_data::InMemoryMarketDataRepository::default());
 
         let mut tools: Vec<AgentToolRef> = vec![
+            Arc::new(FinanceListFeedBundlesTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
             Arc::new(FinanceListFeedSourcesTool::new(
                 data_feed_svc.clone(),
                 data_feed_registry.clone(),

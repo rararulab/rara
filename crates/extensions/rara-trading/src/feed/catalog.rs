@@ -34,12 +34,60 @@ pub struct DefaultFeedSource {
     pub setup_hint:             Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DefaultFeedBundle {
+    pub id:                 String,
+    pub name:               String,
+    pub description:        String,
+    pub tags:               Vec<String>,
+    pub catalog_source_ids: Vec<String>,
+}
+
 impl DefaultFeedSource {
     #[must_use]
     pub fn feed_name(&self) -> String { format!("finance-{}", self.id) }
 
     #[must_use]
     pub fn can_enable(&self) -> bool { !self.requires_configuration && self.transport.is_some() }
+}
+
+#[must_use]
+pub fn default_finance_feed_bundles() -> Vec<DefaultFeedBundle> {
+    vec![
+        feed_bundle(
+            "macro-news",
+            "Macro News",
+            "Federal Reserve and SEC official RSS feeds for macro and regulatory monitoring.",
+            ["finance", "news", "macro", "regulatory"],
+            [
+                "fed-press-releases",
+                "fed-h15-announcements",
+                "fed-h10-announcements",
+                "sec-press-releases",
+            ],
+        ),
+        feed_bundle(
+            "binance-spot-starter",
+            "Binance Spot Starter",
+            "Public Binance BTCUSDT and ETHUSDT 1m closed candles.",
+            ["finance", "market-data", "crypto", "binance"],
+            ["binance-market-candles"],
+        ),
+        feed_bundle(
+            "binance-major-crypto-15m",
+            "Binance Major Crypto 15m",
+            "Public Binance 15m closed candles for major USDT crypto pairs.",
+            ["finance", "market-data", "crypto", "binance"],
+            ["binance-major-crypto-15m"],
+        ),
+        feed_bundle(
+            "longbridge-equities-daily",
+            "Longbridge Equities Daily",
+            "Longbridge equities daily candles preset for configured normalized endpoints.",
+            ["finance", "market-data", "equities", "longbridge"],
+            ["longbridge-market-candles"],
+        ),
+    ]
 }
 
 #[must_use]
@@ -108,6 +156,22 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             &["1d"],
         ),
     ]
+}
+
+fn feed_bundle(
+    id: &str,
+    name: &str,
+    description: &str,
+    tags: impl IntoIterator<Item = &'static str>,
+    catalog_source_ids: impl IntoIterator<Item = &'static str>,
+) -> DefaultFeedBundle {
+    DefaultFeedBundle {
+        id:                 id.to_owned(),
+        name:               name.to_owned(),
+        description:        description.to_owned(),
+        tags:               tags.into_iter().map(str::to_owned).collect(),
+        catalog_source_ids: catalog_source_ids.into_iter().map(str::to_owned).collect(),
+    }
 }
 
 fn rss_source(
@@ -207,7 +271,7 @@ mod tests {
 
     use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
 
-    use super::default_finance_feed_sources;
+    use super::{default_finance_feed_bundles, default_finance_feed_sources};
     use crate::feed::{market_candle::MarketCandleSource, rss::RssSource};
 
     #[test]
@@ -229,6 +293,42 @@ mod tests {
                 "{} must include finance tag",
                 source.id
             );
+        }
+    }
+
+    #[test]
+    fn bundle_ids_are_unique_and_reference_existing_sources() {
+        let source_ids = default_finance_feed_sources()
+            .into_iter()
+            .map(|source| source.id)
+            .collect::<HashSet<_>>();
+        let mut bundle_ids = HashSet::new();
+
+        for bundle in default_finance_feed_bundles() {
+            assert!(!bundle.id.trim().is_empty());
+            assert!(
+                bundle_ids.insert(bundle.id.clone()),
+                "duplicate bundle id {}",
+                bundle.id
+            );
+            assert!(
+                bundle.tags.iter().any(|tag| tag == "finance"),
+                "{} must include finance tag",
+                bundle.id
+            );
+            assert!(
+                !bundle.catalog_source_ids.is_empty(),
+                "{} must reference at least one source",
+                bundle.id
+            );
+            for source_id in bundle.catalog_source_ids {
+                assert!(
+                    source_ids.contains(&source_id),
+                    "{} references unknown source {}",
+                    bundle.id,
+                    source_id
+                );
+            }
         }
     }
 
