@@ -38,6 +38,7 @@ use uuid::Uuid;
 const MAX_STALE_AFTER_SECS: u64 = 31_536_000;
 const MAX_DIAGNOSTIC_SOURCE_REFS: usize = 32;
 const MAX_DIAGNOSTIC_SOURCE_REF_LEN: usize = 128;
+const DEFAULT_CANDLE_HINT_LIMIT: i64 = 20;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceDiagnoseCandleSubscriptionsParams {
@@ -81,21 +82,34 @@ pub(super) struct FinanceDiagnoseCandleSubscriptionsQuery {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CandleSubscriptionDiagnostic {
-    pub subscription_id:  Uuid,
-    pub source_names:     Vec<String>,
-    pub venues:           Vec<String>,
-    pub symbols:          Vec<String>,
-    pub timeframes:       Vec<String>,
-    pub delivery:         String,
-    pub status:           SubscriptionHealth,
-    pub diagnostic:       Option<String>,
-    pub next_action_hint: Option<FinanceDiagnosticNextActionHint>,
-    pub feed_sources:     Vec<FeedSourceDiagnostic>,
-    pub streams:          Vec<CandleStreamDiagnostic>,
+    pub subscription_id:     Uuid,
+    pub source_names:        Vec<String>,
+    pub venues:              Vec<String>,
+    pub symbols:             Vec<String>,
+    pub timeframes:          Vec<String>,
+    pub delivery:            String,
+    pub status:              SubscriptionHealth,
+    pub diagnostic:          Option<String>,
+    pub next_action_hint:    Option<FinanceDiagnosticNextActionHint>,
+    pub latest_candle_hint:  Option<FinanceDiagnosticCandleToolHint>,
+    pub recent_candles_hint: Option<FinanceDiagnosticCandleToolHint>,
+    pub freshness_hint:      Option<FinanceDiagnosticCandleToolHint>,
+    pub gaps_hint:           Option<FinanceDiagnosticCandleToolHint>,
+    pub query_candles_hint:  Option<FinanceDiagnosticCandleToolHint>,
+    pub feed_sources:        Vec<FeedSourceDiagnostic>,
+    pub streams:             Vec<CandleStreamDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceDiagnosticNextActionHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceDiagnosticCandleToolHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -382,6 +396,11 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
         let status = subscription_health(&subscription, &feed_sources, &streams);
         let diagnostic = subscription_diagnostic(&subscription, status, &feed_sources, &streams);
         let next_action_hint = next_action_hint(&subscription, status, &feed_sources, &streams);
+        let latest_candle_hint = latest_candle_hint_for_subscription(&subscription);
+        let recent_candles_hint = recent_candles_hint_for_subscription(&subscription);
+        let freshness_hint = freshness_hint_for_subscription(&subscription);
+        let gaps_hint = gaps_hint_for_subscription(&subscription);
+        let query_candles_hint = query_candles_hint_for_subscription(&subscription);
 
         Ok(CandleSubscriptionDiagnostic {
             subscription_id: subscription.id,
@@ -393,6 +412,11 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
             status,
             diagnostic,
             next_action_hint,
+            latest_candle_hint,
+            recent_candles_hint,
+            freshness_hint,
+            gaps_hint,
+            query_candles_hint,
             feed_sources,
             streams,
         })
@@ -970,6 +994,104 @@ fn single_value(values: &[String]) -> Option<&String> {
     }
 }
 
+fn single_stream_selectors(subscription: &FinanceSubscription) -> Option<(&str, &str, &str, &str)> {
+    Some((
+        single_value(&subscription.source_names)?.as_str(),
+        single_value(&subscription.venues)?.as_str(),
+        single_value(&subscription.symbols)?.as_str(),
+        single_value(&subscription.timeframes)?.as_str(),
+    ))
+}
+
+fn single_stream_params(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "source_name": source_name,
+        "venue": venue,
+        "symbol": symbol,
+        "timeframe": timeframe,
+    })
+}
+
+fn single_stream_params_with_limit(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "source_name": source_name,
+        "venue": venue,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "limit": DEFAULT_CANDLE_HINT_LIMIT,
+    })
+}
+
+fn latest_candle_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceDiagnosticCandleToolHint> {
+    let (source_name, venue, symbol, timeframe) = single_stream_selectors(subscription)?;
+    Some(FinanceDiagnosticCandleToolHint {
+        tool:            "finance_get_latest_candle".to_owned(),
+        default_params:  single_stream_params(source_name, venue, symbol, timeframe),
+        required_params: Vec::new(),
+        optional_params: Vec::new(),
+    })
+}
+
+fn recent_candles_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceDiagnosticCandleToolHint> {
+    let (source_name, venue, symbol, timeframe) = single_stream_selectors(subscription)?;
+    Some(FinanceDiagnosticCandleToolHint {
+        tool:            "finance_get_recent_candles".to_owned(),
+        default_params:  single_stream_params_with_limit(source_name, venue, symbol, timeframe),
+        required_params: Vec::new(),
+        optional_params: ["end", "limit"].map(str::to_owned).to_vec(),
+    })
+}
+
+fn freshness_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceDiagnosticCandleToolHint> {
+    let (source_name, venue, symbol, timeframe) = single_stream_selectors(subscription)?;
+    Some(FinanceDiagnosticCandleToolHint {
+        tool:            "finance_get_candle_freshness".to_owned(),
+        default_params:  single_stream_params(source_name, venue, symbol, timeframe),
+        required_params: Vec::new(),
+        optional_params: ["as_of", "stale_after_secs"].map(str::to_owned).to_vec(),
+    })
+}
+
+fn gaps_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceDiagnosticCandleToolHint> {
+    let (source_name, venue, symbol, timeframe) = single_stream_selectors(subscription)?;
+    Some(FinanceDiagnosticCandleToolHint {
+        tool:            "finance_find_candle_gaps".to_owned(),
+        default_params:  single_stream_params(source_name, venue, symbol, timeframe),
+        required_params: ["start", "end"].map(str::to_owned).to_vec(),
+        optional_params: Vec::new(),
+    })
+}
+
+fn query_candles_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceDiagnosticCandleToolHint> {
+    let (source_name, venue, symbol, timeframe) = single_stream_selectors(subscription)?;
+    Some(FinanceDiagnosticCandleToolHint {
+        tool:            "finance_query_candles".to_owned(),
+        default_params:  single_stream_params_with_limit(source_name, venue, symbol, timeframe),
+        required_params: ["start", "end"].map(str::to_owned).to_vec(),
+        optional_params: ["limit"].map(str::to_owned).to_vec(),
+    })
+}
+
 fn subscribe_instruments_hint(
     source_param: &str,
     source_value: &str,
@@ -1319,6 +1441,80 @@ mod tests {
         id
     }
 
+    fn single_stream_params() -> serde_json::Value {
+        serde_json::json!({
+            "source_name": "finance-binance-market-candles",
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+        })
+    }
+
+    fn assert_single_stream_query_hints(sub: &super::CandleSubscriptionDiagnostic) {
+        let latest = sub
+            .latest_candle_hint
+            .as_ref()
+            .expect("single-stream diagnosis should expose latest-candle hint");
+        assert_eq!(latest.tool, "finance_get_latest_candle");
+        assert_eq!(latest.default_params, single_stream_params());
+        assert!(latest.required_params.is_empty());
+        assert!(latest.optional_params.is_empty());
+
+        let recent = sub
+            .recent_candles_hint
+            .as_ref()
+            .expect("single-stream diagnosis should expose recent-candles hint");
+        assert_eq!(recent.tool, "finance_get_recent_candles");
+        assert_eq!(
+            recent.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+                "limit": 20,
+            })
+        );
+        assert!(recent.required_params.is_empty());
+        assert_eq!(recent.optional_params, ["end", "limit"]);
+
+        let freshness = sub
+            .freshness_hint
+            .as_ref()
+            .expect("single-stream diagnosis should expose freshness hint");
+        assert_eq!(freshness.tool, "finance_get_candle_freshness");
+        assert_eq!(freshness.default_params, single_stream_params());
+        assert!(freshness.required_params.is_empty());
+        assert_eq!(freshness.optional_params, ["as_of", "stale_after_secs"]);
+
+        let gaps = sub
+            .gaps_hint
+            .as_ref()
+            .expect("single-stream diagnosis should expose gap query hint");
+        assert_eq!(gaps.tool, "finance_find_candle_gaps");
+        assert_eq!(gaps.default_params, single_stream_params());
+        assert_eq!(gaps.required_params, ["start", "end"]);
+        assert!(gaps.optional_params.is_empty());
+
+        let query = sub
+            .query_candles_hint
+            .as_ref()
+            .expect("single-stream diagnosis should expose range query hint");
+        assert_eq!(query.tool, "finance_query_candles");
+        assert_eq!(
+            query.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+                "limit": 20,
+            })
+        );
+        assert_eq!(query.required_params, ["start", "end"]);
+        assert_eq!(query.optional_params, ["limit"]);
+    }
+
     async fn append_feed_event(store: &crate::feed_store::SqliteFeedStore, received_at: Timestamp) {
         let event = FeedEvent::builder()
             .id(FeedEventId::deterministic(
@@ -1417,6 +1613,7 @@ mod tests {
                 .map(|candle| candle.close.as_str()),
             Some("61610.30")
         );
+        assert_single_stream_query_hints(sub);
     }
 
     #[tokio::test]
