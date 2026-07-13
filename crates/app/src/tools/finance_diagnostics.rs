@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use rara_backend_admin::data_feeds::DataFeedSvc;
 use rara_kernel::{
-    data_feed::{DataFeedConfig, DataFeedRegistry},
+    data_feed::{DataFeedConfig, DataFeedRegistry, FeedType},
     identity::UserId,
     tool::{ToolContext, ToolExecute},
 };
@@ -509,12 +509,21 @@ fn feed_selector_coverage(
     configured_timeframes: &[String],
     subscription: &FinanceSubscription,
 ) -> (FeedSelectorCoverage, Option<String>) {
-    let Some(_feed) = feed else {
+    let Some(feed) = feed else {
         return (
             FeedSelectorCoverage::Unavailable,
             Some("feed source is not registered".to_owned()),
         );
     };
+    if feed.feed_type != FeedType::MarketCandle {
+        return (
+            FeedSelectorCoverage::Unavailable,
+            Some(format!(
+                "feed type {} cannot emit market_candle_closed events",
+                feed.feed_type
+            )),
+        );
+    }
 
     let mut diagnostics = Vec::new();
     let subscription_venues = normalize_lowercase(&subscription.venues);
@@ -666,7 +675,7 @@ fn subscription_health(
         matches!(
             feed.runtime_state,
             FeedRuntimeState::Disabled | FeedRuntimeState::NotRegistered
-        )
+        ) || feed.selector_coverage == FeedSelectorCoverage::Unavailable
     }) {
         return SubscriptionHealth::Unconfigured;
     }
@@ -720,6 +729,15 @@ fn subscription_diagnostic(
                         Some(format!("feed source {} is disabled", feed.source_name))
                     }
                     FeedRuntimeState::Running | FeedRuntimeState::Stopped => None,
+                })
+                .or_else(|| {
+                    feed_sources.iter().find_map(|feed| {
+                        (feed.selector_coverage == FeedSelectorCoverage::Unavailable).then(|| {
+                            feed.selector_diagnostic.clone().unwrap_or_else(|| {
+                                format!("feed source {} is unavailable", feed.source_name)
+                            })
+                        })
+                    })
                 })
         }
         SubscriptionHealth::SelectorMismatch => feed_sources.iter().find_map(|feed| {
@@ -1142,6 +1160,60 @@ mod tests {
         assert_eq!(
             sub.feed_sources[0].selector_diagnostic.as_deref(),
             Some("missing symbols: ETHUSDT; missing timeframes: 5m")
+        );
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_unconfigured_when_feed_type_cannot_emit_candles() {
+        let (tool, finance_registry, data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        let mut rss_feed = feed_config();
+        rss_feed.feed_type = FeedType::Rss;
+        rss_feed.transport = serde_json::json!({
+            "url": "https://example.com/feed.xml",
+            "interval_secs": 300,
+            "headers": {},
+            "max_entries_per_poll": 20
+        });
+        assert!(
+            tool.data_feed_svc
+                .update_feed(&rss_feed)
+                .await
+                .expect("rss feed update should succeed")
+        );
+        data_feed_registry.set_running(
+            "finance-binance-market-candles".to_owned(),
+            CancellationToken::new(),
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  None,
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some("feed type rss cannot emit market_candle_closed events")
+        );
+        assert_eq!(sub.feed_sources[0].feed_type.as_deref(), Some("rss"));
+        assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
+        assert_eq!(
+            sub.feed_sources[0].selector_coverage,
+            FeedSelectorCoverage::Unavailable
+        );
+        assert_eq!(
+            sub.feed_sources[0].selector_diagnostic.as_deref(),
+            Some("feed type rss cannot emit market_candle_closed events")
         );
     }
 
