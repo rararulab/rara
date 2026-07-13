@@ -526,6 +526,12 @@ pub(super) struct FinanceSubscribeInstrumentsResult {
     pub subscription_created: bool,
     pub diagnostic_tool: Option<String>,
     pub diagnostic_subscription_id: Option<Uuid>,
+    pub market_data_hint: Option<FinanceSubscriptionMarketDataHint>,
+    pub latest_candle_hint: Option<FinanceSubscriptionLatestCandleHint>,
+    pub recent_candles_hint: Option<FinanceSubscriptionRecentCandlesHint>,
+    pub freshness_hint: Option<FinanceSubscriptionFreshnessHint>,
+    pub gaps_hint: Option<FinanceSubscriptionGapsHint>,
+    pub query_candles_hint: Option<FinanceSubscriptionQueryCandlesHint>,
     pub feed_id: String,
     pub source_name: String,
     pub catalog_source_id: Option<String>,
@@ -1519,12 +1525,29 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
                 max_immediate_per_hour,
             )
             .await?;
+        let hints = instrument_subscription_result_hints(
+            context,
+            subscription_id,
+            &config.name,
+            &venue,
+            &symbols,
+            &timeframes,
+            delivery,
+            cooldown_secs,
+            max_immediate_per_hour,
+        );
 
         Ok(FinanceSubscribeInstrumentsResult {
             subscription_id,
             subscription_created,
             diagnostic_tool: Some("finance_diagnose_candle_subscriptions".to_owned()),
             diagnostic_subscription_id: Some(subscription_id),
+            market_data_hint: hints.market_data,
+            latest_candle_hint: hints.latest_candle,
+            recent_candles_hint: hints.recent_candles,
+            freshness_hint: hints.freshness,
+            gaps_hint: hints.gaps,
+            query_candles_hint: hints.query_candles,
             feed_id: config.id,
             source_name: config.name.clone(),
             catalog_source_id,
@@ -2592,6 +2615,52 @@ fn subscription_entry(
     }
 }
 
+struct InstrumentSubscriptionResultHints {
+    market_data:    Option<FinanceSubscriptionMarketDataHint>,
+    latest_candle:  Option<FinanceSubscriptionLatestCandleHint>,
+    recent_candles: Option<FinanceSubscriptionRecentCandlesHint>,
+    freshness:      Option<FinanceSubscriptionFreshnessHint>,
+    gaps:           Option<FinanceSubscriptionGapsHint>,
+    query_candles:  Option<FinanceSubscriptionQueryCandlesHint>,
+}
+
+fn instrument_subscription_result_hints(
+    context: &ToolContext,
+    subscription_id: Uuid,
+    source_name: &str,
+    venue: &str,
+    symbols: &[String],
+    timeframes: &[String],
+    delivery: FinanceDelivery,
+    cooldown_secs: u64,
+    max_immediate_per_hour: u16,
+) -> InstrumentSubscriptionResultHints {
+    let subscription = FinanceSubscription {
+        id: subscription_id,
+        owner: UserId(context.user_id.clone()),
+        session_key: context.session_key,
+        event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+        source_names: vec![source_name.to_owned()],
+        category_tags: Vec::new(),
+        watch_terms: Vec::new(),
+        venues: vec![venue.to_owned()],
+        symbols: symbols.to_vec(),
+        timeframes: timeframes.to_vec(),
+        delivery,
+        cooldown_secs,
+        max_immediate_per_hour,
+    };
+
+    InstrumentSubscriptionResultHints {
+        market_data:    market_data_hint_for_subscription(&subscription),
+        latest_candle:  latest_candle_hint_for_subscription(&subscription),
+        recent_candles: recent_candles_hint_for_subscription(&subscription),
+        freshness:      freshness_hint_for_subscription(&subscription),
+        gaps:           gaps_hint_for_subscription(&subscription),
+        query_candles:  query_candles_hint_for_subscription(&subscription),
+    }
+}
+
 fn events_hint_for_subscription(
     subscription: &FinanceSubscription,
 ) -> Option<FinanceSubscriptionEventsHint> {
@@ -3019,9 +3088,9 @@ mod tests {
         FinanceListFeedEventsTool, FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
         FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
         FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
-        FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsTool,
-        FinanceSubscribeNewsParams, FinanceSubscribeNewsTool, FinanceUnsubscribeParams,
-        FinanceUnsubscribeTool,
+        FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsResult,
+        FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsParams, FinanceSubscribeNewsTool,
+        FinanceUnsubscribeParams, FinanceUnsubscribeTool,
     };
 
     fn context() -> ToolContext {
@@ -3081,6 +3150,88 @@ mod tests {
             registry,
             finance_registry,
         )
+    }
+
+    fn assert_broad_instrument_result_hints(result: &FinanceSubscribeInstrumentsResult) {
+        let result_market_data_hint = result
+            .market_data_hint
+            .as_ref()
+            .expect("instrument subscription result should include market-data hint");
+        assert_eq!(result_market_data_hint.tool, "finance_list_candle_streams");
+        assert_eq!(
+            result_market_data_hint.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "limit": 20,
+            })
+        );
+        assert!(
+            result.latest_candle_hint.is_none(),
+            "multi-stream subscribe result should not expose a direct latest-candle hint"
+        );
+        assert!(
+            result.query_candles_hint.is_none(),
+            "multi-stream subscribe result should not expose a direct query-candles hint"
+        );
+    }
+
+    fn assert_single_stream_instrument_result_hints(result: &FinanceSubscribeInstrumentsResult) {
+        let latest = result
+            .latest_candle_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include latest-candle hint");
+        assert_eq!(latest.tool, "finance_get_latest_candle");
+        assert_eq!(latest.default_params, single_stream_params());
+
+        let recent = result
+            .recent_candles_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include recent-candles hint");
+        assert_eq!(recent.tool, "finance_get_recent_candles");
+        assert_eq!(recent.default_params, single_stream_params_with_limit());
+
+        let freshness = result
+            .freshness_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include freshness hint");
+        assert_eq!(freshness.tool, "finance_get_candle_freshness");
+        assert_eq!(freshness.default_params, single_stream_params());
+
+        let gaps = result
+            .gaps_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include gaps hint");
+        assert_eq!(gaps.tool, "finance_find_candle_gaps");
+        assert_eq!(gaps.required_params, ["start", "end"]);
+
+        let query = result
+            .query_candles_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include query-candles hint");
+        assert_eq!(query.tool, "finance_query_candles");
+        assert_eq!(query.default_params, single_stream_params_with_limit());
+        assert_eq!(query.required_params, ["start", "end"]);
+        assert_eq!(query.optional_params, ["limit"]);
+    }
+
+    fn single_stream_params() -> serde_json::Value {
+        serde_json::json!({
+            "source_name": "finance-binance-market-candles",
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+        })
+    }
+
+    fn single_stream_params_with_limit() -> serde_json::Value {
+        serde_json::json!({
+            "source_name": "finance-binance-market-candles",
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "limit": 20,
+        })
     }
 
     fn finance_subscription(
@@ -4708,6 +4859,7 @@ mod tests {
             result.diagnostic_subscription_id,
             Some(result.subscription_id)
         );
+        assert_broad_instrument_result_hints(&result);
         assert_eq!(result.source_name, "finance-binance-market-candles");
         assert_eq!(result.venue, "binance");
         assert_eq!(result.symbols, ["BTCUSDT", "SOLUSDT"]);
@@ -4857,6 +5009,7 @@ mod tests {
         assert_eq!(result.venue, "binance");
         assert_eq!(result.symbols, ["BTCUSDT"]);
         assert_eq!(result.timeframes, ["1m"]);
+        assert_single_stream_instrument_result_hints(&result);
         assert!(svc.list_feeds().await.unwrap().iter().any(|feed| {
             feed.name == "finance-binance-market-candles"
                 && feed.transport["symbols"][0] == "BTCUSDT"
