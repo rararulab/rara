@@ -7336,6 +7336,8 @@ name = "rara-model"
 version = "0.0.1"
 dependencies = [
  "diesel",
+ "diesel_migrations",
+ "tempfile",
 ]
 
 [[package]]
