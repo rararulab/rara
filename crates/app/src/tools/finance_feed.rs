@@ -69,6 +69,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub description:            String,
     pub feed_type:              String,
     pub subscribe_tool:         Option<String>,
+    pub subscription_hint:      Option<FinanceFeedSourceSubscriptionHint>,
     pub provider:               Option<String>,
     pub tags:                   Vec<String>,
     pub source_name:            String,
@@ -80,6 +81,15 @@ pub(super) struct FinanceFeedSourceEntry {
     pub venue:                  Option<String>,
     pub configured_symbols:     Vec<String>,
     pub configured_timeframes:  Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceSubscriptionHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+    pub diagnostic_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2158,6 +2168,80 @@ fn subscribe_tool_for_feed_type(feed_type: FeedType) -> Option<String> {
     }
 }
 
+fn subscription_hint_for_source(
+    catalog_source_id: &str,
+    feed_type: FeedType,
+    transport: Option<&serde_json::Value>,
+) -> Option<FinanceFeedSourceSubscriptionHint> {
+    match feed_type {
+        FeedType::Rss => Some(FinanceFeedSourceSubscriptionHint {
+            tool:            "finance_subscribe_news".to_owned(),
+            default_params:  serde_json::json!({
+                "catalog_source_ids": [catalog_source_id]
+            }),
+            required_params: Vec::new(),
+            optional_params: [
+                "category_tags",
+                "watch_terms",
+                "delivery",
+                "start_now",
+                "cooldown_secs",
+                "max_immediate_per_hour",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            diagnostic_tool: None,
+        }),
+        FeedType::MarketCandle => {
+            let venue = transport
+                .and_then(|value| value.get("venue"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            let symbols = transport.map_or_else(Vec::new, |value| {
+                extract_normalized_string_array(value, "symbols", true)
+            });
+            let timeframes = transport.map_or_else(Vec::new, |value| {
+                extract_normalized_string_array(value, "timeframes", false)
+            });
+            let mut default_params = serde_json::Map::from_iter([(
+                "catalog_source_id".to_owned(),
+                serde_json::Value::String(catalog_source_id.to_owned()),
+            )]);
+            if let Some(venue) = venue {
+                default_params.insert("venue".to_owned(), serde_json::Value::String(venue));
+            }
+            if !symbols.is_empty() {
+                default_params.insert("symbols".to_owned(), serde_json::json!(symbols));
+            }
+            if !timeframes.is_empty() {
+                default_params.insert("timeframes".to_owned(), serde_json::json!(timeframes));
+            }
+
+            Some(FinanceFeedSourceSubscriptionHint {
+                tool:            "finance_subscribe_instruments".to_owned(),
+                default_params:  serde_json::Value::Object(default_params),
+                required_params: ["symbols", "timeframes"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                optional_params: [
+                    "venue",
+                    "delivery",
+                    "start_now",
+                    "cooldown_secs",
+                    "max_immediate_per_hour",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+                diagnostic_tool: Some("finance_diagnose_candle_subscriptions".to_owned()),
+            })
+        }
+        FeedType::Polling | FeedType::Webhook | FeedType::WebSocket => None,
+    }
+}
+
 fn feed_source_entry(
     source: DefaultFeedSource,
     persisted: Option<&DataFeedConfig>,
@@ -2172,6 +2256,7 @@ fn feed_source_entry(
     let transport = persisted
         .map(|feed| &feed.transport)
         .or(source.transport.as_ref());
+    let subscription_hint = subscription_hint_for_source(&source.id, source.feed_type, transport);
     let can_enable = source.can_enable();
     let provider = source.provider.clone().or_else(|| {
         transport
@@ -2185,6 +2270,7 @@ fn feed_source_entry(
         description: source.description,
         feed_type: source.feed_type.to_string(),
         subscribe_tool: subscribe_tool_for_feed_type(source.feed_type),
+        subscription_hint,
         provider,
         tags: source.tags,
         source_name,
@@ -2612,6 +2698,20 @@ mod tests {
             fed.subscribe_tool.as_deref(),
             Some("finance_subscribe_news")
         );
+        let fed_hint = fed
+            .subscription_hint
+            .as_ref()
+            .expect("fed should include subscription hint");
+        assert_eq!(fed_hint.tool, "finance_subscribe_news");
+        assert_eq!(
+            fed_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": ["fed-press-releases"]
+            })
+        );
+        assert!(fed_hint.required_params.is_empty());
+        assert!(fed_hint.optional_params.contains(&"watch_terms".to_owned()));
+        assert_eq!(fed_hint.diagnostic_tool, None);
         assert!(fed.can_enable);
         assert!(!fed.runtime.persisted);
         assert_eq!(fed.runtime.feed_id, None);
@@ -2637,6 +2737,25 @@ mod tests {
             binance.subscribe_tool.as_deref(),
             Some("finance_subscribe_instruments")
         );
+        let binance_hint = binance
+            .subscription_hint
+            .as_ref()
+            .expect("binance should include subscription hint");
+        assert_eq!(binance_hint.tool, "finance_subscribe_instruments");
+        assert_eq!(
+            binance_hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "venue": "binance",
+                "symbols": ["BTCUSDT", "ETHUSDT"],
+                "timeframes": ["1m"]
+            })
+        );
+        assert_eq!(binance_hint.required_params, ["symbols", "timeframes"]);
+        assert_eq!(
+            binance_hint.diagnostic_tool.as_deref(),
+            Some("finance_diagnose_candle_subscriptions")
+        );
         assert_eq!(binance.venue.as_deref(), Some("binance"));
         assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
         assert_eq!(binance.configured_timeframes, ["1m"]);
@@ -2650,6 +2769,20 @@ mod tests {
         assert_eq!(
             longbridge.subscribe_tool.as_deref(),
             Some("finance_subscribe_instruments")
+        );
+        let longbridge_hint = longbridge
+            .subscription_hint
+            .as_ref()
+            .expect("longbridge should include subscription hint");
+        assert_eq!(longbridge_hint.tool, "finance_subscribe_instruments");
+        assert_eq!(
+            longbridge_hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "longbridge-market-candles",
+                "venue": "longbridge",
+                "symbols": ["AAPL.US", "NVDA.US", "700.HK"],
+                "timeframes": ["1d"]
+            })
         );
         assert!(longbridge.requires_configuration);
         assert!(!longbridge.can_enable);
