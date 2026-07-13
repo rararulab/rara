@@ -168,8 +168,9 @@ returns unsubscribe and event-query hints.
 It fixes `event_kinds` to `market_candle_closed`, rejects non-`market_candle`
 feed sources, derives `venue` from a selected market-candle source when omitted,
 persists requested `symbols` and `timeframes` into the feed transport, starts or
-restarts the runtime feed by default when needed, and returns market-data,
-diagnostic, and single-stream candle-query hints. Use
+restarts the runtime feed by default when needed, echoes the persisted delivery
+policy and budget, and returns market-data, diagnostic, and single-stream
+candle-query hints. Use
 `finance_list_candle_streams` after subscription creation to discover stored
 TSDB streams, then call the single-stream candle tools for latest, recent,
 freshness, gaps, or bounded ranges.
