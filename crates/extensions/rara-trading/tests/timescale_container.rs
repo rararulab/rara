@@ -173,13 +173,59 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
     assert_eq!(missing, vec![ts("2026-07-10T08:00:00Z")]);
 
     let audit_pool = sqlx_postgres::PgPool::connect(&database_url).await?;
+    assert_correction_audit_payload(&audit_pool).await?;
+
+    Ok(())
+}
+
+async fn assert_correction_audit_payload(audit_pool: &sqlx_postgres::PgPool) -> anyhow::Result<()> {
     let correction_count: i64 =
         sqlx_core::query::query("SELECT COUNT(*)::bigint AS count FROM market_candle_corrections")
-            .fetch_one(&audit_pool)
+            .fetch_one(audit_pool)
             .await?
             .try_get("count")?;
     assert_eq!(correction_count, 1);
 
+    let correction = sqlx_core::query::query(
+        r#"
+        SELECT
+          previous_payload ->> 'close' AS previous_close,
+          new_payload ->> 'close' AS new_close,
+          previous_payload ->> 'open_time' AS previous_open_time,
+          new_payload ->> 'open_time' AS new_open_time,
+          previous_payload ->> 'source_name' AS previous_source_name,
+          new_payload ->> 'source_name' AS new_source_name
+        FROM market_candle_corrections
+        WHERE source_name = 'timescale-container-contract'
+          AND venue = 'binance'
+          AND symbol = 'BTCUSDT'
+          AND timeframe = '15m'
+          AND open_time = '2026-07-10T08:15:00Z'::timestamptz
+        "#,
+    )
+    .fetch_one(audit_pool)
+    .await?;
+    assert_eq!(
+        correction.try_get::<String, _>("previous_close")?,
+        "61610.30"
+    );
+    assert_eq!(correction.try_get::<String, _>("new_close")?, "61611.00");
+    assert_eq!(
+        correction.try_get::<String, _>("previous_open_time")?,
+        "2026-07-10T08:15:00Z"
+    );
+    assert_eq!(
+        correction.try_get::<String, _>("new_open_time")?,
+        "2026-07-10T08:15:00Z"
+    );
+    assert_eq!(
+        correction.try_get::<String, _>("previous_source_name")?,
+        "timescale-container-contract"
+    );
+    assert_eq!(
+        correction.try_get::<String, _>("new_source_name")?,
+        "timescale-container-contract"
+    );
     Ok(())
 }
 
