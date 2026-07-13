@@ -60,11 +60,12 @@ pub struct FinanceGetRecentCandlesParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceGetRecentCandlesResult {
-    pub candles:     Vec<FinanceCandle>,
-    pub count:       usize,
-    pub query_limit: usize,
-    pub has_more:    bool,
-    pub next_end:    Option<String>,
+    pub candles:        Vec<FinanceCandle>,
+    pub count:          usize,
+    pub query_limit:    usize,
+    pub has_more:       bool,
+    pub next_end:       Option<String>,
+    pub next_page_hint: Option<FinanceCandleNextPageHint>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -84,11 +85,20 @@ pub struct FinanceQueryCandlesParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceQueryCandlesResult {
-    pub candles:     Vec<FinanceCandle>,
-    pub count:       usize,
-    pub query_limit: usize,
-    pub has_more:    bool,
-    pub next_start:  Option<String>,
+    pub candles:        Vec<FinanceCandle>,
+    pub count:          usize,
+    pub query_limit:    usize,
+    pub has_more:       bool,
+    pub next_start:     Option<String>,
+    pub next_page_hint: Option<FinanceCandleNextPageHint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceCandleNextPageHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -325,11 +335,15 @@ impl ToolExecute for FinanceGetRecentCandlesTool {
     ) -> anyhow::Result<FinanceGetRecentCandlesResult> {
         let limit = validate_candle_range_limit(params.limit)?;
         let probe_limit = limit.saturating_add(1);
+        let source_name = normalize_optional_source_name_selector(params.source_name)?;
+        let venue = normalize_required_venue_selector(params.venue)?;
+        let symbol = normalize_required_symbol_selector(params.symbol)?;
+        let timeframe = normalize_required_timeframe_selector(params.timeframe)?;
         let query = CandleRecentQuery {
-            source_name: normalize_optional_source_name_selector(params.source_name)?,
-            venue:       normalize_required_venue_selector(params.venue)?,
-            symbol:      normalize_required_symbol_selector(params.symbol)?,
-            timeframe:   normalize_required_timeframe_selector(params.timeframe)?,
+            source_name: source_name.clone(),
+            venue:       venue.clone(),
+            symbol:      symbol.clone(),
+            timeframe:   timeframe.clone(),
             limit:       probe_limit,
         };
         let mut candles = self.repository.recent_candles(query).await?;
@@ -342,12 +356,21 @@ impl ToolExecute for FinanceGetRecentCandlesTool {
             .filter(|_| has_more)
             .map(|candle| candle.open_time.to_string());
         let count = candles.len();
+        let next_page_hint = recent_candles_next_page_hint(
+            source_name.as_deref(),
+            &venue,
+            &symbol,
+            &timeframe,
+            next_end.as_deref(),
+            limit,
+        );
         Ok(FinanceGetRecentCandlesResult {
             candles: candles.into_iter().map(FinanceCandle::from).collect(),
             count,
             query_limit: limit,
             has_more,
             next_end,
+            next_page_hint,
         })
     }
 }
@@ -385,12 +408,16 @@ impl ToolExecute for FinanceQueryCandlesTool {
         let start = parse_timestamp("start", &params.start)?;
         let end = parse_timestamp("end", &params.end)?;
         anyhow::ensure!(start < end, "start must be before end");
+        let source_name = normalize_optional_source_name_selector(params.source_name)?;
+        let venue = normalize_required_venue_selector(params.venue)?;
+        let symbol = normalize_required_symbol_selector(params.symbol)?;
+        let timeframe = normalize_required_timeframe_selector(params.timeframe)?;
 
         let query = CandleRangeQuery {
-            source_name: normalize_optional_source_name_selector(params.source_name)?,
-            venue: normalize_required_venue_selector(params.venue)?,
-            symbol: normalize_required_symbol_selector(params.symbol)?,
-            timeframe: normalize_required_timeframe_selector(params.timeframe)?,
+            source_name: source_name.clone(),
+            venue: venue.clone(),
+            symbol: symbol.clone(),
+            timeframe: timeframe.clone(),
             start,
             end,
             limit: probe_limit,
@@ -402,12 +429,22 @@ impl ToolExecute for FinanceQueryCandlesTool {
             .map(|candle| candle.open_time.to_string());
         candles.truncate(limit);
         let count = candles.len();
+        let next_page_hint = range_candles_next_page_hint(
+            source_name.as_deref(),
+            &venue,
+            &symbol,
+            &timeframe,
+            next_start.as_deref(),
+            &end.to_string(),
+            limit,
+        );
         Ok(FinanceQueryCandlesResult {
             candles: candles.into_iter().map(FinanceCandle::from).collect(),
             count,
             query_limit: limit,
             has_more,
             next_start,
+            next_page_hint,
         })
     }
 }
@@ -674,6 +711,88 @@ fn query_candles_hint_for_stream(
         required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
         optional_params: vec!["limit".to_owned()],
     }
+}
+
+fn recent_candles_next_page_hint(
+    source_name: Option<&str>,
+    venue: &str,
+    symbol: &str,
+    timeframe: &Timeframe,
+    next_end: Option<&str>,
+    limit: usize,
+) -> Option<FinanceCandleNextPageHint> {
+    let next_end = next_end?;
+    let mut default_params = candle_page_default_param_map(source_name, venue, symbol, timeframe);
+    default_params.insert(
+        "end".to_owned(),
+        serde_json::Value::String(next_end.to_owned()),
+    );
+    default_params.insert("limit".to_owned(), serde_json::json!(limit));
+
+    Some(FinanceCandleNextPageHint {
+        tool:            "finance_query_candles".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: vec!["start".to_owned()],
+        optional_params: ["end", "limit"].into_iter().map(str::to_owned).collect(),
+    })
+}
+
+fn range_candles_next_page_hint(
+    source_name: Option<&str>,
+    venue: &str,
+    symbol: &str,
+    timeframe: &Timeframe,
+    next_start: Option<&str>,
+    end: &str,
+    limit: usize,
+) -> Option<FinanceCandleNextPageHint> {
+    let next_start = next_start?;
+    let mut default_params = candle_page_default_param_map(source_name, venue, symbol, timeframe);
+    default_params.insert(
+        "start".to_owned(),
+        serde_json::Value::String(next_start.to_owned()),
+    );
+    default_params.insert("end".to_owned(), serde_json::Value::String(end.to_owned()));
+    default_params.insert("limit".to_owned(), serde_json::json!(limit));
+
+    Some(FinanceCandleNextPageHint {
+        tool:            "finance_query_candles".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: ["start", "end", "limit"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
+fn candle_page_default_param_map(
+    source_name: Option<&str>,
+    venue: &str,
+    symbol: &str,
+    timeframe: &Timeframe,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut default_params = serde_json::Map::from_iter([
+        (
+            "venue".to_owned(),
+            serde_json::Value::String(venue.to_owned()),
+        ),
+        (
+            "symbol".to_owned(),
+            serde_json::Value::String(symbol.to_owned()),
+        ),
+        (
+            "timeframe".to_owned(),
+            serde_json::Value::String(timeframe.to_string()),
+        ),
+    ]);
+    if let Some(source_name) = source_name {
+        default_params.insert(
+            "source_name".to_owned(),
+            serde_json::Value::String(source_name.to_owned()),
+        );
+    }
+    default_params
 }
 
 fn stream_default_params(
@@ -1182,6 +1301,24 @@ mod tests {
         assert_eq!(result.query_limit, 1);
         assert!(result.has_more);
         assert_eq!(result.next_end.as_deref(), Some("2026-07-10T08:01:00Z"));
+        let next_page_hint = result
+            .next_page_hint
+            .as_ref()
+            .expect("paginated recent-candle result should include next-page hint");
+        assert_eq!(next_page_hint.tool, "finance_query_candles");
+        assert_eq!(
+            next_page_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+                "end": "2026-07-10T08:01:00Z",
+                "limit": 1,
+            })
+        );
+        assert_eq!(next_page_hint.required_params, ["start"]);
+        assert_eq!(next_page_hint.optional_params, ["end", "limit"]);
         assert_eq!(result.candles[0].open_time, "2026-07-10T08:01:00Z");
         assert_eq!(result.candles[0].close, "61520.00");
     }
@@ -1210,6 +1347,10 @@ mod tests {
         assert_eq!(result.query_limit, 10);
         assert!(!result.has_more);
         assert_eq!(result.next_start, None);
+        assert!(
+            result.next_page_hint.is_none(),
+            "complete range result should not include next-page hint"
+        );
         assert_eq!(
             result
                 .candles
@@ -1244,6 +1385,25 @@ mod tests {
         assert_eq!(result.query_limit, 1);
         assert!(result.has_more);
         assert_eq!(result.next_start.as_deref(), Some("2026-07-10T08:01:00Z"));
+        let next_page_hint = result
+            .next_page_hint
+            .as_ref()
+            .expect("paginated range result should include next-page hint");
+        assert_eq!(next_page_hint.tool, "finance_query_candles");
+        assert_eq!(
+            next_page_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+                "start": "2026-07-10T08:01:00Z",
+                "end": "2026-07-10T08:02:00Z",
+                "limit": 1,
+            })
+        );
+        assert!(next_page_hint.required_params.is_empty());
+        assert_eq!(next_page_hint.optional_params, ["start", "end", "limit"]);
         assert_eq!(result.candles[0].open_time, "2026-07-10T08:00:00Z");
     }
 
