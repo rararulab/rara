@@ -158,17 +158,17 @@ operations. Market-candle sources expose `market_data_hint` for
 `finance_list_candle_streams` so rara can move from source status to stored
 TSDB stream discovery before querying latest or historical candles.
 
-`finance_subscribe_news` returns `unsubscribe_hint` and `events_hint`
-immediately after creating or updating an RSS article subscription, so rara can
-either list recent persisted articles for the subscribed sources or cancel the
-subscription without first calling `finance_list_subscriptions`.
+`finance_subscribe_news` is the specialized RSS/article entry point. It fixes
+`event_kinds` to `rss_article`, rejects non-RSS catalog source IDs, and returns
+the persisted normalized selectors and delivery policy.
 
-`finance_subscribe_instruments` returns the same market-data and single-stream
-candle hints immediately after creating or updating a subscription. For broad
-subscriptions, use the returned `market_data_hint` to discover stored streams.
-For a single `(source_name, venue, symbol, timeframe)` subscription, the result
-also includes direct hints for latest, recent, freshness, gap, and bounded range
-candle tools.
+`finance_subscribe_instruments` is the specialized closed-candle entry point.
+It fixes `event_kinds` to `market_candle_closed`, rejects non-`market_candle`
+catalog source IDs, derives `venue` from a selected market-candle catalog
+source when omitted, and returns the persisted normalized selectors and delivery
+policy. Use `finance_list_candle_streams` after subscription creation to
+discover stored TSDB streams, then call the single-stream candle tools for
+latest, recent, freshness, gaps, or bounded ranges.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized
@@ -255,8 +255,9 @@ Example article subscription:
 ```
 
 For built-in RSS sources, `finance_subscribe_news` is the preferred
-conversation entry point because it enables the selected RSS feeds and creates
-the article subscription in one call:
+conversation entry point because it narrows the call surface to article
+subscriptions and expands selected RSS catalog IDs into subscription source
+names:
 
 ```json
 {
