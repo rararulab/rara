@@ -290,6 +290,25 @@ describe('DataFeedsPanel', () => {
     });
   });
 
+  it('shows the last feed event type from summary data', async () => {
+    listMock.mockResolvedValue([feed()]);
+    summariesMock.mockResolvedValue([
+      {
+        feed_id: 'feed-1',
+        source_name: 'finance-binance-market-candles',
+        event_count: 12,
+        last_event_type: 'market_candle_closed',
+        last_event_at: '2026-07-12T00:42:02Z',
+        lag_seconds: 30,
+      },
+    ]);
+
+    renderPanel();
+
+    expect(await screen.findByText('market_candle_closed')).toBeInTheDocument();
+    expect(screen.getByText('30s lag')).toBeInTheDocument();
+  });
+
   it('shows an empty state before the first persisted candle', async () => {
     renderPanel();
 

@@ -64,6 +64,7 @@ export interface FeedSummary {
   feed_id: string;
   source_name: string;
   event_count: number;
+  last_event_type: string | null;
   last_event_at: string | null;
   lag_seconds: number | null;
 }
