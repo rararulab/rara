@@ -136,6 +136,7 @@ runtime control, subscription management, and inspection:
 - `finance_enable_feed_source`
 - `finance_disable_feed_source`
 - `finance_restart_feed_source`
+- `finance_subscribe_feed_bundle`
 - `finance_subscribe_news`
 - `finance_subscribe_instruments`
 - `finance_list_subscriptions`
@@ -149,12 +150,16 @@ sources into curated presets such as `macro-news`, `binance-spot-starter`,
 its `catalog_source_ids`, feed types, aggregate persisted/running/subscribed
 counts, setup hints for operator-only presets, and action hints:
 `list_sources_hint` for drilling into per-source status, `enable_hints` for
-ready sources that are not persisted yet, and `subscription_hint` when the whole
-bundle can be subscribed with one specialized tool call. Macro/news bundles use
-`finance_subscribe_news` with multiple RSS `catalog_source_ids`; single-source
-market-data bundles use `finance_subscribe_instruments` with the preset
-symbols/timeframes. Use the `bundle_ids`, `feed_types`, `can_enable`, and
-`requires_configuration` filters to narrow the recommendation list.
+ready sources that are not persisted yet, `subscribe_bundle_hint` for the
+direct bundle-level subscription tool, and `subscription_hint` when the caller
+needs the lower-level specialized tool. `finance_subscribe_feed_bundle` is the
+conversation-first entry point after bundle discovery: macro/news bundles
+subscribe multiple RSS `catalog_source_ids` at once, while single-source
+market-data bundles subscribe their preset symbols/timeframes. Bundles that
+require operator credentials or a custom endpoint do not expose
+`subscribe_bundle_hint`; use their setup hints first. Use the `bundle_ids`,
+`feed_types`, `can_enable`, and `requires_configuration` filters to narrow the
+recommendation list.
 
 `finance_list_feed_sources` is the preferred status view before and after
 subscription changes. It combines the built-in source catalog, persisted feed
@@ -420,24 +425,26 @@ Use this checklist before considering a deployment ready:
    `["finance", "market-data"]`.
 3. Confirm each closed candle is upserted into `market_candles` exactly once
    for `(source_name, venue, symbol, timeframe, open_time)`.
-4. Use a conversation to call `finance_subscribe_news` for article RSS sources
+4. Use a conversation to call `finance_subscribe_feed_bundle` for default
+   presets such as `macro-news` or `binance-major-crypto-15m`.
+5. Use a conversation to call `finance_subscribe_news` for article RSS sources
    and `watch_terms`.
-5. Use a conversation to call `finance_subscribe_instruments` for candle
+6. Use a conversation to call `finance_subscribe_instruments` for candle
    `symbols` and `timeframes`.
-6. Confirm `finance_list_feed_bundles` returns the expected default data
-   feeding presets and exposes actionable subscription hints.
-7. Confirm `finance_list_feed_sources` reports the subscribed source with
+7. Confirm `finance_list_feed_bundles` returns the expected default data
+   feeding presets and exposes actionable bundle subscription hints.
+8. Confirm `finance_list_feed_sources` reports the subscribed source with
    `subscriptions.session_subscribed = true`.
-8. Confirm the admin event endpoint stores one event per article and one event
+9. Confirm the admin event endpoint stores one event per article and one event
    per closed candle across two polls, and `finance_list_feed_events` returns
    recent persisted events for the subscribed source, including filtered views
    by `event_kinds`.
-9. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
+10. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
    recent feed event, `selector_coverage = covered`, and a fresh latest candle
    for the subscribed stream.
-10. Confirm `finance_get_latest_candle` returns the latest stored closed candle
+11. Confirm `finance_get_latest_candle` returns the latest stored closed candle
    for the subscribed `(venue, symbol, timeframe)`.
-11. Confirm
+12. Confirm
    `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
    returns the stored stream watermark.
 11. Confirm `finance_get_recent_candles`,
