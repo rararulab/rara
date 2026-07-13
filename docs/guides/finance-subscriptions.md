@@ -154,7 +154,9 @@ current user/session and returns action hints for the next safe step:
 `finance_subscribe_instruments`. Sources that require operator credentials or a
 custom endpoint do not expose `enable_hint`; they keep `setup_hint` instead.
 Persisted sources also expose `restart_hint` and `disable_hint` for runtime
-operations.
+operations. Market-candle sources expose `market_data_hint` for
+`finance_list_candle_streams` so rara can move from source status to stored
+TSDB stream discovery before querying latest or historical candles.
 
 `finance_list_subscriptions` is the preferred status view after a subscription
 exists. Each subscription includes source/runtime details, an
