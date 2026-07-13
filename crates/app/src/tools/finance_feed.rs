@@ -68,6 +68,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub name:                   String,
     pub description:            String,
     pub feed_type:              String,
+    pub subscribe_tool:         Option<String>,
     pub provider:               Option<String>,
     pub tags:                   Vec<String>,
     pub source_name:            String,
@@ -2149,6 +2150,14 @@ fn is_finance_feed_source(config: &DataFeedConfig) -> bool {
             .any(|source| source.feed_name() == config.name)
 }
 
+fn subscribe_tool_for_feed_type(feed_type: FeedType) -> Option<String> {
+    match feed_type {
+        FeedType::Rss => Some("finance_subscribe_news".to_owned()),
+        FeedType::MarketCandle => Some("finance_subscribe_instruments".to_owned()),
+        FeedType::Polling | FeedType::Webhook | FeedType::WebSocket => None,
+    }
+}
+
 fn feed_source_entry(
     source: DefaultFeedSource,
     persisted: Option<&DataFeedConfig>,
@@ -2175,6 +2184,7 @@ fn feed_source_entry(
         name: source.name,
         description: source.description,
         feed_type: source.feed_type.to_string(),
+        subscribe_tool: subscribe_tool_for_feed_type(source.feed_type),
         provider,
         tags: source.tags,
         source_name,
@@ -2598,6 +2608,10 @@ mod tests {
             .find(|source| source.id == "fed-press-releases")
             .expect("fed source should be listed");
         assert_eq!(fed.source_name, "finance-fed-press-releases");
+        assert_eq!(
+            fed.subscribe_tool.as_deref(),
+            Some("finance_subscribe_news")
+        );
         assert!(fed.can_enable);
         assert!(!fed.runtime.persisted);
         assert_eq!(fed.runtime.feed_id, None);
@@ -2619,6 +2633,10 @@ mod tests {
             .find(|source| source.id == "binance-market-candles")
             .expect("binance source should be listed");
         assert_eq!(binance.provider.as_deref(), Some("binance"));
+        assert_eq!(
+            binance.subscribe_tool.as_deref(),
+            Some("finance_subscribe_instruments")
+        );
         assert_eq!(binance.venue.as_deref(), Some("binance"));
         assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
         assert_eq!(binance.configured_timeframes, ["1m"]);
@@ -2629,6 +2647,10 @@ mod tests {
             .find(|source| source.id == "longbridge-market-candles")
             .expect("longbridge source should be listed");
         assert_eq!(longbridge.provider.as_deref(), Some("longbridge"));
+        assert_eq!(
+            longbridge.subscribe_tool.as_deref(),
+            Some("finance_subscribe_instruments")
+        );
         assert!(longbridge.requires_configuration);
         assert!(!longbridge.can_enable);
         assert!(
