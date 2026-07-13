@@ -855,4 +855,37 @@ mod tests {
             Some("hourly_budget")
         );
     }
+
+    #[tokio::test]
+    async fn default_immediate_budget_allows_sixth_and_silences_seventh() {
+        let (registry, clock, _tmp) = registry(ts("2026-07-10T08:00:00Z"));
+        let session = SessionKey::new();
+        let mut subscription = sub(session);
+        subscription.cooldown_secs = 0;
+        registry.upsert(subscription).await.unwrap();
+
+        for index in 1..=6 {
+            let matched = registry
+                .match_event(&article("fed-news", &format!("BTC notice {index}"), ""))
+                .await;
+            assert_eq!(matched.len(), 1);
+            assert_eq!(
+                matched[0].action,
+                FinanceDeliveryAction::Immediate,
+                "event {index} should remain immediate under the default hourly budget"
+            );
+            assert_eq!(matched[0].downgraded_reason, None);
+            clock.advance(SignedDuration::from_secs(60));
+        }
+
+        let seventh = registry
+            .match_event(&article("fed-news", "BTC notice 7", ""))
+            .await;
+        assert_eq!(seventh.len(), 1);
+        assert_eq!(seventh[0].action, FinanceDeliveryAction::Silent);
+        assert_eq!(
+            seventh[0].downgraded_reason.as_deref(),
+            Some("hourly_budget")
+        );
+    }
 }
