@@ -127,14 +127,8 @@ do not require rara to hold exchange credentials. They still emit only
 
 ## Conversation tools
 
-The app registers finance subscription tools:
-
-- `finance_subscribe`
-- `finance_unsubscribe`
-- `finance_list_subscriptions`
-
-It also registers feed-oriented tools for market data onboarding and runtime
-checks:
+The app registers feed-oriented tools for finance data source discovery,
+runtime control, subscription management, and inspection:
 
 - `finance_list_feed_sources`
 - `finance_list_feed_events`
@@ -143,6 +137,8 @@ checks:
 - `finance_restart_feed_source`
 - `finance_subscribe_news`
 - `finance_subscribe_instruments`
+- `finance_list_subscriptions`
+- `finance_unsubscribe`
 - `finance_diagnose_candle_subscriptions`
 
 `finance_list_feed_sources` is the preferred status view before and after
@@ -150,11 +146,19 @@ subscription changes. It combines the built-in source catalog, persisted feed
 runtime state, event watermarks (`event_count`, `last_event_type`,
 `last_event_at`, and `lag_seconds`), configured K-line selectors, and
 provider metadata. It also reports source-name subscription matches for the
-current user/session. Use `finance_list_feed_events` when the user asks what
-recent finance news or closed-candle notifications were actually received. It
-reads persisted events by `catalog_source_ids`, `source_names`, or `feed_ids`,
-can narrow mixed sources by `event_kinds` (`rss_article`,
-`market_candle_closed`), and returns per-source pages with `total`, `has_more`,
+current user/session and returns `subscription_hint` values that tell rara which
+specialized subscribe tool to call next. RSS sources use
+`finance_subscribe_news`; market-candle sources use
+`finance_subscribe_instruments`.
+
+`finance_list_subscriptions` is the preferred status view after a subscription
+exists. Each subscription includes source/runtime details, an
+`unsubscribe_hint` for `finance_unsubscribe`, and an `events_hint` for
+`finance_list_feed_events`. Use that events hint when the user asks what recent
+finance news or closed-candle notifications were actually received. Event
+queries read persisted events by `catalog_source_ids`, `source_names`, or
+`feed_ids`, can narrow mixed sources by `event_kinds` (`rss_article`,
+`market_candle_closed`), and return per-source pages with `total`, `has_more`,
 `query_limit`, and `query_offset`.
 
 For built-in catalog entries, `provider` is catalog metadata used by the agent
