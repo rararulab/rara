@@ -27,6 +27,7 @@ use super::{
 };
 
 const DEFAULT_CANDLE_LIMIT: usize = 500;
+const DEFAULT_CANDLE_HINT_LIMIT: usize = 20;
 const MAX_CANDLE_LIMIT: usize = 10_000;
 const MAX_CANDLE_RANGE_LIMIT: usize = MAX_CANDLE_LIMIT - 1;
 const MAX_CANDLE_STREAM_LIMIT: usize = MAX_CANDLE_LIMIT - 1;
@@ -160,15 +161,28 @@ pub struct FinanceListCandleStreamsResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceCandleStream {
-    pub source_name:        String,
-    pub venue:              String,
-    pub symbol:             String,
-    pub timeframe:          String,
-    pub candle_count:       usize,
-    pub first_open_time:    String,
-    pub latest_open_time:   String,
-    pub latest_close_time:  String,
-    pub latest_ingested_at: String,
+    pub source_name:         String,
+    pub venue:               String,
+    pub symbol:              String,
+    pub timeframe:           String,
+    pub candle_count:        usize,
+    pub first_open_time:     String,
+    pub latest_open_time:    String,
+    pub latest_close_time:   String,
+    pub latest_ingested_at:  String,
+    pub latest_candle_hint:  FinanceCandleStreamToolHint,
+    pub recent_candles_hint: FinanceCandleStreamToolHint,
+    pub freshness_hint:      FinanceCandleStreamToolHint,
+    pub gaps_hint:           FinanceCandleStreamToolHint,
+    pub query_candles_hint:  FinanceCandleStreamToolHint,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceCandleStreamToolHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -539,18 +553,167 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
 
 impl From<CandleStreamSummary> for FinanceCandleStream {
     fn from(summary: CandleStreamSummary) -> Self {
+        let source_name = summary.source_name;
+        let venue = summary.venue;
+        let symbol = summary.symbol;
+        let timeframe = summary.timeframe.to_string();
         Self {
-            source_name:        summary.source_name,
-            venue:              summary.venue,
-            symbol:             summary.symbol,
-            timeframe:          summary.timeframe.to_string(),
-            candle_count:       summary.candle_count,
-            first_open_time:    summary.first_open_time.to_string(),
-            latest_open_time:   summary.latest_open_time.to_string(),
-            latest_close_time:  summary.latest_close_time.to_string(),
+            latest_candle_hint: latest_candle_hint_for_stream(
+                &source_name,
+                &venue,
+                &symbol,
+                &timeframe,
+            ),
+            recent_candles_hint: recent_candles_hint_for_stream(
+                &source_name,
+                &venue,
+                &symbol,
+                &timeframe,
+            ),
+            freshness_hint: freshness_hint_for_stream(&source_name, &venue, &symbol, &timeframe),
+            gaps_hint: gaps_hint_for_stream(&source_name, &venue, &symbol, &timeframe),
+            query_candles_hint: query_candles_hint_for_stream(
+                &source_name,
+                &venue,
+                &symbol,
+                &timeframe,
+            ),
+            source_name,
+            venue,
+            symbol,
+            timeframe,
+            candle_count: summary.candle_count,
+            first_open_time: summary.first_open_time.to_string(),
+            latest_open_time: summary.latest_open_time.to_string(),
+            latest_close_time: summary.latest_close_time.to_string(),
             latest_ingested_at: summary.latest_ingested_at.to_string(),
         }
     }
+}
+
+fn latest_candle_hint_for_stream(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> FinanceCandleStreamToolHint {
+    FinanceCandleStreamToolHint {
+        tool:            "finance_get_latest_candle".to_owned(),
+        default_params:  stream_default_params(source_name, venue, symbol, timeframe),
+        required_params: Vec::new(),
+        optional_params: Vec::new(),
+    }
+}
+
+fn recent_candles_hint_for_stream(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> FinanceCandleStreamToolHint {
+    let mut default_params = stream_default_param_map(source_name, venue, symbol, timeframe);
+    default_params.insert(
+        "limit".to_owned(),
+        serde_json::Value::Number(DEFAULT_CANDLE_HINT_LIMIT.into()),
+    );
+
+    FinanceCandleStreamToolHint {
+        tool:            "finance_get_recent_candles".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: vec!["limit".to_owned()],
+    }
+}
+
+fn freshness_hint_for_stream(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> FinanceCandleStreamToolHint {
+    FinanceCandleStreamToolHint {
+        tool:            "finance_get_candle_freshness".to_owned(),
+        default_params:  stream_default_params(source_name, venue, symbol, timeframe),
+        required_params: Vec::new(),
+        optional_params: ["as_of", "stale_after_secs"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    }
+}
+
+fn gaps_hint_for_stream(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> FinanceCandleStreamToolHint {
+    FinanceCandleStreamToolHint {
+        tool:            "finance_find_candle_gaps".to_owned(),
+        default_params:  stream_default_params(source_name, venue, symbol, timeframe),
+        required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
+        optional_params: Vec::new(),
+    }
+}
+
+fn query_candles_hint_for_stream(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> FinanceCandleStreamToolHint {
+    let mut default_params = stream_default_param_map(source_name, venue, symbol, timeframe);
+    default_params.insert(
+        "limit".to_owned(),
+        serde_json::Value::Number(DEFAULT_CANDLE_HINT_LIMIT.into()),
+    );
+
+    FinanceCandleStreamToolHint {
+        tool:            "finance_query_candles".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
+        optional_params: vec!["limit".to_owned()],
+    }
+}
+
+fn stream_default_params(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> serde_json::Value {
+    serde_json::Value::Object(stream_default_param_map(
+        source_name,
+        venue,
+        symbol,
+        timeframe,
+    ))
+}
+
+fn stream_default_param_map(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::from_iter([
+        (
+            "source_name".to_owned(),
+            serde_json::Value::String(source_name.to_owned()),
+        ),
+        (
+            "venue".to_owned(),
+            serde_json::Value::String(venue.to_owned()),
+        ),
+        (
+            "symbol".to_owned(),
+            serde_json::Value::String(symbol.to_owned()),
+        ),
+        (
+            "timeframe".to_owned(),
+            serde_json::Value::String(timeframe.to_owned()),
+        ),
+    ])
 }
 
 impl From<MarketCandle> for FinanceCandle {
@@ -799,6 +962,56 @@ mod tests {
         assert_eq!(result.streams[0].symbol, "ETHUSDT");
         assert_eq!(result.streams[0].candle_count, 1);
         assert_eq!(result.streams[0].latest_open_time, "2026-07-10T08:03:00Z");
+        assert_eq!(
+            result.streams[0].latest_candle_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "ETHUSDT",
+                "timeframe": "1m",
+            })
+        );
+        assert_eq!(
+            result.streams[0].recent_candles_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "ETHUSDT",
+                "timeframe": "1m",
+                "limit": 20,
+            })
+        );
+        assert_eq!(
+            result.streams[0].freshness_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "ETHUSDT",
+                "timeframe": "1m",
+            })
+        );
+        assert_eq!(
+            result.streams[0].gaps_hint.required_params,
+            ["start", "end"]
+        );
+        assert_eq!(
+            result.streams[0].query_candles_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "ETHUSDT",
+                "timeframe": "1m",
+                "limit": 20,
+            })
+        );
+        assert_eq!(
+            result.streams[0].query_candles_hint.required_params,
+            ["start", "end"]
+        );
+        assert_eq!(
+            result.streams[0].query_candles_hint.optional_params,
+            ["limit"]
+        );
         assert_eq!(result.streams[1].symbol, "BTCUSDT");
         assert_eq!(result.streams[1].candle_count, 2);
         assert_eq!(result.streams[1].first_open_time, "2026-07-10T08:00:00Z");
