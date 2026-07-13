@@ -310,12 +310,15 @@ as strings to preserve decimal precision. Each stream returned by
 selectors beyond the returned `query_limit`; narrow by `source_name`, `venue`,
 `symbol`, `timeframe`, or time range before assuming a broad query is
 exhaustive. When `finance_query_candles.has_more` is true, `next_start` contains
-the next candle open time to use as the following query's inclusive `start`.
+the next candle open time to use as the following query's inclusive `start`,
+and `next_page_hint` calls `finance_query_candles` with that `start`, the same
+selectors, the same exclusive `end`, and the same limit.
 When `finance_get_recent_candles.has_more` is true, `next_end` contains the
 oldest returned candle open time to use as an exclusive `end` when paging older
-history via `finance_query_candles`. The stream-list, recent-candle, and
-candle-range limits are capped at 9,999 so the tools can probe one extra row and
-report pagination state accurately.
+history via `finance_query_candles`; its `next_page_hint` pre-fills that
+exclusive `end` and keeps `start` as the only required parameter. The
+stream-list, recent-candle, and candle-range limits are capped at 9,999 so the
+tools can probe one extra row and report pagination state accurately.
 
 ## Acceptance checklist
 
