@@ -65,13 +65,14 @@ pub struct FinanceGetRecentCandlesParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceGetRecentCandlesResult {
-    pub selector:       FinanceCandleSelector,
-    pub candles:        Vec<FinanceCandle>,
-    pub count:          usize,
-    pub query_limit:    usize,
-    pub has_more:       bool,
-    pub next_end:       Option<String>,
-    pub next_page_hint: Option<FinanceCandleNextPageHint>,
+    pub selector:        FinanceCandleSelector,
+    pub candles:         Vec<FinanceCandle>,
+    pub count:           usize,
+    pub query_limit:     usize,
+    pub has_more:        bool,
+    pub next_end:        Option<String>,
+    pub next_page_hint:  Option<FinanceCandleNextPageHint>,
+    pub diagnostic_hint: Option<FinanceCandleStreamDiagnosticHint>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -91,13 +92,14 @@ pub struct FinanceQueryCandlesParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceQueryCandlesResult {
-    pub selector:       FinanceCandleSelector,
-    pub candles:        Vec<FinanceCandle>,
-    pub count:          usize,
-    pub query_limit:    usize,
-    pub has_more:       bool,
-    pub next_start:     Option<String>,
-    pub next_page_hint: Option<FinanceCandleNextPageHint>,
+    pub selector:        FinanceCandleSelector,
+    pub candles:         Vec<FinanceCandle>,
+    pub count:           usize,
+    pub query_limit:     usize,
+    pub has_more:        bool,
+    pub next_start:      Option<String>,
+    pub next_page_hint:  Option<FinanceCandleNextPageHint>,
+    pub diagnostic_hint: Option<FinanceCandleStreamDiagnosticHint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,6 +156,7 @@ pub struct FinanceGetCandleFreshnessResult {
     pub lag_secs:         Option<i64>,
     pub is_stale:         bool,
     pub status:           String,
+    pub diagnostic_hint:  Option<FinanceCandleStreamDiagnosticHint>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -455,6 +458,8 @@ impl ToolExecute for FinanceGetRecentCandlesTool {
             .filter(|_| has_more)
             .map(|candle| candle.open_time.to_string());
         let count = candles.len();
+        let diagnostic_hint =
+            source_scoped_empty_candles_diagnostic_hint(source_name.as_deref(), count == 0);
         let next_page_hint = recent_candles_next_page_hint(
             source_name.as_deref(),
             &venue,
@@ -471,6 +476,7 @@ impl ToolExecute for FinanceGetRecentCandlesTool {
             has_more,
             next_end,
             next_page_hint,
+            diagnostic_hint,
         })
     }
 }
@@ -535,6 +541,8 @@ impl ToolExecute for FinanceQueryCandlesTool {
             .map(|candle| candle.open_time.to_string());
         candles.truncate(limit);
         let count = candles.len();
+        let diagnostic_hint =
+            source_scoped_empty_candles_diagnostic_hint(source_name.as_deref(), count == 0);
         let next_page_hint = range_candles_next_page_hint(
             source_name.as_deref(),
             &venue,
@@ -552,6 +560,7 @@ impl ToolExecute for FinanceQueryCandlesTool {
             has_more,
             next_start,
             next_page_hint,
+            diagnostic_hint,
         })
     }
 }
@@ -676,7 +685,7 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
         );
 
         let query = CandleLatestQuery {
-            source_name,
+            source_name: source_name.clone(),
             venue,
             symbol,
             timeframe,
@@ -691,6 +700,10 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
                 lag_secs: None,
                 is_stale: true,
                 status: "missing".to_owned(),
+                diagnostic_hint: source_scoped_empty_candles_diagnostic_hint(
+                    source_name.as_deref(),
+                    true,
+                ),
             });
         };
 
@@ -712,6 +725,7 @@ impl ToolExecute for FinanceGetCandleFreshnessTool {
             lag_secs: Some(lag_secs),
             is_stale,
             status: status.to_owned(),
+            diagnostic_hint: None,
         })
     }
 }
@@ -1202,11 +1216,11 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::{
-        FinanceCandleSelector, FinanceCandleStreamFilters, FinanceFindCandleGapsParams,
-        FinanceFindCandleGapsTool, FinanceGetCandleFreshnessParams, FinanceGetCandleFreshnessTool,
-        FinanceGetLatestCandleParams, FinanceGetLatestCandleTool, FinanceGetRecentCandlesParams,
-        FinanceGetRecentCandlesTool, FinanceListCandleStreamsParams, FinanceListCandleStreamsTool,
-        FinanceQueryCandlesParams, FinanceQueryCandlesTool,
+        FinanceCandleSelector, FinanceCandleStreamDiagnosticHint, FinanceCandleStreamFilters,
+        FinanceFindCandleGapsParams, FinanceFindCandleGapsTool, FinanceGetCandleFreshnessParams,
+        FinanceGetCandleFreshnessTool, FinanceGetLatestCandleParams, FinanceGetLatestCandleTool,
+        FinanceGetRecentCandlesParams, FinanceGetRecentCandlesTool, FinanceListCandleStreamsParams,
+        FinanceListCandleStreamsTool, FinanceQueryCandlesParams, FinanceQueryCandlesTool,
     };
     use crate::market_data::{
         InMemoryMarketDataRepository, MarketCandle, MarketDataRepository, Timeframe,
@@ -1316,6 +1330,34 @@ mod tests {
             symbol:      symbol.map(str::to_owned),
             timeframe:   timeframe.map(str::to_owned),
         }
+    }
+
+    fn assert_diagnostic_hint_for_source(
+        diagnostic_hint: &FinanceCandleStreamDiagnosticHint,
+        source_name: &str,
+    ) {
+        assert_eq!(
+            diagnostic_hint.tool,
+            "finance_diagnose_candle_subscriptions"
+        );
+        assert_eq!(
+            diagnostic_hint.default_params,
+            serde_json::json!({
+                "source_names": [source_name],
+            })
+        );
+        assert!(diagnostic_hint.required_params.is_empty());
+        assert_eq!(
+            diagnostic_hint.optional_params,
+            [
+                "subscription_id",
+                "catalog_source_ids",
+                "source_names",
+                "feed_ids",
+                "as_of",
+                "stale_after_secs"
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1776,6 +1818,7 @@ mod tests {
         assert_eq!(next_page_hint.optional_params, ["end", "limit"]);
         assert_eq!(result.candles[0].open_time, "2026-07-10T08:01:00Z");
         assert_eq!(result.candles[0].close, "61520.00");
+        assert!(result.diagnostic_hint.is_none());
 
         let older_page = tool
             .run(
@@ -1797,6 +1840,7 @@ mod tests {
         assert_eq!(older_page.next_end, None);
         assert!(older_page.next_page_hint.is_none());
         assert_eq!(older_page.candles[0].open_time, "2026-07-10T08:00:00Z");
+        assert!(older_page.diagnostic_hint.is_none());
     }
 
     #[tokio::test]
@@ -1827,6 +1871,7 @@ mod tests {
             result.next_page_hint.is_none(),
             "complete range result should not include next-page hint"
         );
+        assert!(result.diagnostic_hint.is_none());
         assert_eq!(
             result
                 .candles
@@ -2025,6 +2070,11 @@ mod tests {
             .unwrap();
         assert_eq!(recent_result.selector, expected);
         assert!(recent_result.candles.is_empty());
+        let recent_hint = recent_result
+            .diagnostic_hint
+            .as_ref()
+            .expect("empty source-scoped recent query should point back to candle diagnostics");
+        assert_diagnostic_hint_for_source(recent_hint, "binance-spot");
 
         let query_result = query
             .run(
@@ -2043,6 +2093,11 @@ mod tests {
             .unwrap();
         assert_eq!(query_result.selector, expected);
         assert!(query_result.candles.is_empty());
+        let query_hint = query_result
+            .diagnostic_hint
+            .as_ref()
+            .expect("empty source-scoped range query should point back to candle diagnostics");
+        assert_diagnostic_hint_for_source(query_hint, "binance-spot");
 
         let gaps_result = gaps
             .run(
@@ -2079,6 +2134,10 @@ mod tests {
         assert_eq!(freshness_result.selector, expected);
         assert_eq!(freshness_result.status, "missing");
         assert!(freshness_result.latest.is_none());
+        let freshness_hint = freshness_result.diagnostic_hint.as_ref().expect(
+            "missing source-scoped freshness query should point back to candle diagnostics",
+        );
+        assert_diagnostic_hint_for_source(freshness_hint, "binance-spot");
     }
 
     #[tokio::test]
@@ -2149,6 +2208,7 @@ mod tests {
         assert_eq!(fresh.status, "fresh");
         assert!(!fresh.is_stale);
         assert_eq!(fresh.lag_secs, Some(90));
+        assert!(fresh.diagnostic_hint.is_none());
 
         let stale = tool
             .run(
@@ -2167,6 +2227,7 @@ mod tests {
         assert_eq!(stale.status, "stale");
         assert!(stale.is_stale);
         assert_eq!(stale.lag_secs, Some(540));
+        assert!(stale.diagnostic_hint.is_none());
     }
 
     #[test]

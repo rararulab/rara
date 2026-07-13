@@ -384,7 +384,9 @@ streams, the result includes `diagnostic_hint` for
 `finance_diagnose_candle_subscriptions` with the same `source_name`, so rara can
 move from "no TSDB stream exists" to subscription, runtime, raw-event, and
 latest-candle diagnostics without guessing the next tool. A source-scoped
-`finance_get_latest_candle` call that finds no stored candle returns the same
+single-stream candle query (`finance_get_latest_candle`,
+`finance_get_recent_candles`, `finance_query_candles`, or
+`finance_get_candle_freshness`) that finds no stored candle returns the same
 diagnostic hint, which covers the common case where rara already knows the exact
 stream selector but needs to determine whether ingestion is disabled, stale, or
 not writing into TSDB.
