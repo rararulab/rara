@@ -4,7 +4,7 @@
 
 **Goal:** Let a user ask rara to subscribe a conversation to selected financial RSS/Atom news and latest closed market candles, then receive only deduplicated, rate-limited matching updates as a proactive message or silent memory entry.
 
-**Architecture:** Add normalized financial feed events through `rara-trading`: RSS/Atom articles and latest closed market candles both become individually deduplicated `FeedEvent`s rather than raw polling blobs. The kernel `data_feed` layer keeps only generic feed types/lifecycle/storage; source-specific parsing lives in `crates/extensions/rara-trading`. Closed candles are also upserted into a TimescaleDB/PostgreSQL-backed `MarketDataRepository` for durable OHLCV history. `rara-trading` owns finance-specific subscription matching and its three Deferred tools; the app injects that registry into the existing feed-dispatch loop, which already persists every event and can deliver a proactive turn to the source session.
+**Architecture:** Add normalized financial feed events through `rara-trading`: RSS/Atom articles and latest closed market candles both become individually deduplicated `FeedEvent`s rather than raw polling blobs. The kernel `data_feed` layer keeps only generic feed types/lifecycle/storage; source-specific parsing lives in `crates/extensions/rara-trading`. Closed candles are also upserted into a TimescaleDB/PostgreSQL-backed `MarketDataRepository` for durable OHLCV history. `rara-trading` owns finance-specific subscription matching; the app exposes specialized Deferred tools for source discovery, RSS subscription, market-candle subscription, listing, event inspection, diagnostics, and unsubscribe. The app injects that registry into the existing feed-dispatch loop, which already persists every event and can deliver a proactive turn to the source session.
 
 **Tech Stack:** Rust 2024, `feed-rs`, `reqwest`, `rust_decimal`, TimescaleDB/PostgreSQL hypertables, `sqlx-core`/`sqlx-postgres`, `rara-kernel::data_feed`, `rara-kernel::notification::NotifyAction`, `rara-tool-macro::ToolDef`, Tokio, JSON-file persistence, SQLite feed-event store.
 
@@ -18,7 +18,15 @@ The first user experience is:
 
 > “订阅 BTC 15m K 线收盘；有 NVDA 和美联储相关新闻也告诉我。”
 
-The agent uses `finance_subscribe`; an operator has previously registered one or more trusted RSS/Atom sources and market candle sources via the existing admin data-feed API. New articles and latest closed candles are normalized and persisted, then matched against the subscriber's source/category/watch-term/symbol/timeframe filters. A matching event is delivered to the originating session as either `immediate` (one proactive rara turn) or `silent` (tape only).
+The agent uses `finance_list_feed_sources` to discover trusted sources, then
+`finance_subscribe_news` for RSS/Atom articles or
+`finance_subscribe_instruments` for latest closed market candles. An operator
+has previously registered one or more trusted RSS/Atom sources and market candle
+sources via the existing admin data-feed API or built-in finance catalog. New
+articles and latest closed candles are normalized and persisted, then matched
+against the subscriber's source/category/watch-term/symbol/timeframe filters. A
+matching event is delivered to the originating session as either `immediate`
+(one proactive rara turn) or `silent` (tape only).
 
 MVP deliberately excludes arbitrary user-supplied feed URLs, arbitrary ticker/provider fetches, LLM-based entity extraction at ingestion, article scraping, portfolio-aware impact scoring, digest scheduling, derived price-threshold alerts, strategy backtests, orders, accounts, and all execution capability.
 
@@ -544,11 +552,30 @@ Run: `cargo test -p rara-trading finance::tools`
 
 Expected: FAIL because the tools do not exist.
 
-**Step 3: Implement three Deferred tools**
+**Step 3: Implement Deferred subscription tools**
 
-Implement `finance_subscribe`, `finance_unsubscribe`, and `finance_list_subscriptions` using `ToolContext.user_id` and `ToolContext.session_key` as the only identity/routing inputs. Never accept owner or session from LLM parameters.
+Implement specialized subscription tools,
+`finance_subscribe_news` and `finance_subscribe_instruments`, plus
+`finance_unsubscribe` and `finance_list_subscriptions`, using
+`ToolContext.user_id` and `ToolContext.session_key` as the only
+identity/routing inputs. Never accept owner or session from LLM parameters.
 
-`finance_subscribe` accepts `event_kinds`, `source_names`, `category_tags`, `watch_terms`, `venues`, `symbols`, `timeframes`, optional `delivery` (`silent` default; `immediate` explicit), `cooldown_secs` (default 900), and `max_immediate_per_hour` (default 6). Validate non-empty selectors, bounded selector counts/lengths, and normalized deduplicated terms. It returns a subscription ID and exact delivery policy.
+`finance_subscribe_news` accepts built-in `catalog_source_ids` or existing RSS
+`feed_ids`, plus `category_tags`, `watch_terms`, optional `delivery` (`silent`
+default; `immediate` explicit), `cooldown_secs` (default 900), and
+`max_immediate_per_hour` (default 6). It ensures the selected RSS feeds are
+enabled and optionally running, then returns a subscription ID and exact
+delivery policy.
+
+`finance_subscribe_instruments` accepts a built-in market-candle
+`catalog_source_id` or existing market-candle `feed_id`, plus `venue`,
+`symbols`, `timeframes`, optional `delivery`, `cooldown_secs`, and
+`max_immediate_per_hour`. It ensures the market-candle feed is enabled,
+persists the requested symbols/timeframes into the feed config, optionally
+restarts the feed, and returns a subscription ID plus diagnostic identifiers.
+
+Both subscribe tools validate non-empty selectors, bounded selector
+counts/lengths, and normalized deduplicated terms.
 
 Mark subscribe/unsubscribe non-read-only; mark list read-only. Do not mark them destructive: they only manage the caller's notification preference and never alter a financial account.
 
@@ -639,8 +666,8 @@ Document this exact manual lane:
 1. Create an authenticated `rss` data feed with tags `["finance", "macro"]`.
 2. Create an authenticated `market_candle` data feed with tags `["finance", "market-data"]`.
 3. Confirm each closed candle is upserted into `market_candles` exactly once for `(source, venue, symbol, timeframe, open_time)`.
-4. Use a conversation to call `finance_subscribe` for article `source_names` and `watch_terms`.
-5. Use a conversation to call `finance_subscribe` for candle `symbols` and `timeframes`.
+4. Use a conversation to call `finance_subscribe_news` for article sources and `watch_terms`.
+5. Use a conversation to call `finance_subscribe_instruments` for candle `symbols` and `timeframes`.
 6. Confirm the admin event endpoint stores one event per article and one event per closed candle across two polls.
 7. Confirm one matching item wakes the same session at most once.
 8. Confirm a seventh matching item in an hour is tape-only under the default budget.
