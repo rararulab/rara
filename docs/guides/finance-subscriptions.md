@@ -218,7 +218,8 @@ pages with `total`, `has_more`, `query_limit`, and `query_offset`. Pages with
 next `offset`. The result also echoes a normalized `query` with resolved unique
 sources, event-kind strings, `since`, `query_limit`, and `query_offset`, so rara
 can explain empty pages or paginated event lookups without reconstructing the
-request.
+request. Top-level `source_count`, `event_count`, `total`, and `has_more`
+summarize the returned pages across all selected sources.
 
 For built-in catalog entries, `provider` is catalog metadata used by the agent
 and UI to label fixed data sources such as Binance and Longbridge. It is

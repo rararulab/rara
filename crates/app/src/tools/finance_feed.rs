@@ -253,8 +253,12 @@ pub(super) struct FinanceListFeedEventsParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceListFeedEventsResult {
-    pub sources: Vec<FinanceFeedEventPage>,
-    pub query:   FinanceListFeedEventsQuery,
+    pub sources:      Vec<FinanceFeedEventPage>,
+    pub query:        FinanceListFeedEventsQuery,
+    pub source_count: usize,
+    pub event_count:  usize,
+    pub total:        i64,
+    pub has_more:     bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1034,7 +1038,19 @@ impl ToolExecute for FinanceListFeedEventsTool {
             });
         }
 
-        Ok(FinanceListFeedEventsResult { sources, query })
+        let source_count = sources.len();
+        let event_count = sources.iter().map(|page| page.events.len()).sum();
+        let total = sources.iter().map(|page| page.total).sum();
+        let has_more = sources.iter().any(|page| page.has_more);
+
+        Ok(FinanceListFeedEventsResult {
+            sources,
+            query,
+            source_count,
+            event_count,
+            total,
+            has_more,
+        })
     }
 }
 
@@ -4699,6 +4715,10 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(result.source_count, 1);
+        assert_eq!(result.event_count, 1);
+        assert_eq!(result.total, 2);
+        assert!(result.has_more);
         assert_eq!(result.sources.len(), 1);
         let page = &result.sources[0];
         assert_eq!(
