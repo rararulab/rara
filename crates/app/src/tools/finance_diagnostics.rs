@@ -279,7 +279,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
             .await?;
         let status = subscription_health(&subscription, &feed_sources, &streams);
         let diagnostic = subscription_diagnostic(&subscription, status, &feed_sources, &streams);
-        let next_action_hint = next_action_hint(status, &feed_sources, &streams);
+        let next_action_hint = next_action_hint(&subscription, status, &feed_sources, &streams);
 
         Ok(CandleSubscriptionDiagnostic {
             subscription_id: subscription.id,
@@ -775,14 +775,13 @@ fn subscription_diagnostic(
 }
 
 fn next_action_hint(
+    subscription: &FinanceSubscription,
     status: SubscriptionHealth,
     feed_sources: &[FeedSourceDiagnostic],
     streams: &[CandleStreamDiagnostic],
 ) -> Option<FinanceDiagnosticNextActionHint> {
     match status {
-        SubscriptionHealth::Ok
-        | SubscriptionHealth::SelectorMismatch
-        | SubscriptionHealth::Unconfigured => {
+        SubscriptionHealth::Ok | SubscriptionHealth::Unconfigured => {
             feed_sources
                 .iter()
                 .find_map(|feed| match feed.runtime_state {
@@ -792,12 +791,88 @@ fn next_action_hint(
                     | FeedRuntimeState::Stopped => None,
                 })
         }
+        SubscriptionHealth::SelectorMismatch => selector_repair_hint(subscription, feed_sources),
         SubscriptionHealth::NeedsRuntime => feed_sources.iter().find_map(|feed| {
             (feed.runtime_state == FeedRuntimeState::Stopped)
                 .then(|| restart_feed_source_hint(feed))
                 .flatten()
         }),
         SubscriptionHealth::NeedsData => feed_events_hint(feed_sources, streams),
+    }
+}
+
+fn selector_repair_hint(
+    subscription: &FinanceSubscription,
+    feed_sources: &[FeedSourceDiagnostic],
+) -> Option<FinanceDiagnosticNextActionHint> {
+    let feed = feed_sources
+        .iter()
+        .find(|feed| feed.selector_coverage == FeedSelectorCoverage::MissingSelectors)?;
+    let venue = single_value(&subscription.venues)?;
+    if let Some(catalog_source_id) = &feed.catalog_source_id {
+        return Some(subscribe_instruments_hint(
+            "catalog_source_id",
+            catalog_source_id,
+            "feed_id",
+            venue,
+            &subscription.symbols,
+            &subscription.timeframes,
+        ));
+    }
+
+    feed.feed_id.as_ref().map(|feed_id| {
+        subscribe_instruments_hint(
+            "feed_id",
+            feed_id,
+            "catalog_source_id",
+            venue,
+            &subscription.symbols,
+            &subscription.timeframes,
+        )
+    })
+}
+
+fn single_value(values: &[String]) -> Option<&String> {
+    match values {
+        [value] => Some(value),
+        [] | [_, _, ..] => None,
+    }
+}
+
+fn subscribe_instruments_hint(
+    source_param: &str,
+    source_value: &str,
+    alternate_source_param: &str,
+    venue: &str,
+    symbols: &[String],
+    timeframes: &[String],
+) -> FinanceDiagnosticNextActionHint {
+    let mut default_params = serde_json::Map::new();
+    default_params.insert(
+        source_param.to_owned(),
+        serde_json::Value::String(source_value.to_owned()),
+    );
+    default_params.insert(
+        "venue".to_owned(),
+        serde_json::Value::String(venue.to_owned()),
+    );
+    default_params.insert("symbols".to_owned(), serde_json::json!(symbols));
+    default_params.insert("timeframes".to_owned(), serde_json::json!(timeframes));
+    default_params.insert("start_now".to_owned(), serde_json::Value::Bool(true));
+
+    FinanceDiagnosticNextActionHint {
+        tool:            "finance_subscribe_instruments".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: [
+            alternate_source_param,
+            "start_now",
+            "delivery",
+            "cooldown_secs",
+            "max_immediate_per_hour",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
     }
 }
 
@@ -1266,6 +1341,33 @@ mod tests {
         assert_eq!(
             sub.feed_sources[0].selector_diagnostic.as_deref(),
             Some("missing symbols: ETHUSDT; missing timeframes: 5m")
+        );
+        let next_action = sub
+            .next_action_hint
+            .as_ref()
+            .expect("selector mismatch should expose a subscribe-instruments repair hint");
+        assert_eq!(next_action.tool, "finance_subscribe_instruments");
+        assert_eq!(
+            next_action.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "venue": "binance",
+                "symbols": ["ETHUSDT"],
+                "timeframes": ["5m"],
+                "start_now": true
+            })
+        );
+        assert_eq!(next_action.required_params, Vec::<String>::new());
+        assert_eq!(
+            next_action.optional_params,
+            [
+                "feed_id",
+                "start_now",
+                "delivery",
+                "cooldown_secs",
+                "max_immediate_per_hour"
+            ]
+            .map(str::to_owned)
         );
     }
 
