@@ -63,6 +63,7 @@ pub(super) struct CandleSubscriptionDiagnostic {
     pub timeframes:      Vec<String>,
     pub delivery:        String,
     pub status:          SubscriptionHealth,
+    pub diagnostic:      Option<String>,
     pub feed_sources:    Vec<FeedSourceDiagnostic>,
     pub streams:         Vec<CandleStreamDiagnostic>,
 }
@@ -268,6 +269,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
             .stream_diagnostics(&subscription, as_of, stale_after_secs)
             .await?;
         let status = subscription_health(&subscription, &feed_sources, &streams);
+        let diagnostic = subscription_diagnostic(&subscription, status, &feed_sources, &streams);
 
         Ok(CandleSubscriptionDiagnostic {
             subscription_id: subscription.id,
@@ -277,6 +279,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
             timeframes: subscription.timeframes,
             delivery: format!("{:?}", subscription.delivery),
             status,
+            diagnostic,
             feed_sources,
             streams,
         })
@@ -689,6 +692,103 @@ fn subscription_health(
     SubscriptionHealth::Ok
 }
 
+fn subscription_diagnostic(
+    subscription: &FinanceSubscription,
+    status: SubscriptionHealth,
+    feed_sources: &[FeedSourceDiagnostic],
+    streams: &[CandleStreamDiagnostic],
+) -> Option<String> {
+    match status {
+        SubscriptionHealth::Ok => None,
+        SubscriptionHealth::Unconfigured => {
+            if subscription.venues.is_empty()
+                || subscription.symbols.is_empty()
+                || subscription.timeframes.is_empty()
+            {
+                return Some(
+                    "subscription is missing venue, symbol, or timeframe selectors".into(),
+                );
+            }
+            feed_sources
+                .iter()
+                .find_map(|feed| match feed.runtime_state {
+                    FeedRuntimeState::NotRegistered => Some(format!(
+                        "feed source {} is not registered",
+                        feed.source_name
+                    )),
+                    FeedRuntimeState::Disabled => {
+                        Some(format!("feed source {} is disabled", feed.source_name))
+                    }
+                    FeedRuntimeState::Running | FeedRuntimeState::Stopped => None,
+                })
+        }
+        SubscriptionHealth::SelectorMismatch => feed_sources.iter().find_map(|feed| {
+            feed.selector_diagnostic.as_ref().map(|diagnostic| {
+                format!(
+                    "feed source {} selector mismatch: {diagnostic}",
+                    feed.source_name
+                )
+            })
+        }),
+        SubscriptionHealth::NeedsRuntime => feed_sources.iter().find_map(|feed| {
+            if feed.runtime_state == FeedRuntimeState::Running {
+                None
+            } else {
+                Some(format!(
+                    "feed source {} is {}",
+                    feed.source_name,
+                    feed.runtime_state.as_diagnostic_str()
+                ))
+            }
+        }),
+        SubscriptionHealth::NeedsData => streams.iter().find_map(stream_diagnostic_summary),
+    }
+}
+
+impl FeedRuntimeState {
+    fn as_diagnostic_str(self) -> &'static str {
+        match self {
+            FeedRuntimeState::Running => "running",
+            FeedRuntimeState::Stopped => "stopped",
+            FeedRuntimeState::Disabled => "disabled",
+            FeedRuntimeState::NotRegistered => "not registered",
+        }
+    }
+}
+
+fn stream_diagnostic_summary(stream: &CandleStreamDiagnostic) -> Option<String> {
+    if stream.status == CandleStreamStatus::Fresh {
+        return None;
+    }
+    let source = stream
+        .source_name
+        .as_deref()
+        .map_or_else(|| "any source".to_owned(), str::to_owned);
+    let reason = stream
+        .diagnostic
+        .as_deref()
+        .unwrap_or_else(|| stream.status.as_diagnostic_str());
+    Some(format!(
+        "stream {source}/{}/{}/{} is {}: {reason}",
+        stream.venue,
+        stream.symbol,
+        stream.timeframe,
+        stream.status.as_diagnostic_str()
+    ))
+}
+
+impl CandleStreamStatus {
+    fn as_diagnostic_str(self) -> &'static str {
+        match self {
+            CandleStreamStatus::Fresh => "fresh",
+            CandleStreamStatus::Stale => "stale",
+            CandleStreamStatus::Missing => "missing",
+            CandleStreamStatus::Future => "future-dated",
+            CandleStreamStatus::InvalidSelector => "invalid",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -937,6 +1037,7 @@ mod tests {
         assert_eq!(result.count, 1);
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::Ok);
+        assert_eq!(sub.diagnostic, None);
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.feed_sources[0].event_count, 1);
         assert_eq!(
@@ -1028,6 +1129,13 @@ mod tests {
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::SelectorMismatch);
         assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some(
+                "feed source finance-binance-market-candles selector mismatch: missing symbols: \
+                 ETHUSDT; missing timeframes: 5m"
+            )
+        );
+        assert_eq!(
             sub.feed_sources[0].selector_coverage,
             FeedSelectorCoverage::MissingSelectors
         );
@@ -1057,11 +1165,51 @@ mod tests {
 
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::NeedsRuntime);
+        assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some("feed source finance-binance-market-candles is stopped")
+        );
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Stopped);
         assert_eq!(sub.feed_sources[0].event_count, 0);
         assert_eq!(sub.feed_sources[0].last_event_type, None);
         assert_eq!(sub.feed_sources[0].last_event_at, None);
         assert_eq!(sub.feed_sources[0].lag_seconds, None);
+        assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
+        assert!(sub.streams[0].latest.is_none());
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_missing_data_when_feed_is_running_without_candles() {
+        let (tool, finance_registry, data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        data_feed_registry.set_running(
+            "finance-binance-market-candles".to_owned(),
+            CancellationToken::new(),
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  None,
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::NeedsData);
+        assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some(
+                "stream finance-binance-market-candles/binance/BTCUSDT/1m is missing: no stored \
+                 closed candle matched this stream"
+            )
+        );
+        assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
         assert!(sub.streams[0].latest.is_none());
     }
@@ -1104,6 +1252,10 @@ mod tests {
 
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some("feed source finance-missing-market-candles is not registered")
+        );
         assert_eq!(
             sub.feed_sources[0].runtime_state,
             FeedRuntimeState::NotRegistered
@@ -1150,6 +1302,10 @@ mod tests {
 
         let sub = &result.subscriptions[0];
         assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some("feed source finance-binance-market-candles is disabled")
+        );
         assert_eq!(sub.feed_sources[0].enabled, Some(false));
         assert_eq!(
             sub.feed_sources[0].runtime_state,
