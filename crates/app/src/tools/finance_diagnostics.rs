@@ -785,10 +785,10 @@ fn next_action_hint(
             feed_sources
                 .iter()
                 .find_map(|feed| match feed.runtime_state {
-                    FeedRuntimeState::Disabled => enable_feed_source_hint(feed),
-                    FeedRuntimeState::NotRegistered
-                    | FeedRuntimeState::Running
-                    | FeedRuntimeState::Stopped => None,
+                    FeedRuntimeState::Disabled | FeedRuntimeState::NotRegistered => {
+                        enable_feed_source_hint(feed)
+                    }
+                    FeedRuntimeState::Running | FeedRuntimeState::Stopped => None,
                 })
         }
         SubscriptionHealth::SelectorMismatch => selector_repair_hint(subscription, feed_sources),
@@ -1579,6 +1579,60 @@ mod tests {
         );
         assert_eq!(sub.feed_sources[0].feed_id, None);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
+    }
+
+    #[tokio::test]
+    async fn diagnose_reports_enable_hint_when_builtin_feed_source_is_not_registered() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        assert!(
+            tool.data_feed_svc
+                .delete_feed("feed-1")
+                .await
+                .expect("delete feed should succeed")
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:  None,
+                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(
+            sub.diagnostic.as_deref(),
+            Some("feed source finance-binance-market-candles is not registered")
+        );
+        assert_eq!(
+            sub.feed_sources[0].catalog_source_id.as_deref(),
+            Some("binance-market-candles")
+        );
+        assert_eq!(
+            sub.feed_sources[0].runtime_state,
+            FeedRuntimeState::NotRegistered
+        );
+        let next_action = sub
+            .next_action_hint
+            .as_ref()
+            .expect("unregistered built-in source should expose an enable hint");
+        assert_eq!(next_action.tool, "finance_enable_feed_source");
+        assert_eq!(
+            next_action.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "start_now": true
+            })
+        );
+        assert_eq!(next_action.required_params, Vec::<String>::new());
+        assert_eq!(next_action.optional_params, ["start_now".to_owned()]);
     }
 
     #[tokio::test]

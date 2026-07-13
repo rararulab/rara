@@ -328,8 +328,8 @@ subscription diagnostic includes:
   expected event kind;
 - latest stored closed candle and freshness per
   `(source_name, venue, symbol, timeframe)`;
-- a `next_action_hint` when there is an obvious follow-up: disabled built-in
-  sources point to `finance_enable_feed_source`, stopped sources point to
+- a `next_action_hint` when there is an obvious follow-up: missing or disabled
+  built-in sources point to `finance_enable_feed_source`, stopped sources point to
   `finance_restart_feed_source`, selector mismatches point back to
   `finance_subscribe_instruments` with the subscription selectors so the feed
   transport can be extended idempotently, and running sources with
