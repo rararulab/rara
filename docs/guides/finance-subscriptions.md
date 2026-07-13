@@ -159,16 +159,20 @@ operations. Market-candle sources expose `market_data_hint` for
 TSDB stream discovery before querying latest or historical candles.
 
 `finance_subscribe_news` is the specialized RSS/article entry point. It fixes
-`event_kinds` to `rss_article`, rejects non-RSS catalog source IDs, and returns
-the persisted normalized selectors and delivery policy.
+`event_kinds` to `rss_article`, rejects non-RSS feed sources, ensures selected
+catalog or existing RSS feeds are enabled, starts them by default, creates or
+updates the subscription for the current ToolContext identity/session, and
+returns unsubscribe and event-query hints.
 
 `finance_subscribe_instruments` is the specialized closed-candle entry point.
 It fixes `event_kinds` to `market_candle_closed`, rejects non-`market_candle`
-catalog source IDs, derives `venue` from a selected market-candle catalog
-source when omitted, and returns the persisted normalized selectors and delivery
-policy. Use `finance_list_candle_streams` after subscription creation to
-discover stored TSDB streams, then call the single-stream candle tools for
-latest, recent, freshness, gaps, or bounded ranges.
+feed sources, derives `venue` from a selected market-candle source when omitted,
+persists requested `symbols` and `timeframes` into the feed transport, starts or
+restarts the runtime feed by default when needed, and returns market-data,
+diagnostic, and single-stream candle-query hints. Use
+`finance_list_candle_streams` after subscription creation to discover stored
+TSDB streams, then call the single-stream candle tools for latest, recent,
+freshness, gaps, or bounded ranges.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized
@@ -256,8 +260,8 @@ Example article subscription:
 
 For built-in RSS sources, `finance_subscribe_news` is the preferred
 conversation entry point because it narrows the call surface to article
-subscriptions and expands selected RSS catalog IDs into subscription source
-names:
+subscriptions, materializes the selected RSS catalog feeds when needed, and
+expands catalog IDs into subscription source names:
 
 ```json
 {
@@ -280,9 +284,11 @@ Example candle subscription:
 ```
 
 `finance_subscribe_instruments` derives `venue` from the selected
-`market_candle` feed when omitted. If a caller supplies `venue`, it must match
-the feed transport venue; mismatches are rejected before subscription creation
-because the feed cannot emit candles for another venue.
+`market_candle` feed when omitted. It also persists requested `symbols` and
+`timeframes` into the feed transport before creating the subscription. If a
+caller supplies `venue`, it must match the feed transport venue; mismatches are
+rejected before subscription creation because the feed cannot emit candles for
+another venue.
 
 Default delivery is `silent`. Immediate delivery is bounded by per-subscription
 cooldown and hourly budget; events above the budget are appended to tape rather

@@ -564,6 +564,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discover_tools_finds_finance_feed_subscription_tools() {
+        let pools = rara_kernel::testing::build_memory_diesel_pools().await;
+        let data_feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
+        let data_feed_registry = Arc::new(rara_kernel::data_feed::DataFeedRegistry::new(event_tx));
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let finance_registry = Arc::new(
+            rara_trading::finance::registry::FinanceSubscriptionRegistry::load(
+                tmp.path().join("finance-subscriptions.json"),
+            ),
+        );
+
+        let mut registry = ToolRegistry::new();
+        for tool in [
+            Arc::new(FinanceListFeedSourcesTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )) as AgentToolRef,
+            Arc::new(FinanceSubscribeNewsTool::new(
+                data_feed_svc.clone(),
+                data_feed_registry.clone(),
+                finance_registry.clone(),
+            )),
+            Arc::new(FinanceSubscribeInstrumentsTool::new(
+                data_feed_svc,
+                data_feed_registry,
+                finance_registry,
+            )),
+        ] {
+            registry.register(tool);
+        }
+        let context = context_with_registry(registry);
+        let discover = DiscoverToolsTool::new(rara_skills::registry::InMemoryRegistry::new());
+
+        let output = discover
+            .execute(
+                serde_json::json!({"query": "finance feed subscribe"}),
+                &context,
+            )
+            .await
+            .expect("discover finance feed subscription tools");
+        let result: DiscoverToolsResult =
+            serde_json::from_value(output.json).expect("discover result");
+
+        assert_eq!(result.status, DiscoverToolsStatus::Activated);
+        let names: Vec<&str> = result.tools.iter().map(|tool| tool.name.as_str()).collect();
+        for expected in [
+            "finance_list_feed_sources",
+            "finance_subscribe_news",
+            "finance_subscribe_instruments",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "discover-tools did not return finance feed tool: {expected}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn finance_agent_tools_do_not_accept_provider_configuration_fields() {
         let pools = rara_kernel::testing::build_memory_diesel_pools().await;
         let data_feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
