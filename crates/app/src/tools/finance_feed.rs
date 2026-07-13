@@ -124,6 +124,7 @@ pub(super) struct FinanceFeedBundleEntry {
     pub sources: Vec<FinanceFeedBundleSource>,
     pub list_sources_hint: FinanceFeedBundleListSourcesHint,
     pub subscribe_bundle_hint: Option<FinanceFeedBundleSubscribeHint>,
+    pub market_data_hint: Option<FinanceFeedSourceMarketDataHint>,
     pub enable_hints: Vec<FinanceFeedSourceEnableHint>,
     pub subscription_hint: Option<FinanceFeedSourceSubscriptionHint>,
     pub source_subscription_hints: Vec<FinanceFeedSourceSubscriptionHint>,
@@ -3561,6 +3562,7 @@ fn feed_bundle_entry(
     let subscription_hint = bundle_subscription_hint(&source_entries);
     let subscribe_bundle_hint =
         subscribe_bundle_hint_for_bundle(&bundle, can_enable, &source_entries);
+    let market_data_hint = bundle_market_data_hint(can_enable, &source_entries);
     let sources = source_entries
         .iter()
         .map(|source| FinanceFeedBundleSource {
@@ -3617,10 +3619,35 @@ fn feed_bundle_entry(
             .collect(),
         },
         subscribe_bundle_hint,
+        market_data_hint,
         enable_hints,
         subscription_hint,
         source_subscription_hints,
     }
+}
+
+fn bundle_market_data_hint(
+    can_enable: bool,
+    source_entries: &[FinanceFeedSourceEntry],
+) -> Option<FinanceFeedSourceMarketDataHint> {
+    if !can_enable || source_entries.len() != 1 {
+        return None;
+    }
+    let source = &source_entries[0];
+    if source.feed_type != FeedType::MarketCandle.to_string() {
+        return None;
+    }
+
+    let mut hint = source.market_data_hint.clone()?;
+    if let serde_json::Value::Object(default_params) = &mut hint.default_params {
+        if let [timeframe] = source.configured_timeframes.as_slice() {
+            default_params.insert(
+                "timeframe".to_owned(),
+                serde_json::Value::String(timeframe.clone()),
+            );
+        }
+    }
+    Some(hint)
 }
 
 fn subscribe_bundle_hint_for_bundle(
@@ -4372,6 +4399,10 @@ mod tests {
         );
         assert!(macro_news.can_enable);
         assert!(!macro_news.requires_configuration);
+        assert!(
+            macro_news.market_data_hint.is_none(),
+            "RSS bundle should not expose TSDB stream hints"
+        );
         let macro_subscribe = macro_news
             .subscription_hint
             .as_ref()
@@ -4437,6 +4468,20 @@ mod tests {
                 "start_now": true,
             })
         );
+        let crypto_market_data = crypto
+            .market_data_hint
+            .as_ref()
+            .expect("market bundle should expose direct TSDB stream hint");
+        assert_eq!(crypto_market_data.tool, "finance_list_candle_streams");
+        assert_eq!(
+            crypto_market_data.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-major-crypto-15m",
+                "venue": "binance",
+                "timeframe": "15m",
+                "limit": 20
+            })
+        );
         assert_eq!(
             crypto_subscribe.default_params,
             serde_json::json!({
@@ -4456,6 +4501,10 @@ mod tests {
         assert!(!longbridge.can_enable);
         assert!(longbridge.enable_hints.is_empty());
         assert!(longbridge.subscribe_bundle_hint.is_none());
+        assert!(
+            longbridge.market_data_hint.is_none(),
+            "operator-configured bundle should not expose direct TSDB stream hint"
+        );
         assert!(
             longbridge
                 .setup_hints
