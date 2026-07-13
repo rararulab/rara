@@ -95,11 +95,25 @@ async fn timescale_repository_contract_runs_against_testcontainer() -> anyhow::R
             symbol:      "BTCUSDT".to_owned(),
             timeframe:   Timeframe::parse("15m")?,
             limit:       1,
+            end:         None,
         })
         .await?;
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].open_time, ts("2026-07-10T08:30:00Z"));
     assert_eq!(recent[0].close, dec("61700.00"));
+
+    let older_recent = repo
+        .recent_candles(CandleRecentQuery {
+            source_name: Some("timescale-container-contract".to_owned()),
+            venue:       "binance".to_owned(),
+            symbol:      "BTCUSDT".to_owned(),
+            timeframe:   Timeframe::parse("15m")?,
+            limit:       1,
+            end:         Some(ts("2026-07-10T08:30:00Z")),
+        })
+        .await?;
+    assert_eq!(older_recent.len(), 1);
+    assert_eq!(older_recent[0].open_time, ts("2026-07-10T08:15:00Z"));
 
     assert_eq!(
         repo.upsert_closed_candle(MarketCandle {

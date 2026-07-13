@@ -317,6 +317,7 @@ fn matches_recent_query(candle: &MarketCandle, query: &CandleRecentQuery) -> boo
         && candle.venue == query.venue
         && candle.symbol == query.symbol
         && candle.timeframe == query.timeframe
+        && query.end.is_none_or(|end| candle.open_time < end)
 }
 
 fn matches_stream_query(candle: &MarketCandle, query: &CandleStreamListQuery) -> bool {
@@ -536,6 +537,7 @@ mod tests {
                 symbol:      "BTCUSDT".to_owned(),
                 timeframe:   Timeframe::parse("15m").unwrap(),
                 limit:       2,
+                end:         None,
             })
             .await
             .unwrap();

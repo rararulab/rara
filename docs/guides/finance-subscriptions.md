@@ -317,8 +317,8 @@ inclusive `start`, and `next_page_hint` calls `finance_query_candles` with that
 `start`, the same selectors, the same exclusive `end`, and the same limit.
 When `finance_get_recent_candles.has_more` is true, `next_end` contains the
 oldest returned candle open time to use as an exclusive `end` when paging older
-history via `finance_query_candles`; its `next_page_hint` pre-fills that
-exclusive `end` and keeps `start` as the only required parameter. The
+history via another `finance_get_recent_candles` call; its `next_page_hint`
+pre-fills that exclusive `end`. The
 stream-list, recent-candle, and candle-range limits are capped at 9,999 so the
 tools can probe one extra row and report pagination state accurately.
 

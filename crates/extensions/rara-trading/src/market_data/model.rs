@@ -150,6 +150,7 @@ pub struct CandleRecentQuery {
     pub symbol:      String,
     pub timeframe:   Timeframe,
     pub limit:       usize,
+    pub end:         Option<Timestamp>,
 }
 
 /// Stream inventory query for stored candle data.
