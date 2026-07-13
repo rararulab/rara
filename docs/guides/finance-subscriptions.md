@@ -239,7 +239,9 @@ semantics and are capped at 10,000 expected candles.
 
 Identity and session routing are always taken from `ToolContext`. The tool
 schema has no `owner` or `session` parameter, so an agent cannot subscribe or
-unsubscribe on behalf of another user by passing forged IDs.
+unsubscribe on behalf of another user by passing forged IDs. Subscription list
+results also omit internal `owner` and `session_key` routing fields; they expose
+only the subscription ID, normalized selectors, and delivery policy.
 
 Example article subscription:
 
