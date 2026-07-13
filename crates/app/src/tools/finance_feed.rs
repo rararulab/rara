@@ -44,6 +44,7 @@ use uuid::Uuid;
 const MAX_CATALOG_SOURCE_ID_LEN: usize = 128;
 const MAX_FEED_ID_LEN: usize = 128;
 const MAX_SOURCE_NAME_LEN: usize = 128;
+const MAX_FEED_SOURCE_FILTERS: usize = 64;
 const MAX_NEWS_SOURCE_REFS: usize = 32;
 const MAX_EVENT_SOURCE_REFS: usize = 32;
 const MAX_UNSUBSCRIBE_SOURCE_REFS: usize = 64;
@@ -53,14 +54,67 @@ const MAX_NEWS_SELECTOR_LEN: usize = 128;
 const MAX_SYMBOLS: usize = 500;
 const MAX_TIMEFRAMES: usize = 32;
 const MAX_INSTRUMENT_SELECTOR_LEN: usize = 64;
+const MAX_PROVIDER_SELECTOR_LEN: usize = 64;
 const DEFAULT_COOLDOWN_SECS: u64 = 900;
 const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 const DEFAULT_FEED_EVENT_LIMIT: i64 = 20;
 const MAX_FEED_EVENT_LIMIT: i64 = 200;
 const DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID: &str = "binance-market-candles";
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct FinanceListFeedSourcesParams {}
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct FinanceListFeedSourcesParams {
+    /// Optional built-in source ids from this catalog, for example
+    /// fed-press-releases or binance-market-candles.
+    #[serde(default)]
+    pub catalog_source_ids:         Vec<String>,
+    /// Optional feed types such as rss or market_candle.
+    #[serde(default)]
+    pub feed_types:                 Vec<String>,
+    /// Optional provider labels such as binance or longbridge.
+    #[serde(default)]
+    pub providers:                  Vec<String>,
+    /// When set, include only sources whose ready catalog template can be
+    /// enabled directly without operator configuration.
+    #[serde(default)]
+    pub can_enable:                 Option<bool>,
+    /// When set, include only sources that do or do not require operator
+    /// configuration before enabling.
+    #[serde(default)]
+    pub requires_configuration:     Option<bool>,
+    /// When set, include only sources that are or are not persisted as
+    /// DataFeedConfig rows.
+    #[serde(default)]
+    pub persisted:                  Option<bool>,
+    /// When set, include only sources whose persisted config is enabled or
+    /// disabled. Non-persisted sources count as disabled.
+    #[serde(default)]
+    pub enabled:                    Option<bool>,
+    /// When set, include only sources whose runtime task is or is not running.
+    #[serde(default)]
+    pub running:                    Option<bool>,
+    /// When set, include only sources that the current user is or is not
+    /// subscribed to across any session.
+    #[serde(default)]
+    pub subscribed:                 Option<bool>,
+    /// When set, include only sources that this conversation/session is or is
+    /// not subscribed to.
+    #[serde(default)]
+    pub current_session_subscribed: Option<bool>,
+}
+
+#[derive(Debug)]
+struct FinanceFeedSourceFilters {
+    catalog_source_ids:         Vec<String>,
+    feed_types:                 Vec<String>,
+    providers:                  Vec<String>,
+    can_enable:                 Option<bool>,
+    requires_configuration:     Option<bool>,
+    persisted:                  Option<bool>,
+    enabled:                    Option<bool>,
+    running:                    Option<bool>,
+    subscribed:                 Option<bool>,
+    current_session_subscribed: Option<bool>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedSourceEntry {
@@ -821,9 +875,10 @@ impl ToolExecute for FinanceListFeedSourcesTool {
 
     async fn run(
         &self,
-        _params: FinanceListFeedSourcesParams,
+        params: FinanceListFeedSourcesParams,
         context: &ToolContext,
     ) -> anyhow::Result<FinanceListFeedSourcesResult> {
+        let filters = FinanceFeedSourceFilters::from_params(params)?;
         let feeds = self.svc.list_feeds().await?;
         let summaries = self
             .svc
@@ -839,14 +894,14 @@ impl ToolExecute for FinanceListFeedSourcesTool {
         Ok(FinanceListFeedSourcesResult {
             sources: default_finance_feed_sources()
                 .into_iter()
-                .map(|source| {
+                .filter_map(|source| {
                     let source_name = source.feed_name();
                     let persisted = feeds.iter().find(|feed| feed.name == source_name);
                     let summary = summaries.get(&source_name);
                     let last_event_at = summary.and_then(|summary| summary.last_event_at);
                     let lag_seconds = last_event_at
                         .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
-                    feed_source_entry(
+                    let entry = feed_source_entry(
                         source,
                         persisted,
                         self.registry.is_running(&source_name),
@@ -859,7 +914,8 @@ impl ToolExecute for FinanceListFeedSourcesTool {
                             context.session_key,
                             &source_name,
                         ),
-                    )
+                    );
+                    filters.matches(&entry).then_some(entry)
                 })
                 .collect(),
         })
@@ -976,6 +1032,135 @@ fn payload_string(payload: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+impl FinanceFeedSourceFilters {
+    fn from_params(params: FinanceListFeedSourcesParams) -> anyhow::Result<Self> {
+        let catalog_source_ids = params
+            .catalog_source_ids
+            .into_iter()
+            .map(normalize_catalog_source_id)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            catalog_source_ids.len() <= MAX_FEED_SOURCE_FILTERS,
+            "catalog_source_ids has too many values"
+        );
+        let providers = normalize_string_refs(
+            "providers",
+            params.providers,
+            MAX_FEED_SOURCE_FILTERS,
+            MAX_PROVIDER_SELECTOR_LEN,
+        )?
+        .into_iter()
+        .map(|provider| provider.to_ascii_lowercase())
+        .collect();
+        let feed_types = normalize_feed_type_filters(params.feed_types)?;
+
+        Ok(Self {
+            catalog_source_ids,
+            feed_types,
+            providers,
+            can_enable: params.can_enable,
+            requires_configuration: params.requires_configuration,
+            persisted: params.persisted,
+            enabled: params.enabled,
+            running: params.running,
+            subscribed: params.subscribed,
+            current_session_subscribed: params.current_session_subscribed,
+        })
+    }
+
+    fn matches(&self, entry: &FinanceFeedSourceEntry) -> bool {
+        if !self.catalog_source_ids.is_empty()
+            && !self.catalog_source_ids.iter().any(|id| id == &entry.id)
+        {
+            return false;
+        }
+        if !self.feed_types.is_empty()
+            && !self
+                .feed_types
+                .iter()
+                .any(|feed_type| feed_type == &entry.feed_type)
+        {
+            return false;
+        }
+        if !self.providers.is_empty()
+            && !entry
+                .provider
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .is_some_and(|provider| self.providers.iter().any(|value| value == &provider))
+        {
+            return false;
+        }
+        if self
+            .can_enable
+            .is_some_and(|expected| expected != entry.can_enable)
+        {
+            return false;
+        }
+        if self
+            .requires_configuration
+            .is_some_and(|expected| expected != entry.requires_configuration)
+        {
+            return false;
+        }
+        if self
+            .persisted
+            .is_some_and(|expected| expected != entry.runtime.persisted)
+        {
+            return false;
+        }
+        if self
+            .enabled
+            .is_some_and(|expected| expected != entry.runtime.enabled)
+        {
+            return false;
+        }
+        if self
+            .running
+            .is_some_and(|expected| expected != entry.runtime.running)
+        {
+            return false;
+        }
+        if self
+            .subscribed
+            .is_some_and(|expected| expected != entry.subscriptions.user_subscribed)
+        {
+            return false;
+        }
+        if self
+            .current_session_subscribed
+            .is_some_and(|expected| expected != entry.subscriptions.session_subscribed)
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
+fn normalize_feed_type_filters(feed_types: Vec<String>) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(
+        feed_types.len() <= MAX_FEED_SOURCE_FILTERS,
+        "feed_types has too many values"
+    );
+    let mut out = Vec::with_capacity(feed_types.len());
+    for feed_type in feed_types {
+        let feed_type = feed_type.trim().to_ascii_lowercase();
+        anyhow::ensure!(!feed_type.is_empty(), "feed_types contains an empty value");
+        anyhow::ensure!(
+            matches!(
+                feed_type.as_str(),
+                "webhook" | "web_socket" | "polling" | "rss" | "market_candle"
+            ),
+            "unknown feed_type filter: {feed_type}"
+        );
+        if !out.contains(&feed_type) {
+            out.push(feed_type);
+        }
+    }
+    Ok(out)
 }
 
 #[async_trait]
@@ -3674,7 +3859,7 @@ mod tests {
             tool().await;
 
         let result = tool
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
 
@@ -3798,6 +3983,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_feed_sources_filters_catalog_by_provider_type_and_setup_state() {
+        let (tool, _enable, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
+            tool().await;
+
+        let binance = tool
+            .run(
+                FinanceListFeedSourcesParams {
+                    feed_types:                 vec!["market_candle".to_owned()],
+                    providers:                  vec!["BINANCE".to_owned()],
+                    catalog_source_ids:         Vec::new(),
+                    can_enable:                 Some(true),
+                    requires_configuration:     Some(false),
+                    persisted:                  None,
+                    enabled:                    None,
+                    running:                    None,
+                    subscribed:                 None,
+                    current_session_subscribed: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            binance
+                .sources
+                .iter()
+                .map(|source| source.id.as_str())
+                .collect::<Vec<_>>(),
+            ["binance-market-candles", "binance-major-crypto-15m"]
+        );
+
+        let longbridge = tool
+            .run(
+                FinanceListFeedSourcesParams {
+                    feed_types:                 vec!["market_candle".to_owned()],
+                    providers:                  vec!["longbridge".to_owned()],
+                    catalog_source_ids:         Vec::new(),
+                    can_enable:                 Some(false),
+                    requires_configuration:     Some(true),
+                    persisted:                  None,
+                    enabled:                    None,
+                    running:                    None,
+                    subscribed:                 None,
+                    current_session_subscribed: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(longbridge.sources.len(), 1);
+        assert_eq!(longbridge.sources[0].id, "longbridge-market-candles");
+    }
+
+    #[tokio::test]
     async fn list_feed_sources_reports_persisted_enabled_source_state() {
         let (list, enable, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
             tool().await;
@@ -3813,7 +4052,7 @@ mod tests {
             .unwrap();
 
         let result = list
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
         let fed = result
@@ -4301,7 +4540,7 @@ mod tests {
         store.append(&event).await.unwrap();
 
         let result = list
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
         let fed = result
@@ -4614,7 +4853,7 @@ mod tests {
             .unwrap();
 
         let result = list
-            .run(FinanceListFeedSourcesParams {}, &ctx)
+            .run(FinanceListFeedSourcesParams::default(), &ctx)
             .await
             .unwrap();
         let binance = result
@@ -4664,7 +4903,7 @@ mod tests {
         svc.create_feed(&config).await.unwrap();
 
         let result = list
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
         let binance = result
@@ -4851,7 +5090,7 @@ mod tests {
         assert!(!registry.is_running("finance-fed-press-releases"));
 
         let listed = list
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
         let fed = listed
@@ -6033,7 +6272,7 @@ mod tests {
         );
 
         let listed = list
-            .run(FinanceListFeedSourcesParams {}, &context())
+            .run(FinanceListFeedSourcesParams::default(), &context())
             .await
             .unwrap();
         let binance = listed
