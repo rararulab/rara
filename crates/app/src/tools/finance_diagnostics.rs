@@ -64,8 +64,19 @@ pub(super) struct FinanceDiagnoseCandleSubscriptionsParams {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceDiagnoseCandleSubscriptionsResult {
     pub as_of:         String,
+    pub query:         FinanceDiagnoseCandleSubscriptionsQuery,
     pub subscriptions: Vec<CandleSubscriptionDiagnostic>,
     pub count:         usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FinanceDiagnoseCandleSubscriptionsQuery {
+    pub subscription_id:       Option<Uuid>,
+    pub catalog_source_ids:    Vec<String>,
+    pub source_names:          Vec<String>,
+    pub feed_ids:              Vec<String>,
+    pub resolved_source_names: Vec<String>,
+    pub stale_after_secs:      Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,14 +175,17 @@ struct FeedEventSummary {
 #[derive(Debug, Clone)]
 struct DiagnosticSourceFilter {
     source_names: Option<HashSet<String>>,
+    query:        FinanceDiagnoseCandleSubscriptionsQuery,
 }
 
 impl DiagnosticSourceFilter {
     fn from_params(
         feeds_by_name: &HashMap<String, DataFeedConfig>,
+        subscription_id: Option<Uuid>,
         catalog_source_ids: Vec<String>,
         source_names: Vec<String>,
         feed_ids: Vec<String>,
+        stale_after_secs: Option<u64>,
     ) -> anyhow::Result<Self> {
         let catalog_source_ids =
             normalize_diagnostic_refs("catalog_source_ids", catalog_source_ids)?;
@@ -184,22 +198,32 @@ impl DiagnosticSourceFilter {
         );
 
         let mut selected_source_names = HashSet::new();
-        for catalog_source_id in catalog_source_ids {
-            selected_source_names.insert(find_catalog_source(&catalog_source_id)?.feed_name());
+        for catalog_source_id in &catalog_source_ids {
+            selected_source_names.insert(find_catalog_source(catalog_source_id)?.feed_name());
         }
-        for source_name in source_names {
-            selected_source_names.insert(source_name);
+        for source_name in &source_names {
+            selected_source_names.insert(source_name.clone());
         }
-        for feed_id in feed_ids {
+        for feed_id in &feed_ids {
             let feed = feeds_by_name
                 .values()
-                .find(|feed| feed.id == feed_id)
+                .find(|feed| feed.id == *feed_id)
                 .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
             selected_source_names.insert(feed.name.clone());
         }
 
+        let mut resolved_source_names = selected_source_names.iter().cloned().collect::<Vec<_>>();
+        resolved_source_names.sort();
         Ok(Self {
             source_names: (!selected_source_names.is_empty()).then_some(selected_source_names),
+            query:        FinanceDiagnoseCandleSubscriptionsQuery {
+                subscription_id,
+                catalog_source_ids,
+                source_names,
+                feed_ids,
+                resolved_source_names,
+                stale_after_secs,
+            },
         })
     }
 
@@ -280,9 +304,11 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
             .collect::<HashMap<_, _>>();
         let source_filter = DiagnosticSourceFilter::from_params(
             &feeds_by_name,
+            params.subscription_id,
             params.catalog_source_ids,
             params.source_names,
             params.feed_ids,
+            stale_after_secs,
         )?;
         let event_summaries = self
             .data_feed_svc
@@ -332,6 +358,7 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
         let count = diagnostics.len();
         Ok(FinanceDiagnoseCandleSubscriptionsResult {
             as_of: as_of.to_string(),
+            query: source_filter.query,
             subscriptions: diagnostics,
             count,
         })
@@ -1903,11 +1930,120 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.count, 1);
+        assert_eq!(
+            result.query,
+            super::FinanceDiagnoseCandleSubscriptionsQuery {
+                subscription_id:       None,
+                catalog_source_ids:    vec!["binance-market-candles".to_owned()],
+                source_names:          Vec::new(),
+                feed_ids:              Vec::new(),
+                resolved_source_names: vec!["finance-binance-market-candles".to_owned()],
+                stale_after_secs:      None,
+            }
+        );
         assert_eq!(result.subscriptions[0].subscription_id, binance_id);
         assert_eq!(
             result.subscriptions[0].source_names,
             ["finance-binance-market-candles"]
         );
+    }
+
+    #[tokio::test]
+    async fn diagnose_filters_by_source_name_for_current_user() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        let binance_id = insert_subscription(&finance_registry, &ctx).await;
+        let longbridge_id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id:                     longbridge_id,
+                owner:                  UserId(ctx.user_id.clone()),
+                session_key:            ctx.session_key,
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           vec!["finance-longbridge-market-candles".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["longbridge".to_owned()],
+                symbols:                vec!["AAPL.US".to_owned()],
+                timeframes:             vec!["1d".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       vec!["finance-binance-market-candles".to_owned()],
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   Some(120),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(
+            result.query.resolved_source_names,
+            ["finance-binance-market-candles"]
+        );
+        assert_eq!(result.query.stale_after_secs, Some(120));
+        assert_eq!(result.subscriptions[0].subscription_id, binance_id);
+    }
+
+    #[tokio::test]
+    async fn diagnose_filters_by_feed_id_for_current_user() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        let binance_id = insert_subscription(&finance_registry, &ctx).await;
+        let longbridge_id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id:                     longbridge_id,
+                owner:                  UserId(ctx.user_id.clone()),
+                session_key:            ctx.session_key,
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           vec!["finance-longbridge-market-candles".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["longbridge".to_owned()],
+                symbols:                vec!["AAPL.US".to_owned()],
+                timeframes:             vec!["1d".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           vec!["feed-1".to_owned()],
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.query.feed_ids, ["feed-1"]);
+        assert_eq!(
+            result.query.resolved_source_names,
+            ["finance-binance-market-candles"]
+        );
+        assert_eq!(result.subscriptions[0].subscription_id, binance_id);
     }
 
     #[tokio::test]

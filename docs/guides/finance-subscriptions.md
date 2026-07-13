@@ -221,11 +221,16 @@ next `offset`. Empty market-candle pages include a `diagnostic_hint` for
 `finance_diagnose_candle_subscriptions`, prefilled with the same
 `catalog_source_ids`, `source_names`, or `feed_ids` selector, so rara can move
 from "no raw closed candle events" to source-scoped subscription/runtime
-diagnosis. The result also echoes a normalized `query` with resolved unique
-sources, event-kind strings, `since`, `query_limit`, and `query_offset`, so rara
-can explain empty pages or paginated event lookups without reconstructing the
-request. Top-level `source_count`, `event_count`, `total`, and `has_more`
-summarize the returned pages across all selected sources.
+diagnosis. Candle diagnostics echo a normalized `query` with the requested
+`subscription_id`, `catalog_source_ids`, `source_names`, `feed_ids`,
+`stale_after_secs`, and the resolved unique `resolved_source_names`, so rara can
+state whether it diagnosed all current-user candle subscriptions or only the
+sources selected by the empty event query. The event result also echoes a
+normalized `query` with resolved unique sources, event-kind strings, `since`,
+`query_limit`, and `query_offset`, so rara can explain empty pages or paginated
+event lookups without reconstructing the request. Top-level `source_count`,
+`event_count`, `total`, and `has_more` summarize the returned pages across all
+selected sources.
 
 For built-in catalog entries, `provider` is catalog metadata used by the agent
 and UI to label fixed data sources such as Binance and Longbridge. It is
