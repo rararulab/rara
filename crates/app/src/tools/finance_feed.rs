@@ -277,6 +277,7 @@ pub(super) struct FinanceSubscriptionEntry {
     pub diagnostic_subscription_id: Option<Uuid>,
     pub unsubscribe_hint:           Option<FinanceSubscriptionUnsubscribeHint>,
     pub events_hint:                Option<FinanceSubscriptionEventsHint>,
+    pub market_data_hint:           Option<FinanceSubscriptionMarketDataHint>,
     pub source_names:               Vec<String>,
     pub matches_all_sources:        bool,
     pub sources:                    Vec<FinanceSubscriptionSource>,
@@ -300,6 +301,14 @@ pub(super) struct FinanceSubscriptionUnsubscribeHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscriptionEventsHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionMarketDataHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2502,6 +2511,7 @@ fn subscription_entry(
     let diagnostic_subscription_id = diagnostic_tool.as_ref().map(|_| subscription.id);
     let unsubscribe_hint = Some(unsubscribe_hint_for_subscription(subscription.id));
     let events_hint = events_hint_for_subscription(&subscription);
+    let market_data_hint = market_data_hint_for_subscription(&subscription);
 
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
@@ -2512,6 +2522,7 @@ fn subscription_entry(
         diagnostic_subscription_id,
         unsubscribe_hint,
         events_hint,
+        market_data_hint,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2553,6 +2564,60 @@ fn events_hint_for_subscription(
             .map(str::to_owned)
             .collect(),
     })
+}
+
+fn market_data_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceSubscriptionMarketDataHint> {
+    if !subscription_is_market_candle(subscription) {
+        return None;
+    }
+
+    let mut default_params = serde_json::Map::from_iter([(
+        "limit".to_owned(),
+        serde_json::Value::Number(DEFAULT_FEED_EVENT_LIMIT.into()),
+    )]);
+    if let Some(source_name) = single_selector_value(&subscription.source_names) {
+        default_params.insert(
+            "source_name".to_owned(),
+            serde_json::Value::String(source_name.to_owned()),
+        );
+    }
+    if let Some(venue) = single_selector_value(&subscription.venues) {
+        default_params.insert(
+            "venue".to_owned(),
+            serde_json::Value::String(venue.to_owned()),
+        );
+    }
+    if let Some(symbol) = single_selector_value(&subscription.symbols) {
+        default_params.insert(
+            "symbol".to_owned(),
+            serde_json::Value::String(symbol.to_owned()),
+        );
+    }
+    if let Some(timeframe) = single_selector_value(&subscription.timeframes) {
+        default_params.insert(
+            "timeframe".to_owned(),
+            serde_json::Value::String(timeframe.to_owned()),
+        );
+    }
+
+    Some(FinanceSubscriptionMarketDataHint {
+        tool:            "finance_list_candle_streams".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: ["source_name", "venue", "symbol", "timeframe", "limit"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
+fn single_selector_value(values: &[String]) -> Option<&str> {
+    match values {
+        [value] => Some(value.as_str()),
+        _ => None,
+    }
 }
 
 fn unsubscribe_hint_for_subscription(subscription_id: Uuid) -> FinanceSubscriptionUnsubscribeHint {
@@ -4524,6 +4589,24 @@ mod tests {
                 "since": "24h",
                 "limit": 20,
             })
+        );
+        let market_data_hint = listed.subscriptions[0]
+            .market_data_hint
+            .as_ref()
+            .expect("market subscription should include market-data hint");
+        assert_eq!(market_data_hint.tool, "finance_list_candle_streams");
+        assert_eq!(
+            market_data_hint.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "limit": 20,
+            })
+        );
+        assert!(market_data_hint.required_params.is_empty());
+        assert_eq!(
+            market_data_hint.optional_params,
+            ["source_name", "venue", "symbol", "timeframe", "limit"]
         );
         assert_eq!(
             listed.subscriptions[0].sources[0].provider.as_deref(),
