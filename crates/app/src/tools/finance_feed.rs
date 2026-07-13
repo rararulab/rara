@@ -70,6 +70,8 @@ pub(super) struct FinanceFeedSourceEntry {
     pub feed_type:              String,
     pub subscribe_tool:         Option<String>,
     pub subscription_hint:      Option<FinanceFeedSourceSubscriptionHint>,
+    pub enable_hint:            Option<FinanceFeedSourceEnableHint>,
+    pub events_hint:            Option<FinanceFeedSourceEventsHint>,
     pub provider:               Option<String>,
     pub tags:                   Vec<String>,
     pub source_name:            String,
@@ -90,6 +92,22 @@ pub(super) struct FinanceFeedSourceSubscriptionHint {
     pub required_params: Vec<String>,
     pub optional_params: Vec<String>,
     pub diagnostic_tool: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceEnableHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceEventsHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2260,6 +2278,52 @@ fn subscription_hint_for_source(
     }
 }
 
+fn enable_hint_for_source(
+    catalog_source_id: &str,
+    can_enable: bool,
+    persisted: bool,
+) -> Option<FinanceFeedSourceEnableHint> {
+    if !can_enable || persisted {
+        return None;
+    }
+
+    Some(FinanceFeedSourceEnableHint {
+        tool:            "finance_enable_feed_source".to_owned(),
+        default_params:  serde_json::json!({
+            "catalog_source_id": catalog_source_id,
+            "start_now": true,
+        }),
+        required_params: Vec::new(),
+        optional_params: vec!["start_now".to_owned()],
+    })
+}
+
+fn events_hint_for_source(
+    catalog_source_id: &str,
+    feed_type: FeedType,
+) -> Option<FinanceFeedSourceEventsHint> {
+    let event_kind = match feed_type {
+        FeedType::Rss => "rss_article",
+        FeedType::MarketCandle => "market_candle_closed",
+        FeedType::Polling | FeedType::Webhook | FeedType::WebSocket => return None,
+    };
+
+    Some(FinanceFeedSourceEventsHint {
+        tool:            "finance_list_feed_events".to_owned(),
+        default_params:  serde_json::json!({
+            "catalog_source_ids": [catalog_source_id],
+            "event_kinds": [event_kind],
+            "since": "24h",
+            "limit": DEFAULT_FEED_EVENT_LIMIT,
+        }),
+        required_params: Vec::new(),
+        optional_params: ["since", "limit", "offset"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
 fn feed_source_entry(
     source: DefaultFeedSource,
     persisted: Option<&DataFeedConfig>,
@@ -2276,6 +2340,8 @@ fn feed_source_entry(
         .or(source.transport.as_ref());
     let subscription_hint = subscription_hint_for_source(&source.id, source.feed_type, transport);
     let can_enable = source.can_enable();
+    let enable_hint = enable_hint_for_source(&source.id, can_enable, persisted.is_some());
+    let events_hint = events_hint_for_source(&source.id, source.feed_type);
     let provider = source.provider.clone().or_else(|| {
         transport
             .and_then(|value| value.get("provider"))
@@ -2289,6 +2355,8 @@ fn feed_source_entry(
         feed_type: source.feed_type.to_string(),
         subscribe_tool: subscribe_tool_for_feed_type(source.feed_type),
         subscription_hint,
+        enable_hint,
+        events_hint,
         provider,
         tags: source.tags,
         source_name,
@@ -2740,6 +2808,57 @@ mod tests {
         }
     }
 
+    fn assert_fed_source_action_hints(fed: &super::FinanceFeedSourceEntry) {
+        let enable_hint = fed
+            .enable_hint
+            .as_ref()
+            .expect("fed should include enable hint");
+        assert_eq!(enable_hint.tool, "finance_enable_feed_source");
+        assert_eq!(
+            enable_hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "fed-press-releases",
+                "start_now": true
+            })
+        );
+        assert!(enable_hint.required_params.is_empty());
+        assert_eq!(enable_hint.optional_params, ["start_now"]);
+
+        let events_hint = fed
+            .events_hint
+            .as_ref()
+            .expect("fed should include events hint");
+        assert_eq!(events_hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            events_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": ["fed-press-releases"],
+                "event_kinds": ["rss_article"],
+                "since": "24h",
+                "limit": 20
+            })
+        );
+        assert!(events_hint.required_params.is_empty());
+        assert_eq!(events_hint.optional_params, ["since", "limit", "offset"]);
+    }
+
+    fn assert_binance_source_events_hint(binance: &super::FinanceFeedSourceEntry) {
+        let events_hint = binance
+            .events_hint
+            .as_ref()
+            .expect("binance should include events hint");
+        assert_eq!(events_hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            events_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": ["binance-market-candles"],
+                "event_kinds": ["market_candle_closed"],
+                "since": "24h",
+                "limit": 20
+            })
+        );
+    }
+
     #[tokio::test]
     async fn list_feed_sources_reports_catalog_and_absent_runtime_state() {
         let (tool, _enable, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
@@ -2774,6 +2893,7 @@ mod tests {
         assert!(fed_hint.required_params.is_empty());
         assert!(fed_hint.optional_params.contains(&"watch_terms".to_owned()));
         assert_eq!(fed_hint.diagnostic_tool, None);
+        assert_fed_source_action_hints(fed);
         assert!(fed.can_enable);
         assert!(!fed.runtime.persisted);
         assert_eq!(fed.runtime.feed_id, None);
@@ -2818,6 +2938,7 @@ mod tests {
             binance_hint.diagnostic_tool.as_deref(),
             Some("finance_diagnose_candle_subscriptions")
         );
+        assert_binance_source_events_hint(binance);
         assert_eq!(binance.venue.as_deref(), Some("binance"));
         assert_eq!(binance.configured_symbols, ["BTCUSDT", "ETHUSDT"]);
         assert_eq!(binance.configured_timeframes, ["1m"]);
@@ -2848,6 +2969,13 @@ mod tests {
         );
         assert!(longbridge.requires_configuration);
         assert!(!longbridge.can_enable);
+        assert!(longbridge.enable_hint.is_none());
+        assert!(
+            longbridge
+                .events_hint
+                .as_ref()
+                .is_some_and(|hint| hint.tool == "finance_list_feed_events")
+        );
         assert!(
             longbridge
                 .setup_hint
@@ -2893,6 +3021,24 @@ mod tests {
         assert_eq!(fed.runtime.status.as_deref(), Some("idle"));
         assert_eq!(fed.runtime.last_error, None);
         assert_eq!(fed.runtime.event_count, 0);
+        assert!(
+            fed.enable_hint.is_none(),
+            "persisted source should not include enable hint"
+        );
+        let events_hint = fed
+            .events_hint
+            .as_ref()
+            .expect("persisted source should include events hint");
+        assert_eq!(events_hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            events_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": ["fed-press-releases"],
+                "event_kinds": ["rss_article"],
+                "since": "24h",
+                "limit": 20
+            })
+        );
     }
 
     #[tokio::test]
