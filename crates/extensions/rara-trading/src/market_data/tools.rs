@@ -159,14 +159,18 @@ pub struct FinanceListCandleStreamsParams {
     pub timeframe:   Option<String>,
     #[serde(default)]
     pub limit:       Option<usize>,
+    #[serde(default)]
+    pub offset:      Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceListCandleStreamsResult {
-    pub streams:     Vec<FinanceCandleStream>,
-    pub count:       usize,
-    pub query_limit: usize,
-    pub has_more:    bool,
+    pub streams:        Vec<FinanceCandleStream>,
+    pub count:          usize,
+    pub query_limit:    usize,
+    pub query_offset:   usize,
+    pub has_more:       bool,
+    pub next_page_hint: Option<FinanceCandleStreamNextPageHint>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,6 +193,14 @@ pub struct FinanceCandleStream {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceCandleStreamToolHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FinanceCandleStreamNextPageHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -242,23 +254,40 @@ impl ToolExecute for FinanceListCandleStreamsTool {
         _context: &ToolContext,
     ) -> anyhow::Result<FinanceListCandleStreamsResult> {
         let limit = validate_stream_limit(params.limit)?;
+        let offset = params.offset.unwrap_or(0);
         let query_limit = limit.saturating_add(1);
+        let source_name = normalize_optional_source_name_selector(params.source_name)?;
+        let venue = normalize_optional_venue_selector(params.venue)?;
+        let symbol = normalize_optional_symbol_selector(params.symbol)?;
+        let timeframe = normalize_optional_timeframe_selector(params.timeframe)?;
         let query = CandleStreamListQuery {
-            source_name: normalize_optional_source_name_selector(params.source_name)?,
-            venue:       normalize_optional_venue_selector(params.venue)?,
-            symbol:      normalize_optional_symbol_selector(params.symbol)?,
-            timeframe:   normalize_optional_timeframe_selector(params.timeframe)?,
-            limit:       query_limit,
+            source_name: source_name.clone(),
+            venue: venue.clone(),
+            symbol: symbol.clone(),
+            timeframe: timeframe.clone(),
+            limit: query_limit,
+            offset,
         };
         let mut streams = self.repository.candle_streams(query).await?;
         let has_more = streams.len() > limit;
         streams.truncate(limit);
         let count = streams.len();
+        let next_page_hint = stream_list_next_page_hint(
+            source_name.as_deref(),
+            venue.as_deref(),
+            symbol.as_deref(),
+            timeframe.as_ref(),
+            limit,
+            offset,
+            has_more,
+        );
         Ok(FinanceListCandleStreamsResult {
             streams: streams.into_iter().map(FinanceCandleStream::from).collect(),
             count,
             query_limit: limit,
+            query_offset: offset,
             has_more,
+            next_page_hint,
         })
     }
 }
@@ -713,6 +742,68 @@ fn query_candles_hint_for_stream(
     }
 }
 
+fn stream_list_next_page_hint(
+    source_name: Option<&str>,
+    venue: Option<&str>,
+    symbol: Option<&str>,
+    timeframe: Option<&Timeframe>,
+    limit: usize,
+    offset: usize,
+    has_more: bool,
+) -> Option<FinanceCandleStreamNextPageHint> {
+    if !has_more {
+        return None;
+    }
+
+    let mut default_params = serde_json::Map::new();
+    if let Some(source_name) = source_name {
+        default_params.insert(
+            "source_name".to_owned(),
+            serde_json::Value::String(source_name.to_owned()),
+        );
+    }
+    if let Some(venue) = venue {
+        default_params.insert(
+            "venue".to_owned(),
+            serde_json::Value::String(venue.to_owned()),
+        );
+    }
+    if let Some(symbol) = symbol {
+        default_params.insert(
+            "symbol".to_owned(),
+            serde_json::Value::String(symbol.to_owned()),
+        );
+    }
+    if let Some(timeframe) = timeframe {
+        default_params.insert(
+            "timeframe".to_owned(),
+            serde_json::Value::String(timeframe.to_string()),
+        );
+    }
+    default_params.insert("limit".to_owned(), serde_json::json!(limit));
+    default_params.insert(
+        "offset".to_owned(),
+        serde_json::json!(offset.saturating_add(limit)),
+    );
+
+    Some(FinanceCandleStreamNextPageHint {
+        tool:            "finance_list_candle_streams".to_owned(),
+        default_params:  serde_json::Value::Object(default_params),
+        required_params: Vec::new(),
+        optional_params: [
+            "source_name",
+            "venue",
+            "symbol",
+            "timeframe",
+            "limit",
+            "offset",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+    })
+}
+
 fn recent_candles_next_page_hint(
     source_name: Option<&str>,
     venue: &str,
@@ -1070,6 +1161,7 @@ mod tests {
                     symbol:      None,
                     timeframe:   Some("1m".to_owned()),
                     limit:       Some(10),
+                    offset:      None,
                 },
                 &context(),
             )
@@ -1148,6 +1240,7 @@ mod tests {
                     symbol:      Some("BTCUSDT".to_owned()),
                     timeframe:   Some("1m".to_owned()),
                     limit:       None,
+                    offset:      None,
                 },
                 &context(),
             )
@@ -1171,6 +1264,7 @@ mod tests {
                     symbol:      None,
                     timeframe:   Some("1m".to_owned()),
                     limit:       Some(1),
+                    offset:      None,
                 },
                 &context(),
             )
@@ -1181,6 +1275,55 @@ mod tests {
         assert_eq!(result.query_limit, 1);
         assert!(result.has_more);
         assert_eq!(result.streams[0].symbol, "ETHUSDT");
+        assert_eq!(result.query_offset, 0);
+        let next_page_hint = result
+            .next_page_hint
+            .as_ref()
+            .expect("paginated stream list should include next-page hint");
+        assert_eq!(next_page_hint.tool, "finance_list_candle_streams");
+        assert_eq!(
+            next_page_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "timeframe": "1m",
+                "limit": 1,
+                "offset": 1,
+            })
+        );
+        assert!(next_page_hint.required_params.is_empty());
+        assert_eq!(
+            next_page_hint.optional_params,
+            [
+                "source_name",
+                "venue",
+                "symbol",
+                "timeframe",
+                "limit",
+                "offset"
+            ]
+        );
+
+        let second_page = tool
+            .run(
+                FinanceListCandleStreamsParams {
+                    source_name: Some("binance-spot".to_owned()),
+                    venue:       Some("binance".to_owned()),
+                    symbol:      None,
+                    timeframe:   Some("1m".to_owned()),
+                    limit:       Some(1),
+                    offset:      Some(1),
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_page.count, 1);
+        assert_eq!(second_page.query_limit, 1);
+        assert_eq!(second_page.query_offset, 1);
+        assert!(!second_page.has_more);
+        assert!(second_page.next_page_hint.is_none());
+        assert_eq!(second_page.streams[0].symbol, "BTCUSDT");
     }
 
     #[tokio::test]
@@ -1195,6 +1338,7 @@ mod tests {
                     symbol:      None,
                     timeframe:   None,
                     limit:       Some(10_000),
+                    offset:      None,
                 },
                 &context(),
             )
@@ -1219,6 +1363,7 @@ mod tests {
                     symbol:      Some(" btcusdt ".to_owned()),
                     timeframe:   Some(" 1M ".to_owned()),
                     limit:       None,
+                    offset:      None,
                 },
                 &context(),
             )

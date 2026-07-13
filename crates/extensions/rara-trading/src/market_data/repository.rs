@@ -223,7 +223,11 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
                 .then_with(|| left.timeframe.cmp(&right.timeframe))
                 .then_with(|| left.source_name.cmp(&right.source_name))
         });
-        rows.truncate(query.limit.min(10_000));
+        rows = rows
+            .into_iter()
+            .skip(query.offset.min(10_000))
+            .take(query.limit.min(10_000))
+            .collect();
         Ok(rows)
     }
 
@@ -570,6 +574,7 @@ mod tests {
                 symbol:      None,
                 timeframe:   Some(Timeframe::parse("15m").unwrap()),
                 limit:       10,
+                offset:      0,
             })
             .await
             .unwrap();
