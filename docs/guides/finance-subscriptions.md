@@ -163,11 +163,14 @@ exists. Each subscription includes source/runtime details, an
 `unsubscribe_hint` for `finance_unsubscribe`, and an `events_hint` for
 `finance_list_feed_events`. Market-candle subscriptions also include a
 `market_data_hint` for `finance_list_candle_streams`, defaulting only to
-selectors that are unambiguous for the subscription. Use the events hint when
-the user asks what recent finance news or closed-candle notifications were
+selectors that are unambiguous for the subscription. Fully specified
+single-stream market-candle subscriptions also include `latest_candle_hint` for
+`finance_get_latest_candle`, so rara can jump directly from the subscription to
+the latest stored bar without first discovering streams. Use the events hint
+when the user asks what recent finance news or closed-candle notifications were
 actually received; use the market-data hint when the user asks what closed
-candle streams are stored in the TSDB before drilling into latest, recent,
-freshness, or gap queries. Event queries read persisted events by
+candle streams are stored in the TSDB before drilling into recent, freshness,
+or gap queries. Event queries read persisted events by
 `catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
 `event_kinds` (`rss_article`, `market_candle_closed`), and return per-source
 pages with `total`, `has_more`, `query_limit`, and `query_offset`.
