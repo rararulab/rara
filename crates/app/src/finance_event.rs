@@ -456,6 +456,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_immediate_finance_event_does_not_wake_session_twice() {
+        let session = SessionKey::new();
+        let sink = TestFeedDispatchSink::new([session]);
+        let registry = registry_for(article_sub(session, FinanceDelivery::Immediate)).await;
+        let event = article("BTC liquidity note");
+
+        let first = dispatch_feed_event(
+            &event,
+            &InMemoryFeedStore::default(),
+            &InMemoryMarketDataRepository::default(),
+            &registry,
+            &sink,
+        )
+        .await
+        .unwrap();
+        let second = dispatch_feed_event(
+            &event,
+            &InMemoryFeedStore::default(),
+            &InMemoryMarketDataRepository::default(),
+            &registry,
+            &sink,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.finance_decisions, 1);
+        assert_eq!(second.finance_decisions, 0);
+        assert_eq!(sink.synthetic_turns().await.len(), 1);
+        assert!(sink.silent_appends().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn default_immediate_budget_silences_seventh_finance_event() {
+        let session = SessionKey::new();
+        let sink = TestFeedDispatchSink::new([session]);
+        let mut subscription = article_sub(session, FinanceDelivery::Immediate);
+        subscription.cooldown_secs = 0;
+        let registry = registry_for(subscription).await;
+
+        for index in 1..=7 {
+            dispatch_feed_event(
+                &article(&format!("BTC notice {index}")),
+                &InMemoryFeedStore::default(),
+                &InMemoryMarketDataRepository::default(),
+                &registry,
+                &sink,
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(sink.synthetic_turns().await.len(), 6);
+        let silent = sink.silent_appends().await;
+        assert_eq!(silent.len(), 1);
+        assert_eq!(silent[0]["payload"]["title"], "BTC notice 7");
+    }
+
+    #[tokio::test]
     async fn matched_immediate_candle_creates_compact_market_update_turn() {
         let session = SessionKey::new();
         let sink = TestFeedDispatchSink::new([session]);
