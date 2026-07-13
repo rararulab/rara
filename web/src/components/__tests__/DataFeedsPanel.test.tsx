@@ -432,6 +432,37 @@ describe('DataFeedsPanel', () => {
     });
   });
 
+  it('shows a compact K-line summary in feed history rows', async () => {
+    listMock.mockResolvedValue([feed()]);
+    eventsMock.mockResolvedValue({
+      events: [
+        {
+          id: 'event-1',
+          source_name: 'finance-binance-market-candles',
+          event_type: 'market_candle_closed',
+          tags: ['finance', 'market-data', 'venue:binance', 'symbol:BTCUSDT', 'timeframe:1m'],
+          payload: {
+            venue: 'binance',
+            symbol: 'BTCUSDT',
+            timeframe: '1m',
+            close_time: '2026-07-12T00:42:00Z',
+            close: '61610.30',
+          },
+          received_at: '2026-07-12T00:42:02Z',
+        },
+      ],
+      total: 1,
+      has_more: false,
+    } satisfies FeedEventsResponse);
+
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'finance-binance-market-candles' }));
+
+    expect(await screen.findByText('BINANCE · BTCUSDT · 1m')).toBeInTheDocument();
+    expect(screen.getByText('close 61610.30')).toBeInTheDocument();
+  });
+
   it('shows fresh health for a K-line subscription with a matching stored stream', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-12T00:42:30Z'));
     financeSubscriptionsMock.mockResolvedValue({
