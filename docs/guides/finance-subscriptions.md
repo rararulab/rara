@@ -215,7 +215,10 @@ picking a stream. Event queries read persisted events by
 pages with `total`, `has_more`, `query_limit`, and `query_offset`. Pages with
 `has_more=true` also include `next_page_hint`, which calls
 `finance_list_feed_events` with the same source selector and filters plus the
-next `offset`.
+next `offset`. The result also echoes a normalized `query` with resolved unique
+sources, event-kind strings, `since`, `query_limit`, and `query_offset`, so rara
+can explain empty pages or paginated event lookups without reconstructing the
+request.
 
 For built-in catalog entries, `provider` is catalog metadata used by the agent
 and UI to label fixed data sources such as Binance and Longbridge. It is
