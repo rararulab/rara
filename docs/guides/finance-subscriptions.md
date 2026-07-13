@@ -241,11 +241,14 @@ as an exclusive open-time upper bound. Freshness defaults its stale threshold to
 2x the timeframe step. Gap checks use the same inclusive/exclusive range
 semantics and are capped at 10,000 expected candles.
 
-Identity and session routing are always taken from `ToolContext`. The tool
-schema has no `owner` or `session` parameter, so an agent cannot subscribe or
-unsubscribe on behalf of another user by passing forged IDs. Subscription list
-results also omit internal `owner` and `session_key` routing fields; they expose
-only the subscription ID, normalized selectors, and delivery policy.
+Identity and session routing are always taken from `ToolContext`. Finance tool
+schemas do not accept `owner`, `user_id`, `session`, or `session_key` identity
+parameters, so an agent cannot subscribe or unsubscribe on behalf of another
+user or conversation by passing forged IDs. `current_session_only` is only a
+scope flag for listing/removing the current user's subscriptions; it does not
+select an arbitrary session. Subscription list results also omit internal
+`owner` and `session_key` routing fields; they expose only the subscription ID,
+normalized selectors, source/runtime context, hints, and delivery policy.
 
 Example article subscription:
 
