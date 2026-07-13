@@ -300,7 +300,10 @@ stored streams, `finance_get_latest_candle` for one newest closed bar,
 `finance_query_candles` for bounded historical windows. `finance_find_candle_gaps`
 checks completeness over a bounded range, while `finance_get_candle_freshness`
 answers whether a stream is currently stale. All prices and volumes are returned
-as strings to preserve decimal precision. Each stream returned by
+as strings to preserve decimal precision. Single-stream candle tools return a
+normalized `selector` (`source_name`, `venue`, `symbol`, `timeframe`) even when
+no rows match, so rara can tie empty or missing results back to the stream it
+checked. Each stream returned by
 `finance_list_candle_streams` includes ready-to-call hints for
 `finance_get_latest_candle`, `finance_get_recent_candles`,
 `finance_get_candle_freshness`, `finance_find_candle_gaps`, and
