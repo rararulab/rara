@@ -66,8 +66,14 @@ pub struct FinanceSubscribeParams {
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceSubscribeResult {
     pub subscription_id:        Uuid,
+    pub event_kinds:            Vec<FinanceEventKind>,
     pub source_names:           Vec<String>,
     pub catalog_source_ids:     Vec<String>,
+    pub category_tags:          Vec<String>,
+    pub watch_terms:            Vec<String>,
+    pub venues:                 Vec<String>,
+    pub symbols:                Vec<String>,
+    pub timeframes:             Vec<String>,
     pub delivery:               FinanceDelivery,
     pub cooldown_secs:          u64,
     pub max_immediate_per_hour: u16,
@@ -202,21 +208,29 @@ impl ToolExecute for FinanceSubscribeTool {
             max_immediate_per_hour,
         };
         let subscription_id = self.registry.upsert(subscription).await?;
-        let source_names = self
+        let saved_subscription = self
             .registry
             .list_for_owner(&owner)
             .await
             .into_iter()
             .find(|subscription| subscription.id == subscription_id)
-            .map_or_else(Vec::new, |subscription| subscription.source_names);
+            .ok_or_else(|| {
+                anyhow::anyhow!("created finance subscription {subscription_id} was not persisted")
+            })?;
 
         Ok(FinanceSubscribeResult {
             subscription_id,
-            source_names,
+            event_kinds: saved_subscription.event_kinds,
+            source_names: saved_subscription.source_names,
             catalog_source_ids,
-            delivery,
-            cooldown_secs,
-            max_immediate_per_hour,
+            category_tags: saved_subscription.category_tags,
+            watch_terms: saved_subscription.watch_terms,
+            venues: saved_subscription.venues,
+            symbols: saved_subscription.symbols,
+            timeframes: saved_subscription.timeframes,
+            delivery: saved_subscription.delivery,
+            cooldown_secs: saved_subscription.cooldown_secs,
+            max_immediate_per_hour: saved_subscription.max_immediate_per_hour,
         })
     }
 }
@@ -664,7 +678,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.catalog_source_ids, ["fed-press-releases"]);
+        assert_eq!(result.event_kinds, [FinanceEventKind::RssArticle]);
         assert_eq!(result.source_names, ["finance-fed-press-releases"]);
+        assert_eq!(result.watch_terms, ["rate cut"]);
+        assert!(result.category_tags.is_empty());
+        assert!(result.venues.is_empty());
+        assert!(result.symbols.is_empty());
+        assert!(result.timeframes.is_empty());
 
         let subs = registry
             .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
@@ -702,7 +722,13 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(result.event_kinds, [FinanceEventKind::MarketCandleClosed]);
         assert_eq!(result.source_names, ["finance-binance-market-candles"]);
+        assert_eq!(result.category_tags, ["category:market-data"]);
+        assert!(result.watch_terms.is_empty());
+        assert_eq!(result.venues, ["binance"]);
+        assert_eq!(result.symbols, ["BTCUSDT"]);
+        assert_eq!(result.timeframes, ["15m"]);
 
         let subs = registry
             .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
