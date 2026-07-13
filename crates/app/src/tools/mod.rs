@@ -624,7 +624,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finance_agent_tools_do_not_accept_provider_configuration_fields() {
+    async fn finance_agent_tools_do_not_accept_provider_configuration_or_identity_fields() {
         let pools = rara_kernel::testing::build_memory_diesel_pools().await;
         let data_feed_svc = rara_backend_admin::data_feeds::DataFeedSvc::new(pools);
         let (event_tx, _event_rx) = tokio::sync::mpsc::channel(16);
@@ -696,10 +696,14 @@ mod tests {
             "headers",
             "order",
             "orders",
+            "owner",
             "provider_url",
+            "session",
+            "session_key",
             "transport",
             "url",
             "urls",
+            "user_id",
         ];
 
         for tool in tools {
@@ -713,8 +717,8 @@ mod tests {
             for field in forbidden_fields {
                 assert!(
                     !fields.iter().any(|candidate| candidate == field),
-                    "finance tool {} exposes provider/configuration field `{field}` in schema \
-                     properties {fields:?}",
+                    "finance tool {} exposes provider/configuration/identity field `{field}` in \
+                     schema properties {fields:?}",
                     tool.name()
                 );
             }
