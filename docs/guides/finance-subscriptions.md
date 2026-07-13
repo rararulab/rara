@@ -157,13 +157,15 @@ Persisted sources also expose `restart_hint` and `disable_hint` for runtime
 operations. Market-candle sources expose `market_data_hint` for
 `finance_list_candle_streams` so rara can move from source status to stored
 TSDB stream discovery before querying latest or historical candles.
+
 As the catalog grows, `finance_list_feed_sources` can narrow the returned
 catalog by `catalog_source_ids`, `feed_types`, `providers`, `can_enable`,
 `requires_configuration`, `persisted`, `enabled`, `running`, `subscribed`, and
 `current_session_subscribed`. For example, use
 `feed_types=["market_candle"]` and `providers=["binance"]` to inspect ready
 Binance K-line sources without mixing in RSS news feeds or operator-only
-presets.
+presets. The result echoes the normalized `filters` plus `count`, so rara can
+explain empty or narrowed source lists without reconstructing the query.
 
 `finance_subscribe_news` is the specialized RSS/article entry point. It fixes
 `event_kinds` to `rss_article`, rejects non-RSS feed sources, ensures selected
