@@ -57,6 +57,7 @@ const DEFAULT_COOLDOWN_SECS: u64 = 900;
 const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 const DEFAULT_FEED_EVENT_LIMIT: i64 = 20;
 const MAX_FEED_EVENT_LIMIT: i64 = 200;
+const DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID: &str = "binance-market-candles";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceListFeedSourcesParams {}
@@ -370,6 +371,7 @@ pub(super) struct SubscribedNewsSource {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceSubscribeInstrumentsParams {
     /// Built-in market-candle source id from `finance_list_feed_sources`.
+    /// Defaults to binance-market-candles when feed_id is not provided.
     #[serde(default)]
     pub catalog_source_id:      Option<String>,
     /// Existing persisted DataFeedConfig id. Use this for custom market-candle
@@ -1300,7 +1302,8 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
             "max_immediate_per_hour must be <= 60"
         );
 
-        let source_ref = SourceRef::from_params(params.catalog_source_id, params.feed_id)?;
+        let source_ref =
+            SourceRef::from_params_or_default_market(params.catalog_source_id, params.feed_id)?;
         let FeedResolution {
             mut config,
             catalog_source_id,
@@ -1533,6 +1536,18 @@ impl SourceRef {
                 anyhow::bail!("provide either catalog_source_id or feed_id, not both")
             }
             (None, None) => anyhow::bail!("catalog_source_id or feed_id is required"),
+        }
+    }
+
+    fn from_params_or_default_market(
+        catalog_source_id: Option<String>,
+        feed_id: Option<String>,
+    ) -> anyhow::Result<Self> {
+        match (catalog_source_id, feed_id) {
+            (None, None) => Ok(Self::Catalog(
+                DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID.to_owned(),
+            )),
+            (catalog_source_id, feed_id) => Self::from_params(catalog_source_id, feed_id),
         }
     }
 }
@@ -3923,6 +3938,53 @@ mod tests {
             listed.subscriptions[0].sources[0].provider.as_deref(),
             Some("binance")
         );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_defaults_to_binance_market_feed() {
+        let (_list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
+            tool().await;
+        let ctx = context();
+
+        let result = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_id:      None,
+                    feed_id:                None,
+                    venue:                  None,
+                    symbols:                vec!["btcusdt".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.feed_change, FeedChange::Created);
+        assert_eq!(
+            result.catalog_source_id.as_deref(),
+            Some("binance-market-candles")
+        );
+        assert_eq!(result.source_name, "finance-binance-market-candles");
+        assert_eq!(result.venue, "binance");
+        assert_eq!(result.symbols, ["BTCUSDT"]);
+        assert_eq!(result.timeframes, ["1m"]);
+        assert!(svc.list_feeds().await.unwrap().iter().any(|feed| {
+            feed.name == "finance-binance-market-candles"
+                && feed.transport["symbols"][0] == "BTCUSDT"
+                && feed.transport["timeframes"][0] == "1m"
+        }));
+        assert!(registry.get("finance-binance-market-candles").is_some());
+
+        let subs = finance_registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].source_names, ["finance-binance-market-candles"]);
     }
 
     #[tokio::test]
