@@ -161,12 +161,16 @@ TSDB stream discovery before querying latest or historical candles.
 `finance_list_subscriptions` is the preferred status view after a subscription
 exists. Each subscription includes source/runtime details, an
 `unsubscribe_hint` for `finance_unsubscribe`, and an `events_hint` for
-`finance_list_feed_events`. Use that events hint when the user asks what recent
-finance news or closed-candle notifications were actually received. Event
-queries read persisted events by `catalog_source_ids`, `source_names`, or
-`feed_ids`, can narrow mixed sources by `event_kinds` (`rss_article`,
-`market_candle_closed`), and return per-source pages with `total`, `has_more`,
-`query_limit`, and `query_offset`.
+`finance_list_feed_events`. Market-candle subscriptions also include a
+`market_data_hint` for `finance_list_candle_streams`, defaulting only to
+selectors that are unambiguous for the subscription. Use the events hint when
+the user asks what recent finance news or closed-candle notifications were
+actually received; use the market-data hint when the user asks what closed
+candle streams are stored in the TSDB before drilling into latest, recent,
+freshness, or gap queries. Event queries read persisted events by
+`catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
+`event_kinds` (`rss_article`, `market_candle_closed`), and return per-source
+pages with `total`, `has_more`, `query_limit`, and `query_offset`.
 
 For built-in catalog entries, `provider` is catalog metadata used by the agent
 and UI to label fixed data sources such as Binance and Longbridge. It is
