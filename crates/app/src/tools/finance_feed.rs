@@ -239,6 +239,7 @@ pub(super) struct FinanceSubscriptionEntry {
     pub diagnostic_tool:            Option<String>,
     pub diagnostic_subscription_id: Option<Uuid>,
     pub unsubscribe_hint:           Option<FinanceSubscriptionUnsubscribeHint>,
+    pub events_hint:                Option<FinanceSubscriptionEventsHint>,
     pub source_names:               Vec<String>,
     pub matches_all_sources:        bool,
     pub sources:                    Vec<FinanceSubscriptionSource>,
@@ -254,6 +255,14 @@ pub(super) struct FinanceSubscriptionEntry {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscriptionUnsubscribeHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionEventsHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2337,6 +2346,7 @@ fn subscription_entry(
         .then(|| "finance_diagnose_candle_subscriptions".to_owned());
     let diagnostic_subscription_id = diagnostic_tool.as_ref().map(|_| subscription.id);
     let unsubscribe_hint = Some(unsubscribe_hint_for_subscription(subscription.id));
+    let events_hint = events_hint_for_subscription(&subscription);
 
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
@@ -2346,6 +2356,7 @@ fn subscription_entry(
         diagnostic_tool,
         diagnostic_subscription_id,
         unsubscribe_hint,
+        events_hint,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2358,6 +2369,35 @@ fn subscription_entry(
         cooldown_secs: subscription.cooldown_secs,
         max_immediate_per_hour: subscription.max_immediate_per_hour,
     }
+}
+
+fn events_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceSubscriptionEventsHint> {
+    if subscription.source_names.is_empty() {
+        return None;
+    }
+    let event_kinds = subscription
+        .event_kinds
+        .iter()
+        .copied()
+        .map(finance_event_kind_type)
+        .collect::<Vec<_>>();
+
+    Some(FinanceSubscriptionEventsHint {
+        tool:            "finance_list_feed_events".to_owned(),
+        default_params:  serde_json::json!({
+            "source_names": subscription.source_names.clone(),
+            "event_kinds": event_kinds,
+            "since": "24h",
+            "limit": DEFAULT_FEED_EVENT_LIMIT,
+        }),
+        required_params: Vec::new(),
+        optional_params: ["since", "limit", "offset"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    })
 }
 
 fn unsubscribe_hint_for_subscription(subscription_id: Uuid) -> FinanceSubscriptionUnsubscribeHint {
@@ -2919,6 +2959,22 @@ mod tests {
         );
         assert!(unsubscribe_hint.required_params.is_empty());
         assert_eq!(unsubscribe_hint.optional_params, ["dry_run"]);
+        let events_hint = subscription
+            .events_hint
+            .as_ref()
+            .expect("subscription should include events hint");
+        assert_eq!(events_hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            events_hint.default_params,
+            serde_json::json!({
+                "source_names": ["finance-fed-press-releases"],
+                "event_kinds": ["rss_article"],
+                "since": "24h",
+                "limit": 20,
+            })
+        );
+        assert!(events_hint.required_params.is_empty());
+        assert_eq!(events_hint.optional_params, ["since", "limit", "offset"]);
         assert_eq!(subscription.source_names, ["finance-fed-press-releases"]);
         assert!(!subscription.matches_all_sources);
         assert_eq!(subscription.category_tags, ["category:monetary-policy"]);
@@ -4169,6 +4225,20 @@ mod tests {
             unsubscribe_hint.default_params,
             serde_json::json!({
                 "subscription_ids": [result.subscription_id],
+            })
+        );
+        let events_hint = listed.subscriptions[0]
+            .events_hint
+            .as_ref()
+            .expect("market subscription should include events hint");
+        assert_eq!(events_hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            events_hint.default_params,
+            serde_json::json!({
+                "source_names": ["finance-binance-market-candles"],
+                "event_kinds": ["market_candle_closed"],
+                "since": "24h",
+                "limit": 20,
             })
         );
         assert_eq!(
