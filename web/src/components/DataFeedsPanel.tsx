@@ -113,6 +113,43 @@ function payloadSize(payload: unknown): string {
   return `${(bytes / 1024).toFixed(1)}K`;
 }
 
+function payloadRecord(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  return payload as Record<string, unknown>;
+}
+
+function payloadString(payload: unknown, key: string): string | null {
+  const value = payloadRecord(payload)?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function eventSummary(event: FeedEvent): { title: string; detail: string | null } | null {
+  if (event.event_type === 'market_candle_closed') {
+    const venue = payloadString(event.payload, 'venue')?.toUpperCase();
+    const symbol = payloadString(event.payload, 'symbol');
+    const timeframe = payloadString(event.payload, 'timeframe');
+    const close = payloadString(event.payload, 'close');
+    const title = [venue, symbol, timeframe].filter(Boolean).join(' · ');
+
+    if (!title) return null;
+    return {
+      title,
+      detail: close ? `close ${close}` : null,
+    };
+  }
+
+  if (event.event_type === 'rss_article') {
+    const title = payloadString(event.payload, 'title');
+    if (!title) return null;
+    return {
+      title,
+      detail: payloadString(event.payload, 'url') ?? payloadString(event.payload, 'summary'),
+    };
+  }
+
+  return null;
+}
+
 function eventCountLabel(count: number): string {
   return `${count} event${count === 1 ? '' : 's'}`;
 }
@@ -1240,36 +1277,55 @@ function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () =
             <TableRow>
               <TableHead className="w-32">Time</TableHead>
               <TableHead>Type</TableHead>
+              <TableHead>Event</TableHead>
               <TableHead className="w-20 text-right">Size</TableHead>
               <TableHead className="w-8" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {events.map((evt) => (
-              <TableRow
-                key={evt.id}
-                className="cursor-pointer"
-                onClick={() => setSelectedEvent(evt)}
-              >
-                <TableCell
-                  className="font-mono text-xs"
-                  title={new Date(evt.received_at).toLocaleString()}
+            {events.map((evt) => {
+              const summary = eventSummary(evt);
+
+              return (
+                <TableRow
+                  key={evt.id}
+                  className="cursor-pointer"
+                  onClick={() => setSelectedEvent(evt)}
                 >
-                  {timeAgo(evt.received_at)}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline" className="text-xs">
-                    {evt.event_type}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right text-xs text-muted-foreground">
-                  {payloadSize(evt.payload)}
-                </TableCell>
-                <TableCell>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </TableCell>
-              </TableRow>
-            ))}
+                  <TableCell
+                    className="font-mono text-xs"
+                    title={new Date(evt.received_at).toLocaleString()}
+                  >
+                    {timeAgo(evt.received_at)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs">
+                      {evt.event_type}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {summary ? (
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{summary.title}</div>
+                        {summary.detail && (
+                          <div className="truncate font-mono text-xs text-muted-foreground">
+                            {summary.detail}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Raw event</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">
+                    {payloadSize(evt.payload)}
+                  </TableCell>
+                  <TableCell>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}
