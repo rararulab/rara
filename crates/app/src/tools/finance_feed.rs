@@ -566,9 +566,9 @@ pub(super) enum FeedChange {
 #[tool(
     name = "finance_list_feed_sources",
     description = "List built-in finance data feed source catalog entries with current persisted \
-                   config and runtime status. Use this before enabling or subscribing to default \
-                   feeds such as Fed, SEC, Binance, or Longbridge. This is read-only and never \
-                   places trades.",
+                   config and runtime status. Use this before enable or subscribe operations for \
+                   default feeds such as Fed, SEC, Binance, or Longbridge. This is read-only and \
+                   never places trades.",
     tier = "deferred",
     read_only,
     concurrency_safe

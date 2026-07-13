@@ -74,6 +74,7 @@ impl ToolExecute for DiscoverToolsTool {
             .query
             .trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
             .to_lowercase();
+        let query_terms: Vec<&str> = query.split_whitespace().collect();
 
         // --- Search deferred tools ---
         // TODO: pass actual activation state so already-activated tools are excluded.
@@ -88,9 +89,7 @@ impl ToolExecute for DiscoverToolsTool {
 
         let tool_matches: Vec<DiscoveredToolEntry> = catalog
             .iter()
-            .filter(|(name, desc)| {
-                name.to_lowercase().contains(&query) || desc.to_lowercase().contains(&query)
-            })
+            .filter(|(name, desc)| matches_discovery_query(name, desc, &query, &query_terms))
             .map(|(name, desc)| {
                 let parameters = context
                     .tool_registry
@@ -111,10 +110,7 @@ impl ToolExecute for DiscoverToolsTool {
             .skill_registry
             .list_all()
             .into_iter()
-            .filter(|s| {
-                s.name.to_lowercase().contains(&query)
-                    || s.description.to_lowercase().contains(&query)
-            })
+            .filter(|s| matches_discovery_query(&s.name, &s.description, &query, &query_terms))
             .map(|s| DiscoveredSkillEntry {
                 name:        s.name,
                 description: s.description,
@@ -167,4 +163,17 @@ impl ToolExecute for DiscoverToolsTool {
         };
         serde_json::to_value(&result).map_err(Into::into)
     }
+}
+
+fn matches_discovery_query(
+    name: &str,
+    description: &str,
+    query: &str,
+    query_terms: &[&str],
+) -> bool {
+    let haystack = format!("{name} {description}").to_lowercase();
+    if query_terms.len() <= 1 {
+        return haystack.contains(query);
+    }
+    query_terms.iter().all(|term| haystack.contains(term))
 }
