@@ -169,11 +169,13 @@ single-stream market-candle subscriptions also include `latest_candle_hint` for
 the latest stored bar without first discovering streams, `recent_candles_hint`
 for `finance_get_recent_candles`, and `freshness_hint` for
 `finance_get_candle_freshness`, so rara can check recent bars and whether that
-stream is fresh or stale with the same exact selectors. Use the events hint when
-the user asks what recent finance news or closed-candle notifications were
-actually received; use the market-data hint when the user asks what closed
-candle streams are stored in the TSDB before drilling into gap queries. Event
-queries read persisted events by
+stream is fresh or stale with the same exact selectors. They also include
+`gaps_hint` for `finance_find_candle_gaps`; this pre-fills the stream selectors
+but still requires the user or agent to supply the `start` and `end` range. Use
+the events hint when the user asks what recent finance news or closed-candle
+notifications were actually received; use the market-data hint when the user
+asks what closed candle streams are stored in the TSDB before picking a stream.
+Event queries read persisted events by
 `catalog_source_ids`, `source_names`, or `feed_ids`, can narrow mixed sources by
 `event_kinds` (`rss_article`, `market_candle_closed`), and return per-source
 pages with `total`, `has_more`, `query_limit`, and `query_offset`.

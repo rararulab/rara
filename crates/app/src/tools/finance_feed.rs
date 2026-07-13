@@ -281,6 +281,7 @@ pub(super) struct FinanceSubscriptionEntry {
     pub latest_candle_hint:         Option<FinanceSubscriptionLatestCandleHint>,
     pub recent_candles_hint:        Option<FinanceSubscriptionRecentCandlesHint>,
     pub freshness_hint:             Option<FinanceSubscriptionFreshnessHint>,
+    pub gaps_hint:                  Option<FinanceSubscriptionGapsHint>,
     pub source_names:               Vec<String>,
     pub matches_all_sources:        bool,
     pub sources:                    Vec<FinanceSubscriptionSource>,
@@ -336,6 +337,14 @@ pub(super) struct FinanceSubscriptionRecentCandlesHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscriptionFreshnessHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceSubscriptionGapsHint {
     pub tool:            String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
@@ -2542,6 +2551,7 @@ fn subscription_entry(
     let latest_candle_hint = latest_candle_hint_for_subscription(&subscription);
     let recent_candles_hint = recent_candles_hint_for_subscription(&subscription);
     let freshness_hint = freshness_hint_for_subscription(&subscription);
+    let gaps_hint = gaps_hint_for_subscription(&subscription);
 
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
@@ -2556,6 +2566,7 @@ fn subscription_entry(
         latest_candle_hint,
         recent_candles_hint,
         freshness_hint,
+        gaps_hint,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2722,6 +2733,31 @@ fn freshness_hint_for_subscription(
             .into_iter()
             .map(str::to_owned)
             .collect(),
+    })
+}
+
+fn gaps_hint_for_subscription(
+    subscription: &FinanceSubscription,
+) -> Option<FinanceSubscriptionGapsHint> {
+    if !subscription_is_market_candle(subscription) {
+        return None;
+    }
+
+    let source_name = single_selector_value(&subscription.source_names)?;
+    let venue = single_selector_value(&subscription.venues)?;
+    let symbol = single_selector_value(&subscription.symbols)?;
+    let timeframe = single_selector_value(&subscription.timeframes)?;
+
+    Some(FinanceSubscriptionGapsHint {
+        tool:            "finance_find_candle_gaps".to_owned(),
+        default_params:  serde_json::json!({
+            "source_name": source_name,
+            "venue": venue,
+            "symbol": symbol,
+            "timeframe": timeframe,
+        }),
+        required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
+        optional_params: Vec::new(),
     })
 }
 
@@ -4732,6 +4768,10 @@ mod tests {
             listed.subscriptions[0].freshness_hint.is_none(),
             "multi-symbol/timeframe subscriptions should not expose a direct freshness hint"
         );
+        assert!(
+            listed.subscriptions[0].gaps_hint.is_none(),
+            "multi-symbol/timeframe subscriptions should not expose a direct gaps hint"
+        );
         assert_eq!(
             listed.subscriptions[0].sources[0].provider.as_deref(),
             Some("binance")
@@ -4851,6 +4891,22 @@ mod tests {
             freshness_hint.optional_params,
             ["as_of", "stale_after_secs"]
         );
+        let gaps_hint = listed.subscriptions[0]
+            .gaps_hint
+            .as_ref()
+            .expect("single-stream market subscription should include gaps hint");
+        assert_eq!(gaps_hint.tool, "finance_find_candle_gaps");
+        assert_eq!(
+            gaps_hint.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-market-candles",
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "timeframe": "1m",
+            })
+        );
+        assert_eq!(gaps_hint.required_params, ["start", "end"]);
+        assert!(gaps_hint.optional_params.is_empty());
     }
 
     #[tokio::test]
