@@ -218,9 +218,10 @@ pages with `total`, `has_more`, `query_limit`, and `query_offset`. Pages with
 `has_more=true` also include `next_page_hint`, which calls
 `finance_list_feed_events` with the same source selector and filters plus the
 next `offset`. Empty market-candle pages include a `diagnostic_hint` for
-`finance_diagnose_candle_subscriptions` so rara can move from "no raw closed
-candle events" to subscription/runtime diagnosis without inventing follow-up
-parameters. The result also echoes a normalized `query` with resolved unique
+`finance_diagnose_candle_subscriptions`, prefilled with the same
+`catalog_source_ids`, `source_names`, or `feed_ids` selector, so rara can move
+from "no raw closed candle events" to source-scoped subscription/runtime
+diagnosis. The result also echoes a normalized `query` with resolved unique
 sources, event-kind strings, `since`, `query_limit`, and `query_offset`, so rara
 can explain empty pages or paginated event lookups without reconstructing the
 request. Top-level `source_count`, `event_count`, `total`, and `has_more`
@@ -317,8 +318,10 @@ cooldown and hourly budget; events above the budget are appended to tape rather
 than waking the session.
 
 After subscribing to candle instruments, call
-`finance_diagnose_candle_subscriptions` to verify the path end to end. Each
-subscription diagnostic includes:
+`finance_diagnose_candle_subscriptions` to verify the path end to end. It can
+inspect all current-user candle subscriptions, one explicit `subscription_id`,
+or the subset whose source matches `catalog_source_ids`, `source_names`, or
+`feed_ids`. Each subscription diagnostic includes:
 
 - feed config/runtime state, including whether the source is registered and
   running, plus configured `venue`, `symbols`, and `timeframes`;

@@ -2278,14 +2278,36 @@ fn empty_candle_feed_events_diagnostic_hint(
         return None;
     }
 
+    let mut default_params = serde_json::Map::new();
+    if let Some(catalog_source_id) = &source_ref.catalog_source_id {
+        default_params.insert(
+            "catalog_source_ids".to_owned(),
+            serde_json::json!([catalog_source_id]),
+        );
+    } else if let Some(feed_id) = &source_ref.feed_id {
+        default_params.insert("feed_ids".to_owned(), serde_json::json!([feed_id]));
+    } else {
+        default_params.insert(
+            "source_names".to_owned(),
+            serde_json::json!([source_ref.source_name]),
+        );
+    }
+
     Some(FinanceFeedEventDiagnosticHint {
         tool:            "finance_diagnose_candle_subscriptions".to_owned(),
-        default_params:  serde_json::json!({}),
+        default_params:  serde_json::Value::Object(default_params),
         required_params: Vec::new(),
-        optional_params: ["subscription_id", "as_of", "stale_after_secs"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
+        optional_params: [
+            "subscription_id",
+            "catalog_source_ids",
+            "source_names",
+            "feed_ids",
+            "as_of",
+            "stale_after_secs",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
     })
 }
 
@@ -5148,11 +5170,23 @@ mod tests {
             diagnostic_hint.tool,
             "finance_diagnose_candle_subscriptions"
         );
-        assert_eq!(diagnostic_hint.default_params, serde_json::json!({}));
+        assert_eq!(
+            diagnostic_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": ["binance-market-candles"]
+            })
+        );
         assert!(diagnostic_hint.required_params.is_empty());
         assert_eq!(
             diagnostic_hint.optional_params,
-            ["subscription_id", "as_of", "stale_after_secs"]
+            [
+                "subscription_id",
+                "catalog_source_ids",
+                "source_names",
+                "feed_ids",
+                "as_of",
+                "stale_after_secs"
+            ]
         );
     }
 

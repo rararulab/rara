@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use jiff::Timestamp;
@@ -33,18 +36,29 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_STALE_AFTER_SECS: u64 = 31_536_000;
+const MAX_DIAGNOSTIC_SOURCE_REFS: usize = 32;
+const MAX_DIAGNOSTIC_SOURCE_REF_LEN: usize = 128;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct FinanceDiagnoseCandleSubscriptionsParams {
     /// Optional current-user subscription id filter.
     #[serde(default)]
-    pub subscription_id:  Option<Uuid>,
+    pub subscription_id:    Option<Uuid>,
+    /// Built-in market-candle source ids from finance_list_feed_sources.
+    #[serde(default)]
+    pub catalog_source_ids: Vec<String>,
+    /// Concrete finance market-candle source names.
+    #[serde(default)]
+    pub source_names:       Vec<String>,
+    /// Existing persisted finance DataFeedConfig ids.
+    #[serde(default)]
+    pub feed_ids:           Vec<String>,
     /// Comparison timestamp. Defaults to server now.
     #[serde(default)]
-    pub as_of:            Option<String>,
+    pub as_of:              Option<String>,
     /// Stale threshold in seconds. Defaults to 2x each timeframe step.
     #[serde(default)]
-    pub stale_after_secs: Option<u64>,
+    pub stale_after_secs:   Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +161,58 @@ struct FeedEventSummary {
     last_event_at:   Option<Timestamp>,
 }
 
+#[derive(Debug, Clone)]
+struct DiagnosticSourceFilter {
+    source_names: Option<HashSet<String>>,
+}
+
+impl DiagnosticSourceFilter {
+    fn from_params(
+        feeds_by_name: &HashMap<String, DataFeedConfig>,
+        catalog_source_ids: Vec<String>,
+        source_names: Vec<String>,
+        feed_ids: Vec<String>,
+    ) -> anyhow::Result<Self> {
+        let catalog_source_ids =
+            normalize_diagnostic_refs("catalog_source_ids", catalog_source_ids)?;
+        let source_names = normalize_diagnostic_refs("source_names", source_names)?;
+        let feed_ids = normalize_diagnostic_refs("feed_ids", feed_ids)?;
+        anyhow::ensure!(
+            catalog_source_ids.len() + source_names.len() + feed_ids.len()
+                <= MAX_DIAGNOSTIC_SOURCE_REFS,
+            "too many diagnostic source filters"
+        );
+
+        let mut selected_source_names = HashSet::new();
+        for catalog_source_id in catalog_source_ids {
+            selected_source_names.insert(find_catalog_source(&catalog_source_id)?.feed_name());
+        }
+        for source_name in source_names {
+            selected_source_names.insert(source_name);
+        }
+        for feed_id in feed_ids {
+            let feed = feeds_by_name
+                .values()
+                .find(|feed| feed.id == feed_id)
+                .ok_or_else(|| anyhow::anyhow!("unknown data feed id: {feed_id}"))?;
+            selected_source_names.insert(feed.name.clone());
+        }
+
+        Ok(Self {
+            source_names: (!selected_source_names.is_empty()).then_some(selected_source_names),
+        })
+    }
+
+    fn matches(&self, subscription: &FinanceSubscription) -> bool {
+        self.source_names.as_ref().is_none_or(|source_names| {
+            subscription
+                .source_names
+                .iter()
+                .any(|source_name| source_names.contains(source_name))
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum CandleStreamStatus {
@@ -163,7 +229,9 @@ pub(super) enum CandleStreamStatus {
     description = "Diagnose current-user finance candle subscriptions by combining subscription \
                    selectors, feed config/runtime status, and latest stored candle freshness. Use \
                    this after finance_subscribe_instruments to verify that data is actually \
-                   flowing. This is read-only and never places trades.",
+                   flowing, or after an empty market-candle finance_list_feed_events result with \
+                   the same catalog_source_ids, source_names, or feed_ids selector. This is \
+                   read-only and never places trades.",
     tier = "deferred",
     read_only,
     concurrency_safe
@@ -210,6 +278,12 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
             .into_iter()
             .map(|feed| (feed.name.clone(), feed))
             .collect::<HashMap<_, _>>();
+        let source_filter = DiagnosticSourceFilter::from_params(
+            &feeds_by_name,
+            params.catalog_source_ids,
+            params.source_names,
+            params.feed_ids,
+        )?;
         let event_summaries = self
             .data_feed_svc
             .event_summaries()
@@ -238,6 +312,7 @@ impl ToolExecute for FinanceDiagnoseCandleSubscriptionsTool {
                     .subscription_id
                     .is_none_or(|id| id == subscription.id)
             })
+            .filter(|subscription| source_filter.matches(subscription))
             .collect::<Vec<_>>();
 
         let mut diagnostics = Vec::with_capacity(subscriptions.len());
@@ -479,6 +554,35 @@ fn catalog_by_source_name() -> HashMap<String, DefaultFeedSource> {
         .into_iter()
         .map(|source| (source.feed_name(), source))
         .collect()
+}
+
+fn find_catalog_source(catalog_source_id: &str) -> anyhow::Result<DefaultFeedSource> {
+    default_finance_feed_sources()
+        .into_iter()
+        .find(|source| source.id == catalog_source_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!("unknown finance feed catalog source id: {catalog_source_id}")
+        })
+}
+
+fn normalize_diagnostic_refs(label: &str, values: Vec<String>) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(
+        values.len() <= MAX_DIAGNOSTIC_SOURCE_REFS,
+        "too many {label}"
+    );
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim();
+        anyhow::ensure!(!value.is_empty(), "{label} must not contain empty values");
+        anyhow::ensure!(
+            value.chars().count() <= MAX_DIAGNOSTIC_SOURCE_REF_LEN,
+            "{label} value is too long"
+        );
+        if !normalized.iter().any(|existing| existing == value) {
+            normalized.push(value.to_owned());
+        }
+    }
+    Ok(normalized)
 }
 
 fn transport_string(transport: &serde_json::Value, key: &str) -> Option<String> {
@@ -936,11 +1040,11 @@ fn feed_events_hint(
         tool:            "finance_list_feed_events".to_owned(),
         default_params:  serde_json::json!({
             "source_names": source_names,
-            "event_types": ["market_candle_closed"],
+            "event_kinds": ["market_candle_closed"],
             "limit": 20
         }),
         required_params: Vec::new(),
-        optional_params: ["after", "before", "offset"].map(str::to_owned).to_vec(),
+        optional_params: ["since", "limit", "offset"].map(str::to_owned).to_vec(),
     })
 }
 
@@ -1224,9 +1328,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  None,
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: Some(120),
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   Some(120),
                 },
                 &ctx,
             )
@@ -1316,9 +1423,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  Some(id),
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: Some(120),
+                    subscription_id:    Some(id),
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   Some(120),
                 },
                 &ctx,
             )
@@ -1398,9 +1508,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  None,
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1434,9 +1547,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  None,
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1482,9 +1598,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  None,
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1509,14 +1628,14 @@ mod tests {
             next_action.default_params,
             serde_json::json!({
                 "source_names": ["finance-binance-market-candles"],
-                "event_types": ["market_candle_closed"],
+                "event_kinds": ["market_candle_closed"],
                 "limit": 20
             })
         );
         assert_eq!(next_action.required_params, Vec::<String>::new());
         assert_eq!(
             next_action.optional_params,
-            ["after", "before", "offset"].map(str::to_owned)
+            ["since", "limit", "offset"].map(str::to_owned)
         );
         assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Running);
         assert_eq!(sub.streams[0].status, CandleStreamStatus::Missing);
@@ -1550,9 +1669,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  Some(id),
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    Some(id),
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1596,9 +1718,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  None,
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1654,9 +1779,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  None,
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1718,9 +1846,12 @@ mod tests {
         let result = tool
             .run(
                 FinanceDiagnoseCandleSubscriptionsParams {
-                    subscription_id:  Some(id),
-                    as_of:            Some("2026-07-10T08:31:00Z".to_owned()),
-                    stale_after_secs: None,
+                    subscription_id:    Some(id),
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
                 },
                 &ctx,
             )
@@ -1729,6 +1860,54 @@ mod tests {
 
         assert_eq!(result.count, 1);
         assert_eq!(result.subscriptions[0].subscription_id, id);
+    }
+
+    #[tokio::test]
+    async fn diagnose_filters_by_catalog_source_id_for_current_user() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        let binance_id = insert_subscription(&finance_registry, &ctx).await;
+        let longbridge_id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id:                     longbridge_id,
+                owner:                  UserId(ctx.user_id.clone()),
+                session_key:            ctx.session_key,
+                event_kinds:            vec![FinanceEventKind::MarketCandleClosed],
+                source_names:           vec!["finance-longbridge-market-candles".to_owned()],
+                category_tags:          Vec::new(),
+                watch_terms:            Vec::new(),
+                venues:                 vec!["longbridge".to_owned()],
+                symbols:                vec!["AAPL.US".to_owned()],
+                timeframes:             vec!["1d".to_owned()],
+                delivery:               FinanceDelivery::Silent,
+                cooldown_secs:          900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:    None,
+                    catalog_source_ids: vec!["binance-market-candles".to_owned()],
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(result.subscriptions[0].subscription_id, binance_id);
+        assert_eq!(
+            result.subscriptions[0].source_names,
+            ["finance-binance-market-candles"]
+        );
     }
 
     #[tokio::test]
