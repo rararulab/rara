@@ -547,6 +547,9 @@ pub(super) struct FinanceSubscribeInstrumentsResult {
     pub venue: String,
     pub symbols: Vec<String>,
     pub timeframes: Vec<String>,
+    pub delivery: FinanceDelivery,
+    pub cooldown_secs: u64,
+    pub max_immediate_per_hour: u16,
     pub feed_change: FeedChange,
     pub feed_restarted: bool,
     pub running: bool,
@@ -1575,6 +1578,9 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
             venue,
             symbols,
             timeframes,
+            delivery,
+            cooldown_secs,
+            max_immediate_per_hour,
             feed_change: if created {
                 FeedChange::Created
             } else if feed_updated {
@@ -3159,7 +3165,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        FeedChange, FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
+        DEFAULT_COOLDOWN_SECS, DEFAULT_MAX_IMMEDIATE_PER_HOUR, FeedChange,
+        FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
         FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedEventsParams,
         FinanceListFeedEventsTool, FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
         FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
@@ -3273,6 +3280,16 @@ mod tests {
         );
     }
 
+    fn assert_default_delivery_budget(
+        delivery: FinanceDelivery,
+        cooldown_secs: u64,
+        max_immediate_per_hour: u16,
+    ) {
+        assert_eq!(delivery, FinanceDelivery::Silent);
+        assert_eq!(cooldown_secs, DEFAULT_COOLDOWN_SECS);
+        assert_eq!(max_immediate_per_hour, DEFAULT_MAX_IMMEDIATE_PER_HOUR);
+    }
+
     fn assert_single_stream_instrument_result_hints(result: &FinanceSubscribeInstrumentsResult) {
         let latest = result
             .latest_candle_hint
@@ -3310,6 +3327,62 @@ mod tests {
         assert_eq!(query.default_params, single_stream_params_with_limit());
         assert_eq!(query.required_params, ["start", "end"]);
         assert_eq!(query.optional_params, ["limit"]);
+    }
+
+    fn assert_single_stream_subscription_entry_hints(entry: &super::FinanceSubscriptionEntry) {
+        let latest_candle_hint = entry
+            .latest_candle_hint
+            .as_ref()
+            .expect("single-stream market subscription should include latest-candle hint");
+        assert_eq!(latest_candle_hint.tool, "finance_get_latest_candle");
+        assert_eq!(latest_candle_hint.default_params, single_stream_params());
+        assert!(latest_candle_hint.required_params.is_empty());
+        assert!(latest_candle_hint.optional_params.is_empty());
+
+        let recent_candles_hint = entry
+            .recent_candles_hint
+            .as_ref()
+            .expect("single-stream market subscription should include recent-candles hint");
+        assert_eq!(recent_candles_hint.tool, "finance_get_recent_candles");
+        assert_eq!(
+            recent_candles_hint.default_params,
+            single_stream_params_with_limit()
+        );
+        assert!(recent_candles_hint.required_params.is_empty());
+        assert_eq!(recent_candles_hint.optional_params, ["end", "limit"]);
+
+        let freshness_hint = entry
+            .freshness_hint
+            .as_ref()
+            .expect("single-stream market subscription should include freshness hint");
+        assert_eq!(freshness_hint.tool, "finance_get_candle_freshness");
+        assert_eq!(freshness_hint.default_params, single_stream_params());
+        assert!(freshness_hint.required_params.is_empty());
+        assert_eq!(
+            freshness_hint.optional_params,
+            ["as_of", "stale_after_secs"]
+        );
+
+        let gaps_hint = entry
+            .gaps_hint
+            .as_ref()
+            .expect("single-stream market subscription should include gaps hint");
+        assert_eq!(gaps_hint.tool, "finance_find_candle_gaps");
+        assert_eq!(gaps_hint.default_params, single_stream_params());
+        assert_eq!(gaps_hint.required_params, ["start", "end"]);
+        assert!(gaps_hint.optional_params.is_empty());
+
+        let query_candles_hint = entry
+            .query_candles_hint
+            .as_ref()
+            .expect("single-stream market subscription should include query-candles hint");
+        assert_eq!(query_candles_hint.tool, "finance_query_candles");
+        assert_eq!(
+            query_candles_hint.default_params,
+            single_stream_params_with_limit()
+        );
+        assert_eq!(query_candles_hint.required_params, ["start", "end"]);
+        assert_eq!(query_candles_hint.optional_params, ["limit"]);
     }
 
     fn assert_news_result_hints(result: &FinanceSubscribeNewsResult) {
@@ -4861,6 +4934,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscribe_news_defaults_to_silent_delivery_budget() {
+        let (_list, _enable, _disable, _restart, _subscribe, svc, registry, finance_registry) =
+            tool().await;
+        let tool =
+            FinanceSubscribeNewsTool::new(svc.clone(), registry.clone(), finance_registry.clone());
+        let ctx = context();
+
+        let result = tool
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     vec!["fed-press-releases".to_owned()],
+                    feed_ids:               Vec::new(),
+                    category_tags:          Vec::new(),
+                    watch_terms:            vec!["BTC".to_owned()],
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_default_delivery_budget(
+            result.delivery,
+            result.cooldown_secs,
+            result.max_immediate_per_hour,
+        );
+
+        let subs = finance_registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_default_delivery_budget(
+            subs[0].delivery,
+            subs[0].cooldown_secs,
+            subs[0].max_immediate_per_hour,
+        );
+    }
+
+    #[tokio::test]
     async fn subscribe_news_is_idempotent_for_same_session_and_selectors() {
         let (_list, _enable, _disable, _restart, _subscribe, svc, registry, finance_registry) =
             tool().await;
@@ -5173,6 +5288,11 @@ mod tests {
         assert_eq!(result.venue, "binance");
         assert_eq!(result.symbols, ["BTCUSDT"]);
         assert_eq!(result.timeframes, ["1m"]);
+        assert_default_delivery_budget(
+            result.delivery,
+            result.cooldown_secs,
+            result.max_immediate_per_hour,
+        );
         assert_single_stream_instrument_result_hints(&result);
         assert!(svc.list_feeds().await.unwrap().iter().any(|feed| {
             feed.name == "finance-binance-market-candles"
@@ -5186,6 +5306,11 @@ mod tests {
             .await;
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].source_names, ["finance-binance-market-candles"]);
+        assert_default_delivery_budget(
+            subs[0].delivery,
+            subs[0].cooldown_secs,
+            subs[0].max_immediate_per_hour,
+        );
 
         let listed = list
             .run(
@@ -5197,91 +5322,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(listed.count, 1);
-        let latest_candle_hint = listed.subscriptions[0]
-            .latest_candle_hint
-            .as_ref()
-            .expect("single-stream market subscription should include latest-candle hint");
-        assert_eq!(latest_candle_hint.tool, "finance_get_latest_candle");
-        assert_eq!(
-            latest_candle_hint.default_params,
-            serde_json::json!({
-                "source_name": "finance-binance-market-candles",
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-            })
-        );
-        assert!(latest_candle_hint.required_params.is_empty());
-        assert!(latest_candle_hint.optional_params.is_empty());
-        let recent_candles_hint = listed.subscriptions[0]
-            .recent_candles_hint
-            .as_ref()
-            .expect("single-stream market subscription should include recent-candles hint");
-        assert_eq!(recent_candles_hint.tool, "finance_get_recent_candles");
-        assert_eq!(
-            recent_candles_hint.default_params,
-            serde_json::json!({
-                "source_name": "finance-binance-market-candles",
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-                "limit": 20,
-            })
-        );
-        assert!(recent_candles_hint.required_params.is_empty());
-        assert_eq!(recent_candles_hint.optional_params, ["end", "limit"]);
-        let freshness_hint = listed.subscriptions[0]
-            .freshness_hint
-            .as_ref()
-            .expect("single-stream market subscription should include freshness hint");
-        assert_eq!(freshness_hint.tool, "finance_get_candle_freshness");
-        assert_eq!(
-            freshness_hint.default_params,
-            serde_json::json!({
-                "source_name": "finance-binance-market-candles",
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-            })
-        );
-        assert!(freshness_hint.required_params.is_empty());
-        assert_eq!(
-            freshness_hint.optional_params,
-            ["as_of", "stale_after_secs"]
-        );
-        let gaps_hint = listed.subscriptions[0]
-            .gaps_hint
-            .as_ref()
-            .expect("single-stream market subscription should include gaps hint");
-        assert_eq!(gaps_hint.tool, "finance_find_candle_gaps");
-        assert_eq!(
-            gaps_hint.default_params,
-            serde_json::json!({
-                "source_name": "finance-binance-market-candles",
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-            })
-        );
-        assert_eq!(gaps_hint.required_params, ["start", "end"]);
-        assert!(gaps_hint.optional_params.is_empty());
-        let query_candles_hint = listed.subscriptions[0]
-            .query_candles_hint
-            .as_ref()
-            .expect("single-stream market subscription should include query-candles hint");
-        assert_eq!(query_candles_hint.tool, "finance_query_candles");
-        assert_eq!(
-            query_candles_hint.default_params,
-            serde_json::json!({
-                "source_name": "finance-binance-market-candles",
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "timeframe": "1m",
-                "limit": 20,
-            })
-        );
-        assert_eq!(query_candles_hint.required_params, ["start", "end"]);
-        assert_eq!(query_candles_hint.optional_params, ["limit"]);
+        assert_single_stream_subscription_entry_hints(&listed.subscriptions[0]);
     }
 
     #[tokio::test]
