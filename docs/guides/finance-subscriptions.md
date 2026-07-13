@@ -145,8 +145,8 @@ runtime control, subscription management, and inspection:
 
 `finance_list_feed_bundles` is the preferred discovery view when the user asks
 what default finance data feeding rara can provide. It groups built-in catalog
-sources into curated presets such as `macro-news`, `binance-spot-starter`,
-`binance-major-crypto-15m`, and `longbridge-equities-daily`. Each bundle echoes
+sources into curated presets such as `macro-news`, `binance-major-crypto-15m`,
+and `longbridge-equities-daily`. Each bundle echoes
 its `catalog_source_ids`, feed types, aggregate persisted/running/subscribed
 counts, setup hints for operator-only presets, and action hints:
 `list_sources_hint` for drilling into per-source status, `enable_hints` for
@@ -155,11 +155,12 @@ direct bundle-level subscription tool, and `subscription_hint` when the caller
 needs the lower-level specialized tool. `finance_subscribe_feed_bundle` is the
 conversation-first entry point after bundle discovery: macro/news bundles
 subscribe multiple RSS `catalog_source_ids` at once, while single-source
-market-data bundles subscribe their preset symbols/timeframes. Bundles that
-require operator credentials or a custom endpoint do not expose
-`subscribe_bundle_hint`; use their setup hints first. Use the `bundle_ids`,
-`feed_types`, `can_enable`, and `requires_configuration` filters to narrow the
-recommendation list.
+market-data bundles subscribe their preset symbols/timeframes and return
+top-level `diagnostic_hint` / `market_data_hint` values for the next candle
+health or stream-overview step. Bundles that require operator credentials or a
+custom endpoint do not expose `subscribe_bundle_hint`; use their setup hints
+first. Use the `bundle_ids`, `feed_types`, `can_enable`, and
+`requires_configuration` filters to narrow the recommendation list.
 
 `finance_list_feed_sources` is the preferred status view before and after
 subscription changes. It combines the built-in source catalog, persisted feed

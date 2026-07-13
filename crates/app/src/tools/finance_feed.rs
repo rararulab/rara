@@ -720,6 +720,8 @@ pub(super) struct FinanceSubscribeFeedBundleResult {
     pub name:                    String,
     pub subscription_kind:       String,
     pub catalog_source_ids:      Vec<String>,
+    pub diagnostic_hint:         Option<FinanceSubscriptionDiagnosticHint>,
+    pub market_data_hint:        Option<FinanceSubscriptionMarketDataHint>,
     pub news_subscription:       Option<FinanceSubscribeNewsResult>,
     pub instrument_subscription: Option<FinanceSubscribeInstrumentsResult>,
 }
@@ -1929,6 +1931,8 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                 name:                    bundle.name,
                 subscription_kind:       "rss_article".to_owned(),
                 catalog_source_ids:      bundle.catalog_source_ids,
+                diagnostic_hint:         None,
+                market_data_hint:        None,
                 news_subscription:       Some(result),
                 instrument_subscription: None,
             });
@@ -1970,12 +1974,16 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                     context,
                 )
                 .await?;
+            let diagnostic_hint = result.diagnostic_hint.clone();
+            let market_data_hint = result.market_data_hint.clone();
             return Ok(FinanceSubscribeFeedBundleResult {
-                bundle_id:               bundle.id,
-                name:                    bundle.name,
-                subscription_kind:       "market_candle_closed".to_owned(),
-                catalog_source_ids:      bundle.catalog_source_ids,
-                news_subscription:       None,
+                bundle_id: bundle.id,
+                name: bundle.name,
+                subscription_kind: "market_candle_closed".to_owned(),
+                catalog_source_ids: bundle.catalog_source_ids,
+                diagnostic_hint,
+                market_data_hint,
+                news_subscription: None,
                 instrument_subscription: Some(result),
             });
         }
@@ -4541,6 +4549,14 @@ mod tests {
                 "sec-press-releases"
             ]
         );
+        assert!(
+            result.diagnostic_hint.is_none(),
+            "RSS bundle should not expose candle diagnostics"
+        );
+        assert!(
+            result.market_data_hint.is_none(),
+            "RSS bundle should not expose candle stream hints"
+        );
         let news = result
             .news_subscription
             .as_ref()
@@ -4613,6 +4629,25 @@ mod tests {
         assert_eq!(result.subscription_kind, "market_candle_closed");
         assert_eq!(result.catalog_source_ids, ["binance-major-crypto-15m"]);
         assert!(result.news_subscription.is_none());
+        let diagnostic = result
+            .diagnostic_hint
+            .as_ref()
+            .expect("market bundle should expose top-level diagnostic hint");
+        assert_eq!(diagnostic.tool, "finance_diagnose_candle_subscriptions");
+        let market_data = result
+            .market_data_hint
+            .as_ref()
+            .expect("market bundle should expose top-level market-data hint");
+        assert_eq!(market_data.tool, "finance_list_candle_streams");
+        assert_eq!(
+            market_data.default_params,
+            serde_json::json!({
+                "source_name": "finance-binance-major-crypto-15m",
+                "venue": "binance",
+                "timeframe": "15m",
+                "limit": 20
+            })
+        );
         let instruments = result
             .instrument_subscription
             .as_ref()
