@@ -24,6 +24,7 @@ import type {
   CandleStreamsResponse,
   DataFeedConfig,
   FeedCatalogEntry,
+  FeedEventsResponse,
   FinanceSubscription,
   FinanceSubscriptionsResponse,
   MarketCandleFreshnessResponse,
@@ -34,6 +35,7 @@ import type {
 const listMock = vi.fn();
 const summariesMock = vi.fn();
 const catalogMock = vi.fn();
+const eventsMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const candleStreamsMock = vi.fn();
 const candlesMock = vi.fn();
@@ -47,6 +49,7 @@ vi.mock('@/api/data-feeds', () => ({
     list: (...args: unknown[]) => listMock(...args),
     summaries: (...args: unknown[]) => summariesMock(...args),
     catalog: (...args: unknown[]) => catalogMock(...args),
+    events: (...args: unknown[]) => eventsMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
     candles: (...args: unknown[]) => candlesMock(...args),
@@ -117,9 +120,20 @@ function candleSubscription(partial: Partial<FinanceSubscription> = {}): Finance
 }
 
 beforeEach(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+  }
+  if (!Element.prototype.setPointerCapture) {
+    Element.prototype.setPointerCapture = () => {};
+  }
+  if (!Element.prototype.releasePointerCapture) {
+    Element.prototype.releasePointerCapture = () => {};
+  }
+
   listMock.mockReset();
   summariesMock.mockReset();
   catalogMock.mockReset();
+  eventsMock.mockReset();
   financeSubscriptionsMock.mockReset();
   candleStreamsMock.mockReset();
   candlesMock.mockReset();
@@ -130,6 +144,11 @@ beforeEach(() => {
   listMock.mockResolvedValue([]);
   summariesMock.mockResolvedValue([]);
   catalogMock.mockResolvedValue([] satisfies FeedCatalogEntry[]);
+  eventsMock.mockResolvedValue({
+    events: [],
+    total: 0,
+    has_more: false,
+  } satisfies FeedEventsResponse);
   financeSubscriptionsMock.mockResolvedValue({
     subscriptions: [],
     count: 0,
@@ -360,6 +379,37 @@ describe('DataFeedsPanel', () => {
 
     await waitFor(() => {
       expect(candleStreamsMock).toHaveBeenLastCalledWith({ limit: 500 });
+    });
+  });
+
+  it('filters feed history by backend event kind', async () => {
+    listMock.mockResolvedValue([feed()]);
+
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'finance-binance-market-candles' }));
+    await waitFor(() => {
+      expect(eventsMock).toHaveBeenLastCalledWith('feed-1', {
+        since: '24h',
+        limit: 50,
+        offset: 0,
+      });
+    });
+
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Event type' }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'K-line closed' }));
+
+    await waitFor(() => {
+      expect(eventsMock).toHaveBeenLastCalledWith('feed-1', {
+        since: '24h',
+        event_kinds: ['market_candle_closed'],
+        limit: 50,
+        offset: 0,
+      });
     });
   });
 

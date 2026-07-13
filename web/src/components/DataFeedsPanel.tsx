@@ -37,6 +37,7 @@ import {
   type FeedCatalogEntry,
   type FeedEvent,
   type FeedSummary,
+  type FinanceEventKind,
   type FinanceSubscription,
   type FinanceSubscriptionsResponse,
   type CreateFeedRequest,
@@ -436,6 +437,15 @@ const TIME_FILTERS = [
   { value: '7d', label: 'Last 7 days' },
   { value: '30d', label: 'Last 30 days' },
 ] as const;
+
+const EVENT_KIND_FILTERS: ReadonlyArray<{
+  value: 'all' | FinanceEventKind;
+  label: string;
+}> = [
+  { value: 'all', label: 'All event types' },
+  { value: 'rss_article', label: 'RSS articles' },
+  { value: 'market_candle_closed', label: 'K-line closed' },
+];
 
 // ---------------------------------------------------------------------------
 // Empty auth/transport helpers
@@ -1102,15 +1112,23 @@ function EventDetailSheet({
 
 function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () => void }) {
   const [timeFilter, setTimeFilter] = useState('24h');
+  const [eventKindFilter, setEventKindFilter] = useState<'all' | FinanceEventKind>('all');
   const [selectedEvent, setSelectedEvent] = useState<FeedEvent | null>(null);
   const [offset, setOffset] = useState(0);
   const limit = 50;
 
   const since = timeFilter;
+  const eventKinds = eventKindFilter === 'all' ? undefined : [eventKindFilter];
+  const eventQueryParams = {
+    since,
+    ...(eventKinds ? { event_kinds: eventKinds } : {}),
+    limit,
+    offset,
+  };
 
   const eventsQuery = useQuery({
-    queryKey: ['data-feed-events', feed.id, since, offset],
-    queryFn: () => dataFeedsApi.events(feed.id, { since, limit, offset }),
+    queryKey: ['data-feed-events', feed.id, since, eventKindFilter, offset],
+    queryFn: () => dataFeedsApi.events(feed.id, eventQueryParams),
   });
 
   const events = eventsQuery.data?.events ?? [];
@@ -1173,6 +1191,25 @@ function EventHistoryView({ feed, onBack }: { feed: DataFeedConfig; onBack: () =
           </SelectTrigger>
           <SelectContent>
             {TIME_FILTERS.map((f) => (
+              <SelectItem key={f.value} value={f.value}>
+                {f.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={eventKindFilter}
+          onValueChange={(v) => {
+            setEventKindFilter(v as 'all' | FinanceEventKind);
+            setOffset(0);
+          }}
+        >
+          <SelectTrigger aria-label="Event type" className="h-8 w-44 text-xs">
+            <Radio className="mr-1.5 h-3.5 w-3.5" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {EVENT_KIND_FILTERS.map((f) => (
               <SelectItem key={f.value} value={f.value}>
                 {f.label}
               </SelectItem>

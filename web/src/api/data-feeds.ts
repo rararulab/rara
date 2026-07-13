@@ -408,9 +408,18 @@ export const dataFeedsApi = {
   deleteFinanceSubscription: (id: string) =>
     api.del<DeleteFinanceSubscriptionResponse>(`/api/v1/data-feeds/finance/subscriptions/${id}`),
 
-  events: (id: string, params?: { since?: string; limit?: number; offset?: number }) => {
+  events: (
+    id: string,
+    params?: {
+      since?: string;
+      event_kinds?: FinanceEventKind[];
+      limit?: number;
+      offset?: number;
+    },
+  ) => {
     const query = new URLSearchParams();
     if (params?.since) query.set('since', params.since);
+    if (params?.event_kinds?.length) query.set('event_kinds', params.event_kinds.join(','));
     if (params?.limit) query.set('limit', String(params.limit));
     if (params?.offset) query.set('offset', String(params.offset));
     const qs = query.toString();
