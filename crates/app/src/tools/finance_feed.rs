@@ -221,21 +221,23 @@ pub(super) struct FinanceUnsubscribeMatch {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceSubscriptionEntry {
-    pub subscription_id:        Uuid,
-    pub current_session:        bool,
-    pub session_key:            String,
-    pub event_kinds:            Vec<FinanceEventKind>,
-    pub source_names:           Vec<String>,
-    pub matches_all_sources:    bool,
-    pub sources:                Vec<FinanceSubscriptionSource>,
-    pub category_tags:          Vec<String>,
-    pub watch_terms:            Vec<String>,
-    pub venues:                 Vec<String>,
-    pub symbols:                Vec<String>,
-    pub timeframes:             Vec<String>,
-    pub delivery:               FinanceDelivery,
-    pub cooldown_secs:          u64,
-    pub max_immediate_per_hour: u16,
+    pub subscription_id:            Uuid,
+    pub current_session:            bool,
+    pub session_key:                String,
+    pub event_kinds:                Vec<FinanceEventKind>,
+    pub diagnostic_tool:            Option<String>,
+    pub diagnostic_subscription_id: Option<Uuid>,
+    pub source_names:               Vec<String>,
+    pub matches_all_sources:        bool,
+    pub sources:                    Vec<FinanceSubscriptionSource>,
+    pub category_tags:              Vec<String>,
+    pub watch_terms:                Vec<String>,
+    pub venues:                     Vec<String>,
+    pub symbols:                    Vec<String>,
+    pub timeframes:                 Vec<String>,
+    pub delivery:                   FinanceDelivery,
+    pub cooldown_secs:              u64,
+    pub max_immediate_per_hour:     u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2226,11 +2228,17 @@ fn subscription_entry(
         })
         .collect();
 
+    let diagnostic_tool = subscription_is_market_candle(&subscription)
+        .then(|| "finance_diagnose_candle_subscriptions".to_owned());
+    let diagnostic_subscription_id = diagnostic_tool.as_ref().map(|_| subscription.id);
+
     FinanceSubscriptionEntry {
         subscription_id: subscription.id,
         current_session: subscription.session_key == current_session,
         session_key: subscription.session_key.to_string(),
         event_kinds: subscription.event_kinds,
+        diagnostic_tool,
+        diagnostic_subscription_id,
         source_names: subscription.source_names,
         matches_all_sources,
         sources,
@@ -2243,6 +2251,12 @@ fn subscription_entry(
         cooldown_secs: subscription.cooldown_secs,
         max_immediate_per_hour: subscription.max_immediate_per_hour,
     }
+}
+
+fn subscription_is_market_candle(subscription: &FinanceSubscription) -> bool {
+    subscription
+        .event_kinds
+        .contains(&FinanceEventKind::MarketCandleClosed)
 }
 
 fn subscription_source_entry(
@@ -2713,6 +2727,8 @@ mod tests {
         assert!(subscription.current_session);
         assert_eq!(subscription.session_key, ctx.session_key.to_string());
         assert_eq!(subscription.event_kinds, [FinanceEventKind::RssArticle]);
+        assert_eq!(subscription.diagnostic_tool, None);
+        assert_eq!(subscription.diagnostic_subscription_id, None);
         assert_eq!(subscription.source_names, ["finance-fed-press-releases"]);
         assert!(!subscription.matches_all_sources);
         assert_eq!(subscription.category_tags, ["category:monetary-policy"]);
@@ -3946,6 +3962,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(listed.count, 1);
+        assert_eq!(
+            listed.subscriptions[0].diagnostic_tool.as_deref(),
+            Some("finance_diagnose_candle_subscriptions")
+        );
+        assert_eq!(
+            listed.subscriptions[0].diagnostic_subscription_id,
+            Some(result.subscription_id)
+        );
         assert_eq!(
             listed.subscriptions[0].sources[0].provider.as_deref(),
             Some("binance")
