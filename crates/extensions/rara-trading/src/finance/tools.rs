@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_kernel::{
+    data_feed::FeedType,
     identity::UserId,
     tool::{ToolContext, ToolExecute},
 };
@@ -49,6 +50,46 @@ pub struct FinanceSubscribeParams {
     pub category_tags:          Vec<String>,
     #[serde(default)]
     pub watch_terms:            Vec<String>,
+    #[serde(default)]
+    pub venues:                 Vec<String>,
+    #[serde(default)]
+    pub symbols:                Vec<String>,
+    #[serde(default)]
+    pub timeframes:             Vec<String>,
+    #[serde(default)]
+    pub delivery:               Option<FinanceDelivery>,
+    #[serde(default)]
+    pub cooldown_secs:          Option<u64>,
+    #[serde(default)]
+    pub max_immediate_per_hour: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinanceSubscribeNewsParams {
+    #[serde(default)]
+    pub catalog_source_ids:     Vec<String>,
+    #[serde(default)]
+    pub source_names:           Vec<String>,
+    #[serde(default)]
+    pub category_tags:          Vec<String>,
+    #[serde(default)]
+    pub watch_terms:            Vec<String>,
+    #[serde(default)]
+    pub delivery:               Option<FinanceDelivery>,
+    #[serde(default)]
+    pub cooldown_secs:          Option<u64>,
+    #[serde(default)]
+    pub max_immediate_per_hour: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FinanceSubscribeInstrumentsParams {
+    #[serde(default)]
+    pub catalog_source_ids:     Vec<String>,
+    #[serde(default)]
+    pub source_names:           Vec<String>,
+    #[serde(default)]
+    pub category_tags:          Vec<String>,
     #[serde(default)]
     pub venues:                 Vec<String>,
     #[serde(default)]
@@ -247,6 +288,108 @@ impl ToolExecute for FinanceSubscribeTool {
             cooldown_secs: saved_subscription.cooldown_secs,
             max_immediate_per_hour: saved_subscription.max_immediate_per_hour,
         })
+    }
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_subscribe_news",
+    description = "Subscribe the current conversation to finance RSS/article feeds. Prefer this \
+                   over finance_subscribe for news and filings. Identity and session are always \
+                   taken from tool context. Pass catalog_source_ids from \
+                   finance_list_feed_sources or source_names for custom RSS feeds. This never \
+                   places trades.",
+    tier = "deferred"
+)]
+pub struct FinanceSubscribeNewsTool {
+    registry: Arc<FinanceSubscriptionRegistry>,
+}
+
+impl FinanceSubscribeNewsTool {
+    pub fn new(registry: Arc<FinanceSubscriptionRegistry>) -> Self { Self { registry } }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceSubscribeNewsTool {
+    type Output = FinanceSubscribeResult;
+    type Params = FinanceSubscribeNewsParams;
+
+    async fn run(
+        &self,
+        params: FinanceSubscribeNewsParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceSubscribeResult> {
+        validate_catalog_source_type(&params.catalog_source_ids, FeedType::Rss)?;
+        FinanceSubscribeTool::new(self.registry.clone())
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds:            Some(vec![FinanceEventKind::RssArticle]),
+                    catalog_source_ids:     params.catalog_source_ids,
+                    source_names:           params.source_names,
+                    category_tags:          params.category_tags,
+                    watch_terms:            params.watch_terms,
+                    venues:                 Vec::new(),
+                    symbols:                Vec::new(),
+                    timeframes:             Vec::new(),
+                    delivery:               params.delivery,
+                    cooldown_secs:          params.cooldown_secs,
+                    max_immediate_per_hour: params.max_immediate_per_hour,
+                },
+                context,
+            )
+            .await
+    }
+}
+
+#[derive(ToolDef)]
+#[tool(
+    name = "finance_subscribe_instruments",
+    description = "Subscribe the current conversation to latest closed market candle updates for \
+                   instruments. Prefer this over finance_subscribe for OHLCV candles. Identity \
+                   and session are always taken from tool context. Pass market_candle \
+                   catalog_source_ids from finance_list_feed_sources or source_names for custom \
+                   candle feeds. This never places trades.",
+    tier = "deferred"
+)]
+pub struct FinanceSubscribeInstrumentsTool {
+    registry: Arc<FinanceSubscriptionRegistry>,
+}
+
+impl FinanceSubscribeInstrumentsTool {
+    pub fn new(registry: Arc<FinanceSubscriptionRegistry>) -> Self { Self { registry } }
+}
+
+#[async_trait]
+impl ToolExecute for FinanceSubscribeInstrumentsTool {
+    type Output = FinanceSubscribeResult;
+    type Params = FinanceSubscribeInstrumentsParams;
+
+    async fn run(
+        &self,
+        params: FinanceSubscribeInstrumentsParams,
+        context: &ToolContext,
+    ) -> anyhow::Result<FinanceSubscribeResult> {
+        validate_catalog_source_type(&params.catalog_source_ids, FeedType::MarketCandle)?;
+        let mut venues = params.venues;
+        derive_market_candle_venue(&params.catalog_source_ids, &mut venues)?;
+        FinanceSubscribeTool::new(self.registry.clone())
+            .run(
+                FinanceSubscribeParams {
+                    event_kinds: Some(vec![FinanceEventKind::MarketCandleClosed]),
+                    catalog_source_ids: params.catalog_source_ids,
+                    source_names: params.source_names,
+                    category_tags: params.category_tags,
+                    watch_terms: Vec::new(),
+                    venues,
+                    symbols: params.symbols,
+                    timeframes: params.timeframes,
+                    delivery: params.delivery,
+                    cooldown_secs: params.cooldown_secs,
+                    max_immediate_per_hour: params.max_immediate_per_hour,
+                },
+                context,
+            )
+            .await
     }
 }
 
@@ -487,6 +630,87 @@ fn expand_catalog_source_ids(params: &mut FinanceSubscribeParams) -> anyhow::Res
     Ok(())
 }
 
+fn validate_catalog_source_type(
+    catalog_source_ids: &[String],
+    expected: FeedType,
+) -> anyhow::Result<()> {
+    if catalog_source_ids.is_empty() {
+        return Ok(());
+    }
+
+    validate_string_group("catalog_source_ids", catalog_source_ids)?;
+    let sources = default_finance_feed_sources();
+    for raw_id in catalog_source_ids {
+        let id = raw_id.trim();
+        let source = sources
+            .iter()
+            .find(|source| source.id == id)
+            .ok_or_else(|| anyhow::anyhow!("unknown finance feed catalog source id: {id}"))?;
+        anyhow::ensure!(
+            source.feed_type == expected,
+            "finance feed catalog source {id:?} has type {}, expected {}",
+            source.feed_type,
+            expected
+        );
+    }
+    Ok(())
+}
+
+fn derive_market_candle_venue(
+    catalog_source_ids: &[String],
+    venues: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    if catalog_source_ids.is_empty() {
+        return Ok(());
+    }
+
+    let derived = catalog_market_candle_venues(catalog_source_ids)?;
+    if derived.is_empty() {
+        return Ok(());
+    }
+
+    if !venues.is_empty() {
+        let normalized_venues: Vec<String> = venues
+            .iter()
+            .map(|venue| venue.trim().to_ascii_lowercase())
+            .collect();
+        for venue in &derived {
+            anyhow::ensure!(
+                normalized_venues.contains(venue),
+                "venue selector must include {venue:?} for the selected market_candle catalog \
+                 source"
+            );
+        }
+        return Ok(());
+    }
+
+    if derived.len() == 1 {
+        venues.push(derived[0].clone());
+    }
+    Ok(())
+}
+
+fn catalog_market_candle_venues(catalog_source_ids: &[String]) -> anyhow::Result<Vec<String>> {
+    let sources = default_finance_feed_sources();
+    let mut venues = Vec::new();
+    for raw_id in catalog_source_ids {
+        let id = raw_id.trim();
+        let source = sources
+            .iter()
+            .find(|source| source.id == id)
+            .ok_or_else(|| anyhow::anyhow!("unknown finance feed catalog source id: {id}"))?;
+        if let Some(venue) = source.transport.as_ref().and_then(|transport| {
+            transport
+                .get("venue")
+                .and_then(serde_json::Value::as_str)
+                .map(|venue| venue.trim().to_ascii_lowercase())
+        }) {
+            venues.push(venue);
+        }
+    }
+    Ok(dedupe(venues))
+}
+
 fn feed_source_entry(source: DefaultFeedSource) -> FinanceFeedSourceEntry {
     let source_name = source.feed_name();
     let can_enable = source.can_enable();
@@ -526,8 +750,10 @@ mod tests {
 
     use super::{
         FinanceListFeedSourcesParams, FinanceListFeedSourcesTool, FinanceListSubscriptionsParams,
-        FinanceListSubscriptionsTool, FinanceSubscribeParams, FinanceSubscribeTool,
-        FinanceUnsubscribeParams, FinanceUnsubscribeTool,
+        FinanceListSubscriptionsTool, FinanceSubscribeInstrumentsParams,
+        FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsParams, FinanceSubscribeNewsTool,
+        FinanceSubscribeParams, FinanceSubscribeTool, FinanceUnsubscribeParams,
+        FinanceUnsubscribeTool,
     };
     use crate::finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscriptionRegistry,
@@ -794,6 +1020,169 @@ mod tests {
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].source_names, ["finance-fed-press-releases"]);
         assert_eq!(subs[0].watch_terms, ["rate cut"]);
+    }
+
+    #[tokio::test]
+    async fn subscribe_news_sets_rss_event_kind_and_rejects_market_catalog_sources() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeNewsTool::new(registry.clone());
+        let ctx = context();
+
+        let result = tool
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     vec![" fed-press-releases ".to_owned()],
+                    source_names:           Vec::new(),
+                    category_tags:          Vec::new(),
+                    watch_terms:            vec!["rate cut".to_owned()],
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.event_kinds, [FinanceEventKind::RssArticle]);
+        assert_eq!(result.catalog_source_ids, ["fed-press-releases"]);
+        assert_eq!(result.source_names, ["finance-fed-press-releases"]);
+        assert_eq!(result.watch_terms, ["rate cut"]);
+        assert!(result.venues.is_empty());
+        assert!(result.symbols.is_empty());
+        assert!(result.timeframes.is_empty());
+
+        let err = tool
+            .run(
+                FinanceSubscribeNewsParams {
+                    catalog_source_ids:     vec!["binance-market-candles".to_owned()],
+                    source_names:           Vec::new(),
+                    category_tags:          Vec::new(),
+                    watch_terms:            vec!["BTC".to_owned()],
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("expected rss"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_sets_candle_event_kind_and_derives_catalog_venue() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeInstrumentsTool::new(registry.clone());
+        let ctx = context();
+
+        let result = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_ids:     vec!["binance-major-crypto-15m".to_owned()],
+                    source_names:           Vec::new(),
+                    category_tags:          Vec::new(),
+                    venues:                 Vec::new(),
+                    symbols:                vec![" solusdt ".to_owned()],
+                    timeframes:             vec![" 15M ".to_owned()],
+                    delivery:               Some(FinanceDelivery::Immediate),
+                    cooldown_secs:          Some(60),
+                    max_immediate_per_hour: Some(4),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.event_kinds, [FinanceEventKind::MarketCandleClosed]);
+        assert_eq!(result.catalog_source_ids, ["binance-major-crypto-15m"]);
+        assert_eq!(result.source_names, ["finance-binance-major-crypto-15m"]);
+        assert_eq!(result.venues, ["binance"]);
+        assert_eq!(result.symbols, ["SOLUSDT"]);
+        assert_eq!(result.timeframes, ["15m"]);
+        assert_eq!(result.delivery, FinanceDelivery::Immediate);
+        assert_eq!(result.cooldown_secs, 60);
+        assert_eq!(result.max_immediate_per_hour, 4);
+
+        let subs = registry
+            .list_for_owner(&rara_kernel::identity::UserId("alice".to_owned()))
+            .await;
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].event_kinds, [FinanceEventKind::MarketCandleClosed]);
+        assert_eq!(subs[0].venues, ["binance"]);
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_rejects_news_catalog_sources() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeInstrumentsTool::new(registry);
+
+        let err = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_ids:     vec!["fed-press-releases".to_owned()],
+                    source_names:           Vec::new(),
+                    category_tags:          Vec::new(),
+                    venues:                 Vec::new(),
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("expected market_candle"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_instruments_rejects_catalog_venue_mismatch() {
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = Arc::new(FinanceSubscriptionRegistry::load(
+            tmp.path().join("subs.json"),
+        ));
+        let tool = FinanceSubscribeInstrumentsTool::new(registry);
+
+        let err = tool
+            .run(
+                FinanceSubscribeInstrumentsParams {
+                    catalog_source_ids:     vec!["binance-market-candles".to_owned()],
+                    source_names:           Vec::new(),
+                    category_tags:          Vec::new(),
+                    venues:                 vec!["longbridge".to_owned()],
+                    symbols:                vec!["BTCUSDT".to_owned()],
+                    timeframes:             vec!["1m".to_owned()],
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("must include \"binance\""),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
