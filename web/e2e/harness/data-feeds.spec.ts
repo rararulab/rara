@@ -392,7 +392,7 @@ async function setupRoutes(
     await route.fulfill({ json: state.catalog ?? [] });
   });
 
-  await page.route('**/api/v1/data-feeds/finance/bundles', async (route) => {
+  await page.route(/\/api\/v1\/data-feeds\/finance\/bundles(\?.*)?$/, async (route) => {
     await route.fulfill({ json: state.financeBundles ?? { bundles: [], count: 0 } });
   });
 
@@ -418,22 +418,44 @@ async function setupRoutes(
         session_key: string;
         catalog_source_ids?: string[];
         delivery?: 'immediate' | 'silent';
+        venues?: string[];
+        symbols?: string[];
+        timeframes?: string[];
       };
-      const entry = state.catalog?.find((item) => item.id === body.catalog_source_ids?.[0]);
+      const entries = (body.catalog_source_ids ?? [])
+        .map((id) => state.catalog?.find((item) => item.id === id))
+        .filter((entry): entry is FeedCatalogEntry => entry != null);
+      const eventKinds = Array.from(
+        new Set(
+          entries.map((entry) =>
+            entry.feed_type === 'market_candle' ? 'market_candle_closed' : 'rss_article',
+          ),
+        ),
+      ) as FinanceSubscription['event_kinds'];
       const subscription: FinanceSubscription = {
         subscription_id: `sub-${Date.now()}`,
         session_key: body.session_key,
-        event_kinds: [
-          entry?.feed_type === 'market_candle' ? 'market_candle_closed' : 'rss_article',
-        ],
-        source_names: [entry?.source_name ?? `finance-${entry?.id ?? 'unknown'}`],
+        event_kinds: eventKinds.length > 0 ? eventKinds : ['rss_article'],
+        source_names:
+          entries.length > 0
+            ? entries.map((entry) => entry.source_name ?? `finance-${entry.id}`)
+            : ['finance-unknown'],
         matches_all_sources: false,
-        sources: [],
+        sources: entries.map((entry) => ({
+          source_name: entry.source_name ?? `finance-${entry.id}`,
+          catalog_source_id: entry.id,
+          catalog_name: entry.name,
+          provider: entry.provider ?? null,
+          feed_id: entry.feed_id,
+          feed_type: entry.feed_type,
+          enabled: entry.enabled,
+          status: entry.enabled ? 'running' : 'idle',
+        })),
         category_tags: [],
         watch_terms: [],
-        venues: [],
-        symbols: [],
-        timeframes: [],
+        venues: body.venues ?? [],
+        symbols: body.symbols ?? [],
+        timeframes: body.timeframes ?? [],
         delivery: body.delivery ?? 'silent',
         cooldown_secs: 900,
         max_immediate_per_hour: 6,
@@ -487,6 +509,13 @@ async function setupRoutes(
     state.feeds.push(feed);
     entry.enabled = true;
     entry.feed_id = feed.id;
+    for (const bundle of state.financeBundles?.bundles ?? []) {
+      const source = bundle.sources.find((item) => item.id === entry.id);
+      if (!source) continue;
+      source.enabled = true;
+      source.feed_id = feed.id;
+      bundle.enabled_source_count = bundle.sources.filter((item) => item.enabled).length;
+    }
     await route.fulfill({ status: 201, json: feed });
   });
 
@@ -857,6 +886,110 @@ test.describe('Data Feeds Management', () => {
     await expect(
       page.locator('input[placeholder="https://market-data.example/candles/latest"]'),
     ).toBeVisible();
+  });
+
+  test('finance watch bundle enables ready sources and subscribes the session', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const fed: FeedCatalogEntry = {
+      id: 'fed-press-releases',
+      name: 'Federal Reserve Press Releases',
+      description: 'Official Federal Reserve press releases.',
+      feed_type: 'rss',
+      tags: ['finance', 'news', 'fed', 'macro'],
+      source_name: 'finance-fed-press-releases',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        url: 'https://www.federalreserve.gov/feeds/press_all.xml',
+        interval_secs: 300,
+        headers: {},
+        max_entries_per_poll: 50,
+      },
+    };
+    const sec: FeedCatalogEntry = {
+      id: 'sec-press-releases',
+      name: 'SEC Press Releases',
+      description: 'SEC press releases RSS feed.',
+      feed_type: 'rss',
+      tags: ['finance', 'news', 'sec', 'regulatory'],
+      source_name: 'finance-sec-press-releases',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        url: 'https://www.sec.gov/news/pressreleases.rss',
+        interval_secs: 300,
+        headers: {},
+        max_entries_per_poll: 50,
+      },
+    };
+    const state = {
+      feeds: [] as DataFeedConfig[],
+      events: [] as FeedEvent[],
+      sessions: [makeChatSession({ key: 'session-1' })],
+      financeSubscriptions: { subscriptions: [], count: 0 },
+      catalog: [fed, sec],
+      financeBundles: {
+        count: 1,
+        bundles: [
+          {
+            id: 'macro-news',
+            name: 'Macro News',
+            description: 'Federal Reserve and SEC official RSS feeds.',
+            tags: ['finance', 'news', 'macro', 'regulatory'],
+            catalog_source_ids: ['fed-press-releases', 'sec-press-releases'],
+            feed_types: ['rss'],
+            providers: [],
+            source_count: 2,
+            enabled_source_count: 0,
+            ready_source_count: 2,
+            requires_configuration: false,
+            can_enable: true,
+            sources: [fed, sec],
+            subscriptions: {
+              user_subscribed: false,
+              user_subscription_ids: [],
+            },
+          },
+        ],
+      },
+    };
+    await setupRoutes(page, state);
+
+    await page.goto('/chat/session-1');
+
+    await expect(page.getByText('Finance watches')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Curated bundles')).toBeVisible();
+    await expect(page.getByText('Macro News', { exact: true })).toBeVisible();
+    await expect(page.getByText('0/2 sources on')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Enable bundle' }).click();
+
+    await expect(page.getByText('2/2 sources on')).toBeVisible({ timeout: 10_000 });
+    expect(state.feeds.map((feed) => feed.name).sort()).toEqual([
+      'finance-fed-press-releases',
+      'finance-sec-press-releases',
+    ]);
+
+    await page.getByRole('button', { name: 'Watch bundle' }).click();
+
+    const macroBundle = page
+      .getByText('Macro News', { exact: true })
+      .locator('xpath=ancestor::div[contains(@class, "rounded-md")][1]');
+    await expect(macroBundle.getByRole('button', { name: 'Unwatch' })).toBeVisible({
+      timeout: 10_000,
+    });
+    expect(state.financeSubscriptions.subscriptions).toHaveLength(1);
+    expect(state.financeSubscriptions.subscriptions[0].session_key).toBe('session-1');
+    expect(state.financeSubscriptions.subscriptions[0].source_names.sort()).toEqual([
+      'finance-fed-press-releases',
+      'finance-sec-press-releases',
+    ]);
   });
 
   // -----------------------------------------------------------------------
