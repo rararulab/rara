@@ -352,6 +352,86 @@ describe('DataFeedsPanel', () => {
     });
   });
 
+  it('opens the catalog configure dialog from a requires-config finance bundle', async () => {
+    const longbridge: FeedCatalogEntry = {
+      id: 'longbridge-market-candles',
+      name: 'Longbridge Market Data',
+      description: 'Preset for Longbridge equities market data.',
+      feed_type: 'market_candle',
+      provider: 'longbridge',
+      tags: ['finance', 'market-data', 'equities', 'longbridge'],
+      source_name: 'finance-longbridge-market-candles',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: true,
+      setup_hint: 'Connect Longbridge credentials behind a normalized candle endpoint.',
+      transport_template: {
+        url: '',
+        interval_secs: 60,
+        headers: {},
+        venue: 'longbridge',
+        symbols: [],
+        timeframes: [],
+        max_candles_per_poll: 1000,
+      },
+    };
+
+    catalogMock.mockResolvedValue([longbridge] satisfies FeedCatalogEntry[]);
+    financeBundlesMock.mockResolvedValue({
+      count: 1,
+      bundles: [
+        {
+          id: 'longbridge-equities-daily',
+          name: 'Longbridge Equities Daily',
+          description: 'Longbridge equities daily candles preset.',
+          tags: ['finance', 'market-data', 'equities', 'longbridge'],
+          catalog_source_ids: ['longbridge-market-candles'],
+          feed_types: ['market_candle'],
+          providers: ['longbridge'],
+          source_count: 1,
+          enabled_source_count: 0,
+          ready_source_count: 0,
+          requires_configuration: true,
+          can_enable: false,
+          sources: [longbridge],
+          subscriptions: {
+            user_subscribed: false,
+            user_subscription_ids: [],
+          },
+        },
+      ],
+    } satisfies FinanceFeedBundlesResponse);
+
+    renderPanel();
+
+    expect(await screen.findByText('Longbridge Equities Daily')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure source' }));
+
+    expect(await screen.findByText('Configure Longbridge Market Data')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('https://market-data.example/candles/latest'), {
+      target: { value: 'https://market-data.local/longbridge/candles/latest' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('BTCUSDT, ETHUSDT'), {
+      target: { value: 'AAPL.US, NVDA.US' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('1m, 15m, 1h'), {
+      target: { value: '1d' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Enable source' }));
+
+    await waitFor(() => {
+      expect(enableCatalogEntryMock).toHaveBeenCalledWith('longbridge-market-candles', {
+        transport: expect.objectContaining({
+          url: 'https://market-data.local/longbridge/candles/latest',
+          venue: 'longbridge',
+          symbols: ['AAPL.US', 'NVDA.US'],
+          timeframes: ['1d'],
+        }),
+        auth: null,
+      });
+    });
+  });
+
   it('requests and displays stored K-line stream watermarks', async () => {
     listMock.mockResolvedValue([feed()]);
     candleStreamsMock.mockResolvedValue({
