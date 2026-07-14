@@ -1732,6 +1732,7 @@ function FeedCatalogCard({
 
 function FinanceFeedBundlesCard({ bundles }: { bundles: FinanceFeedBundle[] }) {
   const queryClient = useQueryClient();
+  const [configureEntry, setConfigureEntry] = useState<FeedCatalogEntry | null>(null);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
@@ -1755,82 +1756,132 @@ function FinanceFeedBundlesCard({ bundles }: { bundles: FinanceFeedBundle[] }) {
     onSuccess: refresh,
   });
 
+  const configureSourceMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: EnableCatalogEntryRequest }) =>
+      dataFeedsApi.enableCatalogEntry(id, body),
+    onSuccess: refresh,
+  });
+
   if (bundles.length === 0) return null;
 
   return (
-    <div className="rounded-lg border bg-card">
-      <div className="border-b px-4 py-3">
-        <h3 className="text-sm font-semibold">Curated feed bundles</h3>
-        <p className="text-xs text-muted-foreground">
-          Operator-owned defaults for common finance ingestion paths. Enable ready sources here;
-          configure credentialed providers from the catalog below.
-        </p>
-      </div>
-      <div className="divide-y">
-        {bundles.map((bundle) => {
-          const readyDisabledSources = bundle.sources.filter(
-            (source) => !source.enabled && !source.requires_configuration,
-          );
-          const configuredSources = bundle.sources.filter((source) => source.enabled);
-          const configuredLabel = `${bundle.enabled_source_count}/${bundle.source_count} sources on`;
-          const pending =
-            enableBundleMutation.isPending && enableBundleMutation.variables?.id === bundle.id;
-          const providerLabel =
-            bundle.providers.length > 0 ? summarizeList(bundle.providers) : 'Mixed sources';
-          const feedTypeLabel = bundle.feed_types.map(typeLabel).join(' + ');
-          const sourceNames = bundle.sources.map((source) => catalogSourceName(source));
-          const canEnable = bundle.can_enable && readyDisabledSources.length > 0;
+    <>
+      <div className="rounded-lg border bg-card">
+        <div className="border-b px-4 py-3">
+          <h3 className="text-sm font-semibold">Curated feed bundles</h3>
+          <p className="text-xs text-muted-foreground">
+            Operator-owned defaults for common finance ingestion paths. Enable ready sources here;
+            configure credentialed providers from the catalog below.
+          </p>
+        </div>
+        <div className="divide-y">
+          {bundles.map((bundle) => {
+            const readyDisabledSources = bundle.sources.filter(
+              (source) => !source.enabled && !source.requires_configuration,
+            );
+            const configurableSources = bundle.sources.filter(
+              (source) => !source.enabled && source.requires_configuration,
+            );
+            const configuredSources = bundle.sources.filter((source) => source.enabled);
+            const configuredLabel = `${bundle.enabled_source_count}/${bundle.source_count} sources on`;
+            const pending =
+              enableBundleMutation.isPending && enableBundleMutation.variables?.id === bundle.id;
+            const providerLabel =
+              bundle.providers.length > 0 ? summarizeList(bundle.providers) : 'Mixed sources';
+            const feedTypeLabel = bundle.feed_types.map(typeLabel).join(' + ');
+            const sourceNames = bundle.sources.map((source) => catalogSourceName(source));
+            const canEnable = bundle.can_enable && readyDisabledSources.length > 0;
+            const singleConfigurableSource =
+              configurableSources.length === 1 ? (configurableSources[0] ?? null) : null;
 
-          return (
-            <div key={bundle.id} className="flex flex-col gap-3 px-4 py-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{bundle.name}</span>
-                    <Badge variant="outline" className="text-xs">
-                      {configuredLabel}
-                    </Badge>
-                    {configuredSources.length === bundle.source_count && (
-                      <Badge variant="secondary" className="text-xs text-foreground">
-                        Enabled
+            return (
+              <div key={bundle.id} className="flex flex-col gap-3 px-4 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{bundle.name}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {configuredLabel}
                       </Badge>
-                    )}
-                    {bundle.requires_configuration && (
-                      <Badge variant="secondary" className="text-xs text-muted-foreground">
-                        Requires config
-                      </Badge>
+                      {configuredSources.length === bundle.source_count && (
+                        <Badge variant="secondary" className="text-xs text-foreground">
+                          Enabled
+                        </Badge>
+                      )}
+                      {bundle.requires_configuration && (
+                        <Badge variant="secondary" className="text-xs text-muted-foreground">
+                          Requires config
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{bundle.description}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {feedTypeLabel} · {providerLabel}
+                    </p>
+                    {sourceNames.length > 0 && (
+                      <p className="font-mono text-[11px] text-muted-foreground">
+                        Sources {summarizeList(sourceNames, 5)}
+                      </p>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground">{bundle.description}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {feedTypeLabel} · {providerLabel}
-                  </p>
-                  {sourceNames.length > 0 && (
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                      Sources {summarizeList(sourceNames, 5)}
-                    </p>
-                  )}
+                  <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+                    {canEnable && (
+                      <Button
+                        size="sm"
+                        className="h-8"
+                        onClick={() => enableBundleMutation.mutate(bundle)}
+                        disabled={pending}
+                      >
+                        {pending ? 'Enabling...' : 'Enable bundle'}
+                      </Button>
+                    )}
+                    {singleConfigurableSource ? (
+                      <Button
+                        size="sm"
+                        className="h-8"
+                        variant={canEnable ? 'outline' : 'default'}
+                        onClick={() => setConfigureEntry(singleConfigurableSource)}
+                      >
+                        Configure source
+                      </Button>
+                    ) : bundle.requires_configuration ? (
+                      <p className="text-xs text-muted-foreground sm:max-w-40 sm:text-right">
+                        Configure required sources below.
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-                {canEnable ? (
-                  <Button
-                    size="sm"
-                    className="h-8 shrink-0"
-                    onClick={() => enableBundleMutation.mutate(bundle)}
-                    disabled={pending}
-                  >
-                    {pending ? 'Enabling...' : 'Enable bundle'}
-                  </Button>
-                ) : bundle.requires_configuration ? (
-                  <p className="text-xs text-muted-foreground sm:max-w-40 sm:text-right">
-                    Configure required sources below.
-                  </p>
-                ) : null}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
+      <CatalogConfigureDialog
+        entry={configureEntry}
+        onOpenChange={(open) => {
+          if (!open) setConfigureEntry(null);
+        }}
+        onSubmit={(body) => {
+          if (!configureEntry) return;
+          configureSourceMutation.mutate(
+            { id: configureEntry.id, body },
+            {
+              onSuccess: () => setConfigureEntry(null),
+            },
+          );
+        }}
+        saving={
+          configureSourceMutation.isPending &&
+          configureSourceMutation.variables?.id === configureEntry?.id
+        }
+        serverError={
+          configureSourceMutation.isError &&
+          configureSourceMutation.variables?.id === configureEntry?.id
+            ? configureSourceMutation.error.message
+            : null
+        }
+      />
+    </>
   );
 }
 
