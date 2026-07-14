@@ -201,6 +201,14 @@ fn rss_source(
     }
 }
 
+/// Builds a public Binance spot OHLCV preset polling `/api/v3/klines`.
+///
+/// `interval_secs` is the polling cadence. Sub-minute monitoring (5–10s) is
+/// supported for timely flash-crash detection; the transport rejects any
+/// cadence below the `MIN_INTERVAL_SECS` floor at load. The effective request
+/// rate is `symbols × timeframes / interval_secs` per second, so keep the
+/// monitored set focused when polling near the floor to stay within Binance's
+/// per-IP request-weight budget.
 fn binance_market_candles_source(
     id: &str,
     name: &str,
