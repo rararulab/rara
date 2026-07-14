@@ -37,6 +37,7 @@ import {
   type FeedCatalogEntry,
   type FeedEvent,
   type FeedSummary,
+  type FinanceFeedBundle,
   type FinanceEventKind,
   type FinanceSubscription,
   type FinanceSubscriptionsResponse,
@@ -882,6 +883,7 @@ function FeedFormDialog({
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -893,6 +895,7 @@ function FeedFormDialog({
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
       onOpenChange(false);
     },
     onError: (err: Error) => setError(err.message),
@@ -1529,7 +1532,9 @@ function FeedCatalogCard({
     void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
     void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
     void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+    void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
     void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
+    void queryClient.invalidateQueries({ queryKey: ['market-data-candle-streams'] });
   };
 
   const enableMutation = useMutation({
@@ -1725,6 +1730,110 @@ function FeedCatalogCard({
   );
 }
 
+function FinanceFeedBundlesCard({ bundles }: { bundles: FinanceFeedBundle[] }) {
+  const queryClient = useQueryClient();
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
+    void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+    void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+    void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
+    void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
+    void queryClient.invalidateQueries({ queryKey: ['market-data-candle-streams'] });
+  };
+
+  const enableBundleMutation = useMutation({
+    mutationFn: async (bundle: FinanceFeedBundle) => {
+      const sources = bundle.sources.filter(
+        (source) => !source.enabled && !source.requires_configuration,
+      );
+      for (const source of sources) {
+        await dataFeedsApi.enableCatalogEntry(source.id);
+      }
+      return sources.length;
+    },
+    onSuccess: refresh,
+  });
+
+  if (bundles.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="border-b px-4 py-3">
+        <h3 className="text-sm font-semibold">Curated feed bundles</h3>
+        <p className="text-xs text-muted-foreground">
+          Operator-owned defaults for common finance ingestion paths. Enable ready sources here;
+          configure credentialed providers from the catalog below.
+        </p>
+      </div>
+      <div className="divide-y">
+        {bundles.map((bundle) => {
+          const readyDisabledSources = bundle.sources.filter(
+            (source) => !source.enabled && !source.requires_configuration,
+          );
+          const configuredSources = bundle.sources.filter((source) => source.enabled);
+          const configuredLabel = `${bundle.enabled_source_count}/${bundle.source_count} sources on`;
+          const pending =
+            enableBundleMutation.isPending && enableBundleMutation.variables?.id === bundle.id;
+          const providerLabel =
+            bundle.providers.length > 0 ? summarizeList(bundle.providers) : 'Mixed sources';
+          const feedTypeLabel = bundle.feed_types.map(typeLabel).join(' + ');
+          const sourceNames = bundle.sources.map((source) => catalogSourceName(source));
+          const canEnable = bundle.can_enable && readyDisabledSources.length > 0;
+
+          return (
+            <div key={bundle.id} className="flex flex-col gap-3 px-4 py-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{bundle.name}</span>
+                    <Badge variant="outline" className="text-xs">
+                      {configuredLabel}
+                    </Badge>
+                    {configuredSources.length === bundle.source_count && (
+                      <Badge variant="secondary" className="text-xs text-foreground">
+                        Enabled
+                      </Badge>
+                    )}
+                    {bundle.requires_configuration && (
+                      <Badge variant="secondary" className="text-xs text-muted-foreground">
+                        Requires config
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{bundle.description}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {feedTypeLabel} · {providerLabel}
+                  </p>
+                  {sourceNames.length > 0 && (
+                    <p className="font-mono text-[11px] text-muted-foreground">
+                      Sources {summarizeList(sourceNames, 5)}
+                    </p>
+                  )}
+                </div>
+                {canEnable ? (
+                  <Button
+                    size="sm"
+                    className="h-8 shrink-0"
+                    onClick={() => enableBundleMutation.mutate(bundle)}
+                    disabled={pending}
+                  >
+                    {pending ? 'Enabling...' : 'Enable bundle'}
+                  </Button>
+                ) : bundle.requires_configuration ? (
+                  <p className="text-xs text-muted-foreground sm:max-w-40 sm:text-right">
+                    Configure required sources below.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function FinanceSubscriptionsCard({
   result,
   candleStreams,
@@ -1738,6 +1847,7 @@ function FinanceSubscriptionsCard({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
     },
   });
 
@@ -2300,6 +2410,10 @@ function FeedListView({
     queryKey: ['data-feed-catalog'],
     queryFn: () => dataFeedsApi.catalog(),
   });
+  const financeBundlesQuery = useQuery({
+    queryKey: ['finance-feed-bundles'],
+    queryFn: () => dataFeedsApi.financeBundles(),
+  });
   const financeSubscriptionsQuery = useQuery({
     queryKey: ['finance-subscriptions'],
     queryFn: () => dataFeedsApi.financeSubscriptions(),
@@ -2310,6 +2424,7 @@ function FeedListView({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
       void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
     },
   });
@@ -2320,6 +2435,7 @@ function FeedListView({
       void queryClient.invalidateQueries({ queryKey: ['data-feeds'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-catalog'] });
       void queryClient.invalidateQueries({ queryKey: ['data-feed-summaries'] });
+      void queryClient.invalidateQueries({ queryKey: ['finance-feed-bundles'] });
       void queryClient.invalidateQueries({ queryKey: ['finance-subscriptions'] });
       setDeleteId(null);
     },
@@ -2368,6 +2484,9 @@ function FeedListView({
         </Button>
       </div>
 
+      {financeBundlesQuery.data && financeBundlesQuery.data.bundles.length > 0 && (
+        <FinanceFeedBundlesCard bundles={financeBundlesQuery.data.bundles} />
+      )}
       {catalogQuery.data && (
         <FeedCatalogCard
           entries={catalogQuery.data}
