@@ -113,15 +113,20 @@ pub(super) struct FinanceFeedBundleEntry {
     pub description: String,
     pub tags: Vec<String>,
     pub feed_types: Vec<String>,
+    pub providers: Vec<String>,
     pub catalog_source_ids: Vec<String>,
     pub source_count: usize,
+    pub enabled_source_count: usize,
+    pub ready_source_count: usize,
     pub persisted_count: usize,
     pub running_count: usize,
     pub subscribed_count: usize,
+    pub session_subscribed_count: usize,
     pub can_enable: bool,
     pub requires_configuration: bool,
     pub setup_hints: Vec<String>,
     pub sources: Vec<FinanceFeedBundleSource>,
+    pub subscriptions: FinanceFeedBundleSubscriptions,
     pub list_sources_hint: FinanceFeedBundleListSourcesHint,
     pub subscribe_bundle_hint: Option<FinanceFeedBundleSubscribeHint>,
     pub market_data_hint: Option<FinanceFeedSourceMarketDataHint>,
@@ -133,14 +138,15 @@ pub(super) struct FinanceFeedBundleEntry {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedBundleSource {
-    pub catalog_source_id: String,
-    pub source_name:       String,
-    pub name:              String,
-    pub feed_type:         String,
-    pub provider:          Option<String>,
-    pub readiness:         FinanceFeedBundleSourceReadiness,
-    pub runtime:           FinanceFeedBundleSourceRuntime,
-    pub subscribed:        bool,
+    pub catalog_source_id:  String,
+    pub source_name:        String,
+    pub name:               String,
+    pub feed_type:          String,
+    pub provider:           Option<String>,
+    pub readiness:          FinanceFeedBundleSourceReadiness,
+    pub runtime:            FinanceFeedBundleSourceRuntime,
+    pub subscribed:         bool,
+    pub session_subscribed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,7 +158,16 @@ pub(super) struct FinanceFeedBundleSourceReadiness {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedBundleSourceRuntime {
     pub persisted: bool,
+    pub enabled:   bool,
     pub running:   bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleSubscriptions {
+    pub user_subscribed:          bool,
+    pub session_subscribed:       bool,
+    pub user_subscription_ids:    Vec<Uuid>,
+    pub session_subscription_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3563,7 +3578,23 @@ fn feed_bundle_entry(
             feed_types.push(source.feed_type.clone());
         }
     }
+    let mut providers = Vec::new();
+    for source in &source_entries {
+        if let Some(provider) = &source.provider
+            && !providers.contains(provider)
+        {
+            providers.push(provider.clone());
+        }
+    }
     let source_count = source_entries.len();
+    let enabled_source_count = source_entries
+        .iter()
+        .filter(|source| source.runtime.enabled)
+        .count();
+    let ready_source_count = source_entries
+        .iter()
+        .filter(|source| source.can_enable || source.runtime.enabled)
+        .count();
     let persisted_count = source_entries
         .iter()
         .filter(|source| source.runtime.persisted)
@@ -3575,6 +3606,10 @@ fn feed_bundle_entry(
     let subscribed_count = source_entries
         .iter()
         .filter(|source| source.subscriptions.user_subscribed)
+        .count();
+    let session_subscribed_count = source_entries
+        .iter()
+        .filter(|source| source.subscriptions.session_subscribed)
         .count();
     let can_enable = source_entries.iter().all(|source| source.can_enable);
     let requires_configuration = source_entries
@@ -3600,23 +3635,26 @@ fn feed_bundle_entry(
     let subscribe_bundle_hint =
         subscribe_bundle_hint_for_bundle(&bundle, can_enable, &source_entries);
     let market_data_hint = bundle_market_data_hint(can_enable, &source_entries);
+    let subscriptions = bundle_subscription_summary(&source_entries);
     let sources = source_entries
         .iter()
         .map(|source| FinanceFeedBundleSource {
-            catalog_source_id: source.id.clone(),
-            source_name:       source.source_name.clone(),
-            name:              source.name.clone(),
-            feed_type:         source.feed_type.clone(),
-            provider:          source.provider.clone(),
-            readiness:         FinanceFeedBundleSourceReadiness {
+            catalog_source_id:  source.id.clone(),
+            source_name:        source.source_name.clone(),
+            name:               source.name.clone(),
+            feed_type:          source.feed_type.clone(),
+            provider:           source.provider.clone(),
+            readiness:          FinanceFeedBundleSourceReadiness {
                 requires_configuration: source.requires_configuration,
                 can_enable:             source.can_enable,
             },
-            runtime:           FinanceFeedBundleSourceRuntime {
+            runtime:            FinanceFeedBundleSourceRuntime {
                 persisted: source.runtime.persisted,
+                enabled:   source.runtime.enabled,
                 running:   source.runtime.running,
             },
-            subscribed:        source.subscriptions.user_subscribed,
+            subscribed:         source.subscriptions.user_subscribed,
+            session_subscribed: source.subscriptions.session_subscribed,
         })
         .collect();
 
@@ -3626,15 +3664,20 @@ fn feed_bundle_entry(
         description: bundle.description,
         tags: bundle.tags,
         feed_types,
+        providers,
         catalog_source_ids: bundle.catalog_source_ids.clone(),
         source_count,
+        enabled_source_count,
+        ready_source_count,
         persisted_count,
         running_count,
         subscribed_count,
+        session_subscribed_count,
         can_enable,
         requires_configuration,
         setup_hints,
         sources,
+        subscriptions,
         list_sources_hint: FinanceFeedBundleListSourcesHint {
             tool:            "finance_list_feed_sources".to_owned(),
             default_params:  serde_json::json!({
@@ -4173,6 +4216,39 @@ fn subscription_source_provider(
         })
 }
 
+fn bundle_subscription_summary(
+    source_entries: &[FinanceFeedSourceEntry],
+) -> FinanceFeedBundleSubscriptions {
+    let mut user_subscription_ids = Vec::new();
+    let mut session_subscription_ids = Vec::new();
+
+    for source in source_entries {
+        push_unique_subscription_ids(
+            &mut user_subscription_ids,
+            &source.subscriptions.user_subscription_ids,
+        );
+        push_unique_subscription_ids(
+            &mut session_subscription_ids,
+            &source.subscriptions.session_subscription_ids,
+        );
+    }
+
+    FinanceFeedBundleSubscriptions {
+        user_subscribed: !user_subscription_ids.is_empty(),
+        session_subscribed: !session_subscription_ids.is_empty(),
+        user_subscription_ids,
+        session_subscription_ids,
+    }
+}
+
+fn push_unique_subscription_ids(target: &mut Vec<Uuid>, source: &[Uuid]) {
+    for id in source {
+        if !target.contains(id) {
+            target.push(*id);
+        }
+    }
+}
+
 fn source_subscription_summary(
     subscriptions: &[FinanceSubscription],
     session_key: rara_kernel::session::SessionKey,
@@ -4597,7 +4673,11 @@ mod tests {
             .expect("filtered bundles");
 
         assert_eq!(result.count, 1);
-        assert_eq!(result.bundles[0].id, "binance-major-crypto-15m");
+        let bundle = &result.bundles[0];
+        assert_eq!(bundle.id, "binance-major-crypto-15m");
+        assert_eq!(bundle.providers, ["binance"]);
+        assert_eq!(bundle.enabled_source_count, 0);
+        assert_eq!(bundle.ready_source_count, 1);
         assert_eq!(
             result.filters.bundle_ids,
             ["macro-news", "binance-major-crypto-15m"]
@@ -4690,6 +4770,80 @@ mod tests {
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].event_kinds, [FinanceEventKind::RssArticle]);
         assert_eq!(subs[0].source_names, news.source_names);
+    }
+
+    #[tokio::test]
+    async fn list_feed_bundles_reports_source_status_breakdown() {
+        let (
+            _feed_sources,
+            _enable,
+            _disable,
+            _restart,
+            _subscribe,
+            svc,
+            registry,
+            finance_registry,
+        ) = tool().await;
+        let subscribe = FinanceSubscribeFeedBundleTool::new(
+            svc.clone(),
+            registry.clone(),
+            finance_registry.clone(),
+        );
+        let list = FinanceListFeedBundlesTool::new(svc, registry, finance_registry);
+        let ctx = context();
+
+        subscribe
+            .run(
+                FinanceSubscribeFeedBundleParams {
+                    bundle_id:              "macro-news".to_owned(),
+                    category_tags:          Vec::new(),
+                    watch_terms:            Vec::new(),
+                    start_now:              Some(false),
+                    delivery:               None,
+                    cooldown_secs:          None,
+                    max_immediate_per_hour: None,
+                },
+                &ctx,
+            )
+            .await
+            .expect("subscribe macro-news bundle");
+
+        let result = list
+            .run(
+                FinanceListFeedBundlesParams {
+                    bundle_ids:             vec!["macro-news".to_owned()],
+                    feed_types:             Vec::new(),
+                    can_enable:             None,
+                    requires_configuration: None,
+                },
+                &ctx,
+            )
+            .await
+            .expect("list macro-news bundle");
+        let macro_news = result
+            .bundles
+            .as_slice()
+            .first()
+            .expect("macro-news bundle");
+
+        assert_eq!(macro_news.source_count, 4);
+        assert_eq!(macro_news.enabled_source_count, 4);
+        assert_eq!(macro_news.ready_source_count, 4);
+        assert_eq!(macro_news.persisted_count, 4);
+        assert_eq!(macro_news.running_count, 0);
+        assert_eq!(macro_news.subscribed_count, 4);
+        assert_eq!(macro_news.session_subscribed_count, 4);
+        assert!(macro_news.subscriptions.user_subscribed);
+        assert!(macro_news.subscriptions.session_subscribed);
+        assert_eq!(macro_news.subscriptions.user_subscription_ids.len(), 1);
+        assert_eq!(macro_news.subscriptions.session_subscription_ids.len(), 1);
+        assert!(macro_news.sources.iter().all(|source| {
+            source.runtime.persisted
+                && source.runtime.enabled
+                && !source.runtime.running
+                && source.subscribed
+                && source.session_subscribed
+        }));
     }
 
     #[tokio::test]
