@@ -154,6 +154,10 @@ ready sources that are not persisted yet, `subscribe_bundle_hint` for the
 direct bundle-level subscription tool, `market_data_hint` for single-source
 market-data bundles that can be inspected directly in TSDB, and
 `subscription_hint` when the caller needs the lower-level specialized tool.
+Bundles that require operator configuration also include `configure_hints`
+for their blocked catalog sources. These are UI action hints, not mutating
+tools: open Settings → Data Feeds with the provided `dataFeedCatalogId`, fill
+the operator-owned transport/auth fields, then enable the source.
 `finance_subscribe_feed_bundle` is the
 conversation-first entry point after bundle discovery: macro/news bundles
 subscribe multiple RSS `catalog_source_ids` at once, while single-source
@@ -171,6 +175,8 @@ runtime state, event watermarks (`event_count`, `last_event_type`,
 provider metadata. It also reports source-name subscription matches for the
 current user/session and returns action hints for the next safe step:
 `enable_hint` for materializing a ready built-in source,
+`configure_hint` for opening Settings → Data Feeds on a source that needs
+operator-owned transport/auth fields,
 `subscription_hint` for choosing the specialized subscribe tool, and
 `events_hint` for checking recent persisted events. RSS sources use
 `finance_subscribe_news`; market-candle sources use

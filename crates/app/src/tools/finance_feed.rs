@@ -126,6 +126,7 @@ pub(super) struct FinanceFeedBundleEntry {
     pub subscribe_bundle_hint: Option<FinanceFeedBundleSubscribeHint>,
     pub market_data_hint: Option<FinanceFeedSourceMarketDataHint>,
     pub enable_hints: Vec<FinanceFeedSourceEnableHint>,
+    pub configure_hints: Vec<FinanceFeedSourceConfigureHint>,
     pub subscription_hint: Option<FinanceFeedSourceSubscriptionHint>,
     pub source_subscription_hints: Vec<FinanceFeedSourceSubscriptionHint>,
 }
@@ -234,6 +235,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub subscribe_tool:         Option<String>,
     pub subscription_hint:      Option<FinanceFeedSourceSubscriptionHint>,
     pub enable_hint:            Option<FinanceFeedSourceEnableHint>,
+    pub configure_hint:         Option<FinanceFeedSourceConfigureHint>,
     pub events_hint:            Option<FinanceFeedSourceEventsHint>,
     pub market_data_hint:       Option<FinanceFeedSourceMarketDataHint>,
     pub restart_hint:           Option<FinanceFeedSourceRuntimeActionHint>,
@@ -263,6 +265,15 @@ pub(super) struct FinanceFeedSourceSubscriptionHint {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedSourceEnableHint {
     pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceConfigureHint {
+    pub action:          String,
+    pub section:         String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
     pub optional_params: Vec<String>,
@@ -3361,6 +3372,26 @@ fn enable_hint_for_source(
     })
 }
 
+fn configure_hint_for_source(
+    catalog_source_id: &str,
+    requires_configuration: bool,
+) -> Option<FinanceFeedSourceConfigureHint> {
+    if !requires_configuration {
+        return None;
+    }
+
+    Some(FinanceFeedSourceConfigureHint {
+        action:          "open_settings".to_owned(),
+        section:         "data-feeds".to_owned(),
+        default_params:  serde_json::json!({
+            "catalog_source_id": catalog_source_id,
+            "dataFeedCatalogId": catalog_source_id,
+        }),
+        required_params: Vec::new(),
+        optional_params: Vec::new(),
+    })
+}
+
 fn events_hint_for_source(
     catalog_source_id: &str,
     feed_type: FeedType,
@@ -3464,6 +3495,7 @@ fn feed_source_entry(
     let can_enable = source.can_enable();
     let is_persisted = persisted.is_some();
     let enable_hint = enable_hint_for_source(&source.id, can_enable, is_persisted);
+    let configure_hint = configure_hint_for_source(&source.id, source.requires_configuration);
     let events_hint = events_hint_for_source(&source.id, source.feed_type);
     let market_data_hint = market_data_hint_for_source(&source_name, source.feed_type, transport);
     let restart_hint =
@@ -3484,6 +3516,7 @@ fn feed_source_entry(
         subscribe_tool: subscribe_tool_for_feed_type(source.feed_type),
         subscription_hint,
         enable_hint,
+        configure_hint,
         events_hint,
         market_data_hint,
         restart_hint,
@@ -3555,6 +3588,10 @@ fn feed_bundle_entry(
         .iter()
         .filter_map(|source| source.enable_hint.clone())
         .collect::<Vec<_>>();
+    let configure_hints = source_entries
+        .iter()
+        .filter_map(|source| source.configure_hint.clone())
+        .collect::<Vec<_>>();
     let source_subscription_hints = source_entries
         .iter()
         .filter_map(|source| source.subscription_hint.clone())
@@ -3621,6 +3658,7 @@ fn feed_bundle_entry(
         subscribe_bundle_hint,
         market_data_hint,
         enable_hints,
+        configure_hints,
         subscription_hint,
         source_subscription_hints,
     }
@@ -4294,10 +4332,11 @@ mod tests {
     use super::{
         DEFAULT_COOLDOWN_SECS, DEFAULT_MAX_IMMEDIATE_PER_HOUR, FeedChange,
         FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
-        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceListFeedBundlesParams,
-        FinanceListFeedBundlesTool, FinanceListFeedEventsParams, FinanceListFeedEventsTool,
-        FinanceListFeedSourcesParams, FinanceListFeedSourcesTool, FinanceListSubscriptionsParams,
-        FinanceListSubscriptionsTool, FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
+        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceFeedSourceConfigureHint,
+        FinanceListFeedBundlesParams, FinanceListFeedBundlesTool, FinanceListFeedEventsParams,
+        FinanceListFeedEventsTool, FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
+        FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
+        FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeFeedBundleParams, FinanceSubscribeFeedBundleTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsResult,
         FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsParams, FinanceSubscribeNewsResult,
@@ -4361,6 +4400,18 @@ mod tests {
             registry,
             finance_registry,
         )
+    }
+
+    fn assert_longbridge_configure_hint(hint: &FinanceFeedSourceConfigureHint) {
+        assert_eq!(hint.action, "open_settings");
+        assert_eq!(hint.section, "data-feeds");
+        assert_eq!(
+            hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "longbridge-market-candles",
+                "dataFeedCatalogId": "longbridge-market-candles",
+            })
+        );
     }
 
     #[tokio::test]
@@ -4500,6 +4551,8 @@ mod tests {
         assert!(longbridge.requires_configuration);
         assert!(!longbridge.can_enable);
         assert!(longbridge.enable_hints.is_empty());
+        assert_eq!(longbridge.configure_hints.len(), 1);
+        assert_longbridge_configure_hint(&longbridge.configure_hints[0]);
         assert!(longbridge.subscribe_bundle_hint.is_none());
         assert!(
             longbridge.market_data_hint.is_none(),
@@ -5353,6 +5406,12 @@ mod tests {
         assert!(longbridge.requires_configuration);
         assert!(!longbridge.can_enable);
         assert!(longbridge.enable_hint.is_none());
+        assert_longbridge_configure_hint(
+            longbridge
+                .configure_hint
+                .as_ref()
+                .expect("longbridge should expose settings configure hint"),
+        );
         assert!(
             longbridge
                 .events_hint
