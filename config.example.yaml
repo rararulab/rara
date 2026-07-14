@@ -262,6 +262,16 @@ agents:
 #   symbols: ["BTCUSDT", "ETHUSDT"]
 #   timeframes: ["15m", "1h"]
 #   max_candles_per_poll: 1000
+#
+# interval_secs is the polling cadence. Sub-minute monitoring (5–10s) is
+# supported so a flash crash is observed within seconds; 5s is the hard floor
+# (interval_secs below it is rejected at load). The floor is a fixed property
+# of Binance's per-IP request-weight limit, not a tunable — do not try to
+# override it. Note the effective request rate is symbols × timeframes /
+# interval_secs per second, not 1 / interval_secs: each tick fans out to one
+# /api/v3/klines request per symbol × timeframe. So even at interval_secs >= 5,
+# a large symbols × timeframes set can approach the venue's rate limit — keep
+# the monitored set focused rather than pushing the interval to the floor.
 
 # ---------------------------------------------------------------------------
 # Optional integrations — remove or leave commented out if unused

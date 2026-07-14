@@ -49,6 +49,27 @@ use crate::market_data::Timeframe;
 const MAX_CANDLES_PER_POLL: usize = 10_000;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
+/// Minimum polling cadence for a market-candle feed, in seconds.
+///
+/// Sub-minute polling (5–10s) is the intended operating point: a flash crash
+/// must be observed within seconds, not up to a minute late. But the Binance
+/// public REST API enforces a per-IP request-weight budget, and each poll tick
+/// fans out to `symbols × timeframes` `/api/v3/klines` requests — so the true
+/// request rate is `symbols × timeframes / interval_secs` per second, not
+/// `1 / interval_secs`. A cadence below this floor multiplies that fan-out into
+/// a request burst that trips the venue's rate limit (HTTP 429/418) and gets
+/// the deployment IP temporarily banned, flipping every symbol to `Error` at
+/// once. Five seconds is the fastest cadence that keeps the intended monitoring
+/// fan-out within the venue's budget while still catching a sub-minute crash in
+/// time.
+///
+/// This encodes a fixed property of the venue API's rate limit — no deploy
+/// operator has a principled reason to poll faster than the venue allows — so
+/// it lives as a mechanism `const` rather than a YAML knob
+/// (`docs/guides/anti-patterns.md`). `interval_secs` itself stays a per-feed
+/// config value: a genuine deploy-relevant choice *within* the allowed range.
+const MIN_INTERVAL_SECS: u64 = 5;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MarketCandleTransport {
     #[serde(default)]
@@ -617,6 +638,12 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
         "market candle interval_secs must be greater than zero"
     );
     anyhow::ensure!(
+        transport.interval_secs >= MIN_INTERVAL_SECS,
+        "market candle interval_secs must be at least {MIN_INTERVAL_SECS} seconds: each poll tick \
+         fans out to symbols × timeframes /api/v3/klines requests, so polling faster trips \
+         Binance's per-IP request-weight rate limit and gets the deployment IP-banned"
+    );
+    anyhow::ensure!(
         !transport.venue.is_empty(),
         "market candle venue is required"
     );
@@ -987,5 +1014,56 @@ mod tests {
         assert_eq!(event.payload["low"], "61480.50");
         assert_eq!(event.payload["close"], "61610.30");
         assert_eq!(event.payload["volume"], "124.551");
+    }
+
+    fn candle_config_with_interval(interval_secs: u64) -> DataFeedConfig {
+        DataFeedConfig::builder()
+            .id("candles-cadence-test".to_owned())
+            .name("binance-cadence".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "crypto".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": interval_secs,
+                "venue": "binance",
+                "symbols": ["BTCUSDT"],
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 2
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build()
+    }
+
+    #[test]
+    fn subminute_interval_within_floor_is_accepted() {
+        let config = candle_config_with_interval(super::MIN_INTERVAL_SECS);
+
+        MarketCandleSource::from_config(&config)
+            .expect("a 5s monitoring cadence at the floor should pass transport validation");
+    }
+
+    #[test]
+    fn interval_below_rate_limit_floor_is_rejected() {
+        let config = candle_config_with_interval(super::MIN_INTERVAL_SECS - 1);
+
+        // `MarketCandleSource` is not `Debug`, so match rather than `expect_err`.
+        let error = match MarketCandleSource::from_config(&config) {
+            Ok(_) => panic!("an interval below the rate-limit floor must be rejected at load"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(
+            message.contains(&super::MIN_INTERVAL_SECS.to_string()),
+            "error must name the minimum interval, got: {message}"
+        );
+        assert!(
+            message.contains("request-weight") && message.contains("rate limit"),
+            "error must explain the rate-limit rationale, got: {message}"
+        );
     }
 }
