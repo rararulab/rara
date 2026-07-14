@@ -167,8 +167,9 @@ the operator-owned transport/auth fields, then enable the source.
 conversation-first entry point after bundle discovery: macro/news bundles
 subscribe multiple RSS `catalog_source_ids` at once, while single-source
 market-data bundles subscribe their preset symbols/timeframes and return
-top-level `diagnostic_hint` / `market_data_hint` values for the next candle
-health or stream-overview step. Bundles that require operator credentials or a
+the post-subscribe `bundle_status` snapshot plus top-level `diagnostic_hint` /
+`market_data_hint` values for the next candle health or stream-overview step.
+Bundles that require operator credentials or a
 custom endpoint do not expose `subscribe_bundle_hint`; use their setup hints
 first. Use the `bundle_ids`, `feed_types`, `can_enable`, and
 `requires_configuration` filters to narrow the recommendation list.
