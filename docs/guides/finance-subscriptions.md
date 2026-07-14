@@ -147,13 +147,18 @@ runtime control, subscription management, and inspection:
 what default finance data feeding rara can provide. It groups built-in catalog
 sources into curated presets such as `macro-news`, `binance-spot-starter`,
 `binance-major-crypto-15m`, and `longbridge-equities-daily`. Each bundle echoes
-its `catalog_source_ids`, feed types, aggregate persisted/running/subscribed
-counts, setup hints for operator-only presets, and action hints:
+its `catalog_source_ids`, providers, feed types, aggregate
+`enabled_source_count`, `ready_source_count`, persisted/running/subscribed
+counts, per-session subscription counts, setup hints for operator-only presets,
+and action hints:
 `list_sources_hint` for drilling into per-source status, `enable_hints` for
 ready sources that are not persisted yet, `subscribe_bundle_hint` for the
 direct bundle-level subscription tool, `market_data_hint` for single-source
 market-data bundles that can be inspected directly in TSDB, and
 `subscription_hint` when the caller needs the lower-level specialized tool.
+The nested `subscriptions` object de-duplicates subscription ids across all
+sources in the bundle so a caller can answer "is this bundle already watched
+by this user/session?" without re-querying every source.
 Bundles that require operator configuration also include `configure_hints`
 for their blocked catalog sources. These are UI action hints, not mutating
 tools: open Settings → Data Feeds with the provided `dataFeedCatalogId`, fill
