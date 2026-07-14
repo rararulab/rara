@@ -747,6 +747,7 @@ pub(super) struct FinanceSubscribeFeedBundleResult {
     pub name:                    String,
     pub subscription_kind:       String,
     pub catalog_source_ids:      Vec<String>,
+    pub bundle_status:           FinanceFeedBundleEntry,
     pub diagnostic_hint:         Option<FinanceSubscriptionDiagnosticHint>,
     pub market_data_hint:        Option<FinanceSubscriptionMarketDataHint>,
     pub news_subscription:       Option<FinanceSubscribeNewsResult>,
@@ -1953,14 +1954,23 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                     context,
                 )
                 .await?;
+            let bundle_status = feed_bundle_entry_for_context(
+                bundle.clone(),
+                &self.data_feed_svc,
+                &self.data_feed_registry,
+                &self.finance_registry,
+                context,
+            )
+            .await?;
             return Ok(FinanceSubscribeFeedBundleResult {
-                bundle_id:               bundle.id,
-                name:                    bundle.name,
-                subscription_kind:       "rss_article".to_owned(),
-                catalog_source_ids:      bundle.catalog_source_ids,
-                diagnostic_hint:         None,
-                market_data_hint:        None,
-                news_subscription:       Some(result),
+                bundle_id: bundle.id,
+                name: bundle.name,
+                subscription_kind: "rss_article".to_owned(),
+                catalog_source_ids: bundle.catalog_source_ids,
+                bundle_status,
+                diagnostic_hint: None,
+                market_data_hint: None,
+                news_subscription: Some(result),
                 instrument_subscription: None,
             });
         }
@@ -2003,11 +2013,20 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                 .await?;
             let diagnostic_hint = result.diagnostic_hint.clone();
             let market_data_hint = result.market_data_hint.clone();
+            let bundle_status = feed_bundle_entry_for_context(
+                bundle.clone(),
+                &self.data_feed_svc,
+                &self.data_feed_registry,
+                &self.finance_registry,
+                context,
+            )
+            .await?;
             return Ok(FinanceSubscribeFeedBundleResult {
                 bundle_id: bundle.id,
                 name: bundle.name,
                 subscription_kind: "market_candle_closed".to_owned(),
                 catalog_source_ids: bundle.catalog_source_ids,
+                bundle_status,
                 diagnostic_hint,
                 market_data_hint,
                 news_subscription: None,
@@ -3568,6 +3587,55 @@ fn feed_source_entry(
     }
 }
 
+async fn feed_bundle_entry_for_context(
+    bundle: DefaultFeedBundle,
+    svc: &DataFeedSvc,
+    registry: &DataFeedRegistry,
+    finance_registry: &FinanceSubscriptionRegistry,
+    context: &ToolContext,
+) -> anyhow::Result<FinanceFeedBundleEntry> {
+    let feeds = svc.list_feeds().await?;
+    let summaries = svc
+        .event_summaries()
+        .await?
+        .into_iter()
+        .map(|summary| (summary.source_name.clone(), summary))
+        .collect::<HashMap<_, _>>();
+    let owner = UserId(context.user_id.clone());
+    let subscriptions = finance_registry.list_for_owner(&owner).await;
+    let now = Timestamp::now();
+    let sources_by_id = default_finance_feed_sources()
+        .into_iter()
+        .map(|source| (source.id.clone(), source))
+        .collect::<HashMap<_, _>>();
+    let mut source_entries = Vec::new();
+
+    for source_id in &bundle.catalog_source_ids {
+        let source = sources_by_id
+            .get(source_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("unknown catalog source in bundle: {source_id}"))?;
+        let source_name = source.feed_name();
+        let persisted = feeds.iter().find(|feed| feed.name == source_name);
+        let summary = summaries.get(&source_name);
+        let last_event_at = summary.and_then(|summary| summary.last_event_at);
+        let lag_seconds =
+            last_event_at.map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+        source_entries.push(feed_source_entry(
+            source,
+            persisted,
+            registry.is_running(&source_name),
+            summary.map_or(0, |summary| summary.event_count),
+            summary.and_then(|summary| summary.last_event_type.clone()),
+            last_event_at.map(|timestamp| timestamp.to_string()),
+            lag_seconds,
+            source_subscription_summary(&subscriptions, context.session_key, &source_name),
+        ));
+    }
+
+    Ok(feed_bundle_entry(bundle, source_entries))
+}
+
 fn feed_bundle_entry(
     bundle: DefaultFeedBundle,
     source_entries: Vec<FinanceFeedSourceEntry>,
@@ -4408,10 +4476,10 @@ mod tests {
     use super::{
         DEFAULT_COOLDOWN_SECS, DEFAULT_MAX_IMMEDIATE_PER_HOUR, FeedChange,
         FinanceDisableFeedSourceParams, FinanceDisableFeedSourceTool,
-        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceFeedSourceConfigureHint,
-        FinanceListFeedBundlesParams, FinanceListFeedBundlesTool, FinanceListFeedEventsParams,
-        FinanceListFeedEventsTool, FinanceListFeedSourcesParams, FinanceListFeedSourcesTool,
-        FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
+        FinanceEnableFeedSourceParams, FinanceEnableFeedSourceTool, FinanceFeedBundleEntry,
+        FinanceFeedSourceConfigureHint, FinanceListFeedBundlesParams, FinanceListFeedBundlesTool,
+        FinanceListFeedEventsParams, FinanceListFeedEventsTool, FinanceListFeedSourcesParams,
+        FinanceListFeedSourcesTool, FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
         FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeFeedBundleParams, FinanceSubscribeFeedBundleTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsResult,
@@ -4488,6 +4556,30 @@ mod tests {
                 "dataFeedCatalogId": "longbridge-market-candles",
             })
         );
+    }
+
+    fn assert_subscribed_bundle_status(
+        status: &FinanceFeedBundleEntry,
+        bundle_id: &str,
+        source_count: usize,
+    ) {
+        assert_eq!(status.id, bundle_id);
+        assert_eq!(status.source_count, source_count);
+        assert_eq!(status.enabled_source_count, source_count);
+        assert_eq!(status.ready_source_count, source_count);
+        assert_eq!(status.persisted_count, source_count);
+        assert_eq!(status.subscribed_count, source_count);
+        assert_eq!(status.session_subscribed_count, source_count);
+        assert!(status.subscriptions.user_subscribed);
+        assert!(status.subscriptions.session_subscribed);
+        assert_eq!(status.subscriptions.user_subscription_ids.len(), 1);
+        assert_eq!(status.subscriptions.session_subscription_ids.len(), 1);
+        assert!(status.sources.iter().all(|source| {
+            source.runtime.persisted
+                && source.runtime.enabled
+                && source.subscribed
+                && source.session_subscribed
+        }));
     }
 
     #[tokio::test]
@@ -4731,6 +4823,7 @@ mod tests {
                 "sec-press-releases"
             ]
         );
+        assert_subscribed_bundle_status(&result.bundle_status, "macro-news", 4);
         assert!(
             result.diagnostic_hint.is_none(),
             "RSS bundle should not expose candle diagnostics"
@@ -4884,6 +4977,7 @@ mod tests {
         assert_eq!(result.bundle_id, "binance-major-crypto-15m");
         assert_eq!(result.subscription_kind, "market_candle_closed");
         assert_eq!(result.catalog_source_ids, ["binance-major-crypto-15m"]);
+        assert_subscribed_bundle_status(&result.bundle_status, "binance-major-crypto-15m", 1);
         assert!(result.news_subscription.is_none());
         let diagnostic = result
             .diagnostic_hint
