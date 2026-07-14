@@ -25,6 +25,7 @@ import type {
   DataFeedConfig,
   FeedCatalogEntry,
   FeedEventsResponse,
+  FinanceFeedBundlesResponse,
   FinanceSubscription,
   FinanceSubscriptionsResponse,
   MarketCandleFreshnessResponse,
@@ -36,12 +37,14 @@ const listMock = vi.fn();
 const summariesMock = vi.fn();
 const catalogMock = vi.fn();
 const eventsMock = vi.fn();
+const financeBundlesMock = vi.fn();
 const financeSubscriptionsMock = vi.fn();
 const candleStreamsMock = vi.fn();
 const candlesMock = vi.fn();
 const recentCandlesMock = vi.fn();
 const candleFreshnessMock = vi.fn();
 const candleGapsMock = vi.fn();
+const enableCatalogEntryMock = vi.fn();
 
 vi.mock('@/api/data-feeds', () => ({
   CANDLE_STREAM_OVERVIEW_LIMIT: 500,
@@ -50,6 +53,7 @@ vi.mock('@/api/data-feeds', () => ({
     summaries: (...args: unknown[]) => summariesMock(...args),
     catalog: (...args: unknown[]) => catalogMock(...args),
     events: (...args: unknown[]) => eventsMock(...args),
+    financeBundles: (...args: unknown[]) => financeBundlesMock(...args),
     financeSubscriptions: (...args: unknown[]) => financeSubscriptionsMock(...args),
     candleStreams: (...args: unknown[]) => candleStreamsMock(...args),
     candles: (...args: unknown[]) => candlesMock(...args),
@@ -58,7 +62,7 @@ vi.mock('@/api/data-feeds', () => ({
     candleGaps: (...args: unknown[]) => candleGapsMock(...args),
     toggle: vi.fn(),
     delete: vi.fn(),
-    enableCatalogEntry: vi.fn(),
+    enableCatalogEntry: (...args: unknown[]) => enableCatalogEntryMock(...args),
     disableCatalogEntry: vi.fn(),
     unsubscribeCatalogEntry: vi.fn(),
     deleteFinanceSubscription: vi.fn(),
@@ -134,16 +138,22 @@ beforeEach(() => {
   summariesMock.mockReset();
   catalogMock.mockReset();
   eventsMock.mockReset();
+  financeBundlesMock.mockReset();
   financeSubscriptionsMock.mockReset();
   candleStreamsMock.mockReset();
   candlesMock.mockReset();
   recentCandlesMock.mockReset();
   candleFreshnessMock.mockReset();
   candleGapsMock.mockReset();
+  enableCatalogEntryMock.mockReset();
 
   listMock.mockResolvedValue([]);
   summariesMock.mockResolvedValue([]);
   catalogMock.mockResolvedValue([] satisfies FeedCatalogEntry[]);
+  financeBundlesMock.mockResolvedValue({
+    bundles: [],
+    count: 0,
+  } satisfies FinanceFeedBundlesResponse);
   eventsMock.mockResolvedValue({
     events: [],
     total: 0,
@@ -187,6 +197,7 @@ beforeEach(() => {
     expected_count: 50,
     complete: true,
   } satisfies MarketCandleGapsResponse);
+  enableCatalogEntryMock.mockResolvedValue(feed());
 });
 
 afterEach(() => {
@@ -255,6 +266,90 @@ describe('DataFeedsPanel', () => {
     expect(await screen.findByText('Default finance sources')).toBeInTheDocument();
     expect(screen.getByText('Provider binance')).toBeInTheDocument();
     expect(screen.getByText('Provider longbridge')).toBeInTheDocument();
+  });
+
+  it('shows curated finance bundles and enables all ready sources', async () => {
+    const fed: FeedCatalogEntry = {
+      id: 'fed-press-releases',
+      name: 'Federal Reserve Press Releases',
+      description: 'Official Federal Reserve press releases.',
+      feed_type: 'rss',
+      provider: null,
+      tags: ['finance', 'news', 'fed', 'macro'],
+      source_name: 'finance-fed-press-releases',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        url: 'https://www.federalreserve.gov/feeds/press_all.xml',
+        interval_secs: 300,
+        headers: {},
+        max_entries_per_poll: 50,
+      },
+    };
+    const sec: FeedCatalogEntry = {
+      id: 'sec-press-releases',
+      name: 'SEC Press Releases',
+      description: 'SEC press releases RSS feed.',
+      feed_type: 'rss',
+      provider: null,
+      tags: ['finance', 'news', 'sec', 'regulatory'],
+      source_name: 'finance-sec-press-releases',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        url: 'https://www.sec.gov/news/pressreleases.rss',
+        interval_secs: 300,
+        headers: {},
+        max_entries_per_poll: 50,
+      },
+    };
+
+    catalogMock.mockResolvedValue([fed, sec] satisfies FeedCatalogEntry[]);
+    financeBundlesMock.mockResolvedValue({
+      count: 1,
+      bundles: [
+        {
+          id: 'macro-news',
+          name: 'Macro News',
+          description: 'Federal Reserve and SEC official RSS feeds.',
+          tags: ['finance', 'news', 'macro', 'regulatory'],
+          catalog_source_ids: ['fed-press-releases', 'sec-press-releases'],
+          feed_types: ['rss'],
+          providers: [],
+          source_count: 2,
+          enabled_source_count: 0,
+          ready_source_count: 2,
+          requires_configuration: false,
+          can_enable: true,
+          sources: [fed, sec],
+          subscriptions: {
+            user_subscribed: false,
+            user_subscription_ids: [],
+          },
+        },
+      ],
+    } satisfies FinanceFeedBundlesResponse);
+
+    renderPanel();
+
+    expect(await screen.findByText('Curated feed bundles')).toBeInTheDocument();
+    expect(screen.getByText('Macro News')).toBeInTheDocument();
+    expect(screen.getByText('0/2 sources on')).toBeInTheDocument();
+    expect(screen.getByText('RSS · Mixed sources')).toBeInTheDocument();
+    expect(
+      screen.getByText('Sources finance-fed-press-releases, finance-sec-press-releases'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable bundle' }));
+
+    await waitFor(() => {
+      expect(enableCatalogEntryMock).toHaveBeenNthCalledWith(1, 'fed-press-releases');
+      expect(enableCatalogEntryMock).toHaveBeenNthCalledWith(2, 'sec-press-releases');
+    });
   });
 
   it('requests and displays stored K-line stream watermarks', async () => {

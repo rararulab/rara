@@ -742,6 +742,94 @@ test.describe('Data Feeds Management', () => {
     await expect(page.getByRole('button', { name: 'Disable' })).toBeVisible();
   });
 
+  test('shows curated finance bundles in settings and enables ready sources', async ({ page }) => {
+    const fed: FeedCatalogEntry = {
+      id: 'fed-press-releases',
+      name: 'Federal Reserve Press Releases',
+      description: 'Official Federal Reserve press releases.',
+      feed_type: 'rss',
+      provider: null,
+      tags: ['finance', 'news', 'fed', 'macro'],
+      source_name: 'finance-fed-press-releases',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        url: 'https://www.federalreserve.gov/feeds/press_all.xml',
+        interval_secs: 300,
+        headers: {},
+        max_entries_per_poll: 50,
+      },
+    };
+    const sec: FeedCatalogEntry = {
+      id: 'sec-press-releases',
+      name: 'SEC Press Releases',
+      description: 'SEC press releases RSS feed.',
+      feed_type: 'rss',
+      provider: null,
+      tags: ['finance', 'news', 'sec', 'regulatory'],
+      source_name: 'finance-sec-press-releases',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        url: 'https://www.sec.gov/news/pressreleases.rss',
+        interval_secs: 300,
+        headers: {},
+        max_entries_per_poll: 50,
+      },
+    };
+    const state = {
+      feeds: [] as DataFeedConfig[],
+      events: [] as FeedEvent[],
+      catalog: [fed, sec],
+      financeSubscriptions: { subscriptions: [], count: 0 },
+      financeBundles: {
+        count: 1,
+        bundles: [
+          {
+            id: 'macro-news',
+            name: 'Macro News',
+            description: 'Federal Reserve and SEC official RSS feeds.',
+            tags: ['finance', 'news', 'macro', 'regulatory'],
+            catalog_source_ids: ['fed-press-releases', 'sec-press-releases'],
+            feed_types: ['rss'],
+            providers: [],
+            source_count: 2,
+            enabled_source_count: 0,
+            ready_source_count: 2,
+            requires_configuration: false,
+            can_enable: true,
+            sources: [fed, sec],
+            subscriptions: {
+              user_subscribed: false,
+              user_subscription_ids: [],
+            },
+          },
+        ],
+      },
+    };
+    await setupRoutes(page, state);
+    await goToDataFeeds(page);
+
+    await expect(page.getByText('Curated feed bundles')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Macro News', { exact: true })).toBeVisible();
+    await expect(page.getByText('0/2 sources on')).toBeVisible();
+    await expect(
+      page.getByText('Sources finance-fed-press-releases, finance-sec-press-releases'),
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: 'Enable bundle' }).click();
+
+    await expect(page.getByText('2/2 sources on')).toBeVisible({ timeout: 10_000 });
+    expect(state.feeds.map((feed) => feed.name).sort()).toEqual([
+      'finance-fed-press-releases',
+      'finance-sec-press-releases',
+    ]);
+  });
+
   test('provider preset opens a prefilled market candle form', async ({ page }) => {
     await setupRoutes(page, {
       feeds: [],
