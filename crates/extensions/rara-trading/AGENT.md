@@ -7,8 +7,17 @@ and evaluates newly closed candles for market anomalies — emitting ordinary
 kernel `FeedEvent`s and, on the app side, enriched synthetic directives.
 
 ## Architecture
-Four modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
+Five modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
 
+- `dispatch/` — the **market-signal facade** (`pipeline.rs`). `on_feed_event`
+  is the single entry point that runs the whole persist → upsert → evaluate →
+  match → deliver pipeline for one kernel `FeedEvent`, returning
+  `FeedDispatchOutcome`. It owns the app-boundary adapters that were previously
+  app glue: the rolling-window pull + degradation policy (`evaluate_anomaly`),
+  candle parsing/normalization (`market_candle_from_event`), directive wording
+  (`finance_directive`), and the `FeedDispatchSink` trait (session-injection
+  side effect, abstracted so the production `KernelHandle`-backed sink can stay
+  in `crates/app`). Layer-②/③ consume `on_feed_event` instead of re-plumbing.
 - `feed/` — finance-specific ingestion sources (Binance poller, RSS) that parse
   external data into kernel `FeedEvent`s. The kernel owns the generic event
   envelope, registry, and store; this crate only produces events.
@@ -29,10 +38,13 @@ Four modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   vs bipower-variation jump test); `signal.rs` = `AnomalySignal` / `Severity` /
   `AnomalyMetrics`; `error.rs` = `AnomalyError` (snafu).
 
-The write→read→enrich wiring lives in `crates/app/src/finance_event.rs`
-(`dispatch_feed_event`): it upserts the closed candle, pulls the window via
-`recent_candles`, runs `anomaly::evaluate`, and enriches `finance_directive`
-when a signal is produced. The evaluator itself holds no repository handle.
+The write→read→enrich wiring lives in `dispatch/pipeline.rs` (`on_feed_event`):
+it upserts the closed candle, pulls the window via `recent_candles`, runs
+`anomaly::evaluate`, and enriches `finance_directive` when a signal is
+produced. The evaluator itself holds no repository handle. `crates/app` is thin
+wiring: it constructs the deps, supplies the `KernelFeedDispatchSink`
+(`crates/app/src/finance_event.rs`), and calls `on_feed_event` from its feed
+dispatch loop (`crates/app/src/lib.rs`).
 
 ## Critical Invariants
 - **The anomaly evaluator is pure — no clock, no I/O.** Every rule and
@@ -55,16 +67,21 @@ when a signal is produced. The evaluator itself holds no repository handle.
 
 ## What NOT To Do
 - Do NOT change delivery policy (cooldown / hourly budget / `Silent` downgrade)
-  from the `anomaly/` module or `finance_event.rs` — that is `registry.rs`'s
-  job (severity-based bypass is issue 2416). Mixing evaluation and delivery
+  from the `anomaly/` module or `dispatch/` — that is `registry.rs`'s job
+  (severity-based bypass is issue 2416). The facade calls `match_event` and
+  supplies the already-computed severity; mixing evaluation and delivery
   couples two independently-tested concerns.
+- Do NOT let `dispatch/` depend on `crates/app` types (e.g. `KernelHandle`) —
+  that inverts the `rara-app → rara-trading` dependency and will not compile.
+  Session injection is abstracted behind the `FeedDispatchSink` trait; the
+  kernel-backed sink stays in `crates/app`.
 - Do NOT return a fixed `Severity` regardless of input, or add an
   `AnomalyMetrics` field nothing reads — that is a hollow implementation
   (`docs/guides/anti-patterns.md`). Every severity level and metric must be
   reachable and asserted by a test.
 - Do NOT feed the newest candle into `evaluate` twice: `window` is the history
-  strictly before `latest`. The app queries `recent_candles` with
-  `end = Some(latest.open_time)` to enforce this.
+  strictly before `latest`. `dispatch/pipeline.rs` queries `recent_candles`
+  with `end = Some(latest.open_time)` to enforce this.
 - Do NOT use mean/stddev for the return z-score — one outlier bar inflates the
   scale and masks a fresh move; use median/MAD (`statistics::robust_zscore`).
 - Do NOT compute log-returns on non-positive prices — `evaluate` returns
@@ -72,8 +89,9 @@ when a signal is produced. The evaluator itself holds no repository handle.
 
 ## Dependencies
 - Upstream: `rara-kernel` (`FeedEvent`, `Subscription`, tool traits).
-- Downstream: `crates/app` (`finance_event.rs`) drives ingestion→evaluation→
-  directive delivery; `market_data::tools` are registered as agent tools.
+- Downstream: `crates/app` calls `dispatch::on_feed_event` from its feed
+  dispatch loop and supplies the `KernelHandle`-backed `FeedDispatchSink`
+  (`finance_event.rs`); `market_data::tools` are registered as agent tools.
 - External: Binance REST (candles), RSS feeds, TimescaleDB/Postgres
   (`sqlx-postgres`) for durable candle history.
 - Style: `snafu` for domain errors, `bon::Builder` for 3+ field structs
