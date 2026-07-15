@@ -14,7 +14,18 @@
 
 //! L1 window rules: cumulative return, rolling drawdown, and volume surge.
 //! Each is a pure function over the ordered close/volume series so the
-//! evaluator can compose them and every branch stays unit-testable.
+//! evaluator can compose them and every branch stays unit-testable. Each pure
+//! function is wrapped by a thin [`Signal`] adapter that owns its trip
+//! threshold and reason wording, so the registry can walk them uniformly.
+
+use super::registry::{Signal, SignalContext, SignalOutput};
+
+/// Absolute cumulative window return (fraction) that trips the return rule.
+const WINDOW_RETURN_THRESHOLD: f64 = 0.03;
+/// Rolling max-drawdown magnitude (fraction) that trips the drawdown rule.
+const DRAWDOWN_THRESHOLD: f64 = 0.03;
+/// Volume-vs-rolling-mean multiple that trips the volume-surge rule.
+const VOLUME_SURGE_THRESHOLD: f64 = 3.0;
 
 /// Signed cumulative return across `closes`, as a fraction of the first close.
 ///
@@ -55,6 +66,93 @@ pub(crate) fn volume_surge(history_volumes: &[f64], latest_volume: f64) -> Optio
         return None;
     }
     Some(latest_volume / mean)
+}
+
+/// L1 signal: signed cumulative window return. Fires on a large move in either
+/// direction; the fragment keeps the sign so a rally and a slide read
+/// differently.
+pub(crate) struct WindowReturnSignal;
+
+impl WindowReturnSignal {
+    /// Stable trace identifier (matches the `AnomalyMetrics::window_return`
+    /// field it projects onto).
+    pub(crate) const NAME: &'static str = "window_return";
+}
+
+impl Signal for WindowReturnSignal {
+    fn name(&self) -> &'static str { Self::NAME }
+
+    fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
+        let value = window_return(ctx.closes());
+        SignalOutput::builder()
+            .name(Self::NAME)
+            .value(value)
+            .fired(value.abs() >= WINDOW_RETURN_THRESHOLD)
+            .build()
+    }
+
+    fn fragment(&self, output: &SignalOutput) -> String {
+        format!(
+            "window return {:+.1}%",
+            output.value.unwrap_or_default() * 100.0
+        )
+    }
+}
+
+/// L1 signal: deepest peak-to-trough decline across the window. Fires on a
+/// drawdown magnitude; the classifier also reads its value for the flash-crash
+/// escalation.
+pub(crate) struct MaxDrawdownSignal;
+
+impl MaxDrawdownSignal {
+    /// Stable trace identifier (matches the `AnomalyMetrics::max_drawdown`
+    /// field it projects onto).
+    pub(crate) const NAME: &'static str = "max_drawdown";
+}
+
+impl Signal for MaxDrawdownSignal {
+    fn name(&self) -> &'static str { Self::NAME }
+
+    fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
+        let value = max_drawdown(ctx.closes());
+        SignalOutput::builder()
+            .name(Self::NAME)
+            .value(value)
+            .fired(value >= DRAWDOWN_THRESHOLD)
+            .build()
+    }
+
+    fn fragment(&self, output: &SignalOutput) -> String {
+        format!("drawdown {:.1}%", output.value.unwrap_or_default() * 100.0)
+    }
+}
+
+/// L1 signal: newest volume relative to the rolling mean. Not evaluable
+/// (`None`) when there is no history or a ~zero mean, so it never fires on a
+/// dead tape.
+pub(crate) struct VolumeSurgeSignal;
+
+impl VolumeSurgeSignal {
+    /// Stable trace identifier (matches the `AnomalyMetrics::volume_surge`
+    /// field it projects onto).
+    pub(crate) const NAME: &'static str = "volume_surge";
+}
+
+impl Signal for VolumeSurgeSignal {
+    fn name(&self) -> &'static str { Self::NAME }
+
+    fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
+        let value = volume_surge(ctx.history_volumes(), ctx.latest_volume());
+        SignalOutput::builder()
+            .name(Self::NAME)
+            .maybe_value(value)
+            .fired(value.is_some_and(|surge| surge >= VOLUME_SURGE_THRESHOLD))
+            .build()
+    }
+
+    fn fragment(&self, output: &SignalOutput) -> String {
+        format!("volume surge {:.1}x", output.value.unwrap_or_default())
+    }
 }
 
 #[cfg(test)]

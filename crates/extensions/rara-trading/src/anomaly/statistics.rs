@@ -21,6 +21,17 @@
 //! reason to pick a different MAD-to-sigma factor or bipower coefficient, and a
 //! YAML knob would recreate the #1804→#1817 footgun where a default config
 //! silently disables the fix.
+//!
+//! Each pure statistic is wrapped by a thin [`Signal`] adapter that owns its
+//! trip threshold and reason wording, so the registry can walk L1 rules and L2
+//! statistics uniformly.
+
+use super::registry::{Signal, SignalContext, SignalOutput};
+
+/// Robust z-score magnitude that trips the return-anomaly statistic.
+const ZSCORE_THRESHOLD: f64 = 3.5;
+/// BNS jump ratio above which the path is flagged as containing a jump.
+const JUMP_RATIO_THRESHOLD: f64 = 1.5;
 
 /// Minimum number of returns required before a statistic is trusted. Below this
 /// the MAD scale and bipower variation are too noisy to separate signal from
@@ -125,6 +136,65 @@ pub(crate) fn jump_ratio(returns: &[f64]) -> Option<f64> {
         return None;
     }
     Some(realized_variance(returns) / bipower)
+}
+
+/// L2 signal: MAD-based robust z-score of the newest log-return against its
+/// history. Not evaluable (`None`) below [`MIN_SAMPLES`] history points or on a
+/// flat history where the MAD collapses.
+pub(crate) struct RobustZScoreSignal;
+
+impl RobustZScoreSignal {
+    /// Stable trace identifier (matches the `AnomalyMetrics::robust_zscore`
+    /// field it projects onto).
+    pub(crate) const NAME: &'static str = "robust_zscore";
+}
+
+impl Signal for RobustZScoreSignal {
+    fn name(&self) -> &'static str { Self::NAME }
+
+    fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
+        let value = ctx
+            .newest_return()
+            .and_then(|(newest, history)| robust_zscore(history, newest));
+        SignalOutput::builder()
+            .name(Self::NAME)
+            .maybe_value(value)
+            .fired(value.is_some_and(|zscore| zscore >= ZSCORE_THRESHOLD))
+            .build()
+    }
+
+    fn fragment(&self, output: &SignalOutput) -> String {
+        format!("robust z-score {:.1}", output.value.unwrap_or_default())
+    }
+}
+
+/// L2 signal: Barndorff-Nielsen–Shephard jump ratio (realized variance over
+/// bipower variation). Not evaluable (`None`) below [`MIN_SAMPLES`] returns or
+/// a ~zero bipower variation. Its `fired` flag is the
+/// `AnomalyMetrics::jump_flagged` bit.
+pub(crate) struct JumpSignal;
+
+impl JumpSignal {
+    /// Stable trace identifier (matches the `AnomalyMetrics::jump_ratio` field
+    /// it projects onto).
+    pub(crate) const NAME: &'static str = "jump_ratio";
+}
+
+impl Signal for JumpSignal {
+    fn name(&self) -> &'static str { Self::NAME }
+
+    fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
+        let value = jump_ratio(ctx.returns());
+        SignalOutput::builder()
+            .name(Self::NAME)
+            .maybe_value(value)
+            .fired(value.is_some_and(|ratio| ratio >= JUMP_RATIO_THRESHOLD))
+            .build()
+    }
+
+    fn fragment(&self, output: &SignalOutput) -> String {
+        format!("jump ratio {:.1}", output.value.unwrap_or_default())
+    }
 }
 
 #[cfg(test)]

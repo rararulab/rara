@@ -29,6 +29,7 @@
 
 mod error;
 mod evaluator;
+mod registry;
 mod rules;
 mod signal;
 mod statistics;
