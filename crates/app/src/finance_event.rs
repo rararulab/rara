@@ -20,10 +20,11 @@ use rara_kernel::{
     session::SessionKey,
 };
 use rara_trading::{
+    anomaly::{self, AnomalySignal},
     finance::registry::{
         FinanceDeliveryAction, FinanceDeliveryDecision, FinanceSubscriptionRegistry,
     },
-    market_data::{MarketCandle, MarketDataRepository, Timeframe},
+    market_data::{CandleRecentQuery, MarketCandle, MarketDataRepository, Timeframe},
 };
 use rust_decimal::Decimal;
 
@@ -95,15 +96,25 @@ pub(crate) async fn dispatch_feed_event(
 ) -> anyhow::Result<FeedDispatchOutcome> {
     feed_store.append(event).await?;
 
-    if event.event_type == "market_candle_closed" {
+    // Keep the parsed candle so the anomaly evaluator can pull its rolling
+    // window after the upsert (the newest bar is then already durable).
+    let closed_candle = if event.event_type == "market_candle_closed" {
         let candle = market_candle_from_event(event)?;
-        market_repo.upsert_closed_candle(candle).await?;
-    }
+        market_repo.upsert_closed_candle(candle.clone()).await?;
+        Some(candle)
+    } else {
+        None
+    };
+
+    let anomaly = match &closed_candle {
+        Some(candle) => evaluate_anomaly(market_repo, candle).await,
+        None => None,
+    };
 
     let event_json = serde_json::to_value(event).unwrap_or_default();
     let decisions = finance_registry.match_event(event).await;
     for decision in &decisions {
-        dispatch_finance_decision(event, &event_json, decision, sink).await;
+        dispatch_finance_decision(event, &event_json, decision, anomaly.as_ref(), sink).await;
     }
 
     dispatch_generic_subscriptions(event, &event_json, sink).await;
@@ -118,6 +129,7 @@ async fn dispatch_finance_decision(
     event: &FeedEvent,
     event_json: &serde_json::Value,
     decision: &FinanceDeliveryDecision,
+    anomaly: Option<&AnomalySignal>,
     sink: &dyn FeedDispatchSink,
 ) {
     match decision.action {
@@ -130,7 +142,7 @@ async fn dispatch_finance_decision(
             sink.deliver_synthetic(
                 decision.owner.clone(),
                 decision.session_key,
-                finance_directive(event),
+                finance_directive(event, anomaly),
             )
             .await;
         }
@@ -171,19 +183,70 @@ async fn dispatch_generic_subscriptions(
     }
 }
 
-fn finance_directive(event: &FeedEvent) -> String {
+/// Pull the rolling window for `candle` and run the anomaly evaluator.
+///
+/// This is an application-boundary adapter: a repository read or an evaluator
+/// error must never block delivery, so both degrade to `None` (the factual,
+/// unenriched directive) after logging a concrete reason.
+#[tracing::instrument(skip_all)]
+async fn evaluate_anomaly(
+    market_repo: &dyn MarketDataRepository,
+    candle: &MarketCandle,
+) -> Option<AnomalySignal> {
+    let window = match market_repo
+        .recent_candles(CandleRecentQuery {
+            source_name: Some(candle.source_name.clone()),
+            venue:       candle.venue.clone(),
+            symbol:      candle.symbol.clone(),
+            timeframe:   candle.timeframe.clone(),
+            limit:       anomaly::EVAL_WINDOW,
+            // Strictly earlier bars: the window is the history before this bar.
+            end:         Some(candle.open_time),
+        })
+        .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!(%err, "recent-candles query failed; skipping anomaly evaluation");
+            return None;
+        }
+    };
+
+    match anomaly::evaluate(&window, candle) {
+        Ok(signal) => signal,
+        Err(err) => {
+            tracing::warn!(%err, "anomaly evaluation failed; delivering factual directive");
+            None
+        }
+    }
+}
+
+fn finance_directive(event: &FeedEvent, anomaly: Option<&AnomalySignal>) -> String {
     match event.event_type.as_str() {
-        "market_candle_closed" => format!(
-            "[FinanceMarketUpdate] source={} venue={} symbol={} timeframe={} close_time={} \
-             close={}\nReport the market update factually; do not infer a trade unless the user \
-             asks.",
-            event.source_name,
-            event.payload["venue"].as_str().unwrap_or_default(),
-            event.payload["symbol"].as_str().unwrap_or_default(),
-            event.payload["timeframe"].as_str().unwrap_or_default(),
-            event.payload["close_time"].as_str().unwrap_or_default(),
-            event.payload["close"].as_str().unwrap_or_default(),
-        ),
+        "market_candle_closed" => {
+            let header = format!(
+                "[FinanceMarketUpdate] source={} venue={} symbol={} timeframe={} close_time={} \
+                 close={}",
+                event.source_name,
+                event.payload["venue"].as_str().unwrap_or_default(),
+                event.payload["symbol"].as_str().unwrap_or_default(),
+                event.payload["timeframe"].as_str().unwrap_or_default(),
+                event.payload["close_time"].as_str().unwrap_or_default(),
+                event.payload["close"].as_str().unwrap_or_default(),
+            );
+            match anomaly {
+                Some(signal) => format!(
+                    "{header}\n[Anomaly severity={} reason={}]\nDescribe what happened, the \
+                     related market context, and a suggested next action.",
+                    signal.severity.label(),
+                    signal.reason,
+                ),
+                None => format!(
+                    "{header}\nReport the market update factually; do not infer a trade unless \
+                     the user asks.",
+                ),
+            }
+        }
         _ => format!(
             "[FinanceArticle] source={} title={} url={} published_at={}\nSummarize factual \
              relevance; do not give trade advice unless the user asks.",
@@ -283,10 +346,12 @@ mod tests {
             FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
         },
         market_data::{
-            CandleLatestQuery, InMemoryMarketDataRepository, MarketDataRepository, Timeframe,
+            CandleLatestQuery, InMemoryMarketDataRepository, MarketCandle, MarketDataRepository,
+            Timeframe,
             tools::{FinanceGetLatestCandleParams, FinanceGetLatestCandleTool},
         },
     };
+    use rust_decimal::Decimal;
 
     use super::{FeedDispatchOutcome, TestFeedDispatchSink, dispatch_feed_event};
     use crate::feed_store::InMemoryFeedStore;
@@ -428,6 +493,62 @@ mod tests {
             cooldown_secs: 900,
             max_immediate_per_hour: 6,
         }
+    }
+
+    /// Build a `binance / BTCUSDT / 15m` candle at bar `index` (15m apart from
+    /// a fixed base), with `open = high = low = close` so drawdown/return
+    /// read the close series directly.
+    fn mk_candle(index: i64, close: i64, volume: i64) -> MarketCandle {
+        let base = ts("2026-07-10T08:00:00Z");
+        let open_time = base + jiff::SignedDuration::from_secs(index * 900);
+        MarketCandle {
+            source_name: "binance-spot".to_owned(),
+            venue: "binance".to_owned(),
+            symbol: "BTCUSDT".to_owned(),
+            timeframe: Timeframe::parse("15m").expect("timeframe fixture should parse"),
+            open_time,
+            close_time: open_time + jiff::SignedDuration::from_secs(900),
+            open: Decimal::from(close),
+            high: Decimal::from(close),
+            low: Decimal::from(close),
+            close: Decimal::from(close),
+            volume: Decimal::from(volume),
+            ingested_at: open_time,
+            provider_sequence: None,
+        }
+    }
+
+    /// Render a `market_candle_closed` feed event carrying `candle`'s fields,
+    /// so the dispatched event and the seeded history share one shape.
+    fn candle_event_from(candle: &MarketCandle) -> FeedEvent {
+        FeedEvent::builder()
+            .id(FeedEventId::deterministic(&format!(
+                "binance:BTCUSDT:15m:{}",
+                candle.open_time
+            )))
+            .source_name(candle.source_name.clone())
+            .event_type("market_candle_closed".to_owned())
+            .tags(vec![
+                "finance".to_owned(),
+                "market-data".to_owned(),
+                "venue:binance".to_owned(),
+                "symbol:BTCUSDT".to_owned(),
+                "timeframe:15m".to_owned(),
+            ])
+            .payload(serde_json::json!({
+                "venue": candle.venue,
+                "symbol": candle.symbol,
+                "timeframe": candle.timeframe.as_str(),
+                "open_time": candle.open_time.to_string(),
+                "close_time": candle.close_time.to_string(),
+                "open": candle.open.to_string(),
+                "high": candle.high.to_string(),
+                "low": candle.low.to_string(),
+                "close": candle.close.to_string(),
+                "volume": candle.volume.to_string(),
+            }))
+            .received_at(candle.ingested_at)
+            .build()
     }
 
     #[tokio::test]
@@ -654,5 +775,103 @@ mod tests {
 
         assert!(sink.synthetic_turns().await.is_empty());
         assert!(sink.silent_appends().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn anomaly_signal_enriches_finance_directive() {
+        // A crash-shaped rolling window: six flat bars, a four-bar decline, and
+        // a newly closed bar that completes a ~7% drop on a 5x volume spike.
+        let session = SessionKey::new();
+        let market_repo = InMemoryMarketDataRepository::default();
+        let sink = TestFeedDispatchSink::new([session]);
+        let registry = registry_for(candle_sub(session, FinanceDelivery::Immediate)).await;
+
+        let history = [
+            (61_500, 120),
+            (61_500, 120),
+            (61_500, 120),
+            (61_500, 120),
+            (61_500, 120),
+            (61_500, 120),
+            (61_000, 120),
+            (60_000, 120),
+            (59_000, 120),
+            (58_000, 120),
+        ];
+        for (index, (close, volume)) in history.iter().enumerate() {
+            market_repo
+                .upsert_closed_candle(mk_candle(index as i64, *close, *volume))
+                .await
+                .unwrap();
+        }
+        let crash = mk_candle(10, 57_000, 600);
+
+        dispatch_feed_event(
+            &candle_event_from(&crash),
+            &InMemoryFeedStore::default(),
+            &market_repo,
+            &registry,
+            &sink,
+        )
+        .await
+        .unwrap();
+
+        let turns = sink.synthetic_turns().await;
+        assert_eq!(turns.len(), 1);
+        assert!(
+            turns[0].contains("[Anomaly severity=critical"),
+            "directive should name the severity: {}",
+            turns[0]
+        );
+        assert!(
+            turns[0].contains("drawdown"),
+            "directive should carry the anomaly reason: {}",
+            turns[0]
+        );
+        assert!(
+            turns[0].contains("Describe what happened")
+                && turns[0].contains("suggested next action"),
+            "directive should instruct narration and a suggested action: {}",
+            turns[0]
+        );
+
+        // A flat window over the same stream keeps the unchanged factual wording.
+        let flat_session = SessionKey::new();
+        let flat_repo = InMemoryMarketDataRepository::default();
+        let flat_sink = TestFeedDispatchSink::new([flat_session]);
+        let flat_registry =
+            registry_for(candle_sub(flat_session, FinanceDelivery::Immediate)).await;
+
+        for index in 0..10 {
+            let close = if index % 2 == 0 { 61_500 } else { 61_510 };
+            flat_repo
+                .upsert_closed_candle(mk_candle(index, close, 120))
+                .await
+                .unwrap();
+        }
+        let flat = mk_candle(10, 61_505, 122);
+
+        dispatch_feed_event(
+            &candle_event_from(&flat),
+            &InMemoryFeedStore::default(),
+            &flat_repo,
+            &flat_registry,
+            &flat_sink,
+        )
+        .await
+        .unwrap();
+
+        let flat_turns = flat_sink.synthetic_turns().await;
+        assert_eq!(flat_turns.len(), 1);
+        assert!(
+            flat_turns[0].contains("Report the market update factually"),
+            "flat window keeps the factual wording: {}",
+            flat_turns[0]
+        );
+        assert!(
+            !flat_turns[0].contains("[Anomaly"),
+            "flat window must not be enriched: {}",
+            flat_turns[0]
+        );
     }
 }

@@ -19,6 +19,7 @@
 //! ingestion/parsing sources and emits ordinary kernel
 //! [`FeedEvent`](rara_kernel::data_feed::FeedEvent) values.
 
+pub mod anomaly;
 pub mod feed;
 pub mod finance;
 pub mod market_data;
