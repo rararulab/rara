@@ -112,3 +112,6 @@ mise.local.toml
 .scratch/
 .agents/
 _reversa_sdd/
+
+# pipeline-v2 verify stage (S3) per-worktree scratch reports — never versioned
+verification/
