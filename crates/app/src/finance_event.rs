@@ -112,7 +112,13 @@ pub(crate) async fn dispatch_feed_event(
     };
 
     let event_json = serde_json::to_value(event).unwrap_or_default();
-    let decisions = finance_registry.match_event(event).await;
+    // Feed the evaluated severity into the delivery decision so an alert-grade
+    // anomaly bypasses the routine cooldown / hourly-budget throttle. The
+    // registry stays the single home of that policy; the app only supplies the
+    // severity it already computed above.
+    let decisions = finance_registry
+        .match_event(event, anomaly.as_ref().map(|signal| signal.severity))
+        .await;
     for decision in &decisions {
         dispatch_finance_decision(event, &event_json, decision, anomaly.as_ref(), sink).await;
     }
@@ -344,6 +350,7 @@ mod tests {
     use rara_trading::{
         finance::registry::{
             FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
+            ManualFinanceClock,
         },
         market_data::{
             CandleLatestQuery, InMemoryMarketDataRepository, MarketCandle, MarketDataRepository,
@@ -873,5 +880,112 @@ mod tests {
             "flat window must not be enriched: {}",
             flat_turns[0]
         );
+    }
+
+    #[tokio::test]
+    async fn critical_candle_burst_wakes_session_every_bar() {
+        // A crash burst: 30 flat bars of history, then eight consecutive bars
+        // each dropping well past the 6% critical-drawdown floor, so every
+        // burst bar evaluates to Severity::Critical.
+        let crash_prices = [
+            57_000, 55_000, 53_000, 51_000, 49_000, 47_000, 45_000, 43_000,
+        ];
+
+        let session = SessionKey::new();
+        let market_repo = InMemoryMarketDataRepository::default();
+        let sink = TestFeedDispatchSink::new([session]);
+        let clock = Arc::new(ManualFinanceClock::new(ts("2026-07-10T08:00:00Z")));
+
+        // Default budget (6); cooldown disabled so the hourly budget is the sole
+        // routine throttle — the lane the scenario names ("after the budget is
+        // spent"). A high-severity anomaly must bypass it on every bar.
+        let tmp = tempfile::tempdir().expect("tempdir should be created");
+        let registry = FinanceSubscriptionRegistry::load_with_clock(
+            tmp.path().join("subs.json"),
+            clock.clone(),
+        );
+        let mut subscription = candle_sub(session, FinanceDelivery::Immediate);
+        subscription.cooldown_secs = 0;
+        registry.upsert(subscription).await.unwrap();
+
+        for index in 0..30 {
+            market_repo
+                .upsert_closed_candle(mk_candle(index, 61_500, 120))
+                .await
+                .unwrap();
+        }
+
+        // Dispatch the eight-bar crash burst (indices 30..38), advancing 60s per
+        // bar so every delivery falls inside one hourly-budget window.
+        for (offset, &close) in crash_prices.iter().enumerate() {
+            let crash = mk_candle(30 + offset as i64, close, 600);
+            dispatch_feed_event(
+                &candle_event_from(&crash),
+                &InMemoryFeedStore::default(),
+                &market_repo,
+                &registry,
+                &sink,
+            )
+            .await
+            .unwrap();
+            clock.advance(jiff::SignedDuration::from_secs(60));
+        }
+
+        let turns = sink.synthetic_turns().await;
+        assert_eq!(
+            turns.len(),
+            8,
+            "each critical bar must wake the session, not be throttled"
+        );
+        assert!(sink.silent_appends().await.is_empty());
+        assert!(
+            turns
+                .iter()
+                .all(|turn| turn.contains("[Anomaly severity=critical")),
+            "every burst turn should carry the critical anomaly directive: {turns:?}"
+        );
+
+        // Contrast: a flat burst carries no anomaly (severity None), so the
+        // routine budget applies — the first six wake the session, the rest are
+        // silenced. Same stream, same budget, only the severity differs.
+        let flat_session = SessionKey::new();
+        let flat_repo = InMemoryMarketDataRepository::default();
+        let flat_sink = TestFeedDispatchSink::new([flat_session]);
+        let flat_clock = Arc::new(ManualFinanceClock::new(ts("2026-07-10T08:00:00Z")));
+        let flat_tmp = tempfile::tempdir().expect("tempdir should be created");
+        let flat_registry = FinanceSubscriptionRegistry::load_with_clock(
+            flat_tmp.path().join("subs.json"),
+            flat_clock.clone(),
+        );
+        let mut flat_sub = candle_sub(flat_session, FinanceDelivery::Immediate);
+        flat_sub.cooldown_secs = 0;
+        flat_registry.upsert(flat_sub).await.unwrap();
+
+        for index in 0..30 {
+            flat_repo
+                .upsert_closed_candle(mk_candle(index, 61_500, 120))
+                .await
+                .unwrap();
+        }
+        for offset in 0..8 {
+            let flat = mk_candle(30 + offset, 61_500, 120);
+            dispatch_feed_event(
+                &candle_event_from(&flat),
+                &InMemoryFeedStore::default(),
+                &flat_repo,
+                &flat_registry,
+                &flat_sink,
+            )
+            .await
+            .unwrap();
+            flat_clock.advance(jiff::SignedDuration::from_secs(60));
+        }
+
+        assert_eq!(
+            flat_sink.synthetic_turns().await.len(),
+            6,
+            "the routine budget still caps a low-severity burst at six turns"
+        );
+        assert_eq!(flat_sink.silent_appends().await.len(), 2);
     }
 }
