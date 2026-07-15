@@ -1015,7 +1015,7 @@ pub async fn start_with_options(
         let feed_registry = feed_registry.clone();
         tokio::spawn(async move {
             while let Some(event) = feed_event_rx.recv().await {
-                match crate::finance_event::dispatch_feed_event(
+                match rara_trading::dispatch::on_feed_event(
                     &event,
                     store.as_ref(),
                     market_data_repo.as_ref(),
