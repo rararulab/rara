@@ -210,7 +210,7 @@ serde_json = "1.0.143"
 serde_yaml = "0.9"
 sha2 = "0.11"
 shadow-rs = "2.0"
-sqlx-core = { version = "0.8.6", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "uuid"] }
+sqlx-core = { version = "0.9.0", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "uuid"] }
 sqlx-postgres = { version = "0.8.6", default-features = false, features = ["uuid"] }
 smart-default = "0.7"
 snafu = "^0.9"
