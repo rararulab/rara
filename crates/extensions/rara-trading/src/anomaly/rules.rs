@@ -84,11 +84,10 @@ impl Signal for WindowReturnSignal {
 
     fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
         let value = window_return(ctx.closes());
-        SignalOutput::builder()
-            .name(Self::NAME)
-            .value(value)
-            .fired(value.abs() >= WINDOW_RETURN_THRESHOLD)
-            .build()
+        SignalOutput {
+            value: Some(value),
+            fired: value.abs() >= WINDOW_RETURN_THRESHOLD,
+        }
     }
 
     fn fragment(&self, output: &SignalOutput) -> String {
@@ -115,11 +114,10 @@ impl Signal for MaxDrawdownSignal {
 
     fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
         let value = max_drawdown(ctx.closes());
-        SignalOutput::builder()
-            .name(Self::NAME)
-            .value(value)
-            .fired(value >= DRAWDOWN_THRESHOLD)
-            .build()
+        SignalOutput {
+            value: Some(value),
+            fired: value >= DRAWDOWN_THRESHOLD,
+        }
     }
 
     fn fragment(&self, output: &SignalOutput) -> String {
@@ -143,11 +141,10 @@ impl Signal for VolumeSurgeSignal {
 
     fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
         let value = volume_surge(ctx.history_volumes(), ctx.latest_volume());
-        SignalOutput::builder()
-            .name(Self::NAME)
-            .maybe_value(value)
-            .fired(value.is_some_and(|surge| surge >= VOLUME_SURGE_THRESHOLD))
-            .build()
+        SignalOutput {
+            value,
+            fired: value.is_some_and(|surge| surge >= VOLUME_SURGE_THRESHOLD),
+        }
     }
 
     fn fragment(&self, output: &SignalOutput) -> String {
