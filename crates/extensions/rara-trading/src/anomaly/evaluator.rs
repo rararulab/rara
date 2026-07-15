@@ -130,8 +130,8 @@ fn metrics_from(evaluated: &[(&dyn Signal, SignalOutput)]) -> AnomalyMetrics {
     let output = |name: &str| {
         evaluated
             .iter()
+            .find(|(signal, _)| signal.name() == name)
             .map(|(_, out)| out)
-            .find(|out| out.name == name)
     };
     let jump = output(JumpSignal::NAME);
     AnomalyMetrics::builder()
@@ -249,11 +249,10 @@ mod tests {
         fn name(&self) -> &'static str { Self::NAME }
 
         fn evaluate(&self, _ctx: &SignalContext<'_>) -> SignalOutput {
-            SignalOutput::builder()
-                .name(Self::NAME)
-                .value(1.0)
-                .fired(true)
-                .build()
+            SignalOutput {
+                value: Some(1.0),
+                fired: true,
+            }
         }
 
         fn fragment(&self, _output: &SignalOutput) -> String { "test beacon fired".to_owned() }

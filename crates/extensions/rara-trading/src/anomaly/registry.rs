@@ -67,15 +67,15 @@ impl SignalContext<'_> {
 
 /// The structured output of one [`Signal`] over a [`SignalContext`].
 ///
-/// Every field has a downstream consumer, so no field is a hollow placeholder
-/// (`docs/guides/anti-patterns.md`): [`Self::name`] routes the value into the
-/// public [`super::AnomalyMetrics`] trace, [`Self::value`] populates that trace
-/// and feeds [`Signal::fragment`], and [`Self::fired`] drives the fired-count,
-/// severity, and reason-fragment selection in the classifier.
-#[derive(Debug, Clone, Builder)]
+/// Both fields have a downstream consumer, so neither is a hollow placeholder
+/// (`docs/guides/anti-patterns.md`): [`Self::value`] populates the public
+/// [`super::AnomalyMetrics`] trace and feeds [`Signal::fragment`], and
+/// [`Self::fired`] drives the fired-count, severity, and reason-fragment
+/// selection in the classifier. The signal's identity is a static property of
+/// the [`Signal`] itself ([`Signal::name`]), not per-evaluation data, so it is
+/// not duplicated into every output.
+#[derive(Debug, Clone)]
 pub(crate) struct SignalOutput {
-    /// Stable identifier routing this signal's value into the metrics trace.
-    pub(crate) name:  &'static str,
     /// The signal's computed value, or `None` when the window was too short to
     /// compute it — mirrors the `Option<f64>` metrics so "not evaluable" is not
     /// flattened into a numeric `0.0`.

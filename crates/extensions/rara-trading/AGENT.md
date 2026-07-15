@@ -36,9 +36,12 @@ Five modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   Result<Option<AnomalySignal>>` is a **pure** function of its candle inputs. It
   prepares the shared context once, walks a `SignalRegistry` collecting each
   signal's `SignalOutput`, projects those onto `AnomalyMetrics`, then classifies
-  severity. `registry.rs` = the `Signal` trait, `SignalOutput` (name / value /
-  fired), `SignalContext` (shared closes/returns/volumes), and
-  `builtin_registry()`; `rules.rs` = L1 pure functions + their `Signal` adapters
+  severity. `registry.rs` = the `Signal` trait (`name` / `evaluate` /
+  `fragment`), `SignalOutput` (value / fired), `SignalContext` (shared
+  closes/returns/volumes), and `builtin_registry()`; the signal's stable name is
+  a static property of the `Signal` (used to route its value into
+  `AnomalyMetrics`), not per-output data. `rules.rs` = L1 pure functions + their
+  `Signal` adapters
   (window return, rolling drawdown, volume surge); `statistics.rs` = L2 pure
   functions + adapters (MAD-based robust z-score, BNS realized-variance vs
   bipower-variation jump test); `signal.rs` = `AnomalySignal` / `Severity` /
@@ -97,8 +100,9 @@ dispatch loop (`crates/app/src/lib.rs`).
   reachable and asserted by a test. The same bar applies to a `Signal`: a
   production impl that ignores its `SignalContext` and returns a constant, or a
   `SignalOutput` field nothing consumes, is hollow. Every `SignalOutput` field
-  has a consumer — `name` routes into `AnomalyMetrics`, `value` populates the
-  trace and the fragment, `fired` drives the count / severity / reason.
+  has a consumer — `value` populates the `AnomalyMetrics` trace and the
+  fragment, `fired` drives the count / severity / reason; the routing name comes
+  from `Signal::name()`.
 - Do NOT turn severity into a weighted / scored / factor-combination framework
   when adding signals — **why:** `classify` stays concrete (fired-count plus the
   drawdown-keyed critical escalation); a scoring framework is speculative

@@ -156,11 +156,10 @@ impl Signal for RobustZScoreSignal {
         let value = ctx
             .newest_return()
             .and_then(|(newest, history)| robust_zscore(history, newest));
-        SignalOutput::builder()
-            .name(Self::NAME)
-            .maybe_value(value)
-            .fired(value.is_some_and(|zscore| zscore >= ZSCORE_THRESHOLD))
-            .build()
+        SignalOutput {
+            value,
+            fired: value.is_some_and(|zscore| zscore >= ZSCORE_THRESHOLD),
+        }
     }
 
     fn fragment(&self, output: &SignalOutput) -> String {
@@ -185,11 +184,10 @@ impl Signal for JumpSignal {
 
     fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
         let value = jump_ratio(ctx.returns());
-        SignalOutput::builder()
-            .name(Self::NAME)
-            .maybe_value(value)
-            .fired(value.is_some_and(|ratio| ratio >= JUMP_RATIO_THRESHOLD))
-            .build()
+        SignalOutput {
+            value,
+            fired: value.is_some_and(|ratio| ratio >= JUMP_RATIO_THRESHOLD),
+        }
     }
 
     fn fragment(&self, output: &SignalOutput) -> String {
