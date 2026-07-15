@@ -31,12 +31,28 @@ Five modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   `timescale.rs` (TimescaleDB impl), `tools.rs` (agent-facing query tools).
   `recent_candles(CandleRecentQuery)` returns the newest N candles ascending
   and is the rolling-window source for anomaly evaluation.
-- `anomaly/` — market-anomaly evaluation (issue 2415). `evaluate(window,
-  latest) -> Result<Option<AnomalySignal>>` is a **pure** function of its
-  candle inputs. `rules.rs` = L1 (window return, rolling drawdown, volume
-  surge); `statistics.rs` = L2 (MAD-based robust z-score, BNS realized-variance
-  vs bipower-variation jump test); `signal.rs` = `AnomalySignal` / `Severity` /
-  `AnomalyMetrics`; `error.rs` = `AnomalyError` (snafu).
+- `anomaly/` — market-anomaly evaluation (issue 2415; generalized into a signal
+  registry in issue 2429). `evaluate(window, latest) ->
+  Result<Option<AnomalySignal>>` is a **pure** function of its candle inputs. It
+  prepares the shared context once, walks a `SignalRegistry` collecting each
+  signal's `SignalOutput`, projects those onto `AnomalyMetrics`, then classifies
+  severity. `registry.rs` = the `Signal` trait, `SignalOutput` (name / value /
+  fired), `SignalContext` (shared closes/returns/volumes), and
+  `builtin_registry()`; `rules.rs` = L1 pure functions + their `Signal` adapters
+  (window return, rolling drawdown, volume surge); `statistics.rs` = L2 pure
+  functions + adapters (MAD-based robust z-score, BNS realized-variance vs
+  bipower-variation jump test); `signal.rs` = `AnomalySignal` / `Severity` /
+  `AnomalyMetrics`; `error.rs` = `AnomalyError` (snafu). `evaluator.rs` holds the
+  `evaluate` / `evaluate_with(&registry, …)` loop, the metrics projection, and
+  `classify`.
+
+  **Extending the signal set** = implement `Signal` (a struct wrapping a pure
+  stat) + add one `Box::new(...)` line to `builtin_registry()`. The core loop in
+  `evaluate_with`, the metrics projection, and `classify` do not change — the
+  new signal contributes to the reason (via its `fragment`) and the fired-count.
+  `builtin_registry()` order **is** the reason-fragment order (drawdown, return,
+  volume, z-score, jump), so keep it stable. `evaluate_with` is the test seam
+  (`registered_signal_participates_in_evaluation` injects an extra signal).
 
 The write→read→enrich wiring lives in `dispatch/pipeline.rs` (`on_feed_event`):
 it upserts the closed candle, pulls the window via `recent_candles`, runs
@@ -78,7 +94,16 @@ dispatch loop (`crates/app/src/lib.rs`).
 - Do NOT return a fixed `Severity` regardless of input, or add an
   `AnomalyMetrics` field nothing reads — that is a hollow implementation
   (`docs/guides/anti-patterns.md`). Every severity level and metric must be
-  reachable and asserted by a test.
+  reachable and asserted by a test. The same bar applies to a `Signal`: a
+  production impl that ignores its `SignalContext` and returns a constant, or a
+  `SignalOutput` field nothing consumes, is hollow. Every `SignalOutput` field
+  has a consumer — `name` routes into `AnomalyMetrics`, `value` populates the
+  trace and the fragment, `fired` drives the count / severity / reason.
+- Do NOT turn severity into a weighted / scored / factor-combination framework
+  when adding signals — **why:** `classify` stays concrete (fired-count plus the
+  drawdown-keyed critical escalation); a scoring framework is speculative
+  machinery (issue 2429 Boundaries). Per-signal trip thresholds stay `const`
+  next to each signal, never YAML.
 - Do NOT feed the newest candle into `evaluate` twice: `window` is the history
   strictly before `latest`. `dispatch/pipeline.rs` queries `recent_candles`
   with `end = Some(latest.open_time)` to enforce this.

@@ -15,25 +15,30 @@
 //! The anomaly-evaluation entry point.
 //!
 //! [`evaluate`] is a pure function of its candle inputs — no clock, no I/O — so
-//! every rule and statistic is reproducible from a fixture window. It composes
-//! the L1 rules ([`super::rules`]) and L2 statistics ([`super::statistics`])
-//! into a single [`AnomalySignal`], or `None` when the tape is unremarkable.
+//! every rule and statistic is reproducible from a fixture window. It prepares
+//! the shared per-evaluation context once, walks the builtin [`SignalRegistry`]
+//! collecting each signal's [`SignalOutput`], projects those onto the public
+//! [`AnomalyMetrics`], and classifies severity — producing a single
+//! [`AnomalySignal`], or `None` when the tape is unremarkable.
 //!
-//! The thresholds below are **mechanism constants**
+//! Adding a signal is "implement [`Signal`] + register one line" in
+//! [`super::registry`]; the loop below does not change. The seam that makes
+//! that testable is [`evaluate_with`], which takes an explicit registry.
+//!
+//! The drawdown escalation threshold below is a **mechanism constant**
 //! (`docs/guides/anti-patterns.md`): a deploy operator has no principled reason
-//! to retune the drawdown or volume-surge trip points, and a YAML knob would
-//! recreate the #1804→#1817 footgun where a default config silently disables
-//! the fix. The one value a deployment might legitimately tune (per-symbol
-//! sensitivity) is out of scope for this issue and would arrive via
-//! `config.example.yaml`, never as a hardcoded Rust default.
+//! to retune it, and a YAML knob would recreate the #1804→#1817 footgun where a
+//! default config silently disables the fix. Per-signal trip thresholds live as
+//! `const` next to each signal in [`super::rules`] / [`super::statistics`].
 
 use rust_decimal::prelude::ToPrimitive;
 
 use super::{
     error::{NonPositivePriceSnafu, Result},
-    rules,
+    registry::{Signal, SignalContext, SignalOutput, SignalRegistry, builtin_registry},
+    rules::{MaxDrawdownSignal, VolumeSurgeSignal, WindowReturnSignal},
     signal::{AnomalyMetrics, AnomalySignal, Severity},
-    statistics,
+    statistics::{self, JumpSignal, RobustZScoreSignal},
 };
 use crate::market_data::MarketCandle;
 
@@ -42,16 +47,6 @@ use crate::market_data::MarketCandle;
 /// enough to stay responsive to a regime change.
 pub const EVAL_WINDOW: usize = 30;
 
-/// Absolute cumulative window return (fraction) that trips the return rule.
-const WINDOW_RETURN_THRESHOLD: f64 = 0.03;
-/// Rolling max-drawdown magnitude (fraction) that trips the drawdown rule.
-const DRAWDOWN_THRESHOLD: f64 = 0.03;
-/// Volume-vs-rolling-mean multiple that trips the volume-surge rule.
-const VOLUME_SURGE_THRESHOLD: f64 = 3.0;
-/// Robust z-score magnitude that trips the return-anomaly statistic.
-const ZSCORE_THRESHOLD: f64 = 3.5;
-/// BNS jump ratio above which the path is flagged as containing a jump.
-const JUMP_RATIO_THRESHOLD: f64 = 1.5;
 /// Drawdown magnitude (fraction) that escalates a multi-rule anomaly to
 /// [`Severity::Critical`] — the flash-crash shape.
 const CRITICAL_DRAWDOWN: f64 = 0.06;
@@ -70,6 +65,25 @@ const CRITICAL_DRAWDOWN: f64 = 0.06;
 /// Returns [`super::AnomalyError::NonPositivePrice`] if any close in the window
 /// or the latest candle is not strictly positive.
 pub fn evaluate(window: &[MarketCandle], latest: &MarketCandle) -> Result<Option<AnomalySignal>> {
+    evaluate_with(&builtin_registry(), window, latest)
+}
+
+/// Evaluate `latest` against `window` using an explicit signal `registry`.
+///
+/// [`evaluate`] delegates here with [`builtin_registry`]; this is the seam a
+/// test uses to inject an extra signal and prove it participates without any
+/// edit to the walk below. The shared inputs (`closes`, log-`returns`,
+/// historical/latest volumes) are prepared once and handed to every signal.
+///
+/// # Errors
+///
+/// Returns [`super::AnomalyError::NonPositivePrice`] if any close in the window
+/// or the latest candle is not strictly positive.
+pub(crate) fn evaluate_with(
+    registry: &SignalRegistry,
+    window: &[MarketCandle],
+    latest: &MarketCandle,
+) -> Result<Option<AnomalySignal>> {
     let mut closes = Vec::with_capacity(window.len() + 1);
     for candle in window {
         closes.push(close_f64(candle)?);
@@ -83,23 +97,59 @@ pub fn evaluate(window: &[MarketCandle], latest: &MarketCandle) -> Result<Option
 
     let history_volumes: Vec<f64> = window.iter().map(volume_f64).collect();
     let latest_volume = volume_f64(latest);
-
     let returns = statistics::log_returns(&closes);
-    let (&newest_return, history_returns) = returns
-        .split_last()
-        .expect("returns is non-empty when closes has at least two entries");
 
-    let jump_ratio = statistics::jump_ratio(&returns);
-    let metrics = AnomalyMetrics::builder()
-        .window_return(rules::window_return(&closes))
-        .max_drawdown(rules::max_drawdown(&closes))
-        .maybe_volume_surge(rules::volume_surge(&history_volumes, latest_volume))
-        .maybe_robust_zscore(statistics::robust_zscore(history_returns, newest_return))
-        .maybe_jump_ratio(jump_ratio)
-        .jump_flagged(jump_ratio.is_some_and(|ratio| ratio >= JUMP_RATIO_THRESHOLD))
+    let ctx = SignalContext::builder()
+        .closes(&closes)
+        .returns(&returns)
+        .history_volumes(&history_volumes)
+        .latest_volume(latest_volume)
         .build();
 
-    Ok(classify(metrics))
+    let evaluated: Vec<(&dyn Signal, SignalOutput)> = registry
+        .iter()
+        .map(|signal| {
+            let output = signal.evaluate(&ctx);
+            (signal.as_ref(), output)
+        })
+        .collect();
+
+    let metrics = metrics_from(&evaluated);
+    Ok(classify(&evaluated, metrics))
+}
+
+/// Project the collected signal outputs onto the public [`AnomalyMetrics`]
+/// trace, routing each builtin signal's value into its field by stable name.
+///
+/// This preserves the fixed metrics struct byte-for-byte for the builtin five;
+/// a signal beyond them contributes to the reason and severity but not to this
+/// trace. `None` values stay `None` (never flattened to `0.0`) so "not
+/// evaluable" survives the projection; `window_return` / `max_drawdown` are
+/// always computed, so an absent output falls back to their neutral `0.0`.
+fn metrics_from(evaluated: &[(&dyn Signal, SignalOutput)]) -> AnomalyMetrics {
+    let output = |name: &str| {
+        evaluated
+            .iter()
+            .map(|(_, out)| out)
+            .find(|out| out.name == name)
+    };
+    let jump = output(JumpSignal::NAME);
+    AnomalyMetrics::builder()
+        .window_return(
+            output(WindowReturnSignal::NAME)
+                .and_then(|out| out.value)
+                .unwrap_or(0.0),
+        )
+        .max_drawdown(
+            output(MaxDrawdownSignal::NAME)
+                .and_then(|out| out.value)
+                .unwrap_or(0.0),
+        )
+        .maybe_volume_surge(output(VolumeSurgeSignal::NAME).and_then(|out| out.value))
+        .maybe_robust_zscore(output(RobustZScoreSignal::NAME).and_then(|out| out.value))
+        .maybe_jump_ratio(jump.and_then(|out| out.value))
+        .jump_flagged(jump.is_some_and(|out| out.fired))
+        .build()
 }
 
 /// Extract a strictly-positive `f64` close, or fail with a typed error.
@@ -129,28 +179,19 @@ fn volume_f64(candle: &MarketCandle) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Map computed metrics to a severity and reason, or `None` when no rule fired.
-fn classify(metrics: AnomalyMetrics) -> Option<AnomalySignal> {
-    let return_fired = metrics.window_return.abs() >= WINDOW_RETURN_THRESHOLD;
-    let drawdown_fired = metrics.max_drawdown >= DRAWDOWN_THRESHOLD;
-    let volume_fired = metrics
-        .volume_surge
-        .is_some_and(|value| value >= VOLUME_SURGE_THRESHOLD);
-    let zscore_fired = metrics
-        .robust_zscore
-        .is_some_and(|value| value >= ZSCORE_THRESHOLD);
-    let jump_fired = metrics.jump_flagged;
-
-    let fired_count = [
-        return_fired,
-        drawdown_fired,
-        volume_fired,
-        zscore_fired,
-        jump_fired,
-    ]
-    .into_iter()
-    .filter(|&fired| fired)
-    .count();
+/// Map the collected signal outputs and their projected metrics to a severity
+/// and reason, or `None` when no signal fired.
+///
+/// Severity is driven by the generic fired-count over the registry plus the
+/// concrete flash-crash escalation keyed on the drawdown value (domain logic
+/// that stays concrete — not a weighted/scored combination). The reason is the
+/// fired signals' own fragments joined in registry order, so a newly registered
+/// signal's fragment appears here with no edit to this function.
+fn classify(
+    evaluated: &[(&dyn Signal, SignalOutput)],
+    metrics: AnomalyMetrics,
+) -> Option<AnomalySignal> {
+    let fired_count = evaluated.iter().filter(|(_, out)| out.fired).count();
     if fired_count == 0 {
         return None;
     }
@@ -163,25 +204,11 @@ fn classify(metrics: AnomalyMetrics) -> Option<AnomalySignal> {
         Severity::Watch
     };
 
-    let mut parts = Vec::new();
-    if drawdown_fired {
-        parts.push(format!("drawdown {:.1}%", metrics.max_drawdown * 100.0));
-    }
-    if return_fired {
-        parts.push(format!(
-            "window return {:+.1}%",
-            metrics.window_return * 100.0
-        ));
-    }
-    if let Some(surge) = metrics.volume_surge.filter(|_| volume_fired) {
-        parts.push(format!("volume surge {surge:.1}x"));
-    }
-    if let Some(zscore) = metrics.robust_zscore.filter(|_| zscore_fired) {
-        parts.push(format!("robust z-score {zscore:.1}"));
-    }
-    if let Some(ratio) = metrics.jump_ratio.filter(|_| jump_fired) {
-        parts.push(format!("jump ratio {ratio:.1}"));
-    }
+    let parts: Vec<String> = evaluated
+        .iter()
+        .filter(|(_, out)| out.fired)
+        .map(|(signal, out)| signal.fragment(out))
+        .collect();
 
     let reason = format!("{} anomaly — {}", severity.label(), parts.join(", "));
     Some(
@@ -198,11 +225,39 @@ mod tests {
     use jiff::{SignedDuration, Timestamp};
     use rust_decimal::Decimal;
 
-    use super::evaluate;
+    use super::{evaluate, evaluate_with};
     use crate::{
-        anomaly::{error::AnomalyError, signal::Severity},
+        anomaly::{
+            error::AnomalyError,
+            registry::{Signal, SignalContext, SignalOutput, builtin_registry},
+            signal::Severity,
+        },
         market_data::{MarketCandle, Timeframe},
     };
+
+    /// A test-only signal that always fires with a recognizable fragment, used
+    /// to prove a newly registered signal participates in evaluation without
+    /// any edit to the core loop. It is `#[cfg(test)]` only — production code
+    /// never registers an input-independent signal.
+    struct BeaconSignal;
+
+    impl BeaconSignal {
+        const NAME: &'static str = "test_beacon";
+    }
+
+    impl Signal for BeaconSignal {
+        fn name(&self) -> &'static str { Self::NAME }
+
+        fn evaluate(&self, _ctx: &SignalContext<'_>) -> SignalOutput {
+            SignalOutput::builder()
+                .name(Self::NAME)
+                .value(1.0)
+                .fired(true)
+                .build()
+        }
+
+        fn fragment(&self, _output: &SignalOutput) -> String { "test beacon fired".to_owned() }
+    }
 
     /// Build a candle whose open/high/low/close all equal `close` (drawdown and
     /// returns read closes only) at a distinct, increasing open time.
@@ -289,6 +344,57 @@ mod tests {
 
         let signal = evaluate(&history, &latest).expect("positive prices");
         assert!(signal.is_none(), "flat tape should not enrich: {signal:?}");
+    }
+
+    #[test]
+    fn registered_signal_participates_in_evaluation() {
+        // A flat tape the five builtin signals leave unremarkable.
+        let history = window(&[
+            (61_500, 120),
+            (61_510, 120),
+            (61_500, 120),
+            (61_510, 120),
+            (61_500, 120),
+            (61_510, 120),
+            (61_500, 120),
+            (61_510, 120),
+            (61_500, 120),
+            (61_510, 120),
+            (61_500, 120),
+            (61_510, 120),
+        ]);
+        let latest = candle(12, 61_505, 122);
+
+        // Builtin-only registry: the tape is unremarkable, so no signal.
+        assert!(
+            evaluate(&history, &latest)
+                .expect("positive prices")
+                .is_none(),
+            "the builtin five should leave this flat tape unremarkable"
+        );
+
+        // Extend the registry with one always-firing signal — a one-line
+        // registration, no edit to the evaluation loop.
+        let mut registry = builtin_registry();
+        registry.push(Box::new(BeaconSignal));
+
+        let signal = evaluate_with(&registry, &history, &latest)
+            .expect("positive prices")
+            .expect("the added signal fires, so evaluation now yields a signal");
+        assert!(
+            signal.reason.contains("test beacon fired"),
+            "the added signal's fragment should appear in the collected output: {}",
+            signal.reason
+        );
+
+        // The same window through the builtin-only registry still returns None,
+        // confirming the added signal — not the window — caused the difference.
+        assert!(
+            evaluate_with(&builtin_registry(), &history, &latest)
+                .expect("positive prices")
+                .is_none(),
+            "the builtin-only registry must stay silent on this window"
+        );
     }
 
     #[test]
