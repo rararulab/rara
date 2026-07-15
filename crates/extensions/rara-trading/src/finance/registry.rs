@@ -33,7 +33,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::market_data::Timeframe;
+use crate::{anomaly::Severity, market_data::Timeframe};
 
 /// Finance event kinds supported by the MVP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -95,7 +95,13 @@ pub struct FinanceDeliveryDecision {
     pub session_key:       SessionKey,
     pub event_id:          FeedEventId,
     pub action:            FinanceDeliveryAction,
+    /// Set when the routine lane silenced a low-severity event, naming the
+    /// throttle that fired (`cooldown` / `hourly_budget`).
     pub downgraded_reason: Option<String>,
+    /// Set when a bypass-eligible severity overrode a throttle that would
+    /// otherwise have silenced the event, naming the bypassed constraint. Keeps
+    /// the alert-bypass decision inspectable rather than a silent control path.
+    pub bypass_reason:     Option<String>,
 }
 
 /// Clock abstraction for deterministic budget tests.
@@ -235,7 +241,17 @@ impl FinanceSubscriptionRegistry {
     }
 
     /// Match an incoming feed event and record delivery decisions.
-    pub async fn match_event(&self, event: &FeedEvent) -> Vec<FinanceDeliveryDecision> {
+    ///
+    /// `severity` is the anomaly severity the app evaluated for this event (see
+    /// `crates/app/src/finance_event.rs`), or `None` when the event carried no
+    /// anomaly. A severity at or above the private `BYPASS_SEVERITY` threshold
+    /// overrides the routine cooldown / hourly-budget throttle so a genuine
+    /// alert is never the thing that gets silenced.
+    pub async fn match_event(
+        &self,
+        event: &FeedEvent,
+        severity: Option<Severity>,
+    ) -> Vec<FinanceDeliveryDecision> {
         if !event.tags.iter().any(|tag| tag == "finance") {
             return Vec::new();
         }
@@ -257,20 +273,21 @@ impl FinanceSubscriptionRegistry {
                 continue;
             }
 
-            let (action, downgraded_reason) = delivery_action(subscription, &inner.ledger, now);
+            let verdict = delivery_action(subscription, &inner.ledger, now, severity);
             decisions.push(FinanceDeliveryDecision {
-                subscription_id: subscription.id,
-                owner: subscription.owner.clone(),
-                session_key: subscription.session_key,
-                event_id: event.id.clone(),
-                action,
-                downgraded_reason: downgraded_reason.clone(),
+                subscription_id:   subscription.id,
+                owner:             subscription.owner.clone(),
+                session_key:       subscription.session_key,
+                event_id:          event.id.clone(),
+                action:            verdict.action,
+                downgraded_reason: verdict.downgraded_reason,
+                bypass_reason:     verdict.bypass_reason,
             });
             new_ledger_entries.push(DeliveryLedgerEntry {
                 subscription_id: subscription.id,
-                event_id: event_id.clone(),
-                delivered_at: now,
-                action,
+                event_id:        event_id.clone(),
+                delivered_at:    now,
+                action:          verdict.action,
             });
         }
 
@@ -307,15 +324,79 @@ fn already_delivered(
         .any(|entry| entry.subscription_id == subscription_id && entry.event_id == event_id)
 }
 
+/// Severity at or above which an anomaly bypasses the routine throttle.
+///
+/// This is a mechanism constant, not a per-deployment knob: "which severity
+/// counts as an alert" is a property of the alerting design, and a deploy
+/// operator has no principled reason to retune it. A YAML knob here would
+/// recreate the config-silently-disables-the-fix footgun
+/// (`docs/guides/anti-patterns.md`). The per-subscription `cooldown_secs` /
+/// `max_immediate_per_hour` remain genuine user preferences.
+const BYPASS_SEVERITY: Severity = Severity::Critical;
+
+/// Outcome of the budget / cooldown / bypass rule for one matched event.
+struct DeliveryVerdict {
+    action:            FinanceDeliveryAction,
+    /// Set when the routine lane silenced a low-severity event (`cooldown` /
+    /// `hourly_budget`).
+    downgraded_reason: Option<String>,
+    /// Set when a bypass-eligible severity overrode a throttle that would
+    /// otherwise have silenced the event, naming the bypassed constraint.
+    bypass_reason:     Option<String>,
+}
+
 fn delivery_action(
     subscription: &FinanceSubscription,
     ledger: &[DeliveryLedgerEntry],
     now: Timestamp,
-) -> (FinanceDeliveryAction, Option<String>) {
+    severity: Option<Severity>,
+) -> DeliveryVerdict {
     if subscription.delivery == FinanceDelivery::Silent {
-        return (FinanceDeliveryAction::Silent, None);
+        return DeliveryVerdict {
+            action:            FinanceDeliveryAction::Silent,
+            downgraded_reason: None,
+            bypass_reason:     None,
+        };
     }
 
+    // What the budget / cooldown rule would do on its own, ignoring severity:
+    // `Some(reason)` means the routine throttle would silence this event.
+    let throttle_reason = routine_throttle_reason(subscription, ledger, now);
+    let is_alert = severity.is_some_and(|level| level >= BYPASS_SEVERITY);
+
+    match throttle_reason {
+        // An alert-grade severity overrides a throttle that would have silenced
+        // the event: deliver immediately and record which constraint it bypassed.
+        Some(reason) if is_alert => DeliveryVerdict {
+            action:            FinanceDeliveryAction::Immediate,
+            downgraded_reason: None,
+            bypass_reason:     Some(reason),
+        },
+        // Routine lane unchanged: a below-threshold event stays silenced.
+        Some(reason) => DeliveryVerdict {
+            action:            FinanceDeliveryAction::Silent,
+            downgraded_reason: Some(reason),
+            bypass_reason:     None,
+        },
+        // No throttle fired; deliver immediately regardless of severity.
+        None => DeliveryVerdict {
+            action:            FinanceDeliveryAction::Immediate,
+            downgraded_reason: None,
+            bypass_reason:     None,
+        },
+    }
+}
+
+/// Return the routine-throttle disposition for an `Immediate` subscription.
+///
+/// `Some(reason)` when the trailing-hour cooldown / hourly-budget rule would
+/// downgrade this event to `Silent` (naming the throttle that fired), `None`
+/// when the event may be delivered immediately.
+fn routine_throttle_reason(
+    subscription: &FinanceSubscription,
+    ledger: &[DeliveryLedgerEntry],
+    now: Timestamp,
+) -> Option<String> {
     let immediate_entries: Vec<&DeliveryLedgerEntry> = ledger
         .iter()
         .filter(|entry| {
@@ -331,17 +412,14 @@ fn delivery_action(
                 < SignedDuration::from_secs(subscription.cooldown_secs as i64)
         })
     {
-        return (FinanceDeliveryAction::Silent, Some("cooldown".to_owned()));
+        return Some("cooldown".to_owned());
     }
 
     if immediate_entries.len() >= usize::from(subscription.max_immediate_per_hour) {
-        return (
-            FinanceDeliveryAction::Silent,
-            Some("hourly_budget".to_owned()),
-        );
+        return Some("hourly_budget".to_owned());
     }
 
-    (FinanceDeliveryAction::Immediate, None)
+    None
 }
 
 fn matches_subscription(
@@ -544,7 +622,7 @@ mod tests {
 
     use super::{
         FinanceDelivery, FinanceDeliveryAction, FinanceEventKind, FinanceSubscription,
-        FinanceSubscriptionRegistry, ManualFinanceClock,
+        FinanceSubscriptionRegistry, ManualFinanceClock, Severity,
     };
 
     fn ts(value: &str) -> Timestamp { value.parse().expect("timestamp fixture should parse") }
@@ -662,20 +740,20 @@ mod tests {
 
         assert_eq!(
             registry
-                .match_event(&article("fed-news", "Fed mentions BTC liquidity", ""))
+                .match_event(&article("fed-news", "Fed mentions BTC liquidity", ""), None)
                 .await
                 .len(),
             1
         );
         assert!(
             registry
-                .match_event(&article("fed-news", "Fed holds rates", ""))
+                .match_event(&article("fed-news", "Fed holds rates", ""), None)
                 .await
                 .is_empty()
         );
         assert!(
             registry
-                .match_event(&article("other-news", "BTC headline", ""))
+                .match_event(&article("other-news", "BTC headline", ""), None)
                 .await
                 .is_empty()
         );
@@ -705,18 +783,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            registry.match_event(&candle("BTCUSDT", "15m")).await.len(),
+            registry
+                .match_event(&candle("BTCUSDT", "15m"), None)
+                .await
+                .len(),
             1
         );
         assert!(
             registry
-                .match_event(&candle("ETHUSDT", "15m"))
+                .match_event(&candle("ETHUSDT", "15m"), None)
                 .await
                 .is_empty()
         );
         assert!(
             registry
-                .match_event(&candle("BTCUSDT", "1h"))
+                .match_event(&candle("BTCUSDT", "1h"), None)
                 .await
                 .is_empty()
         );
@@ -746,7 +827,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            registry.match_event(&candle("BTCUSDT", "15m")).await.len(),
+            registry
+                .match_event(&candle("BTCUSDT", "15m"), None)
+                .await
+                .len(),
             1
         );
     }
@@ -776,7 +860,10 @@ mod tests {
 
         assert_eq!(
             registry
-                .match_event(&candle_with_payload(" Binance ", " btcusdt ", " 15M "))
+                .match_event(
+                    &candle_with_payload(" Binance ", " btcusdt ", " 15M "),
+                    None
+                )
                 .await
                 .len(),
             1
@@ -808,7 +895,7 @@ mod tests {
 
         assert_eq!(
             registry
-                .match_event(&article("sec-news", "NVDA filing update", ""))
+                .match_event(&article("sec-news", "NVDA filing update", ""), None)
                 .await
                 .len(),
             1
@@ -825,10 +912,10 @@ mod tests {
         registry.upsert(sub(session)).await.unwrap();
 
         let event = article("fed-news", "BTC first notice", "");
-        assert_eq!(registry.match_event(&event).await.len(), 1);
+        assert_eq!(registry.match_event(&event, None).await.len(), 1);
 
         let reloaded = FinanceSubscriptionRegistry::load_with_clock(path, clock);
-        assert!(reloaded.match_event(&event).await.is_empty());
+        assert!(reloaded.match_event(&event, None).await.is_empty());
     }
 
     #[tokio::test]
@@ -841,13 +928,13 @@ mod tests {
         registry.upsert(subscription).await.unwrap();
 
         let first = registry
-            .match_event(&article("fed-news", "BTC first", ""))
+            .match_event(&article("fed-news", "BTC first", ""), None)
             .await;
         assert_eq!(first[0].action, FinanceDeliveryAction::Immediate);
 
         clock.advance(SignedDuration::from_secs(60));
         let second = registry
-            .match_event(&article("fed-news", "BTC second", ""))
+            .match_event(&article("fed-news", "BTC second", ""), None)
             .await;
         assert_eq!(second[0].action, FinanceDeliveryAction::Silent);
         assert_eq!(
@@ -866,7 +953,10 @@ mod tests {
 
         for index in 1..=6 {
             let matched = registry
-                .match_event(&article("fed-news", &format!("BTC notice {index}"), ""))
+                .match_event(
+                    &article("fed-news", &format!("BTC notice {index}"), ""),
+                    None,
+                )
                 .await;
             assert_eq!(matched.len(), 1);
             assert_eq!(
@@ -879,7 +969,7 @@ mod tests {
         }
 
         let seventh = registry
-            .match_event(&article("fed-news", "BTC notice 7", ""))
+            .match_event(&article("fed-news", "BTC notice 7", ""), None)
             .await;
         assert_eq!(seventh.len(), 1);
         assert_eq!(seventh[0].action, FinanceDeliveryAction::Silent);
@@ -887,5 +977,90 @@ mod tests {
             seventh[0].downgraded_reason.as_deref(),
             Some("hourly_budget")
         );
+    }
+
+    #[tokio::test]
+    async fn high_severity_bypasses_cooldown() {
+        let (registry, clock, _tmp) = registry(ts("2026-07-10T08:00:00Z"));
+        let session = SessionKey::new();
+        // Default sub: cooldown 900s, budget 6.
+        registry.upsert(sub(session)).await.unwrap();
+
+        // First immediate delivery seeds the cooldown window.
+        let first = registry
+            .match_event(&article("fed-news", "BTC first", ""), None)
+            .await;
+        assert_eq!(first[0].action, FinanceDeliveryAction::Immediate);
+
+        // A second matched event 60s later sits well inside the 900s cooldown,
+        // but a critical severity must override it.
+        clock.advance(SignedDuration::from_secs(60));
+        let bypass = registry
+            .match_event(
+                &article("fed-news", "BTC crash", ""),
+                Some(Severity::Critical),
+            )
+            .await;
+        assert_eq!(bypass[0].action, FinanceDeliveryAction::Immediate);
+        assert_eq!(bypass[0].bypass_reason.as_deref(), Some("cooldown"));
+        assert_eq!(bypass[0].downgraded_reason, None);
+    }
+
+    #[tokio::test]
+    async fn high_severity_bypasses_hourly_budget() {
+        let (registry, clock, _tmp) = registry(ts("2026-07-10T08:00:00Z"));
+        let session = SessionKey::new();
+        let mut subscription = sub(session);
+        subscription.max_immediate_per_hour = 1;
+        subscription.cooldown_secs = 0;
+        registry.upsert(subscription).await.unwrap();
+
+        // Spend the single-event budget.
+        let first = registry
+            .match_event(&article("fed-news", "BTC first", ""), None)
+            .await;
+        assert_eq!(first[0].action, FinanceDeliveryAction::Immediate);
+
+        // The budget is now exhausted, but a critical severity bypasses it
+        // instead of taking the hourly_budget downgrade.
+        clock.advance(SignedDuration::from_secs(60));
+        let bypass = registry
+            .match_event(
+                &article("fed-news", "BTC crash", ""),
+                Some(Severity::Critical),
+            )
+            .await;
+        assert_eq!(bypass[0].action, FinanceDeliveryAction::Immediate);
+        assert_eq!(bypass[0].bypass_reason.as_deref(), Some("hourly_budget"));
+        assert_eq!(bypass[0].downgraded_reason, None);
+    }
+
+    #[tokio::test]
+    async fn low_severity_still_downgrades_under_budget() {
+        let (registry, clock, _tmp) = registry(ts("2026-07-10T08:00:00Z"));
+        let session = SessionKey::new();
+        let mut subscription = sub(session);
+        subscription.max_immediate_per_hour = 1;
+        subscription.cooldown_secs = 0;
+        registry.upsert(subscription).await.unwrap();
+
+        // Spend the single-event budget.
+        let first = registry
+            .match_event(&article("fed-news", "BTC first", ""), None)
+            .await;
+        assert_eq!(first[0].action, FinanceDeliveryAction::Immediate);
+
+        // A below-threshold severity stays on the routine lane: silenced with
+        // the unchanged hourly_budget reason, no bypass.
+        clock.advance(SignedDuration::from_secs(60));
+        let routine = registry
+            .match_event(&article("fed-news", "BTC drift", ""), Some(Severity::Watch))
+            .await;
+        assert_eq!(routine[0].action, FinanceDeliveryAction::Silent);
+        assert_eq!(
+            routine[0].downgraded_reason.as_deref(),
+            Some("hourly_budget")
+        );
+        assert_eq!(routine[0].bypass_reason, None);
     }
 }
