@@ -20,6 +20,7 @@
 //! [`FeedEvent`](rara_kernel::data_feed::FeedEvent) values.
 
 pub mod anomaly;
+pub mod backtest;
 pub mod dispatch;
 pub mod feed;
 pub mod finance;
