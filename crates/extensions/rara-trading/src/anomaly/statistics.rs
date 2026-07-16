@@ -32,6 +32,15 @@ use super::registry::{Signal, SignalContext, SignalOutput};
 const ZSCORE_THRESHOLD: f64 = 3.5;
 /// BNS jump ratio above which the path is flagged as containing a jump.
 const JUMP_RATIO_THRESHOLD: f64 = 1.5;
+/// Recent-to-baseline per-bar realized-variance ratio that trips the
+/// volatility-regime statistic (recent variance at least this multiple of the
+/// baseline).
+const VOLATILITY_REGIME_THRESHOLD: f64 = 4.0;
+
+/// Number of trailing returns forming the "recent" variance sample compared
+/// against the earlier baseline. Small enough to react to a fresh regime, large
+/// enough that a single bar does not dominate the recent per-bar average.
+const RECENT_VARIANCE_SAMPLES: usize = 5;
 
 /// Minimum number of returns required before a statistic is trusted. Below this
 /// the MAD scale and bipower variation are too noisy to separate signal from
@@ -107,6 +116,37 @@ pub(crate) fn robust_zscore(history: &[f64], newest: f64) -> Option<f64> {
 /// jump because each return enters squared.
 pub(crate) fn realized_variance(returns: &[f64]) -> f64 {
     returns.iter().map(|value| value * value).sum()
+}
+
+/// Ratio of the recent per-bar realized variance (the last
+/// [`RECENT_VARIANCE_SAMPLES`] returns) to the baseline per-bar realized
+/// variance (the preceding returns). Each side is normalized by its sample
+/// count, so a short recent window and a longer baseline compare on a per-bar
+/// basis rather than by raw sum.
+///
+/// This is the sustained-dispersion detector the single-bar statistics miss by
+/// construction: the MAD z-score reads a fresh return as in-family once its
+/// history is also elevated, and the BNS jump test reads a cluster of moderate
+/// bars as diffusive (ratio near one). A regime that shifts from quiet to
+/// choppy therefore trips neither, but drives this ratio up.
+///
+/// Returns `None` when the baseline holds fewer than [`MIN_SAMPLES`] returns
+/// (too few to trust as a baseline), the window is too short to spare
+/// [`RECENT_VARIANCE_SAMPLES`] recent returns, or the baseline variance
+/// collapses to ~zero (a flat baseline, where any recent motion is an undefined
+/// multiple).
+pub(crate) fn volatility_regime_ratio(returns: &[f64]) -> Option<f64> {
+    if returns.len() < RECENT_VARIANCE_SAMPLES + MIN_SAMPLES {
+        return None;
+    }
+    let split = returns.len() - RECENT_VARIANCE_SAMPLES;
+    let (baseline, recent) = returns.split_at(split);
+    let recent_per_bar = realized_variance(recent) / recent.len() as f64;
+    let baseline_per_bar = realized_variance(baseline) / baseline.len() as f64;
+    if baseline_per_bar <= EPSILON {
+        return None;
+    }
+    Some(recent_per_bar / baseline_per_bar)
 }
 
 /// Bipower variation: `μ₁⁻²` times the sum of products of adjacent absolute
@@ -195,9 +235,41 @@ impl Signal for JumpSignal {
     }
 }
 
+/// L2 signal: ratio of recent to baseline per-bar realized variance, catching a
+/// sustained volatility-regime expansion the single-bar statistics miss. Not
+/// evaluable (`None`) below [`RECENT_VARIANCE_SAMPLES`] + [`MIN_SAMPLES`]
+/// returns or on a ~flat baseline.
+pub(crate) struct VolatilityRegimeSignal;
+
+impl VolatilityRegimeSignal {
+    /// Stable trace identifier (matches the `AnomalyMetrics::volatility_regime`
+    /// field it projects onto).
+    pub(crate) const NAME: &'static str = "volatility_regime";
+}
+
+impl Signal for VolatilityRegimeSignal {
+    fn name(&self) -> &'static str { Self::NAME }
+
+    fn evaluate(&self, ctx: &SignalContext<'_>) -> SignalOutput {
+        let value = volatility_regime_ratio(ctx.returns());
+        SignalOutput {
+            value,
+            fired: value.is_some_and(|ratio| ratio >= VOLATILITY_REGIME_THRESHOLD),
+        }
+    }
+
+    fn fragment(&self, output: &SignalOutput) -> String {
+        format!("volatility regime {:.1}x", output.value.unwrap_or_default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{jump_ratio, realized_variance, robust_zscore};
+    use super::{
+        VOLATILITY_REGIME_THRESHOLD, VolatilityRegimeSignal, jump_ratio, realized_variance,
+        robust_zscore, volatility_regime_ratio,
+    };
+    use crate::anomaly::registry::{Signal, SignalContext};
 
     /// Naive mean/standard-deviation z-score, used only to demonstrate the
     /// contrast the robust version is designed to beat.
@@ -278,6 +350,66 @@ mod tests {
         assert!(
             jump_ratio_value > JUMP_RATIO_THRESHOLD,
             "jump ratio {jump_ratio_value} should exceed {JUMP_RATIO_THRESHOLD}"
+        );
+    }
+
+    /// A [`SignalContext`] over a bare return series; the volatility-regime
+    /// signal reads only `returns`, so the other inputs are inert.
+    fn ctx(returns: &[f64]) -> SignalContext<'_> {
+        SignalContext::builder()
+            .closes(&[])
+            .returns(returns)
+            .history_volumes(&[])
+            .latest_volume(0.0)
+            .build()
+    }
+
+    #[test]
+    fn volatility_regime_fires_on_sustained_variance_expansion() {
+        // Eight quiet ±0.15% baseline bars, then five loud ±0.8% recent bars —
+        // a sustained dispersion expansion, not a single outlier.
+        let mut returns = vec![
+            0.0015, -0.0015, 0.0015, -0.0015, 0.0015, -0.0015, 0.0015, -0.0015,
+        ];
+        returns.extend_from_slice(&[0.008, -0.008, 0.008, -0.008, 0.008]);
+
+        let output = VolatilityRegimeSignal.evaluate(&ctx(&returns));
+        let ratio = output
+            .value
+            .expect("recent + baseline both exceed the minimum sample count");
+
+        assert!(
+            ratio >= VOLATILITY_REGIME_THRESHOLD,
+            "recent variance should be >= {VOLATILITY_REGIME_THRESHOLD}x baseline: {ratio}"
+        );
+        assert!(output.fired, "a sustained variance expansion should fire");
+        // The pure function and the signal agree on the value.
+        assert_eq!(volatility_regime_ratio(&returns), output.value);
+    }
+
+    #[test]
+    fn volatility_regime_silent_on_stable_variance() {
+        // Recent and baseline bars carry comparable per-bar variance.
+        let returns = [
+            0.0015, -0.0015, 0.0015, -0.0015, 0.0015, -0.0015, 0.0015, -0.0015, 0.0016, -0.0016,
+            0.0015, -0.0016, 0.0015,
+        ];
+        let output = VolatilityRegimeSignal.evaluate(&ctx(&returns));
+        assert!(
+            output.value.is_some(),
+            "a full-length window is evaluable: {:?}",
+            output.value
+        );
+        assert!(!output.fired, "a stable-variance tape should not fire");
+
+        // Too short to split into recent + baseline: not evaluable.
+        let short = [0.001, -0.001, 0.001];
+        assert!(
+            VolatilityRegimeSignal
+                .evaluate(&ctx(&short))
+                .value
+                .is_none(),
+            "a window shorter than recent + baseline reports no value"
         );
     }
 }

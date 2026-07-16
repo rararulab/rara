@@ -36,9 +36,9 @@ use rust_decimal::prelude::ToPrimitive;
 use super::{
     error::{NonPositivePriceSnafu, Result},
     registry::{Signal, SignalContext, SignalOutput, SignalRegistry, builtin_registry},
-    rules::{MaxDrawdownSignal, VolumeSurgeSignal, WindowReturnSignal},
+    rules::{DirectionalRunSignal, MaxDrawdownSignal, VolumeSurgeSignal, WindowReturnSignal},
     signal::{AnomalyMetrics, AnomalySignal, Severity},
-    statistics::{self, JumpSignal, RobustZScoreSignal},
+    statistics::{self, JumpSignal, RobustZScoreSignal, VolatilityRegimeSignal},
 };
 use crate::market_data::MarketCandle;
 
@@ -121,11 +121,11 @@ pub(crate) fn evaluate_with(
 /// Project the collected signal outputs onto the public [`AnomalyMetrics`]
 /// trace, routing each builtin signal's value into its field by stable name.
 ///
-/// This preserves the fixed metrics struct byte-for-byte for the builtin five;
-/// a signal beyond them contributes to the reason and severity but not to this
-/// trace. `None` values stay `None` (never flattened to `0.0`) so "not
-/// evaluable" survives the projection; `window_return` / `max_drawdown` are
-/// always computed, so an absent output falls back to their neutral `0.0`.
+/// Each builtin signal projects onto its named field; a signal beyond the
+/// builtin set contributes to the reason and severity but not to this trace.
+/// `None` values stay `None` (never flattened to `0.0`) so "not evaluable"
+/// survives the projection; `window_return` / `max_drawdown` are always
+/// computed, so an absent output falls back to their neutral `0.0`.
 fn metrics_from(evaluated: &[(&dyn Signal, SignalOutput)]) -> AnomalyMetrics {
     let output = |name: &str| {
         evaluated
@@ -149,6 +149,8 @@ fn metrics_from(evaluated: &[(&dyn Signal, SignalOutput)]) -> AnomalyMetrics {
         .maybe_robust_zscore(output(RobustZScoreSignal::NAME).and_then(|out| out.value))
         .maybe_jump_ratio(jump.and_then(|out| out.value))
         .jump_flagged(jump.is_some_and(|out| out.fired))
+        .maybe_volatility_regime(output(VolatilityRegimeSignal::NAME).and_then(|out| out.value))
+        .maybe_directional_run(output(DirectionalRunSignal::NAME).and_then(|out| out.value))
         .build()
 }
 
@@ -290,6 +292,19 @@ mod tests {
             .collect()
     }
 
+    /// Build `(window, latest)` from a close series at steady volume: the last
+    /// close is the newly closed `latest` candle, the rest are the window.
+    fn steady_volume_window(closes: &[i64]) -> (Vec<MarketCandle>, MarketCandle) {
+        let (&last, history) = closes.split_last().expect("at least one close");
+        let window: Vec<MarketCandle> = history
+            .iter()
+            .enumerate()
+            .map(|(index, &close)| candle(index as i64, close, 120))
+            .collect();
+        let latest = candle(history.len() as i64, last, 120);
+        (window, latest)
+    }
+
     #[test]
     fn crash_window_produces_high_severity_anomaly_signal() {
         // Six flat bars, then a four-bar decline, all at steady volume.
@@ -398,20 +413,144 @@ mod tests {
 
     #[test]
     fn single_moderate_rule_produces_watch_severity() {
-        // A steady ~4% rise: only the window-return rule trips, no drawdown, no
-        // volume surge, no return-outlier.
-        let history: Vec<MarketCandle> = (0..12)
-            .map(|index| candle(index, 60_000 + 200 * index, 120))
-            .collect();
-        let latest = candle(12, 62_400, 120);
+        // A varied-magnitude rise that nets ~5% (tripping only the
+        // window-return rule), ending on a small in-family up-tick preceded by a
+        // shallow pullback so the trailing same-sign run is a single bar (below
+        // the directional-run threshold). The magnitudes vary, so the MAD scale
+        // stays healthy and no bar is a z-score outlier, and recent and baseline
+        // per-bar variance match (no regime shift). The old fixture — a 12-bar
+        // monotonic rise — is now a persistent grind the directional-run signal
+        // legitimately fires on, so it can no longer isolate a single rule; this
+        // window restores that isolation.
+        let steps = [
+            0.004, 0.005, 0.003, 0.006, 0.004, 0.005, 0.003, 0.005, 0.004, 0.006, 0.004, -0.0025,
+            0.002,
+        ];
+        let mut price = 60_000.0_f64;
+        let mut closes = vec![price.round() as i64];
+        for step in steps {
+            price *= 1.0 + step;
+            closes.push(price.round() as i64);
+        }
+        let (history, latest) = steady_volume_window(&closes);
 
         let signal = evaluate(&history, &latest)
             .expect("positive prices")
-            .expect("a 4% run trips the return rule");
+            .expect("a > 3% net move trips the return rule");
 
         assert_eq!(signal.severity, Severity::Watch);
         assert!(signal.metrics.window_return >= 0.03);
         assert!(signal.metrics.max_drawdown < 0.03);
+        // Only the window-return rule contributed to the fired count: no other
+        // signal's fragment appears in the reason.
+        assert!(
+            signal.reason.contains("window return"),
+            "reason should name the window return: {}",
+            signal.reason
+        );
+        for fragment in [
+            "drawdown",
+            "volume surge",
+            "robust z-score",
+            "jump",
+            "volatility regime",
+            "directional run",
+        ] {
+            assert!(
+                !signal.reason.contains(fragment),
+                "only the window-return rule should fire, found {fragment:?}: {}",
+                signal.reason
+            );
+        }
+    }
+
+    #[test]
+    fn volatility_regime_alone_enriches_unremarkable_tape() {
+        // A quiet ±0.15% baseline that shifts into a choppy ±0.8% cluster, with
+        // a small in-family newest bar. The dispersion expansion trips only the
+        // volatility-regime signal: the net move, drawdown, volume, z-score, and
+        // jump path all stay unremarkable, and the alternating cluster leaves no
+        // directional run.
+        let closes = [
+            60_000, 60_090, 60_000, 60_090, 60_000, 60_090, 60_000, 60_090, 60_000, 60_090, 60_480,
+            60_000, 60_480, 60_000, 60_090,
+        ];
+        let (history, latest) = steady_volume_window(&closes);
+
+        let signal = evaluate(&history, &latest)
+            .expect("positive prices")
+            .expect("the volatility-regime shift now yields a signal");
+
+        assert_eq!(signal.severity, Severity::Watch);
+        assert!(
+            signal.reason.contains("volatility regime"),
+            "reason should carry the volatility-regime fragment: {}",
+            signal.reason
+        );
+        assert!(
+            signal.metrics.volatility_regime.expect("ratio computed") >= 4.0,
+            "the projected metric carries the ratio: {:?}",
+            signal.metrics.volatility_regime
+        );
+        // None of the five existing signals' fragments, and no directional run.
+        for fragment in [
+            "window return",
+            "drawdown",
+            "volume surge",
+            "robust z-score",
+            "jump",
+            "directional run",
+        ] {
+            assert!(
+                !signal.reason.contains(fragment),
+                "only the volatility-regime signal should lift the tape, found {fragment:?}: {}",
+                signal.reason
+            );
+        }
+    }
+
+    #[test]
+    fn directional_run_alone_enriches_unremarkable_tape() {
+        // An alternating ±0.4% baseline (no persistent run, uniform variance)
+        // followed by six consecutive +0.4% bars. The trailing grind trips only
+        // the directional-run signal: the net move stays under 3%, the path has
+        // no meaningful drawdown, volume is steady, the newest bar is in-family
+        // for the z-score, and the recent variance matches the baseline.
+        let closes = [
+            60_000, 60_240, 60_000, 60_240, 60_000, 60_240, 60_000, 60_240, 60_000, 60_240, 60_480,
+            60_720, 60_960, 61_200, 61_440,
+        ];
+        let (history, latest) = steady_volume_window(&closes);
+
+        let signal = evaluate(&history, &latest)
+            .expect("positive prices")
+            .expect("the directional grind now yields a signal");
+
+        assert_eq!(signal.severity, Severity::Watch);
+        assert!(
+            signal.reason.contains("directional run"),
+            "reason should carry the directional-run fragment: {}",
+            signal.reason
+        );
+        assert_eq!(
+            signal.metrics.directional_run.expect("run computed"),
+            6.0,
+            "the projected metric carries the signed run length"
+        );
+        for fragment in [
+            "window return",
+            "drawdown",
+            "volume surge",
+            "robust z-score",
+            "jump",
+            "volatility regime",
+        ] {
+            assert!(
+                !signal.reason.contains(fragment),
+                "only the directional-run signal should lift the tape, found {fragment:?}: {}",
+                signal.reason
+            );
+        }
     }
 
     #[test]

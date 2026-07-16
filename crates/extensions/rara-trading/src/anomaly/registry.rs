@@ -14,19 +14,19 @@
 
 //! The anomaly signal registry: a minimal [`Signal`] trait, the structured
 //! per-signal output, the shared per-evaluation context, and the builtin
-//! registry of the five signals the evaluator ships with.
+//! registry of the seven signals the evaluator ships with.
 //!
 //! This is the extensibility seam for layer-② decision support: a new signal
 //! is "implement [`Signal`] + add one line to [`builtin_registry`]", with no
-//! edit to the core evaluation loop in [`super::evaluator`]. The five builtin
+//! edit to the core evaluation loop in [`super::evaluator`]. The builtin
 //! signals are thin adapters over the pure functions in [`super::rules`] and
 //! [`super::statistics`]; those pure functions remain the computational core.
 
 use bon::Builder;
 
 use super::{
-    rules::{MaxDrawdownSignal, VolumeSurgeSignal, WindowReturnSignal},
-    statistics::{JumpSignal, RobustZScoreSignal},
+    rules::{DirectionalRunSignal, MaxDrawdownSignal, VolumeSurgeSignal, WindowReturnSignal},
+    statistics::{JumpSignal, RobustZScoreSignal, VolatilityRegimeSignal},
 };
 
 /// Shared inputs prepared once per evaluation and handed to every signal, so no
@@ -100,14 +100,20 @@ pub(crate) trait Signal {
 }
 
 /// An ordered set of signals the evaluator walks. The builtin order encodes the
-/// reason-fragment order (drawdown, return, volume, z-score, jump), so the
-/// `reason` string is byte-for-byte stable.
+/// reason-fragment order (drawdown, return, volume, z-score, jump, volatility
+/// regime, directional run), so the `reason` string is byte-for-byte stable.
 pub(crate) type SignalRegistry = Vec<Box<dyn Signal>>;
 
-/// The five signals the anomaly evaluator ships with, in reason-fragment order.
+/// The seven signals the anomaly evaluator ships with, in reason-fragment
+/// order.
 ///
-/// Adding a sixth signal is a one-line extension here plus its [`Signal`] impl;
-/// the core loop in [`super::evaluator::evaluate_with`] does not change.
+/// The first five are the magnitude/outlier detectors; `volatility_regime` and
+/// `directional_run` are appended tail-risk detectors that catch a sustained
+/// dispersion expansion and a persistent one-directional grind the first five
+/// structurally miss. Adding a further signal is a one-line extension here plus
+/// its [`Signal`] impl; the core loop in [`super::evaluator::evaluate_with`]
+/// does not change. New signals are **appended** so the existing
+/// reason-fragment order stays byte-for-byte stable.
 pub(crate) fn builtin_registry() -> SignalRegistry {
     vec![
         Box::new(MaxDrawdownSignal),
@@ -115,5 +121,7 @@ pub(crate) fn builtin_registry() -> SignalRegistry {
         Box::new(VolumeSurgeSignal),
         Box::new(RobustZScoreSignal),
         Box::new(JumpSignal),
+        Box::new(VolatilityRegimeSignal),
+        Box::new(DirectionalRunSignal),
     ]
 }
