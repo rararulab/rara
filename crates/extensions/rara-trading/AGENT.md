@@ -7,7 +7,7 @@ and evaluates newly closed candles for market anomalies — emitting ordinary
 kernel `FeedEvent`s and, on the app side, enriched synthetic directives.
 
 ## Architecture
-Five modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
+Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
 
 - `dispatch/` — the **market-signal facade** (`pipeline.rs`). `on_feed_event`
   is the single entry point that runs the whole persist → upsert → evaluate →
@@ -57,6 +57,23 @@ Five modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   volume, z-score, jump), so keep it stable. `evaluate_with` is the test seam
   (`registered_signal_participates_in_evaluation` injects an extra signal).
 
+- `backtest/` — signal-accuracy backtest harness (issue 2437), the first rung
+  of layer ② (decision support). It replays a single symbol/timeframe stream of
+  stored candles through `anomaly::evaluate` and, for every bar the evaluator
+  fires on, applies one **fixed naive rule** (enter long at the trigger bar's
+  close, exit `HOLD_BARS` bars later at that bar's close) to answer "is a signal
+  actually any good?". `runner.rs` holds `run_backtest(candles) ->
+  Result<BacktestReport>` (the **pure** deterministic core the unit tests bind
+  to) and the thin async `backtest(repo, query)` entry that fetches via
+  `MarketDataRepository::candles` and delegates to the core — the same
+  pure-core/async-entry seam as `anomaly::evaluate` / the dispatch adapter.
+  `report.rs` = `BacktestReport` (`bon::Builder`, the fixed metric set:
+  `trigger_count`, `evaluated_trade_count`, `win_count`, `win_rate`, signed
+  `mean`/`median_forward_return`, strategy `max_drawdown`); `error.rs` =
+  `BacktestError` (snafu; `Evaluate` wraps `AnomalyError`, `FetchCandles` wraps
+  the repository read). It only **consumes** `anomaly::evaluate` and
+  `market_data`; it changes neither.
+
 The write→read→enrich wiring lives in `dispatch/pipeline.rs` (`on_feed_event`):
 it upserts the closed candle, pulls the window via `recent_candles`, runs
 `anomaly::evaluate`, and enriches `finance_directive` when a signal is
@@ -83,6 +100,21 @@ dispatch loop (`crates/app/src/lib.rs`).
 - **Candle selectors are normalized before storage** (venue lowercase, symbol
   uppercase, timeframe canonical). `recent_candles`/`latest_closed_candle`
   match on the normalized form.
+- **`backtest` has no look-ahead** — the number-one backtest bug. Signal
+  evaluation for bar `i` sees only `candles[i.saturating_sub(EVAL_WINDOW)..i]`
+  plus `latest = candles[i]`, never a bar `> i` (the same invariant `dispatch`
+  enforces with `end = Some(latest.open_time)`); forward return reads only bars
+  strictly after `i`. A trigger with fewer than `HOLD_BARS` bars remaining is
+  counted in `trigger_count` but **excluded** from `evaluated_trade_count` and
+  every P&L metric — never zero-filled. Consequence of violation: fabricated
+  edge that would ship a future ③ execution gate on a lie.
+- **The backtest unit is the composite `AnomalySignal`, and forward returns are
+  signed.** A "trigger" is one bar where `evaluate` returns `Some` (what
+  `dispatch` acts on) — not per-signal attribution (a documented future
+  extension). A trade wins **iff** its forward return is strictly `> 0.0`;
+  because the detectors are tail/volatility signals, a low win rate with a
+  negative mean is a valid, informative result. Report the signed mean/median;
+  do not take absolute value. `HOLD_BARS` is a `const`, never YAML.
 
 ## What NOT To Do
 - Do NOT change delivery policy (cooldown / hourly budget / `Silent` downgrade)
@@ -115,6 +147,18 @@ dispatch loop (`crates/app/src/lib.rs`).
   scale and masks a fresh move; use median/MAD (`statistics::robust_zscore`).
 - Do NOT compute log-returns on non-positive prices — `evaluate` returns
   `AnomalyError::NonPositivePrice` instead of producing garbage.
+- Do NOT grow `backtest` into a quant platform — **why:** it self-evaluates
+  rara's own signals with one fixed rule and a fixed metric set over a single
+  stream (issue 2437 Boundaries). No strategy DSL / selectable-or-parameterized
+  rule / parameter search / multi-asset portfolio / Python sandbox /
+  `BacktestArtifact` / transaction-cost model / paper-live execution — several
+  would cross the "NOT a quant platform for others" line. The heavier
+  `trading_backtest` research-desk tool is a separate later issue.
+- Do NOT add a `BacktestReport` field nothing reads, or emit `NaN` on an
+  empty/trigger-less stream — **why:** hollow output is forbidden
+  (`docs/guides/anti-patterns.md`); the empty result is `Option::None` (win
+  rate / returns) and `0.0` (drawdown), and every reported field is asserted by
+  a `runner.rs` test.
 
 ## Dependencies
 - Upstream: `rara-kernel` (`FeedEvent`, `Subscription`, tool traits).
