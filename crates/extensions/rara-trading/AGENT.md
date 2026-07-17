@@ -32,29 +32,47 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   `recent_candles(CandleRecentQuery)` returns the newest N candles ascending
   and is the rolling-window source for anomaly evaluation.
 - `anomaly/` — market-anomaly evaluation (issue 2415; generalized into a signal
-  registry in issue 2429). `evaluate(window, latest) ->
+  registry in issue 2429; tail-risk signals added in issue 2436).
+  `evaluate(window, latest) ->
   Result<Option<AnomalySignal>>` is a **pure** function of its candle inputs. It
   prepares the shared context once, walks a `SignalRegistry` collecting each
   signal's `SignalOutput`, projects those onto `AnomalyMetrics`, then classifies
   severity. `registry.rs` = the `Signal` trait (`name` / `evaluate` /
   `fragment`), `SignalOutput` (value / fired), `SignalContext` (shared
-  closes/returns/volumes), and `builtin_registry()`; the signal's stable name is
+  closes/returns/volumes), and `builtin_registry()` (**seven** builtin signals);
+  the signal's stable name is
   a static property of the `Signal` (used to route its value into
   `AnomalyMetrics`), not per-output data. `rules.rs` = L1 pure functions + their
   `Signal` adapters
-  (window return, rolling drawdown, volume surge); `statistics.rs` = L2 pure
+  (window return, rolling drawdown, volume surge, directional run — the signed
+  trailing same-sign return run that catches a persistent one-directional
+  grind); `statistics.rs` = L2 pure
   functions + adapters (MAD-based robust z-score, BNS realized-variance vs
-  bipower-variation jump test); `signal.rs` = `AnomalySignal` / `Severity` /
+  bipower-variation jump test, volatility regime — the recent-to-baseline
+  per-bar realized-variance ratio that catches a sustained dispersion
+  expansion); `signal.rs` = `AnomalySignal` / `Severity` /
   `AnomalyMetrics`; `error.rs` = `AnomalyError` (snafu). `evaluator.rs` holds the
   `evaluate` / `evaluate_with(&registry, …)` loop, the metrics projection, and
   `classify`.
 
+  `volatility_regime` and `directional_run` are **orthogonal** tail-risk
+  detectors: the first measures dispersion (magnitude), the second sign
+  persistence (direction). Both are structurally invisible to the first five —
+  a sustained variance regime is in-family for the single-bar MAD z-score and
+  diffusive for the BNS jump test; a slow grind crosses no magnitude threshold
+  and a monotonic path has no drawdown. Their trip thresholds are semantic
+  `const`s (`DIRECTIONAL_RUN_THRESHOLD = 6` bars, `VOLATILITY_REGIME_THRESHOLD =
+  4.0×`), **never** tuned to dodge a test fixture.
+
   **Extending the signal set** = implement `Signal` (a struct wrapping a pure
-  stat) + add one `Box::new(...)` line to `builtin_registry()`. The core loop in
-  `evaluate_with`, the metrics projection, and `classify` do not change — the
+  stat) + add one `Box::new(...)` line to `builtin_registry()` + (if the value
+  should reach the public trace) one `Option<f64>` `AnomalyMetrics` field and one
+  `.maybe_<field>(...)` line in `metrics_from`. The core loop in
+  `evaluate_with` and `classify` do not change — the
   new signal contributes to the reason (via its `fragment`) and the fired-count.
   `builtin_registry()` order **is** the reason-fragment order (drawdown, return,
-  volume, z-score, jump), so keep it stable. `evaluate_with` is the test seam
+  volume, z-score, jump, volatility regime, directional run), so append new
+  signals and keep the existing order stable. `evaluate_with` is the test seam
   (`registered_signal_participates_in_evaluation` injects an extra signal).
 
 - `backtest/` — signal-accuracy backtest harness (issue 2437), the first rung

@@ -56,18 +56,24 @@ impl Severity {
 pub struct AnomalyMetrics {
     /// Signed cumulative return across the window, as a fraction (`0.05` =
     /// +5%).
-    pub window_return: f64,
+    pub window_return:     f64,
     /// Deepest peak-to-trough decline across the window, as a positive
     /// fraction.
-    pub max_drawdown:  f64,
+    pub max_drawdown:      f64,
     /// Newest volume divided by the rolling mean volume, when computable.
-    pub volume_surge:  Option<f64>,
+    pub volume_surge:      Option<f64>,
     /// MAD-based robust z-score of the newest log-return, when computable.
-    pub robust_zscore: Option<f64>,
+    pub robust_zscore:     Option<f64>,
     /// BNS jump ratio (realized variance / bipower variation), when computable.
-    pub jump_ratio:    Option<f64>,
+    pub jump_ratio:        Option<f64>,
     /// Whether the jump ratio crossed the discontinuity threshold.
-    pub jump_flagged:  bool,
+    pub jump_flagged:      bool,
+    /// Recent-to-baseline per-bar realized-variance ratio, when computable —
+    /// the volatility-regime signal's value.
+    pub volatility_regime: Option<f64>,
+    /// Signed trailing same-sign run length in bars (`+N` up-run, `-N`
+    /// down-run), when computable — the directional-run signal's value.
+    pub directional_run:   Option<f64>,
 }
 
 /// A detected market anomaly: a severity, a human-readable reason naming the
