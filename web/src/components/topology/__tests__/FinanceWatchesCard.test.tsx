@@ -100,6 +100,7 @@ function catalogEntry(partial: Partial<FeedCatalogEntry> & { id: string }): Feed
     entry.configured_timeframes = partial.configured_timeframes;
   }
   if (partial.subscriptions !== undefined) entry.subscriptions = partial.subscriptions;
+  if (partial.load !== undefined) entry.load = partial.load;
   return entry;
 }
 
@@ -332,6 +333,131 @@ describe('FinanceWatchesCard', () => {
 
     expect(await screen.findByText('Provider binance')).toBeInTheDocument();
     expect(screen.getByText('Provider longbridge')).toBeInTheDocument();
+  });
+
+  it('shows_catalog_kline_load_before_watch', async () => {
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        feed_type: 'market_candle',
+        provider: 'binance',
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT', 'ETHUSDT'],
+        configured_timeframes: ['1m'],
+        load: {
+          user_subscription_count: 0,
+          subscribed_market_stream_count: 0,
+          configured_market_stream_count: 2,
+          configured_market_poll_request_count: 2,
+          configured_market_requests_per_second: 2 / 60,
+          configured_market_request_budget_per_second: 10,
+          configured_market_minimum_safe_interval_secs: 5,
+          configured_market_fanout_safe_to_start: true,
+          configured_market_fanout_diagnostic: null,
+        },
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(
+      await screen.findByText('2 configured streams · 2 req/poll · 0.03 req/s'),
+    ).toBeInTheDocument();
+  });
+
+  it('warns_when_catalog_kline_source_fanout_is_unsafe_before_watch', async () => {
+    catalogMock.mockResolvedValue([
+      catalogEntry({
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        feed_type: 'market_candle',
+        provider: 'binance',
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT'],
+        configured_timeframes: ['1m'],
+        load: {
+          user_subscription_count: 1,
+          subscribed_market_stream_count: 100,
+          configured_market_stream_count: 200,
+          configured_market_poll_request_count: 200,
+          configured_market_requests_per_second: 40,
+          configured_market_request_budget_per_second: 10,
+          configured_market_minimum_safe_interval_secs: 20,
+          configured_market_fanout_safe_to_start: false,
+          configured_market_fanout_diagnostic:
+            'market candle watchlist fans out to 200 requests per poll at interval_secs=5; increase interval_secs to at least 20.',
+        },
+      }),
+    ]);
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('unsafe fan-out')).toBeInTheDocument();
+    expect(
+      screen.getByText('200 configured streams · 200 req/poll · 40 req/s · 100 subscribed streams'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'market candle watchlist fans out to 200 requests per poll at interval_secs=5; increase interval_secs to at least 20.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows_curated_kline_bundle_load_before_watch', async () => {
+    const source = catalogEntry({
+      id: 'binance-major-crypto-15m',
+      name: 'Binance Major Crypto 15m',
+      feed_type: 'market_candle',
+      source_name: 'finance-binance-major-crypto-15m',
+      provider: 'binance',
+      venue: 'binance',
+      configured_symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'],
+      configured_timeframes: ['15m'],
+      load: {
+        user_subscription_count: 0,
+        subscribed_market_stream_count: 0,
+        configured_market_stream_count: 5,
+        configured_market_poll_request_count: 5,
+        configured_market_requests_per_second: 5 / 300,
+        configured_market_request_budget_per_second: 10,
+        configured_market_minimum_safe_interval_secs: 5,
+        configured_market_fanout_safe_to_start: true,
+        configured_market_fanout_diagnostic: null,
+      },
+    });
+    catalogMock.mockResolvedValue([]);
+    financeBundlesMock.mockResolvedValue({
+      bundles: [
+        financeBundle({
+          id: 'binance-major-crypto-15m',
+          name: 'Binance Major Crypto 15m',
+          feed_types: ['market_candle'],
+          providers: ['binance'],
+          catalog_source_ids: ['binance-major-crypto-15m'],
+          sources: [source],
+        }),
+      ],
+      count: 1,
+    });
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(
+      await screen.findByText('5 configured streams · 5 req/poll · 0.02 req/s'),
+    ).toBeInTheDocument();
   });
 
   it('creates_session_watch_from_catalog_kline_source_with_configured_selectors', async () => {
