@@ -823,6 +823,8 @@ pub(super) struct FinanceSubscribeFeedBundleResult {
     pub subscription_kind:       String,
     pub catalog_source_ids:      Vec<String>,
     pub bundle_status:           FinanceFeedBundleEntry,
+    pub unsubscribe_hint:        Option<FinanceSubscriptionUnsubscribeHint>,
+    pub events_hint:             Option<FinanceSubscriptionEventsHint>,
     pub diagnostic_hint:         Option<FinanceSubscriptionDiagnosticHint>,
     pub market_data_hint:        Option<FinanceSubscriptionMarketDataHint>,
     pub news_subscription:       Option<FinanceSubscribeNewsResult>,
@@ -916,6 +918,8 @@ pub(super) struct FinanceSubscribeInstrumentsParams {
 pub(super) struct FinanceSubscribeInstrumentsResult {
     pub subscription_id: Uuid,
     pub subscription_created: bool,
+    pub unsubscribe_hint: Option<FinanceSubscriptionUnsubscribeHint>,
+    pub events_hint: Option<FinanceSubscriptionEventsHint>,
     pub diagnostic_tool: Option<String>,
     pub diagnostic_subscription_id: Option<Uuid>,
     pub diagnostic_hint: Option<FinanceSubscriptionDiagnosticHint>,
@@ -2199,6 +2203,8 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                 subscription_kind: "rss_article".to_owned(),
                 catalog_source_ids: bundle.catalog_source_ids,
                 bundle_status,
+                unsubscribe_hint: result.unsubscribe_hint.clone(),
+                events_hint: result.events_hint.clone(),
                 diagnostic_hint: None,
                 market_data_hint: None,
                 news_subscription: Some(result),
@@ -2244,6 +2250,8 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                 .await?;
             let diagnostic_hint = result.diagnostic_hint.clone();
             let market_data_hint = result.market_data_hint.clone();
+            let unsubscribe_hint = result.unsubscribe_hint.clone();
+            let events_hint = result.events_hint.clone();
             let bundle_status = feed_bundle_entry_for_context(
                 bundle.clone(),
                 &self.data_feed_svc,
@@ -2258,6 +2266,8 @@ impl ToolExecute for FinanceSubscribeFeedBundleTool {
                 subscription_kind: "market_candle_closed".to_owned(),
                 catalog_source_ids: bundle.catalog_source_ids,
                 bundle_status,
+                unsubscribe_hint,
+                events_hint,
                 diagnostic_hint,
                 market_data_hint,
                 news_subscription: None,
@@ -2666,6 +2676,8 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
         Ok(FinanceSubscribeInstrumentsResult {
             subscription_id,
             subscription_created,
+            unsubscribe_hint: hints.unsubscribe,
+            events_hint: hints.events,
             diagnostic_tool: Some("finance_diagnose_candle_subscriptions".to_owned()),
             diagnostic_subscription_id: Some(subscription_id),
             diagnostic_hint: hints.diagnostic,
@@ -4255,6 +4267,8 @@ fn subscription_entry(
 }
 
 struct InstrumentSubscriptionResultHints {
+    unsubscribe:    Option<FinanceSubscriptionUnsubscribeHint>,
+    events:         Option<FinanceSubscriptionEventsHint>,
     diagnostic:     Option<FinanceSubscriptionDiagnosticHint>,
     market_data:    Option<FinanceSubscriptionMarketDataHint>,
     latest_candle:  Option<FinanceSubscriptionLatestCandleHint>,
@@ -4292,6 +4306,8 @@ fn instrument_subscription_result_hints(
     };
 
     InstrumentSubscriptionResultHints {
+        unsubscribe:    Some(unsubscribe_hint_for_subscription(subscription_id)),
+        events:         events_hint_for_subscription(&subscription),
         diagnostic:     diagnostic_hint_for_subscription(&subscription),
         market_data:    market_data_hint_for_subscription(&subscription),
         latest_candle:  latest_candle_hint_for_subscription(&subscription),
@@ -5411,6 +5427,25 @@ mod tests {
         assert_eq!(news.cooldown_secs, 120);
         assert_eq!(news.max_immediate_per_hour, 3);
         assert_news_result_hints(news);
+        let bundle_unsubscribe = result
+            .unsubscribe_hint
+            .as_ref()
+            .expect("RSS bundle subscribe result should include top-level unsubscribe hint");
+        assert_unsubscribe_hint(bundle_unsubscribe, news.subscription_id);
+        let bundle_events = result
+            .events_hint
+            .as_ref()
+            .expect("RSS bundle subscribe result should include top-level events hint");
+        assert_events_hint(
+            bundle_events,
+            &[
+                "finance-fed-press-releases",
+                "finance-fed-h15-announcements",
+                "finance-fed-h10-announcements",
+                "finance-sec-press-releases",
+            ],
+            &["rss_article"],
+        );
 
         let feeds = svc.list_feeds().await.unwrap();
         assert_eq!(feeds.len(), 4);
@@ -5567,6 +5602,34 @@ mod tests {
             Some("binance-major-crypto-15m")
         );
         assert_eq!(instruments.venue, "binance");
+        let instrument_unsubscribe = instruments
+            .unsubscribe_hint
+            .as_ref()
+            .expect("market bundle instrument result should include unsubscribe hint");
+        assert_unsubscribe_hint(instrument_unsubscribe, instruments.subscription_id);
+        let instrument_events = instruments
+            .events_hint
+            .as_ref()
+            .expect("market bundle instrument result should include events hint");
+        assert_events_hint(
+            instrument_events,
+            &["finance-binance-major-crypto-15m"],
+            &["market_candle_closed"],
+        );
+        let bundle_unsubscribe = result
+            .unsubscribe_hint
+            .as_ref()
+            .expect("market bundle subscribe result should include top-level unsubscribe hint");
+        assert_unsubscribe_hint(bundle_unsubscribe, instruments.subscription_id);
+        let bundle_events = result
+            .events_hint
+            .as_ref()
+            .expect("market bundle subscribe result should include top-level events hint");
+        assert_events_hint(
+            bundle_events,
+            &["finance-binance-major-crypto-15m"],
+            &["market_candle_closed"],
+        );
         assert_eq!(
             instruments.symbols,
             ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
@@ -5644,6 +5707,22 @@ mod tests {
     }
 
     fn assert_broad_instrument_result_hints(result: &FinanceSubscribeInstrumentsResult) {
+        let unsubscribe_hint = result
+            .unsubscribe_hint
+            .as_ref()
+            .expect("instrument subscription result should include unsubscribe hint");
+        assert_unsubscribe_hint(unsubscribe_hint, result.subscription_id);
+
+        let events_hint = result
+            .events_hint
+            .as_ref()
+            .expect("instrument subscription result should include events hint");
+        assert_events_hint(
+            events_hint,
+            &["finance-binance-market-candles"],
+            &["market_candle_closed"],
+        );
+
         let result_market_data_hint = result
             .market_data_hint
             .as_ref()
@@ -5690,6 +5769,40 @@ mod tests {
         );
         assert!(hint.required_params.is_empty());
         assert_eq!(hint.optional_params, ["as_of", "stale_after_secs"]);
+    }
+
+    fn assert_unsubscribe_hint(
+        hint: &super::FinanceSubscriptionUnsubscribeHint,
+        subscription_id: Uuid,
+    ) {
+        assert_eq!(hint.tool, "finance_unsubscribe");
+        assert_eq!(
+            hint.default_params,
+            serde_json::json!({
+                "subscription_ids": [subscription_id],
+            })
+        );
+        assert!(hint.required_params.is_empty());
+        assert_eq!(hint.optional_params, ["dry_run"]);
+    }
+
+    fn assert_events_hint(
+        hint: &super::FinanceSubscriptionEventsHint,
+        source_names: &[&str],
+        event_kinds: &[&str],
+    ) {
+        assert_eq!(hint.tool, "finance_list_feed_events");
+        assert_eq!(
+            hint.default_params,
+            serde_json::json!({
+                "source_names": source_names,
+                "event_kinds": event_kinds,
+                "since": "24h",
+                "limit": 20,
+            })
+        );
+        assert!(hint.required_params.is_empty());
+        assert_eq!(hint.optional_params, ["since", "limit", "offset"]);
     }
 
     fn assert_binance_market_feed_config(feeds: &[DataFeedConfig]) {
@@ -5788,6 +5901,22 @@ mod tests {
     }
 
     fn assert_single_stream_instrument_result_hints(result: &FinanceSubscribeInstrumentsResult) {
+        let unsubscribe_hint = result
+            .unsubscribe_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include unsubscribe hint");
+        assert_unsubscribe_hint(unsubscribe_hint, result.subscription_id);
+
+        let events_hint = result
+            .events_hint
+            .as_ref()
+            .expect("single-stream subscribe result should include events hint");
+        assert_events_hint(
+            events_hint,
+            &["finance-binance-market-candles"],
+            &["market_candle_closed"],
+        );
+
         let latest = result
             .latest_candle_hint
             .as_ref()
