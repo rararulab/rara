@@ -203,6 +203,7 @@ pub struct FinanceCandleStream {
     pub freshness_hint:       FinanceCandleStreamToolHint,
     pub gaps_hint:            FinanceCandleStreamToolHint,
     pub query_candles_hint:   FinanceCandleStreamToolHint,
+    pub evaluate_signal_hint: FinanceCandleStreamToolHint,
     pub backtest_signal_hint: FinanceCandleStreamToolHint,
 }
 
@@ -758,6 +759,12 @@ impl From<CandleStreamSummary> for FinanceCandleStream {
                 &symbol,
                 &timeframe,
             ),
+            evaluate_signal_hint: evaluate_signal_hint_for_stream(
+                &source_name,
+                &venue,
+                &symbol,
+                &timeframe,
+            ),
             backtest_signal_hint: backtest_signal_hint_for_stream(
                 &source_name,
                 &venue,
@@ -873,6 +880,20 @@ fn backtest_signal_hint_for_stream(
         default_params:  stream_default_params(source_name, venue, symbol, timeframe),
         required_params: ["start", "end"].into_iter().map(str::to_owned).collect(),
         optional_params: vec!["limit".to_owned()],
+    }
+}
+
+fn evaluate_signal_hint_for_stream(
+    source_name: &str,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+) -> FinanceCandleStreamToolHint {
+    FinanceCandleStreamToolHint {
+        tool:            "finance_evaluate_candle_signal".to_owned(),
+        default_params:  stream_default_params(source_name, venue, symbol, timeframe),
+        required_params: Vec::new(),
+        optional_params: vec!["open_time".to_owned()],
     }
 }
 
@@ -1462,6 +1483,29 @@ mod tests {
         assert_eq!(
             result.streams[0].query_candles_hint.optional_params,
             ["limit"]
+        );
+        assert_eq!(
+            result.streams[0].evaluate_signal_hint.tool,
+            "finance_evaluate_candle_signal"
+        );
+        assert_eq!(
+            result.streams[0].evaluate_signal_hint.default_params,
+            serde_json::json!({
+                "source_name": "binance-spot",
+                "venue": "binance",
+                "symbol": "ETHUSDT",
+                "timeframe": "1m",
+            })
+        );
+        assert!(
+            result.streams[0]
+                .evaluate_signal_hint
+                .required_params
+                .is_empty()
+        );
+        assert_eq!(
+            result.streams[0].evaluate_signal_hint.optional_params,
+            ["open_time"]
         );
         assert_eq!(
             result.streams[0].backtest_signal_hint.tool,
