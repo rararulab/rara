@@ -24,6 +24,7 @@ import type {
   CandleStreamsResponse,
   FeedCatalogEntry,
   FinanceFeedBundle,
+  FinanceFeedBundleQuickStartHint,
   FinanceSubscription,
   FinanceSubscriptionsResponse,
 } from '@/api/data-feeds';
@@ -164,6 +165,37 @@ function financeBundle(partial: Partial<FinanceFeedBundle> & { id: string }): Fi
   };
 }
 
+function bundleQuickStartHint(
+  partial: Partial<FinanceFeedBundleQuickStartHint> & { bundle_id: string },
+): FinanceFeedBundleQuickStartHint {
+  return {
+    bundle_id: partial.bundle_id,
+    name: partial.name ?? partial.bundle_id,
+    feed_types: partial.feed_types ?? ['rss'],
+    providers: partial.providers ?? [],
+    can_start_now: partial.can_start_now ?? true,
+    requires_configuration: partial.requires_configuration ?? false,
+    subscribe_bundle_hint: partial.subscribe_bundle_hint ?? {
+      tool: 'finance_subscribe_feed_bundle',
+      default_params: {
+        bundle_id: partial.bundle_id,
+        start_now: true,
+      },
+      required_params: [],
+      optional_params: ['delivery', 'start_now'],
+    },
+    configure_hints: partial.configure_hints ?? [],
+    list_sources_hint: partial.list_sources_hint ?? {
+      tool: 'finance_list_feed_sources',
+      default_params: {
+        bundle_ids: [partial.bundle_id],
+      },
+      required_params: [],
+      optional_params: ['feed_types'],
+    },
+  };
+}
+
 beforeEach(() => {
   catalogMock.mockReset();
   financeBundlesMock.mockReset();
@@ -257,6 +289,109 @@ describe('FinanceWatchesCard', () => {
         timeframes: ['15m'],
       });
     });
+  });
+
+  it('surfaces_quick_start_hints_for_curated_bundles', async () => {
+    const source = catalogEntry({
+      id: 'macro-news',
+      name: 'Macro News',
+      source_name: 'finance-macro-news',
+      enabled: true,
+      transport_template: { url: 'https://example.com/macro.xml' },
+    });
+    catalogMock.mockResolvedValue([]);
+    financeBundlesMock.mockResolvedValue({
+      bundles: [
+        financeBundle({
+          id: 'macro-news',
+          name: 'Macro News',
+          catalog_source_ids: ['macro-news'],
+          sources: [source],
+        }),
+      ],
+      count: 1,
+      quick_start_hints: [
+        bundleQuickStartHint({
+          bundle_id: 'macro-news',
+          name: 'Macro News',
+          can_start_now: true,
+        }),
+      ],
+    });
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('Rara quick start')).toBeInTheDocument();
+    expect(screen.getByText('Rara can quick-start this bundle from chat.')).toBeInTheDocument();
+  });
+
+  it('uses_quick_start_configure_hint_for_bundle_settings_target', async () => {
+    const source = catalogEntry({
+      id: 'longbridge-default-candles',
+      name: 'LongBridge Market Candles',
+      feed_type: 'market_candle',
+      provider: 'longbridge',
+      enabled: false,
+      requires_configuration: true,
+      setup_hint: 'Configure LongBridge credentials and selectors before enabling.',
+    });
+    catalogMock.mockResolvedValue([]);
+    financeBundlesMock.mockResolvedValue({
+      bundles: [
+        financeBundle({
+          id: 'longbridge-market-data',
+          name: 'LongBridge Market Data',
+          feed_types: ['market_candle'],
+          providers: ['longbridge'],
+          catalog_source_ids: ['longbridge-default-candles'],
+          sources: [source],
+          requires_configuration: true,
+          can_enable: false,
+        }),
+      ],
+      count: 1,
+      quick_start_hints: [
+        bundleQuickStartHint({
+          bundle_id: 'longbridge-market-data',
+          name: 'LongBridge Market Data',
+          feed_types: ['market_candle'],
+          providers: ['longbridge'],
+          can_start_now: false,
+          requires_configuration: true,
+          subscribe_bundle_hint: null,
+          configure_hints: [
+            {
+              action: 'open_settings',
+              section: 'data-feeds',
+              default_params: {
+                dataFeedCatalogId: 'longbridge-market-candles',
+              },
+              required_params: [],
+              optional_params: ['dataFeedCatalogId'],
+            },
+          ],
+        }),
+      ],
+    });
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('setup required')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure' }));
+
+    expect(openSettingsMock).toHaveBeenCalledWith('data-feeds', {
+      dataFeedCatalogId: 'longbridge-market-candles',
+    });
+    expect(createFinanceSubscriptionMock).not.toHaveBeenCalled();
+    expect(enableCatalogEntryMock).not.toHaveBeenCalled();
   });
 
   it('enables_all_ready_sources_in_a_curated_bundle_before_watch', async () => {

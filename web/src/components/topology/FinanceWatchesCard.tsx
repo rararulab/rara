@@ -23,6 +23,7 @@ import {
   type CreateFinanceSubscriptionRequest,
   type FeedCatalogEntry,
   type FinanceFeedBundle,
+  type FinanceFeedBundleQuickStartHint,
   type FinanceEventKind,
   type FinanceSubscription,
 } from '@/api/data-feeds';
@@ -137,6 +138,9 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
 
   const entries = (catalogQuery.data ?? []).filter(isFinanceWatchableEntry);
   const bundles = bundlesQuery.data?.bundles ?? [];
+  const bundleQuickStartHints = new Map(
+    (bundlesQuery.data?.quick_start_hints ?? []).map((hint) => [hint.bundle_id, hint]),
+  );
   const candleStreams = candleStreamsQuery.data?.streams ?? [];
   const candleStreamHasMore = candleStreamsQuery.data?.has_more ?? false;
   const sessionSubscriptions = (subscriptionsQuery.data?.subscriptions ?? []).filter(
@@ -195,6 +199,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
               <div className="space-y-2">
                 <div className="text-[11px] font-medium text-muted-foreground">Curated bundles</div>
                 {bundles.map((bundle) => {
+                  const quickStartHint = bundleQuickStartHints.get(bundle.id);
                   const matchingSubscriptions = sessionSubscriptions.filter((subscription) =>
                     subscriptionMatchesBundle(subscription, bundle),
                   );
@@ -206,7 +211,12 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                   const configurationSource = bundle.sources.find(
                     (source) => !source.enabled && source.requires_configuration,
                   );
-                  const needsConfiguration = !subscribed && configurationSource != null;
+                  const configurationSourceId =
+                    quickStartConfigureSourceId(quickStartHint) ?? configurationSource?.id ?? null;
+                  const needsConfiguration = !subscribed && configurationSourceId != null;
+                  const quickStartAvailable = !subscribed && quickStartHint?.can_start_now === true;
+                  const quickStartNeedsConfiguration =
+                    !subscribed && quickStartHint?.requires_configuration === true;
                   const pending =
                     (enableBundleMutation.isPending &&
                       enableBundleMutation.variables?.id === bundle.id) ||
@@ -244,6 +254,16 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                                 watching
                               </Badge>
                             )}
+                            {quickStartAvailable && (
+                              <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                                Rara quick start
+                              </Badge>
+                            )}
+                            {quickStartNeedsConfiguration && (
+                              <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                                setup required
+                              </Badge>
+                            )}
                             {fanoutDiagnostic && (
                               <Badge
                                 variant="outline"
@@ -264,6 +284,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                               bundle,
                               canEnableInline,
                               needsConfiguration,
+                              quickStartAvailable,
                               subscribed,
                             })}
                           </p>
@@ -280,9 +301,9 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                           onClick={() => {
                             if (canEnableInline) {
                               enableBundleMutation.mutate(bundle);
-                            } else if (needsConfiguration && configurationSource) {
+                            } else if (needsConfiguration && configurationSourceId) {
                               openSettings('data-feeds', {
-                                dataFeedCatalogId: configurationSource.id,
+                                dataFeedCatalogId: configurationSourceId,
                               });
                             } else if (subscribed) {
                               unsubscribeBundleMutation.mutate(
@@ -513,11 +534,13 @@ function bundleLifecycleLabel({
   bundle,
   canEnableInline,
   needsConfiguration,
+  quickStartAvailable,
   subscribed,
 }: {
   bundle: FinanceFeedBundle;
   canEnableInline: boolean;
   needsConfiguration: boolean;
+  quickStartAvailable: boolean;
   subscribed: boolean;
 }): string {
   if (subscribed) return 'This session is watching this bundle.';
@@ -525,10 +548,21 @@ function bundleLifecycleLabel({
   if (canEnableInline) {
     return 'Enable bundle starts ingestion; Watch subscribes this session after sources are on.';
   }
+  if (quickStartAvailable) return 'Rara can quick-start this bundle from chat.';
   if (bundle.enabled_source_count < bundle.source_count) {
     return 'Some sources are off; enable or configure them before watching.';
   }
   return 'Sources are on; Watch subscribes this session without changing ingestion.';
+}
+
+function quickStartConfigureSourceId(
+  hint: FinanceFeedBundleQuickStartHint | undefined,
+): string | null {
+  const defaultParams = hint?.configure_hints[0]?.default_params;
+  const catalogSourceId = defaultParams?.dataFeedCatalogId ?? defaultParams?.catalog_source_id;
+  return typeof catalogSourceId === 'string' && catalogSourceId.trim()
+    ? catalogSourceId.trim()
+    : null;
 }
 
 function subscriptionRequestForEntry(
