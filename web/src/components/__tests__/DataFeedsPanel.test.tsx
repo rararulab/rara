@@ -233,6 +233,17 @@ describe('DataFeedsPanel', () => {
         venue: 'binance',
         configured_symbols: ['BTCUSDT', 'ETHUSDT'],
         configured_timeframes: ['1m'],
+        load: {
+          user_subscription_count: 0,
+          subscribed_market_stream_count: 0,
+          configured_market_stream_count: 2,
+          configured_market_poll_request_count: 2,
+          configured_market_requests_per_second: 2 / 60,
+          configured_market_request_budget_per_second: 10,
+          configured_market_minimum_safe_interval_secs: 5,
+          configured_market_fanout_safe_to_start: true,
+          configured_market_fanout_diagnostic: null,
+        },
       },
       {
         id: 'longbridge-market-candles',
@@ -266,6 +277,62 @@ describe('DataFeedsPanel', () => {
     expect(await screen.findByText('Default finance sources')).toBeInTheDocument();
     expect(screen.getByText('Provider binance')).toBeInTheDocument();
     expect(screen.getByText('Provider longbridge')).toBeInTheDocument();
+    expect(screen.getByText('2 configured streams · 2 req/poll · 0.03 req/s')).toBeInTheDocument();
+  });
+
+  it('warns when a catalog K-line source fan-out is unsafe', async () => {
+    catalogMock.mockResolvedValue([
+      {
+        id: 'binance-market-candles',
+        name: 'Binance Market Candles',
+        description: 'Public Binance spot OHLCV feed.',
+        feed_type: 'market_candle',
+        provider: 'binance',
+        tags: ['finance', 'market-data', 'crypto', 'binance'],
+        source_name: 'finance-binance-market-candles',
+        enabled: false,
+        feed_id: null,
+        requires_configuration: false,
+        setup_hint: null,
+        transport_template: {
+          provider: 'binance',
+          base_url: 'https://api.binance.com',
+          interval_secs: 5,
+          headers: {},
+          venue: 'binance',
+          symbols: ['BTCUSDT'],
+          timeframes: ['1m'],
+          max_candles_per_poll: 1000,
+        },
+        venue: 'binance',
+        configured_symbols: ['BTCUSDT'],
+        configured_timeframes: ['1m'],
+        load: {
+          user_subscription_count: 1,
+          subscribed_market_stream_count: 100,
+          configured_market_stream_count: 200,
+          configured_market_poll_request_count: 200,
+          configured_market_requests_per_second: 40,
+          configured_market_request_budget_per_second: 10,
+          configured_market_minimum_safe_interval_secs: 20,
+          configured_market_fanout_safe_to_start: false,
+          configured_market_fanout_diagnostic:
+            'market candle watchlist fans out to 200 requests per poll at interval_secs=5; increase interval_secs to at least 20.',
+        },
+      },
+    ] satisfies FeedCatalogEntry[]);
+
+    renderPanel();
+
+    expect(await screen.findByText('Unsafe fan-out')).toBeInTheDocument();
+    expect(
+      screen.getByText('200 configured streams · 200 req/poll · 40 req/s · 100 subscribed streams'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'market candle watchlist fans out to 200 requests per poll at interval_secs=5; increase interval_secs to at least 20.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('shows curated finance bundles and enables all ready sources', async () => {

@@ -64,7 +64,10 @@ use rara_trading::{
             DefaultFeedBundle, DefaultFeedSource, default_finance_feed_bundles,
             default_finance_feed_sources,
         },
-        market_candle::MarketCandleSource,
+        market_candle::{
+            DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND, MarketCandleSource,
+            market_candle_fanout_safety, unsafe_market_candle_fanout_message,
+        },
         rss::RssSource,
     },
     finance::registry::{
@@ -444,6 +447,7 @@ struct FeedCatalogEntryResponse {
     configured_symbols:     Vec<String>,
     configured_timeframes:  Vec<String>,
     subscriptions:          FeedCatalogSubscriptionResponse,
+    load:                   FeedCatalogLoadResponse,
 }
 
 /// Current user's finance subscription status for a built-in feed source.
@@ -451,6 +455,19 @@ struct FeedCatalogEntryResponse {
 struct FeedCatalogSubscriptionResponse {
     user_subscribed:       bool,
     user_subscription_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FeedCatalogLoadResponse {
+    user_subscription_count: usize,
+    subscribed_market_stream_count: usize,
+    configured_market_stream_count: Option<usize>,
+    configured_market_poll_request_count: Option<usize>,
+    configured_market_requests_per_second: Option<f64>,
+    configured_market_request_budget_per_second: Option<f64>,
+    configured_market_minimum_safe_interval_secs: Option<u64>,
+    configured_market_fanout_safe_to_start: Option<bool>,
+    configured_market_fanout_diagnostic: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1913,6 +1930,13 @@ fn catalog_response(
                 catalog_transport_string_list(source.transport.as_ref(), "symbols");
             let configured_timeframes =
                 catalog_transport_string_list(source.transport.as_ref(), "timeframes");
+            let load = catalog_load_response(
+                subscriptions,
+                &feed_name,
+                source.feed_type,
+                feed.map(|feed| &feed.transport)
+                    .or(source.transport.as_ref()),
+            );
             FeedCatalogEntryResponse {
                 id: source.id,
                 name: source.name,
@@ -1930,6 +1954,7 @@ fn catalog_response(
                 configured_symbols,
                 configured_timeframes,
                 subscriptions: catalog_subscription_response(subscriptions, &feed_name),
+                load,
             }
         })
         .collect()
@@ -1953,6 +1978,121 @@ fn catalog_subscription_response(
     FeedCatalogSubscriptionResponse {
         user_subscribed: !user_subscription_ids.is_empty(),
         user_subscription_ids,
+    }
+}
+
+fn catalog_load_response(
+    subscriptions: &[FinanceSubscription],
+    source_name: &str,
+    feed_type: FeedType,
+    transport: Option<&serde_json::Value>,
+) -> FeedCatalogLoadResponse {
+    let mut user_subscription_count = 0;
+    let mut market_streams = HashSet::new();
+
+    for subscription in subscriptions {
+        if !subscription
+            .source_names
+            .iter()
+            .any(|name| name == source_name)
+        {
+            continue;
+        }
+
+        user_subscription_count += 1;
+        if feed_type == FeedType::MarketCandle
+            && subscription
+                .event_kinds
+                .contains(&FinanceEventKind::MarketCandleClosed)
+        {
+            insert_market_subscription_streams(subscription, &mut market_streams);
+        }
+    }
+
+    let mut load = FeedCatalogLoadResponse {
+        user_subscription_count,
+        subscribed_market_stream_count: market_streams.len(),
+        configured_market_stream_count: None,
+        configured_market_poll_request_count: None,
+        configured_market_requests_per_second: None,
+        configured_market_request_budget_per_second: None,
+        configured_market_minimum_safe_interval_secs: None,
+        configured_market_fanout_safe_to_start: None,
+        configured_market_fanout_diagnostic: None,
+    };
+
+    if feed_type == FeedType::MarketCandle {
+        apply_configured_market_fanout_load(&mut load, transport);
+    }
+
+    load
+}
+
+fn insert_market_subscription_streams(
+    subscription: &FinanceSubscription,
+    market_streams: &mut HashSet<(String, String, String)>,
+) {
+    if subscription.symbols.is_empty() || subscription.timeframes.is_empty() {
+        return;
+    }
+    let venues = if subscription.venues.is_empty() {
+        vec![String::new()]
+    } else {
+        subscription.venues.clone()
+    };
+    for venue in &venues {
+        for symbol in &subscription.symbols {
+            for timeframe in &subscription.timeframes {
+                market_streams.insert((venue.clone(), symbol.clone(), timeframe.clone()));
+            }
+        }
+    }
+}
+
+fn apply_configured_market_fanout_load(
+    load: &mut FeedCatalogLoadResponse,
+    transport: Option<&serde_json::Value>,
+) {
+    let Some(transport) = transport else {
+        load.configured_market_fanout_diagnostic =
+            Some("market candle source has no transport config".to_owned());
+        return;
+    };
+    let provider = transport
+        .get("provider")
+        .and_then(serde_json::Value::as_str);
+    let symbols = catalog_transport_string_list(Some(transport), "symbols")
+        .into_iter()
+        .map(|symbol| symbol.to_ascii_uppercase())
+        .collect::<Vec<_>>();
+    let timeframes = catalog_transport_string_list(Some(transport), "timeframes")
+        .into_iter()
+        .map(|timeframe| timeframe.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    match market_candle_fanout_safety(
+        provider,
+        transport,
+        &symbols,
+        &timeframes,
+        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+    ) {
+        Ok(safety) => {
+            load.configured_market_stream_count = Some(safety.stream_count);
+            load.configured_market_poll_request_count = Some(safety.poll_request_count);
+            load.configured_market_requests_per_second = Some(safety.estimated_requests_per_second);
+            load.configured_market_request_budget_per_second =
+                Some(safety.request_budget_per_second);
+            load.configured_market_minimum_safe_interval_secs =
+                Some(safety.minimum_safe_interval_secs);
+            load.configured_market_fanout_safe_to_start = Some(safety.safe_to_start);
+            if !safety.safe_to_start {
+                load.configured_market_fanout_diagnostic =
+                    Some(unsafe_market_candle_fanout_message(&safety));
+            }
+        }
+        Err(err) => {
+            load.configured_market_fanout_diagnostic = Some(err.to_string());
+        }
     }
 }
 
@@ -2816,6 +2956,31 @@ mod tests {
             serde_json::json!(["BTCUSDT", "ETHUSDT"])
         );
         assert_eq!(binance["configured_timeframes"], serde_json::json!(["1m"]));
+        assert_eq!(binance["load"]["user_subscription_count"], 0);
+        assert_eq!(binance["load"]["subscribed_market_stream_count"], 0);
+        assert_eq!(binance["load"]["configured_market_stream_count"], 2);
+        assert_eq!(binance["load"]["configured_market_poll_request_count"], 2);
+        assert_eq!(
+            binance["load"]["configured_market_request_budget_per_second"],
+            10.0
+        );
+        assert_eq!(
+            binance["load"]["configured_market_minimum_safe_interval_secs"],
+            5
+        );
+        assert_eq!(
+            binance["load"]["configured_market_fanout_safe_to_start"],
+            true
+        );
+        assert!(binance["load"]["configured_market_fanout_diagnostic"].is_null());
+        assert!(
+            (binance["load"]["configured_market_requests_per_second"]
+                .as_f64()
+                .unwrap()
+                - 2.0 / 60.0)
+                .abs()
+                < f64::EPSILON
+        );
 
         let longbridge = entries
             .as_array()
@@ -2893,6 +3058,9 @@ mod tests {
             fed["subscriptions"]["user_subscription_ids"],
             serde_json::json!([subscription_id])
         );
+        assert_eq!(fed["load"]["user_subscription_count"], 1);
+        assert_eq!(fed["load"]["subscribed_market_stream_count"], 0);
+        assert!(fed["load"]["configured_market_stream_count"].is_null());
         assert_eq!(sec["subscriptions"]["user_subscribed"], false);
         assert_eq!(
             sec["subscriptions"]["user_subscription_ids"],
@@ -2980,6 +3148,19 @@ mod tests {
             binance["subscriptions"]["user_subscription_ids"],
             serde_json::json!([subscription_id])
         );
+        assert_eq!(binance["sources"][0]["load"]["user_subscription_count"], 1);
+        assert_eq!(
+            binance["sources"][0]["load"]["subscribed_market_stream_count"],
+            2
+        );
+        assert_eq!(
+            binance["sources"][0]["load"]["configured_market_stream_count"],
+            5
+        );
+        assert_eq!(
+            binance["sources"][0]["load"]["configured_market_fanout_safe_to_start"],
+            true
+        );
 
         let longbridge = bundles
             .iter()
@@ -2987,6 +3168,61 @@ mod tests {
             .unwrap();
         assert_eq!(longbridge["requires_configuration"], true);
         assert_eq!(longbridge["can_enable"], false);
+    }
+
+    #[test]
+    fn finance_catalog_reports_unsafe_persisted_market_candle_fanout() {
+        let now = Timestamp::now();
+        let symbols = (0..200)
+            .map(|index| format!("ASSET{index}USDT"))
+            .collect::<Vec<_>>();
+        let feed = DataFeedConfig::builder()
+            .id("wide-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 5,
+                "headers": {},
+                "venue": "binance",
+                "symbols": symbols,
+                "timeframes": ["1m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+
+        let entries = catalog_response(&[feed], &[]);
+        let binance = entries
+            .iter()
+            .find(|entry| entry.id == "binance-market-candles")
+            .unwrap();
+
+        assert_eq!(binance.load.configured_market_stream_count, Some(200));
+        assert_eq!(binance.load.configured_market_poll_request_count, Some(200));
+        assert_eq!(
+            binance.load.configured_market_minimum_safe_interval_secs,
+            Some(20)
+        );
+        assert_eq!(
+            binance.load.configured_market_fanout_safe_to_start,
+            Some(false)
+        );
+        assert!(
+            binance
+                .load
+                .configured_market_fanout_diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| {
+                    diagnostic.contains("fans out to 200 requests per poll")
+                        && diagnostic.contains("at least 20")
+                })
+        );
     }
 
     #[tokio::test]
