@@ -39,6 +39,7 @@ use rara_trading::{
     finance::registry::{
         FinanceDelivery, FinanceEventKind, FinanceSubscription, FinanceSubscriptionRegistry,
     },
+    market_data::Timeframe,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,9 @@ const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 const DEFAULT_FEED_EVENT_LIMIT: i64 = 20;
 const MAX_FEED_EVENT_LIMIT: i64 = 200;
 const DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID: &str = "binance-market-candles";
+const DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 10.0;
+const MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 100.0;
+const MIN_MARKET_CANDLE_INTERVAL_SECS: u64 = 5;
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(super) struct FinanceListFeedBundlesParams {
@@ -181,6 +185,59 @@ pub(super) struct FinanceFeedBundleListSourcesHint {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceFeedBundleSubscribeHint {
     pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct FinancePlanInstrumentWatchlistParams {
+    /// Built-in market-candle source id from `finance_list_feed_sources`.
+    /// Defaults to `binance-market-candles`.
+    #[serde(default)]
+    pub catalog_source_id:       Option<String>,
+    /// Instrument symbols to monitor, for example `BTCUSDT`.
+    pub symbols:                 Vec<String>,
+    /// Candle intervals to monitor, for example `1m`, `5m`, or `15m`.
+    pub timeframes:              Vec<String>,
+    /// Conservative request-rate budget used to judge whether the source's
+    /// configured polling interval is safe for this watchlist. Defaults to 10.
+    #[serde(default)]
+    pub max_requests_per_second: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinancePlanInstrumentWatchlistResult {
+    pub catalog_source_id: String,
+    pub source_name: String,
+    pub provider: Option<String>,
+    pub venue: String,
+    pub symbols: Vec<String>,
+    pub timeframes: Vec<String>,
+    pub stream_count: usize,
+    pub poll_request_count: usize,
+    pub configured_interval_secs: u64,
+    pub estimated_requests_per_second: f64,
+    pub request_budget_per_second: f64,
+    pub minimum_safe_interval_secs: u64,
+    pub safe_to_start: bool,
+    pub warning: Option<String>,
+    pub subscribe_hint: FinanceInstrumentWatchlistSubscribeHint,
+    pub configure_hint: Option<FinanceInstrumentWatchlistConfigureHint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceInstrumentWatchlistSubscribeHint {
+    pub tool:            String,
+    pub default_params:  serde_json::Value,
+    pub required_params: Vec<String>,
+    pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceInstrumentWatchlistConfigureHint {
+    pub action:          String,
+    pub section:         String,
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
     pub optional_params: Vec<String>,
@@ -908,6 +965,20 @@ pub(super) struct FinanceListFeedSourcesTool {
 
 #[derive(ToolDef)]
 #[tool(
+    name = "finance_plan_instrument_watchlist",
+    description = "Plan a market-candle watchlist against a built-in finance feed source before \
+                   subscribing. This normalizes symbols/timeframes, estimates provider poll \
+                   fan-out, and returns safe finance_subscribe_instruments parameters. Use this \
+                   for large watchlists or when the user asks whether rara can track many \
+                   instruments. This is read-only and never places trades.",
+    tier = "deferred",
+    read_only,
+    concurrency_safe
+)]
+pub(super) struct FinancePlanInstrumentWatchlistTool;
+
+#[derive(ToolDef)]
+#[tool(
     name = "finance_list_feed_events",
     description = "List recent persisted events for finance RSS or market-candle feed sources. \
                    Use this after subscribing or diagnosing a feed when the user asks what recent \
@@ -1071,6 +1142,141 @@ impl FinanceListFeedSourcesTool {
             registry,
             finance_registry,
         }
+    }
+}
+
+#[async_trait]
+impl ToolExecute for FinancePlanInstrumentWatchlistTool {
+    type Output = FinancePlanInstrumentWatchlistResult;
+    type Params = FinancePlanInstrumentWatchlistParams;
+
+    async fn run(
+        &self,
+        params: FinancePlanInstrumentWatchlistParams,
+        _context: &ToolContext,
+    ) -> anyhow::Result<FinancePlanInstrumentWatchlistResult> {
+        let catalog_source_id = params
+            .catalog_source_id
+            .map(normalize_catalog_source_id)
+            .transpose()?
+            .unwrap_or_else(|| DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID.to_owned());
+        let source = find_catalog_source(&catalog_source_id)?;
+        anyhow::ensure!(
+            source.feed_type == FeedType::MarketCandle,
+            "catalog source {catalog_source_id} is not a market_candle source"
+        );
+        anyhow::ensure!(
+            source.can_enable(),
+            "finance feed source {catalog_source_id} requires configuration: {}",
+            source
+                .setup_hint
+                .as_deref()
+                .unwrap_or("configure this provider before enabling it")
+        );
+        let symbols = normalize_instrument_values("symbols", params.symbols, true, MAX_SYMBOLS)?;
+        let timeframes = normalize_watchlist_timeframes(params.timeframes, MAX_TIMEFRAMES)?;
+        let budget = params
+            .max_requests_per_second
+            .unwrap_or(DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND);
+        anyhow::ensure!(
+            budget.is_finite() && budget > 0.0,
+            "max_requests_per_second must be positive"
+        );
+        anyhow::ensure!(
+            budget <= MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+            "max_requests_per_second must be <= {MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND}"
+        );
+
+        let transport = source.transport.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("finance feed source {catalog_source_id} has no transport template")
+        })?;
+        let venue = transport
+            .get("venue")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                anyhow::anyhow!("market candle source {catalog_source_id} has no venue")
+            })?;
+        let configured_interval_secs = transport
+            .get("interval_secs")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                anyhow::anyhow!("market candle source {catalog_source_id} has no interval_secs")
+            })?;
+        anyhow::ensure!(
+            configured_interval_secs > 0,
+            "market candle source {catalog_source_id} has invalid interval_secs"
+        );
+
+        let stream_count = symbols.len().saturating_mul(timeframes.len());
+        let poll_request_count = if source.provider.as_deref() == Some("binance") {
+            stream_count
+        } else {
+            1
+        };
+        let estimated_requests_per_second =
+            poll_request_count as f64 / configured_interval_secs as f64;
+        let minimum_safe_interval_secs =
+            MIN_MARKET_CANDLE_INTERVAL_SECS.max((poll_request_count as f64 / budget).ceil() as u64);
+        let safe_to_start = configured_interval_secs >= minimum_safe_interval_secs;
+
+        Ok(FinancePlanInstrumentWatchlistResult {
+            catalog_source_id: catalog_source_id.clone(),
+            source_name: source.feed_name(),
+            provider: source.provider,
+            venue: venue.clone(),
+            symbols: symbols.clone(),
+            timeframes: timeframes.clone(),
+            stream_count,
+            poll_request_count,
+            configured_interval_secs,
+            estimated_requests_per_second,
+            request_budget_per_second: budget,
+            minimum_safe_interval_secs,
+            safe_to_start,
+            warning: watchlist_plan_warning(
+                safe_to_start,
+                poll_request_count,
+                configured_interval_secs,
+                minimum_safe_interval_secs,
+            ),
+            subscribe_hint: FinanceInstrumentWatchlistSubscribeHint {
+                tool:            "finance_subscribe_instruments".to_owned(),
+                default_params:  serde_json::json!({
+                    "catalog_source_id": catalog_source_id,
+                    "venue": venue,
+                    "symbols": symbols,
+                    "timeframes": timeframes,
+                    "start_now": safe_to_start,
+                }),
+                required_params: Vec::new(),
+                optional_params: [
+                    "delivery",
+                    "start_now",
+                    "cooldown_secs",
+                    "max_immediate_per_hour",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            },
+            configure_hint: (!safe_to_start).then(|| FinanceInstrumentWatchlistConfigureHint {
+                action:          "open_settings".to_owned(),
+                section:         "data-feeds".to_owned(),
+                default_params:  serde_json::json!({
+                    "catalog_source_id": catalog_source_id,
+                    "dataFeedCatalogId": catalog_source_id,
+                    "transport": {
+                        "interval_secs": minimum_safe_interval_secs,
+                    },
+                }),
+                required_params: Vec::new(),
+                optional_params: ["transport.interval_secs"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            }),
+        })
     }
 }
 
@@ -2982,6 +3188,38 @@ fn normalize_instrument_value(name: &str, value: &str, uppercase: bool) -> anyho
     })
 }
 
+fn normalize_watchlist_timeframes(
+    values: Vec<String>,
+    max_values: usize,
+) -> anyhow::Result<Vec<String>> {
+    let normalized = normalize_instrument_values("timeframes", values, false, max_values)?;
+    let mut out = Vec::with_capacity(normalized.len());
+    for value in normalized {
+        let timeframe = Timeframe::parse(&value)
+            .map_err(|err| anyhow::anyhow!("invalid timeframe {value:?}: {err}"))?;
+        let value = timeframe.to_string();
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn watchlist_plan_warning(
+    safe_to_start: bool,
+    poll_request_count: usize,
+    configured_interval_secs: u64,
+    minimum_safe_interval_secs: u64,
+) -> Option<String> {
+    (!safe_to_start).then(|| {
+        format!(
+            "this watchlist fans out to {poll_request_count} market-data requests per poll; \
+             increase interval_secs from {configured_interval_secs} to at least \
+             {minimum_safe_interval_secs} before starting the feed"
+        )
+    })
+}
+
 fn apply_market_candle_selection(
     transport: &mut serde_json::Value,
     symbols: &[String],
@@ -4480,6 +4718,7 @@ mod tests {
         FinanceFeedSourceConfigureHint, FinanceListFeedBundlesParams, FinanceListFeedBundlesTool,
         FinanceListFeedEventsParams, FinanceListFeedEventsTool, FinanceListFeedSourcesParams,
         FinanceListFeedSourcesTool, FinanceListSubscriptionsParams, FinanceListSubscriptionsTool,
+        FinancePlanInstrumentWatchlistParams, FinancePlanInstrumentWatchlistTool,
         FinanceRestartFeedSourceParams, FinanceRestartFeedSourceTool,
         FinanceSubscribeFeedBundleParams, FinanceSubscribeFeedBundleTool,
         FinanceSubscribeInstrumentsParams, FinanceSubscribeInstrumentsResult,
@@ -4775,6 +5014,106 @@ mod tests {
             ["macro-news", "binance-major-crypto-15m"]
         );
         assert_eq!(result.filters.feed_types, ["market_candle"]);
+    }
+
+    #[tokio::test]
+    async fn plan_instrument_watchlist_returns_subscribe_hint_for_safe_fanout() {
+        let tool = FinancePlanInstrumentWatchlistTool;
+
+        let result = tool
+            .run(
+                FinancePlanInstrumentWatchlistParams {
+                    catalog_source_id:       None,
+                    symbols:                 vec![
+                        " ethusdt ".to_owned(),
+                        "BTCUSDT".to_owned(),
+                        "ETHUSDT".to_owned(),
+                    ],
+                    timeframes:              vec![" 1M ".to_owned(), "15m".to_owned()],
+                    max_requests_per_second: Some(10.0),
+                },
+                &context(),
+            )
+            .await
+            .expect("plan watchlist");
+
+        assert_eq!(result.catalog_source_id, "binance-market-candles");
+        assert_eq!(result.source_name, "finance-binance-market-candles");
+        assert_eq!(result.provider.as_deref(), Some("binance"));
+        assert_eq!(result.venue, "binance");
+        assert_eq!(result.symbols, ["ETHUSDT", "BTCUSDT"]);
+        assert_eq!(result.timeframes, ["1m", "15m"]);
+        assert_eq!(result.stream_count, 4);
+        assert_eq!(result.poll_request_count, 4);
+        assert_eq!(result.configured_interval_secs, 60);
+        assert!(result.estimated_requests_per_second < 0.1);
+        assert_eq!(result.minimum_safe_interval_secs, 5);
+        assert!(result.safe_to_start);
+        assert!(result.warning.is_none());
+        assert!(result.configure_hint.is_none());
+        assert_eq!(result.subscribe_hint.tool, "finance_subscribe_instruments");
+        assert_eq!(
+            result.subscribe_hint.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "venue": "binance",
+                "symbols": ["ETHUSDT", "BTCUSDT"],
+                "timeframes": ["1m", "15m"],
+                "start_now": true,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_instrument_watchlist_marks_large_fanout_unsafe() {
+        let tool = FinancePlanInstrumentWatchlistTool;
+        let symbols = (0..121)
+            .map(|idx| format!("ALT{idx}USDT"))
+            .collect::<Vec<_>>();
+
+        let result = tool
+            .run(
+                FinancePlanInstrumentWatchlistParams {
+                    catalog_source_id: Some("binance-market-candles".to_owned()),
+                    symbols,
+                    timeframes: vec!["1m".to_owned()],
+                    max_requests_per_second: Some(1.0),
+                },
+                &context(),
+            )
+            .await
+            .expect("plan large watchlist");
+
+        assert_eq!(result.stream_count, 121);
+        assert_eq!(result.poll_request_count, 121);
+        assert_eq!(result.configured_interval_secs, 60);
+        assert_eq!(result.minimum_safe_interval_secs, 121);
+        assert!(!result.safe_to_start);
+        assert!(
+            result
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("121 market-data requests"))
+        );
+        assert_eq!(
+            result.subscribe_hint.default_params["start_now"],
+            serde_json::json!(false)
+        );
+        let configure = result
+            .configure_hint
+            .as_ref()
+            .expect("unsafe plan should expose configure hint");
+        assert_eq!(configure.action, "open_settings");
+        assert_eq!(
+            configure.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "dataFeedCatalogId": "binance-market-candles",
+                "transport": {
+                    "interval_secs": 121,
+                },
+            })
+        );
     }
 
     #[tokio::test]
