@@ -159,7 +159,10 @@ dispatch loop (`crates/app/src/lib.rs`).
   repaired watchlist before suggesting a mutating subscribe action; unsafe
   repairs should point to the read-only watchlist planner. Do not silently
   persist, start, or recommend starting an enabled poller that will hit provider
-  rate limits.
+  rate limits. `finance_list_feed_sources` is the operator-facing source
+  overview; keep its `load` block aligned with these guards so users can see
+  subscription counts, subscribed stream pressure, and configured
+  market-candle fan-out before they mutate runtime state.
 - **`backtest` has no look-ahead** — the number-one backtest bug. Signal
   evaluation for bar `i` sees only `candles[i.saturating_sub(EVAL_WINDOW)..i]`
   plus `latest = candles[i]`, never a bar `> i` (the same invariant `dispatch`

@@ -323,6 +323,7 @@ pub(super) struct FinanceFeedSourceEntry {
     pub setup_hint:             Option<String>,
     pub runtime:                FinanceFeedSourceRuntime,
     pub subscriptions:          FinanceFeedSourceSubscriptions,
+    pub load:                   FinanceFeedSourceLoad,
     pub venue:                  Option<String>,
     pub configured_symbols:     Vec<String>,
     pub configured_timeframes:  Vec<String>,
@@ -398,6 +399,20 @@ pub(super) struct FinanceFeedSourceSubscriptions {
     pub session_subscribed:       bool,
     pub user_subscription_ids:    Vec<Uuid>,
     pub session_subscription_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedSourceLoad {
+    pub user_subscription_count: usize,
+    pub session_subscription_count: usize,
+    pub subscribed_market_stream_count: usize,
+    pub configured_market_stream_count: Option<usize>,
+    pub configured_market_poll_request_count: Option<usize>,
+    pub configured_market_requests_per_second: Option<f64>,
+    pub configured_market_request_budget_per_second: Option<f64>,
+    pub configured_market_minimum_safe_interval_secs: Option<u64>,
+    pub configured_market_fanout_safe_to_start: Option<bool>,
+    pub configured_market_fanout_diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1379,6 +1394,15 @@ impl ToolExecute for FinanceListFeedBundlesTool {
                 let last_event_at = summary.and_then(|summary| summary.last_event_at);
                 let lag_seconds = last_event_at
                     .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+                let load = source_load_summary(
+                    &subscriptions,
+                    context.session_key,
+                    &source_name,
+                    source.feed_type,
+                    persisted
+                        .map(|feed| &feed.transport)
+                        .or(source.transport.as_ref()),
+                );
                 let entry = feed_source_entry(
                     source,
                     persisted,
@@ -1388,6 +1412,7 @@ impl ToolExecute for FinanceListFeedBundlesTool {
                     last_event_at.map(|timestamp| timestamp.to_string()),
                     lag_seconds,
                     source_subscription_summary(&subscriptions, context.session_key, &source_name),
+                    load,
                 );
                 (entry.id.clone(), entry)
             })
@@ -1450,6 +1475,15 @@ impl ToolExecute for FinanceListFeedSourcesTool {
                 let last_event_at = summary.and_then(|summary| summary.last_event_at);
                 let lag_seconds = last_event_at
                     .map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+                let load = source_load_summary(
+                    &subscriptions,
+                    context.session_key,
+                    &source_name,
+                    source.feed_type,
+                    persisted
+                        .map(|feed| &feed.transport)
+                        .or(source.transport.as_ref()),
+                );
                 let entry = feed_source_entry(
                     source,
                     persisted,
@@ -1459,6 +1493,7 @@ impl ToolExecute for FinanceListFeedSourcesTool {
                     last_event_at.map(|timestamp| timestamp.to_string()),
                     lag_seconds,
                     source_subscription_summary(&subscriptions, context.session_key, &source_name),
+                    load,
                 );
                 filters.matches(&entry).then_some(entry)
             })
@@ -3785,6 +3820,7 @@ fn feed_source_entry(
     last_event_at: Option<String>,
     lag_seconds: Option<i64>,
     subscriptions: FinanceFeedSourceSubscriptions,
+    load: FinanceFeedSourceLoad,
 ) -> FinanceFeedSourceEntry {
     let source_name = source.feed_name();
     let transport = persisted
@@ -3839,6 +3875,7 @@ fn feed_source_entry(
             lag_seconds,
         },
         subscriptions,
+        load,
         venue: transport
             .and_then(|value| value.get("venue"))
             .and_then(serde_json::Value::as_str)
@@ -3886,6 +3923,15 @@ async fn feed_bundle_entry_for_context(
         let last_event_at = summary.and_then(|summary| summary.last_event_at);
         let lag_seconds =
             last_event_at.map(|last_event_at| now.duration_since(last_event_at).as_secs().max(0));
+        let load = source_load_summary(
+            &subscriptions,
+            context.session_key,
+            &source_name,
+            source.feed_type,
+            persisted
+                .map(|feed| &feed.transport)
+                .or(source.transport.as_ref()),
+        );
         source_entries.push(feed_source_entry(
             source,
             persisted,
@@ -3895,6 +3941,7 @@ async fn feed_bundle_entry_for_context(
             last_event_at.map(|timestamp| timestamp.to_string()),
             lag_seconds,
             source_subscription_summary(&subscriptions, context.session_key, &source_name),
+            load,
         ));
     }
 
@@ -4612,6 +4659,121 @@ fn source_subscription_summary(
     }
 }
 
+fn source_load_summary(
+    subscriptions: &[FinanceSubscription],
+    session_key: rara_kernel::session::SessionKey,
+    source_name: &str,
+    feed_type: FeedType,
+    transport: Option<&serde_json::Value>,
+) -> FinanceFeedSourceLoad {
+    let mut user_subscription_count = 0;
+    let mut session_subscription_count = 0;
+    let mut market_streams = HashSet::new();
+
+    for subscription in subscriptions {
+        if !subscription
+            .source_names
+            .iter()
+            .any(|value| value == source_name)
+        {
+            continue;
+        }
+
+        user_subscription_count += 1;
+        if subscription.session_key == session_key {
+            session_subscription_count += 1;
+        }
+        if feed_type == FeedType::MarketCandle
+            && subscription
+                .event_kinds
+                .contains(&FinanceEventKind::MarketCandleClosed)
+        {
+            insert_market_subscription_streams(subscription, &mut market_streams);
+        }
+    }
+
+    let mut load = FinanceFeedSourceLoad {
+        user_subscription_count,
+        session_subscription_count,
+        subscribed_market_stream_count: market_streams.len(),
+        configured_market_stream_count: None,
+        configured_market_poll_request_count: None,
+        configured_market_requests_per_second: None,
+        configured_market_request_budget_per_second: None,
+        configured_market_minimum_safe_interval_secs: None,
+        configured_market_fanout_safe_to_start: None,
+        configured_market_fanout_diagnostic: None,
+    };
+
+    if feed_type == FeedType::MarketCandle {
+        apply_configured_market_fanout_load(&mut load, transport);
+    }
+
+    load
+}
+
+fn insert_market_subscription_streams(
+    subscription: &FinanceSubscription,
+    market_streams: &mut HashSet<(String, String, String)>,
+) {
+    if subscription.symbols.is_empty() || subscription.timeframes.is_empty() {
+        return;
+    }
+    let venues = if subscription.venues.is_empty() {
+        vec![String::new()]
+    } else {
+        subscription.venues.clone()
+    };
+    for venue in &venues {
+        for symbol in &subscription.symbols {
+            for timeframe in &subscription.timeframes {
+                market_streams.insert((venue.clone(), symbol.clone(), timeframe.clone()));
+            }
+        }
+    }
+}
+
+fn apply_configured_market_fanout_load(
+    load: &mut FinanceFeedSourceLoad,
+    transport: Option<&serde_json::Value>,
+) {
+    let Some(transport) = transport else {
+        load.configured_market_fanout_diagnostic =
+            Some("market candle source has no transport config".to_owned());
+        return;
+    };
+    let provider = transport
+        .get("provider")
+        .and_then(serde_json::Value::as_str);
+    let symbols = extract_normalized_string_array(transport, "symbols", true);
+    let timeframes = extract_normalized_string_array(transport, "timeframes", false);
+    match market_candle_fanout_safety(
+        provider,
+        transport,
+        &symbols,
+        &timeframes,
+        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+    ) {
+        Ok(safety) => {
+            load.configured_market_stream_count = Some(safety.stream_count);
+            load.configured_market_poll_request_count = Some(safety.poll_request_count);
+            load.configured_market_requests_per_second = Some(safety.estimated_requests_per_second);
+            load.configured_market_request_budget_per_second =
+                Some(safety.request_budget_per_second);
+            load.configured_market_minimum_safe_interval_secs =
+                Some(safety.minimum_safe_interval_secs);
+            load.configured_market_fanout_safe_to_start = Some(safety.safe_to_start);
+            if !safety.safe_to_start {
+                load.configured_market_fanout_diagnostic =
+                    Some(unsafe_market_candle_fanout_message(&safety));
+            }
+        }
+        Err(err) => {
+            load.configured_market_fanout_diagnostic = Some(err.to_string());
+        }
+    }
+}
+
 fn extract_normalized_string_array(
     value: &serde_json::Value,
     key: &str,
@@ -4846,6 +5008,37 @@ mod tests {
                 && source.subscribed
                 && source.session_subscribed
         }));
+    }
+
+    fn assert_unsubscribed_rss_load(load: &super::FinanceFeedSourceLoad) {
+        assert_eq!(load.user_subscription_count, 0);
+        assert_eq!(load.session_subscription_count, 0);
+        assert_eq!(load.subscribed_market_stream_count, 0);
+        assert_eq!(load.configured_market_stream_count, None);
+        assert_eq!(load.configured_market_fanout_safe_to_start, None);
+        assert_eq!(load.configured_market_fanout_diagnostic, None);
+    }
+
+    fn assert_safe_binance_load(
+        load: &super::FinanceFeedSourceLoad,
+        user_subscription_count: usize,
+        session_subscription_count: usize,
+        subscribed_stream_count: usize,
+        configured_stream_count: usize,
+    ) {
+        assert_eq!(load.user_subscription_count, user_subscription_count);
+        assert_eq!(load.session_subscription_count, session_subscription_count);
+        assert_eq!(load.subscribed_market_stream_count, subscribed_stream_count);
+        assert_eq!(
+            load.configured_market_stream_count,
+            Some(configured_stream_count)
+        );
+        assert_eq!(
+            load.configured_market_poll_request_count,
+            Some(configured_stream_count)
+        );
+        assert_eq!(load.configured_market_fanout_safe_to_start, Some(true));
+        assert_eq!(load.configured_market_fanout_diagnostic, None);
     }
 
     #[tokio::test]
@@ -5963,6 +6156,7 @@ mod tests {
         assert!(!fed.subscriptions.session_subscribed);
         assert!(fed.subscriptions.user_subscription_ids.is_empty());
         assert!(fed.subscriptions.session_subscription_ids.is_empty());
+        assert_unsubscribed_rss_load(&fed.load);
 
         let binance = result
             .sources
@@ -5989,6 +6183,7 @@ mod tests {
             })
         );
         assert_eq!(binance_hint.required_params, ["symbols", "timeframes"]);
+        assert_safe_binance_load(&binance.load, 0, 0, 0, 2);
         assert_eq!(
             binance_hint.diagnostic_tool.as_deref(),
             Some("finance_diagnose_candle_subscriptions")
@@ -7092,6 +7287,7 @@ mod tests {
             binance.subscriptions.session_subscription_ids,
             binance.subscriptions.user_subscription_ids
         );
+        assert_safe_binance_load(&binance.load, 1, 1, 4, 4);
     }
 
     #[tokio::test]
@@ -8063,7 +8259,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_instruments_persists_unsafe_fanout_disabled_when_not_starting() {
-        let (_list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
+        let (list, _enable, _disable, _restart, tool, svc, registry, finance_registry) =
             tool().await;
         let ctx = context();
 
@@ -8105,8 +8301,37 @@ mod tests {
         );
         assert!(!registry.is_running("finance-binance-market-candles"));
 
+        let sources = list
+            .run(FinanceListFeedSourcesParams::default(), &ctx)
+            .await
+            .unwrap();
+        let binance = sources
+            .sources
+            .iter()
+            .find(|source| source.id == "binance-market-candles")
+            .expect("binance source should be listed");
+        assert_eq!(binance.load.user_subscription_count, 1);
+        assert_eq!(binance.load.session_subscription_count, 1);
+        assert_eq!(binance.load.subscribed_market_stream_count, 1000);
+        assert_eq!(binance.load.configured_market_stream_count, Some(1000));
+        assert_eq!(
+            binance.load.configured_market_poll_request_count,
+            Some(1000)
+        );
+        assert_eq!(
+            binance.load.configured_market_fanout_safe_to_start,
+            Some(false)
+        );
+        assert!(
+            binance
+                .load
+                .configured_market_fanout_diagnostic
+                .as_deref()
+                .is_some_and(|value| value.contains("fans out to 1000 requests per poll"))
+        );
+
         let subs = finance_registry
-            .list_for_owner(&rara_kernel::identity::UserId(ctx.user_id))
+            .list_for_owner(&rara_kernel::identity::UserId(ctx.user_id.clone()))
             .await;
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].event_kinds, [FinanceEventKind::MarketCandleClosed]);
