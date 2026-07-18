@@ -163,7 +163,8 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
           <div>
             <CardTitle className="text-xs">Finance watches</CardTitle>
             <CardDescription className="mt-1 text-[11px]">
-              Subscribe this session to built-in news and K-line feeds.
+              Enable starts background ingestion; Watch routes matching finance events into this
+              session.
             </CardDescription>
           </div>
           {sessionSubscriptions.length > 0 && (
@@ -225,7 +226,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="truncate text-xs font-medium">{bundle.name}</span>
                             <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                              Bundle
+                              Default bundle
                             </Badge>
                             {providers && (
                               <Badge
@@ -257,6 +258,14 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                           </p>
                           <p className="text-[11px] text-muted-foreground">
                             {bundle.sources.map((source) => source.name).join(', ')}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {bundleLifecycleLabel({
+                              bundle,
+                              canEnableInline,
+                              needsConfiguration,
+                              subscribed,
+                            })}
                           </p>
                           {load && <p className="text-[11px] text-muted-foreground">{load}</p>}
                           {fanoutDiagnostic && (
@@ -338,6 +347,9 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                         <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
                           {entry.feed_type === 'rss' ? 'News' : 'K-line'}
                         </Badge>
+                        <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                          Default source
+                        </Badge>
                         {provider && (
                           <Badge
                             variant="outline"
@@ -367,6 +379,13 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                       </div>
                       <p className="line-clamp-2 text-[11px] text-muted-foreground">
                         {coverageLabel(entry)}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {entryLifecycleLabel({
+                          canEnableInline,
+                          needsConfiguration,
+                          subscribed,
+                        })}
                       </p>
                       {load && <p className="text-[11px] text-muted-foreground">{load}</p>}
                       {fanoutDiagnostic && (
@@ -472,6 +491,44 @@ function financeBundleActionLabel({
   if (needsConfiguration) return 'Configure';
   if (canEnableInline) return 'Enable bundle';
   return subscribed ? 'Unwatch' : 'Watch bundle';
+}
+
+function entryLifecycleLabel({
+  canEnableInline,
+  needsConfiguration,
+  subscribed,
+}: {
+  canEnableInline: boolean;
+  needsConfiguration: boolean;
+  subscribed: boolean;
+}): string {
+  if (subscribed) return 'This session is watching this source.';
+  if (needsConfiguration) return 'Configure this source before ingestion can start.';
+  if (canEnableInline)
+    return 'Enable source starts ingestion; Watch subscribes this session after it is on.';
+  return 'Source is on; Watch subscribes this session without changing ingestion.';
+}
+
+function bundleLifecycleLabel({
+  bundle,
+  canEnableInline,
+  needsConfiguration,
+  subscribed,
+}: {
+  bundle: FinanceFeedBundle;
+  canEnableInline: boolean;
+  needsConfiguration: boolean;
+  subscribed: boolean;
+}): string {
+  if (subscribed) return 'This session is watching this bundle.';
+  if (needsConfiguration) return 'Configure required sources before this bundle can start.';
+  if (canEnableInline) {
+    return 'Enable bundle starts ingestion; Watch subscribes this session after sources are on.';
+  }
+  if (bundle.enabled_source_count < bundle.source_count) {
+    return 'Some sources are off; enable or configure them before watching.';
+  }
+  return 'Sources are on; Watch subscribes this session without changing ingestion.';
 }
 
 function subscriptionRequestForEntry(
