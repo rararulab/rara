@@ -15,6 +15,7 @@
 //! The fixed metric set the backtest harness reports.
 
 use bon::Builder;
+use serde::Serialize;
 
 /// The result of replaying one candle stream through the naive-long rule.
 ///
@@ -30,7 +31,7 @@ use bon::Builder;
 /// valid, informative result (the signals lean bearish), not a broken harness.
 /// The `Option` fields are `None` — never `NaN` — when there are no evaluated
 /// trades to average over.
-#[derive(Debug, Clone, Copy, PartialEq, Builder)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Builder)]
 pub struct BacktestReport {
     /// Bars where `anomaly::evaluate` returned `Some` (the composite signal
     /// fired).

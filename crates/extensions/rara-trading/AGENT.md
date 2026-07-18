@@ -90,7 +90,13 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   `mean`/`median_forward_return`, strategy `max_drawdown`); `error.rs` =
   `BacktestError` (snafu; `Evaluate` wraps `AnomalyError`, `FetchCandles` wraps
   the repository read). It only **consumes** `anomaly::evaluate` and
-  `market_data`; it changes neither.
+  `market_data`; it changes neither. `tools.rs` exposes the same narrow harness
+  as the deferred, read-only `finance_backtest_signal` agent tool: the tool
+  validates a single candle range, fetches from the shared market-data
+  repository, rejects over-limit ranges instead of paginating a non-additive
+  replay, delegates to `run_backtest`, and returns the fixed report plus
+  diagnostic hints. It is not the heavier research-desk `trading_backtest`
+  surface.
 
 The write→read→enrich wiring lives in `dispatch/pipeline.rs` (`on_feed_event`):
 it upserts the closed candle, pulls the window via `recent_candles`, runs

@@ -283,6 +283,7 @@ Stored closed candles are queryable through read-only market-data tools:
 - `finance_query_candles`
 - `finance_find_candle_gaps`
 - `finance_get_candle_freshness`
+- `finance_backtest_signal`
 
 Operators can also inspect stored stream watermarks without going through the
 agent via:
@@ -303,7 +304,12 @@ The candle endpoints are read-only. They require canonical selectors
 The range endpoint uses `start` as an inclusive open-time lower bound and `end`
 as an exclusive open-time upper bound. Freshness defaults its stale threshold to
 2x the timeframe step. Gap checks use the same inclusive/exclusive range
-semantics and are capped at 10,000 expected candles.
+semantics and are capped at 10,000 expected candles. `finance_backtest_signal`
+uses the same range semantics over one stored stream, replays rara's built-in
+market-anomaly evaluator, and returns the fixed signal-accuracy report; it is
+read-only and never places trades. It rejects over-limit ranges instead of
+paginating the replay, because a paged backtest would lose the prior evaluation
+window and produce non-additive reports.
 
 Identity and session routing are always taken from `ToolContext`. Finance tool
 schemas do not accept `owner`, `user_id`, `session`, or `session_key` identity
@@ -401,7 +407,9 @@ which stream set it inspected before narrowing to a single stream. Each stream
 returned by `finance_list_candle_streams` includes ready-to-call hints for
 `finance_get_latest_candle`, `finance_get_recent_candles`,
 `finance_get_candle_freshness`, `finance_find_candle_gaps`, and
-`finance_query_candles`; range tools still require explicit `start`/`end`.
+`finance_query_candles`, plus `finance_backtest_signal` for replaying the same
+stream through rara's built-in anomaly signal harness; range tools still
+require explicit `start`/`end`.
 `finance_list_candle_streams`, `finance_get_recent_candles`, and
 `finance_query_candles` return `has_more` when additional rows match the
 selectors beyond the returned `query_limit`; narrow by `source_name`, `venue`,
