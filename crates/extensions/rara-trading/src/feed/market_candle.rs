@@ -31,8 +31,8 @@ use std::{
 use async_trait::async_trait;
 use jiff::Timestamp;
 use rara_kernel::data_feed::{
-    AuthConfig, DataFeed, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, StatusReporterRef,
-    polling::apply_request_auth,
+    AuthConfig, DataFeed, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedType,
+    StatusReporterRef, polling::apply_request_auth,
 };
 use reqwest::{
     Url,
@@ -48,6 +48,8 @@ use crate::market_data::Timeframe;
 
 const MAX_CANDLES_PER_POLL: usize = 10_000;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+pub const DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 10.0;
+const MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 100.0;
 
 /// Minimum polling cadence for a market-candle feed, in seconds.
 ///
@@ -69,6 +71,124 @@ const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// (`docs/guides/anti-patterns.md`). `interval_secs` itself stays a per-feed
 /// config value: a genuine deploy-relevant choice *within* the allowed range.
 const MIN_INTERVAL_SECS: u64 = 5;
+
+#[derive(Debug, Clone)]
+pub struct MarketCandleFanoutSafety {
+    pub stream_count:                  usize,
+    pub poll_request_count:            usize,
+    pub configured_interval_secs:      u64,
+    pub estimated_requests_per_second: f64,
+    pub request_budget_per_second:     f64,
+    pub minimum_safe_interval_secs:    u64,
+    pub safe_to_start:                 bool,
+}
+
+pub fn validate_market_candle_request_budget(budget: f64) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        budget.is_finite() && budget > 0.0,
+        "max_requests_per_second must be positive"
+    );
+    anyhow::ensure!(
+        budget <= MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+        "max_requests_per_second must be <= {MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND}"
+    );
+    Ok(())
+}
+
+pub fn market_candle_fanout_safety(
+    provider: Option<&str>,
+    transport: &serde_json::Value,
+    symbols: &[String],
+    timeframes: &[String],
+    request_budget_per_second: f64,
+) -> anyhow::Result<MarketCandleFanoutSafety> {
+    validate_market_candle_request_budget(request_budget_per_second)?;
+    let configured_interval_secs = transport
+        .get("interval_secs")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("market candle source has no interval_secs"))?;
+    anyhow::ensure!(
+        configured_interval_secs > 0,
+        "market candle source has invalid interval_secs"
+    );
+
+    let stream_count = symbols.len().saturating_mul(timeframes.len());
+    let poll_request_count = if provider == Some("binance") {
+        stream_count
+    } else {
+        1
+    };
+    let estimated_requests_per_second = poll_request_count as f64 / configured_interval_secs as f64;
+    let minimum_safe_interval_secs = MIN_INTERVAL_SECS
+        .max((poll_request_count as f64 / request_budget_per_second).ceil() as u64);
+
+    Ok(MarketCandleFanoutSafety {
+        stream_count,
+        poll_request_count,
+        configured_interval_secs,
+        estimated_requests_per_second,
+        request_budget_per_second,
+        minimum_safe_interval_secs,
+        safe_to_start: configured_interval_secs >= minimum_safe_interval_secs,
+    })
+}
+
+pub fn market_candle_config_fanout_safety(
+    config: &DataFeedConfig,
+) -> anyhow::Result<MarketCandleFanoutSafety> {
+    anyhow::ensure!(
+        config.feed_type == FeedType::MarketCandle,
+        "feed type {} is not market_candle",
+        config.feed_type
+    );
+    let final_symbols = transport_string_array(&config.transport, "symbols", true);
+    let final_timeframes = transport_string_array(&config.transport, "timeframes", false);
+    let provider = config
+        .transport
+        .get("provider")
+        .and_then(serde_json::Value::as_str);
+    market_candle_fanout_safety(
+        provider,
+        &config.transport,
+        &final_symbols,
+        &final_timeframes,
+        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+    )
+}
+
+pub fn unsafe_market_candle_fanout_message(safety: &MarketCandleFanoutSafety) -> String {
+    format!(
+        "market candle watchlist fans out to {} requests per poll at interval_secs={}; configured \
+         interval is unsafe for the default request budget. Increase interval_secs to at least {} \
+         or call finance_plan_instrument_watchlist and retry after reviewing the plan.",
+        safety.poll_request_count,
+        safety.configured_interval_secs,
+        safety.minimum_safe_interval_secs
+    )
+}
+
+fn transport_string_array(
+    transport: &serde_json::Value,
+    key: &str,
+    uppercase: bool,
+) -> Vec<String> {
+    transport
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if uppercase {
+                value.to_ascii_uppercase()
+            } else {
+                value.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MarketCandleTransport {

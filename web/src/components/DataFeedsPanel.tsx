@@ -245,6 +245,39 @@ function catalogCoverageLabel(entry: FeedCatalogEntry): string | null {
   return null;
 }
 
+function formatRate(value: number): string {
+  if (Number.isInteger(value)) return value.toString();
+  return value.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function catalogLoadLabel(entry: FeedCatalogEntry): string | null {
+  if (entry.feed_type !== 'market_candle' || !entry.load) return null;
+
+  const parts: string[] = [];
+  if (entry.load.configured_market_stream_count != null) {
+    parts.push(`${entry.load.configured_market_stream_count} configured streams`);
+  }
+  if (entry.load.configured_market_poll_request_count != null) {
+    parts.push(`${entry.load.configured_market_poll_request_count} req/poll`);
+  }
+  if (entry.load.configured_market_requests_per_second != null) {
+    parts.push(`${formatRate(entry.load.configured_market_requests_per_second)} req/s`);
+  }
+  if (entry.load.subscribed_market_stream_count > 0) {
+    parts.push(`${entry.load.subscribed_market_stream_count} subscribed streams`);
+  }
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function catalogFanoutDiagnostic(entry: FeedCatalogEntry): string | null {
+  if (entry.feed_type !== 'market_candle') return null;
+  if (entry.load?.configured_market_fanout_safe_to_start !== false) return null;
+  return (
+    entry.load.configured_market_fanout_diagnostic ?? 'K-line fan-out exceeds safe polling load.'
+  );
+}
+
 function catalogSourceName(entry: FeedCatalogEntry): string {
   return entry.source_name?.trim() || `finance-${entry.id}`;
 }
@@ -1567,6 +1600,8 @@ function FeedCatalogCard({
       (disableMutation.isPending && disableMutation.variables === entry.id) ||
       (unsubscribeMutation.isPending && unsubscribeMutation.variables === entry.id);
     const coverage = catalogCoverageLabel(entry);
+    const load = catalogLoadLabel(entry);
+    const fanoutDiagnostic = catalogFanoutDiagnostic(entry);
     const provider = catalogProvider(entry);
     const subscribed = entry.subscriptions?.user_subscribed === true;
     const unsubscribeButton = subscribed ? (
@@ -1612,6 +1647,11 @@ function FeedCatalogCard({
                 Requires config
               </Badge>
             )}
+            {fanoutDiagnostic && (
+              <Badge variant="outline" className="border-destructive/40 text-xs text-destructive">
+                Unsafe fan-out
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">{entry.description}</p>
           <p className="font-mono text-[11px] text-muted-foreground">
@@ -1619,6 +1659,8 @@ function FeedCatalogCard({
           </p>
           {entry.setup_hint && <p className="text-xs text-muted-foreground">{entry.setup_hint}</p>}
           {coverage && <p className="text-[11px] text-muted-foreground">{coverage}</p>}
+          {load && <p className="text-[11px] text-muted-foreground">{load}</p>}
+          {fanoutDiagnostic && <p className="text-[11px] text-destructive">{fanoutDiagnostic}</p>}
         </div>
         {entry.requires_configuration ? (
           <div className="flex shrink-0 gap-2">

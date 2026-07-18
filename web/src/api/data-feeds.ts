@@ -165,11 +165,24 @@ export interface FeedCatalogEntry {
   configured_symbols?: string[];
   configured_timeframes?: string[];
   subscriptions?: FeedCatalogSubscriptions;
+  load?: FeedCatalogLoad;
 }
 
 export interface FeedCatalogSubscriptions {
   user_subscribed: boolean;
   user_subscription_ids: string[];
+}
+
+export interface FeedCatalogLoad {
+  user_subscription_count: number;
+  subscribed_market_stream_count: number;
+  configured_market_stream_count: number | null;
+  configured_market_poll_request_count: number | null;
+  configured_market_requests_per_second: number | null;
+  configured_market_request_budget_per_second: number | null;
+  configured_market_minimum_safe_interval_secs: number | null;
+  configured_market_fanout_safe_to_start: boolean | null;
+  configured_market_fanout_diagnostic: string | null;
 }
 
 export interface FinanceFeedBundle {
