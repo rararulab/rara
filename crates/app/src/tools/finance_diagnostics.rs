@@ -36,7 +36,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::finance_candle_fanout::{
-    market_candle_config_fanout_safety, unsafe_market_candle_fanout_message,
+    DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND, market_candle_config_fanout_safety,
+    market_candle_fanout_safety, unsafe_market_candle_fanout_message,
 };
 
 const MAX_STALE_AFTER_SECS: u64 = 31_536_000;
@@ -122,27 +123,29 @@ pub(super) struct FinanceDiagnosticCandleToolHint {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FeedSourceDiagnostic {
-    pub source_name:           String,
-    pub catalog_source_id:     Option<String>,
-    pub catalog_name:          Option<String>,
-    pub feed_id:               Option<String>,
-    pub feed_type:             Option<String>,
-    pub configured_provider:   Option<String>,
-    pub configured_venue:      Option<String>,
-    pub configured_symbols:    Vec<String>,
-    pub configured_timeframes: Vec<String>,
-    pub selector_coverage:     FeedSelectorCoverage,
-    pub selector_diagnostic:   Option<String>,
-    pub fanout_safe_to_start:  Option<bool>,
-    pub fanout_diagnostic:     Option<String>,
-    pub enabled:               Option<bool>,
-    pub configured_status:     Option<String>,
-    pub runtime_state:         FeedRuntimeState,
-    pub last_error:            Option<String>,
-    pub event_count:           i64,
-    pub last_event_type:       Option<String>,
-    pub last_event_at:         Option<String>,
-    pub lag_seconds:           Option<i64>,
+    pub source_name:                 String,
+    pub catalog_source_id:           Option<String>,
+    pub catalog_name:                Option<String>,
+    pub feed_id:                     Option<String>,
+    pub feed_type:                   Option<String>,
+    pub configured_provider:         Option<String>,
+    pub configured_venue:            Option<String>,
+    pub configured_symbols:          Vec<String>,
+    pub configured_timeframes:       Vec<String>,
+    pub selector_coverage:           FeedSelectorCoverage,
+    pub selector_diagnostic:         Option<String>,
+    pub fanout_safe_to_start:        Option<bool>,
+    pub fanout_diagnostic:           Option<String>,
+    pub repair_fanout_safe_to_start: Option<bool>,
+    pub repair_fanout_diagnostic:    Option<String>,
+    pub enabled:                     Option<bool>,
+    pub configured_status:           Option<String>,
+    pub runtime_state:               FeedRuntimeState,
+    pub last_error:                  Option<String>,
+    pub event_count:                 i64,
+    pub last_event_type:             Option<String>,
+    pub last_event_at:               Option<String>,
+    pub lag_seconds:                 Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -464,6 +467,13 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     subscription,
                 );
                 let (fanout_safe_to_start, fanout_diagnostic) = market_candle_start_safety(feed);
+                let (repair_fanout_safe_to_start, repair_fanout_diagnostic) =
+                    market_candle_repair_safety(
+                        feed,
+                        &configured_symbols,
+                        &configured_timeframes,
+                        subscription,
+                    );
                 FeedSourceDiagnostic {
                     source_name: source_name.clone(),
                     catalog_source_id: catalog_source.map(|source| source.id.clone()),
@@ -478,6 +488,8 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     selector_diagnostic,
                     fanout_safe_to_start,
                     fanout_diagnostic,
+                    repair_fanout_safe_to_start,
+                    repair_fanout_diagnostic,
                     enabled: feed.map(|feed| feed.enabled),
                     configured_status: feed.map(|feed| feed.status.to_string()),
                     runtime_state: runtime_state(
@@ -616,6 +628,57 @@ fn market_candle_start_safety(feed: Option<&DataFeedConfig>) -> (Option<bool>, O
         ),
         Err(err) => (Some(false), Some(err.to_string())),
     }
+}
+
+fn market_candle_repair_safety(
+    feed: Option<&DataFeedConfig>,
+    configured_symbols: &[String],
+    configured_timeframes: &[String],
+    subscription: &FinanceSubscription,
+) -> (Option<bool>, Option<String>) {
+    let Some(feed) = feed else {
+        return (None, None);
+    };
+    if feed.feed_type != FeedType::MarketCandle {
+        return (None, None);
+    }
+
+    let symbols = merged_values(
+        configured_symbols,
+        normalize_uppercase(&subscription.symbols),
+    );
+    let timeframes = merged_values(
+        configured_timeframes,
+        normalize_lowercase(&subscription.timeframes),
+    );
+    let provider = feed
+        .transport
+        .get("provider")
+        .and_then(serde_json::Value::as_str);
+
+    match market_candle_fanout_safety(
+        provider,
+        &feed.transport,
+        &symbols,
+        &timeframes,
+        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+    ) {
+        Ok(safety) => (
+            Some(safety.safe_to_start),
+            (!safety.safe_to_start).then(|| unsafe_market_candle_fanout_message(&safety)),
+        ),
+        Err(err) => (Some(false), Some(err.to_string())),
+    }
+}
+
+fn merged_values(existing: &[String], requested: Vec<String>) -> Vec<String> {
+    let mut values = existing.to_vec();
+    for value in requested {
+        if !values.iter().any(|existing| existing == &value) {
+            values.push(value);
+        }
+    }
+    values
 }
 
 fn optional_source_names(source_names: &[String]) -> Vec<Option<String>> {
@@ -989,6 +1052,16 @@ fn selector_repair_hint(
     let feed = feed_sources
         .iter()
         .find(|feed| feed.selector_coverage == FeedSelectorCoverage::MissingSelectors)?;
+    if feed.repair_fanout_safe_to_start == Some(false) {
+        return feed.catalog_source_id.as_ref().map(|catalog_source_id| {
+            plan_instrument_watchlist_hint(
+                catalog_source_id,
+                &subscription.symbols,
+                &subscription.timeframes,
+            )
+        });
+    }
+
     let venue = single_value(&subscription.venues)?;
     if let Some(catalog_source_id) = &feed.catalog_source_id {
         return Some(subscribe_instruments_hint(
@@ -1011,6 +1084,23 @@ fn selector_repair_hint(
             &subscription.timeframes,
         )
     })
+}
+
+fn plan_instrument_watchlist_hint(
+    catalog_source_id: &str,
+    symbols: &[String],
+    timeframes: &[String],
+) -> FinanceDiagnosticNextActionHint {
+    FinanceDiagnosticNextActionHint {
+        tool:            "finance_plan_instrument_watchlist".to_owned(),
+        default_params:  serde_json::json!({
+            "catalog_source_id": catalog_source_id,
+            "symbols": symbols,
+            "timeframes": timeframes,
+        }),
+        required_params: Vec::new(),
+        optional_params: vec!["max_requests_per_second".to_owned()],
+    }
 }
 
 fn single_value(values: &[String]) -> Option<&String> {
@@ -1716,6 +1806,7 @@ mod tests {
             sub.feed_sources[0].selector_diagnostic.as_deref(),
             Some("missing symbols: ETHUSDT; missing timeframes: 5m")
         );
+        assert_eq!(sub.feed_sources[0].repair_fanout_safe_to_start, Some(true));
         let next_action = sub
             .next_action_hint
             .as_ref()
@@ -1742,6 +1833,84 @@ mod tests {
                 "max_immediate_per_hour"
             ]
             .map(str::to_owned)
+        );
+    }
+
+    #[tokio::test]
+    async fn diagnose_plans_watchlist_when_selector_repair_fanout_is_unsafe() {
+        let (tool, finance_registry, data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        let id = uuid::Uuid::new_v4();
+        finance_registry
+            .upsert(FinanceSubscription {
+                id,
+                owner: UserId(ctx.user_id.clone()),
+                session_key: ctx.session_key,
+                event_kinds: vec![FinanceEventKind::MarketCandleClosed],
+                source_names: vec!["finance-binance-market-candles".to_owned()],
+                category_tags: Vec::new(),
+                watch_terms: Vec::new(),
+                venues: vec!["binance".to_owned()],
+                symbols: large_binance_symbols(),
+                timeframes: vec!["1m".to_owned(), "5m".to_owned()],
+                delivery: FinanceDelivery::Silent,
+                cooldown_secs: 900,
+                max_immediate_per_hour: 6,
+            })
+            .await
+            .unwrap();
+        data_feed_registry.set_running(
+            "finance-binance-market-candles".to_owned(),
+            CancellationToken::new(),
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:    Some(id),
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   Some(120),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::SelectorMismatch);
+        assert_eq!(
+            sub.feed_sources[0].selector_coverage,
+            FeedSelectorCoverage::MissingSelectors
+        );
+        assert_eq!(sub.feed_sources[0].repair_fanout_safe_to_start, Some(false));
+        assert!(
+            sub.feed_sources[0]
+                .repair_fanout_diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("fans out to 1000 requests")),
+            "unexpected repair fanout diagnostic: {:?}",
+            sub.feed_sources[0].repair_fanout_diagnostic
+        );
+        let next_action = sub
+            .next_action_hint
+            .as_ref()
+            .expect("unsafe selector repair should expose a read-only planning hint");
+        assert_eq!(next_action.tool, "finance_plan_instrument_watchlist");
+        assert_eq!(
+            next_action.default_params,
+            serde_json::json!({
+                "catalog_source_id": "binance-market-candles",
+                "symbols": large_binance_symbols(),
+                "timeframes": ["1m", "5m"],
+            })
+        );
+        assert_eq!(next_action.required_params, Vec::<String>::new());
+        assert_eq!(
+            next_action.optional_params,
+            ["max_requests_per_second"].map(str::to_owned)
         );
     }
 

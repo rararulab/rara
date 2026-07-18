@@ -155,8 +155,11 @@ dispatch loop (`crates/app/src/lib.rs`).
   enforce the same guard, because enabling a persisted disabled feed can start
   it on app restart even when `start_now=false`. Candle diagnostics must reuse
   the same fan-out calculation and avoid enable/restart `next_action_hint`
-  values for unsafe feeds. Do not silently persist, start, or recommend starting
-  an enabled poller that will hit provider rate limits.
+  values for unsafe feeds. Selector-repair diagnostics must estimate the
+  repaired watchlist before suggesting a mutating subscribe action; unsafe
+  repairs should point to the read-only watchlist planner. Do not silently
+  persist, start, or recommend starting an enabled poller that will hit provider
+  rate limits.
 - **`backtest` has no look-ahead** — the number-one backtest bug. Signal
   evaluation for bar `i` sees only `candles[i.saturating_sub(EVAL_WINDOW)..i]`
   plus `latest = candles[i]`, never a bar `> i` (the same invariant `dispatch`

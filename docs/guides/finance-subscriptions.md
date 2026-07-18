@@ -241,6 +241,10 @@ polling fans out as `symbols × timeframes` requests per poll.
 feed source through `fanout_safe_to_start` and `fanout_diagnostic`; when a
 disabled or stopped feed is unsafe, diagnostics omit the enable/restart
 `next_action_hint` rather than suggesting an operation the guard will reject.
+For selector mismatches, diagnostics also estimate the fan-out after applying
+the missing selectors. Unsafe repairs return a read-only
+`finance_plan_instrument_watchlist` `next_action_hint` instead of a mutating
+`finance_subscribe_instruments(start_now=true)` hint.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized
