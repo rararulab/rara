@@ -56,3 +56,46 @@ pub struct BacktestReport {
     /// evaluated trades in trigger-time order. `0.0` when there are no trades.
     pub max_drawdown:          f64,
 }
+
+/// Per-signal attribution for the same replay and naive-long rule.
+///
+/// The composite [`BacktestReport`] answers "when rara would have emitted an
+/// anomaly, what happened next?". This report answers the next research
+/// question: "which builtin signals contributed to those anomalies, and what
+/// happened after each signal fired?". A bar can contribute to multiple rows
+/// when multiple signals fire on the same candle, so per-signal
+/// [`SignalAttribution::trigger_count`] values intentionally do not sum to the
+/// composite trigger count.
+#[derive(Debug, Clone, PartialEq, Serialize, Builder)]
+pub struct SignalAttributionReport {
+    /// Composite anomaly triggers from the same replay, for context.
+    pub composite_trigger_count: usize,
+    /// Builtin signals in stable registry order, including zero-count rows so
+    /// absence is explicit.
+    pub signals:                 Vec<SignalAttribution>,
+}
+
+/// One builtin signal's trigger and naive-long forward-return metrics.
+#[derive(Debug, Clone, PartialEq, Serialize, Builder)]
+pub struct SignalAttribution {
+    /// Stable signal identifier such as `volume_surge` or `directional_run`.
+    pub signal_name:           String,
+    /// Bars where this individual signal fired.
+    pub trigger_count:         usize,
+    /// Triggers that have a full `HOLD_BARS` forward window.
+    pub evaluated_trade_count: usize,
+    /// Evaluated trades whose forward return is strictly positive.
+    pub win_count:             usize,
+    /// Fraction of evaluated trades that won, or `None` when no full forward
+    /// window exists.
+    pub win_rate:              Option<f64>,
+    /// Signed arithmetic mean forward return, or `None` when no full forward
+    /// window exists.
+    pub mean_forward_return:   Option<f64>,
+    /// Signed median forward return, or `None` when no full forward window
+    /// exists.
+    pub median_forward_return: Option<f64>,
+    /// Deepest peak-to-trough fractional decline of this signal's naive
+    /// strategy equity curve. `0.0` when there are no evaluated trades.
+    pub max_drawdown:          f64,
+}

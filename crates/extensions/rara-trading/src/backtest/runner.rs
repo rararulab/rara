@@ -27,7 +27,7 @@ use snafu::ResultExt;
 
 use super::{
     error::{BacktestError, EvaluateSnafu, Result},
-    report::BacktestReport,
+    report::{BacktestReport, SignalAttribution, SignalAttributionReport},
 };
 use crate::{
     anomaly::{self, EVAL_WINDOW},
@@ -120,6 +120,62 @@ pub fn run_backtest(candles: &[MarketCandle]) -> Result<BacktestReport> {
         .build())
 }
 
+/// Replay `candles` and attribute naive-long outcomes to each builtin signal.
+///
+/// This uses the same no-look-ahead evaluation window as [`run_backtest`], but
+/// keeps one row per builtin signal instead of collapsing all fired signals
+/// into a single composite `AnomalySignal`. A bar that fires multiple signals
+/// is counted once in [`SignalAttributionReport::composite_trigger_count`] and
+/// once in each fired signal's row.
+///
+/// # Errors
+///
+/// Returns [`BacktestError::Evaluate`] if the anomaly evaluator rejects any
+/// candle. The replay validates all bars before computing forward returns, so
+/// the later P&L pass never reads an invalid exit close.
+pub fn run_signal_attribution(candles: &[MarketCandle]) -> Result<SignalAttributionReport> {
+    let mut rows: Vec<SignalAttributionAccumulator> = anomaly::builtin_signal_names()
+        .into_iter()
+        .map(SignalAttributionAccumulator::new)
+        .collect();
+    let mut composite_trigger_count = 0;
+
+    // Pass 1: collect per-signal trigger indices. This validates every candle
+    // through the evaluator before any forward-return pass reads future exits.
+    for index in 0..candles.len() {
+        let window = &candles[index.saturating_sub(EVAL_WINDOW)..index];
+        let latest = &candles[index];
+        let outputs = anomaly::evaluate_builtin_signals(window, latest).context(EvaluateSnafu)?;
+        debug_assert_eq!(
+            rows.len(),
+            outputs.len(),
+            "builtin signal name and output registries should stay aligned"
+        );
+
+        let mut composite_fired = false;
+        for (row, output) in rows.iter_mut().zip(outputs) {
+            debug_assert_eq!(row.signal_name, output.name);
+            if output.fired {
+                composite_fired = true;
+                row.trigger_indices.push(index);
+            }
+        }
+        if composite_fired {
+            composite_trigger_count += 1;
+        }
+    }
+
+    // Pass 2: the same fixed naive-long forward return, now grouped by signal.
+    Ok(SignalAttributionReport::builder()
+        .composite_trigger_count(composite_trigger_count)
+        .signals(
+            rows.into_iter()
+                .map(|row| row.into_report_row(candles))
+                .collect(),
+        )
+        .build())
+}
+
 /// Fetch the single-stream candle history for `query` and delegate to
 /// [`run_backtest`].
 ///
@@ -149,16 +205,71 @@ pub async fn backtest(
 /// Strictly-positive `f64` close of a candle already validated by
 /// `anomaly::evaluate`.
 ///
-/// `run_backtest` calls `evaluate` for every bar as `latest` before this runs,
-/// and `evaluate` rejects any non-positive or non-finite close; so by the time
-/// forward return reads an entry/exit close it is known valid. The `expect`
-/// documents that invariant rather than hiding a fabricated fallback.
+/// `run_backtest` and `run_signal_attribution` validate every bar as `latest`
+/// before their forward-return pass runs, and the evaluator rejects any
+/// non-positive or non-finite close; so by the time forward return reads an
+/// entry/exit close it is known valid. The `expect` documents that invariant
+/// rather than hiding a fabricated fallback.
 fn close_f64(candle: &MarketCandle) -> f64 {
     candle
         .close
         .to_f64()
         .filter(|value| value.is_finite() && *value > 0.0)
         .expect("close validated as strictly positive and finite by anomaly::evaluate")
+}
+
+struct SignalAttributionAccumulator {
+    signal_name:     &'static str,
+    trigger_indices: Vec<usize>,
+}
+
+impl SignalAttributionAccumulator {
+    fn new(signal_name: &'static str) -> Self {
+        Self {
+            signal_name,
+            trigger_indices: Vec::new(),
+        }
+    }
+
+    fn into_report_row(self, candles: &[MarketCandle]) -> SignalAttribution {
+        let forward_returns: Vec<f64> = self
+            .trigger_indices
+            .iter()
+            .filter_map(|&index| forward_return(candles, index))
+            .collect();
+        let evaluated_trade_count = forward_returns.len();
+        let win_count = forward_returns.iter().filter(|value| **value > 0.0).count();
+        let (win_rate, mean_forward_return, median_forward_return) = if evaluated_trade_count == 0 {
+            (None, None, None)
+        } else {
+            let mean = forward_returns.iter().sum::<f64>() / evaluated_trade_count as f64;
+            (
+                Some(win_count as f64 / evaluated_trade_count as f64),
+                Some(mean),
+                median(&forward_returns),
+            )
+        };
+
+        SignalAttribution::builder()
+            .signal_name(self.signal_name.to_owned())
+            .trigger_count(self.trigger_indices.len())
+            .evaluated_trade_count(evaluated_trade_count)
+            .win_count(win_count)
+            .maybe_win_rate(win_rate)
+            .maybe_mean_forward_return(mean_forward_return)
+            .maybe_median_forward_return(median_forward_return)
+            .max_drawdown(strategy_max_drawdown(&forward_returns))
+            .build()
+    }
+}
+
+fn forward_return(candles: &[MarketCandle], index: usize) -> Option<f64> {
+    let exit = index + HOLD_BARS;
+    (exit < candles.len()).then(|| {
+        let entry_close = close_f64(&candles[index]);
+        let exit_close = close_f64(&candles[exit]);
+        (exit_close - entry_close) / entry_close
+    })
 }
 
 /// Median of `values`, or `None` when empty. Copies into a scratch buffer so
@@ -202,7 +313,7 @@ mod tests {
     use jiff::{SignedDuration, Timestamp};
     use rust_decimal::Decimal;
 
-    use super::{HOLD_BARS, backtest, run_backtest};
+    use super::{HOLD_BARS, backtest, run_backtest, run_signal_attribution};
     use crate::{
         anomaly::AnomalyError,
         backtest::BacktestError,
@@ -297,6 +408,63 @@ mod tests {
         // (1.01 − 1.0) / 1.01.
         let expected_drawdown = 0.01 / 1.01;
         assert!((report.max_drawdown - expected_drawdown).abs() < APPROX);
+    }
+
+    #[test]
+    fn signal_attribution_reports_deterministic_metrics_per_builtin_signal() {
+        let candles = winning_and_losing_fixture();
+        let composite = run_backtest(&candles).expect("positive prices");
+        let attribution = run_signal_attribution(&candles).expect("positive prices");
+
+        assert_eq!(
+            attribution.composite_trigger_count, composite.trigger_count,
+            "composite context should match the normal report"
+        );
+        assert_eq!(
+            attribution
+                .signals
+                .iter()
+                .map(|signal| signal.signal_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "max_drawdown",
+                "window_return",
+                "volume_surge",
+                "robust_zscore",
+                "jump_ratio",
+                "volatility_regime",
+                "directional_run",
+            ]
+        );
+
+        let volume = attribution
+            .signals
+            .iter()
+            .find(|signal| signal.signal_name == "volume_surge")
+            .expect("volume surge attribution row");
+        assert_eq!(volume.trigger_count, 2);
+        assert_eq!(volume.evaluated_trade_count, 2);
+        assert_eq!(volume.win_count, 1);
+        assert_eq!(volume.win_rate, Some(0.5));
+
+        let expected_mean =
+            f64::midpoint((60600.0 - 60000.0) / 60000.0, (60000.0 - 60600.0) / 60600.0);
+        assert!((volume.mean_forward_return.expect("mean") - expected_mean).abs() < APPROX);
+        assert!((volume.median_forward_return.expect("median") - expected_mean).abs() < APPROX);
+        assert!((volume.max_drawdown - (0.01 / 1.01)).abs() < APPROX);
+
+        for signal in attribution
+            .signals
+            .iter()
+            .filter(|signal| signal.signal_name != "volume_surge")
+        {
+            assert_eq!(signal.trigger_count, 0, "unexpected trigger in {signal:?}");
+            assert_eq!(signal.evaluated_trade_count, 0);
+            assert_eq!(signal.win_rate, None);
+            assert_eq!(signal.mean_forward_return, None);
+            assert_eq!(signal.median_forward_return, None);
+            assert_eq!(signal.max_drawdown, 0.0);
+        }
     }
 
     #[test]
@@ -434,6 +602,15 @@ mod tests {
         // report computed from the invalid data.
         assert!(matches!(
             error,
+            BacktestError::Evaluate {
+                source: AnomalyError::NonPositivePrice { .. },
+            }
+        ));
+
+        let attribution_error =
+            run_signal_attribution(&candles).expect_err("non-positive close is invalid");
+        assert!(matches!(
+            attribution_error,
             BacktestError::Evaluate {
                 source: AnomalyError::NonPositivePrice { .. },
             }

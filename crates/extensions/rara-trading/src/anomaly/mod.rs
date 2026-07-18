@@ -37,4 +37,5 @@ pub mod tools;
 
 pub use error::{AnomalyError, Result};
 pub use evaluator::{EVAL_WINDOW, evaluate};
+pub(crate) use evaluator::{builtin_signal_names, evaluate_builtin_signals};
 pub use signal::{AnomalyMetrics, AnomalySignal, Severity};
