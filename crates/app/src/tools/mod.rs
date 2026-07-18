@@ -83,8 +83,9 @@ use finance_diagnostics::FinanceDiagnoseCandleSubscriptionsTool;
 use finance_feed::{
     FinanceDisableFeedSourceTool, FinanceEnableFeedSourceTool, FinanceListFeedBundlesTool,
     FinanceListFeedEventsTool, FinanceListFeedSourcesTool, FinanceListSubscriptionsTool,
-    FinanceRestartFeedSourceTool, FinanceSubscribeFeedBundleTool, FinanceSubscribeInstrumentsTool,
-    FinanceSubscribeNewsTool, FinanceUnsubscribeTool,
+    FinancePlanInstrumentWatchlistTool, FinanceRestartFeedSourceTool,
+    FinanceSubscribeFeedBundleTool, FinanceSubscribeInstrumentsTool, FinanceSubscribeNewsTool,
+    FinanceUnsubscribeTool,
 };
 use find_files::FindFilesTool;
 use grep::GrepTool;
@@ -331,6 +332,7 @@ fn finance_tools(deps: &ToolDeps) -> Vec<AgentToolRef> {
             deps.data_feed_registry.clone(),
             deps.finance_registry.clone(),
         )),
+        Arc::new(FinancePlanInstrumentWatchlistTool),
         Arc::new(FinanceListFeedEventsTool::new(deps.data_feed_svc.clone())),
         Arc::new(FinanceListSubscriptionsTool::new(
             deps.data_feed_svc.clone(),
@@ -485,6 +487,7 @@ mod tests {
             "fff-grep",
             "finance_list_feed_sources",
             "finance_list_feed_bundles",
+            "finance_plan_instrument_watchlist",
             "finance_list_feed_events",
             "finance_list_subscriptions",
             "finance_enable_feed_source",
@@ -615,6 +618,7 @@ mod tests {
                 data_feed_registry.clone(),
                 finance_registry.clone(),
             )),
+            Arc::new(FinancePlanInstrumentWatchlistTool),
             Arc::new(FinanceSubscribeFeedBundleTool::new(
                 data_feed_svc.clone(),
                 data_feed_registry.clone(),
@@ -651,6 +655,7 @@ mod tests {
         for expected in [
             "finance_list_feed_bundles",
             "finance_list_feed_sources",
+            "finance_plan_instrument_watchlist",
             "finance_subscribe_feed_bundle",
             "finance_subscribe_news",
             "finance_subscribe_instruments",
@@ -688,6 +693,7 @@ mod tests {
                 data_feed_registry.clone(),
                 finance_registry.clone(),
             )),
+            Arc::new(FinancePlanInstrumentWatchlistTool),
             Arc::new(FinanceListFeedEventsTool::new(data_feed_svc.clone())),
             Arc::new(FinanceListSubscriptionsTool::new(
                 data_feed_svc.clone(),

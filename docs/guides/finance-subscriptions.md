@@ -133,6 +133,7 @@ runtime control, subscription management, and inspection:
 - `finance_list_feed_sources`
 - `finance_list_feed_bundles`
 - `finance_list_feed_events`
+- `finance_plan_instrument_watchlist`
 - `finance_enable_feed_source`
 - `finance_disable_feed_source`
 - `finance_restart_feed_source`
@@ -218,6 +219,17 @@ candle-query hints. Use
 `finance_list_candle_streams` after subscription creation to discover stored
 TSDB streams, then call the single-stream candle tools for latest, recent,
 freshness, gaps, or bounded ranges.
+
+For large watchlists, call `finance_plan_instrument_watchlist` before
+subscribing. The planner is read-only: it normalizes the requested symbols and
+timeframes, estimates the market-data poll fan-out, compares the selected
+source's `interval_secs` against a conservative request-rate budget, and returns
+safe `finance_subscribe_instruments` parameters. If the configured polling
+interval is too aggressive for the watchlist size, the subscribe hint sets
+`start_now=false` and the result includes a Settings → Data Feeds configure hint
+for raising `transport.interval_secs` before the feed is started. This is the
+preferred path when tracking tens or hundreds of instruments because Binance
+polling fans out as `symbols × timeframes` requests per poll.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized

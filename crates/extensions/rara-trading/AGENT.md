@@ -21,6 +21,11 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
 - `feed/` — finance-specific ingestion sources (Binance poller, RSS) that parse
   external data into kernel `FeedEvent`s. The kernel owns the generic event
   envelope, registry, and store; this crate only produces events.
+  `feed/catalog.rs` also owns the built-in source and bundle catalog consumed
+  by app-side finance feed tools. For large market-candle watchlists the app
+  first plans against this catalog (`finance_plan_instrument_watchlist`) so
+  Binance-style sources account for `symbols × timeframes` request fan-out
+  before subscribing or starting a feed.
 - `finance/registry.rs` — `FinanceSubscriptionRegistry`: matches events to
   subscriptions on metadata (venue/symbol/timeframe/source/watch_term) and
   decides delivery (`Immediate` vs `Silent`) under a cooldown + hourly budget.
