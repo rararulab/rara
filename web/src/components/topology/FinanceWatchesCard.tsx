@@ -216,6 +216,8 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                         unsubscribeBundleMutation.variables?.includes(subscription.subscription_id),
                       ));
                   const providers = summarizeList(bundle.providers, 2);
+                  const load = bundleLoadLabel(bundle);
+                  const fanoutDiagnostic = bundleFanoutDiagnostic(bundle);
                   return (
                     <div key={bundle.id} className="rounded-md border bg-muted/20 px-3 py-2">
                       <div className="flex items-start justify-between gap-2">
@@ -241,6 +243,14 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                                 watching
                               </Badge>
                             )}
+                            {fanoutDiagnostic && (
+                              <Badge
+                                variant="outline"
+                                className="border-destructive/40 px-1.5 py-0 text-[10px] text-destructive"
+                              >
+                                unsafe fan-out
+                              </Badge>
+                            )}
                           </div>
                           <p className="line-clamp-2 text-[11px] text-muted-foreground">
                             {bundle.description}
@@ -248,6 +258,10 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                           <p className="text-[11px] text-muted-foreground">
                             {bundle.sources.map((source) => source.name).join(', ')}
                           </p>
+                          {load && <p className="text-[11px] text-muted-foreground">{load}</p>}
+                          {fanoutDiagnostic && (
+                            <p className="text-[11px] text-destructive">{fanoutDiagnostic}</p>
+                          )}
                         </div>
                         <Button
                           size="sm"
@@ -313,6 +327,8 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                 needsConfiguration,
                 subscribed,
               });
+              const load = catalogLoadLabel(entry);
+              const fanoutDiagnostic = catalogFanoutDiagnostic(entry);
               return (
                 <div key={entry.id} className="rounded-md border bg-background/60 px-3 py-2">
                   <div className="flex items-start justify-between gap-2">
@@ -340,10 +356,22 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                             watching
                           </Badge>
                         )}
+                        {fanoutDiagnostic && (
+                          <Badge
+                            variant="outline"
+                            className="border-destructive/40 px-1.5 py-0 text-[10px] text-destructive"
+                          >
+                            unsafe fan-out
+                          </Badge>
+                        )}
                       </div>
                       <p className="line-clamp-2 text-[11px] text-muted-foreground">
                         {coverageLabel(entry)}
                       </p>
+                      {load && <p className="text-[11px] text-muted-foreground">{load}</p>}
+                      {fanoutDiagnostic && (
+                        <p className="text-[11px] text-destructive">{fanoutDiagnostic}</p>
+                      )}
                       {streamHealth && (
                         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                           <Badge
@@ -545,6 +573,90 @@ function coverageLabel(entry: FeedCatalogEntry): string {
 
   const tags = entry.tags.filter((tag) => tag !== 'finance' && tag !== 'news');
   return tags.length > 0 ? tags.join(' · ') : entry.description;
+}
+
+function formatRate(value: number): string {
+  if (Number.isInteger(value)) return value.toString();
+  return value.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function catalogLoadLabel(entry: FeedCatalogEntry): string | null {
+  if (entry.feed_type !== 'market_candle' || !entry.load) return null;
+
+  const parts: string[] = [];
+  if (entry.load.configured_market_stream_count != null) {
+    parts.push(`${entry.load.configured_market_stream_count} configured streams`);
+  }
+  if (entry.load.configured_market_poll_request_count != null) {
+    parts.push(`${entry.load.configured_market_poll_request_count} req/poll`);
+  }
+  if (entry.load.configured_market_requests_per_second != null) {
+    parts.push(`${formatRate(entry.load.configured_market_requests_per_second)} req/s`);
+  }
+  if (entry.load.subscribed_market_stream_count > 0) {
+    parts.push(`${entry.load.subscribed_market_stream_count} subscribed streams`);
+  }
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function catalogFanoutDiagnostic(entry: FeedCatalogEntry): string | null {
+  if (entry.feed_type !== 'market_candle') return null;
+  if (entry.load?.configured_market_fanout_safe_to_start !== false) return null;
+  return (
+    entry.load.configured_market_fanout_diagnostic ?? 'K-line fan-out exceeds safe polling load.'
+  );
+}
+
+function bundleLoadLabel(bundle: FinanceFeedBundle): string | null {
+  const marketSources = bundle.sources.filter(
+    (source) => source.feed_type === 'market_candle' && source.load != null,
+  );
+  if (marketSources.length === 0) return null;
+
+  const configuredStreams = sumOptional(
+    marketSources.map((source) => source.load?.configured_market_stream_count),
+  );
+  const pollRequests = sumOptional(
+    marketSources.map((source) => source.load?.configured_market_poll_request_count),
+  );
+  const requestsPerSecond = sumOptional(
+    marketSources.map((source) => source.load?.configured_market_requests_per_second),
+  );
+  const subscribedStreams = marketSources.reduce(
+    (sum, source) => sum + (source.load?.subscribed_market_stream_count ?? 0),
+    0,
+  );
+
+  const parts: string[] = [];
+  if (configuredStreams != null) parts.push(`${configuredStreams} configured streams`);
+  if (pollRequests != null) parts.push(`${pollRequests} req/poll`);
+  if (requestsPerSecond != null) parts.push(`${formatRate(requestsPerSecond)} req/s`);
+  if (subscribedStreams > 0) parts.push(`${subscribedStreams} subscribed streams`);
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function bundleFanoutDiagnostic(bundle: FinanceFeedBundle): string | null {
+  const source = bundle.sources.find(
+    (candidate) =>
+      candidate.feed_type === 'market_candle' &&
+      candidate.load?.configured_market_fanout_safe_to_start === false,
+  );
+  if (!source) return null;
+  const diagnostic = catalogFanoutDiagnostic(source);
+  return diagnostic ? `${source.name}: ${diagnostic}` : null;
+}
+
+function sumOptional(values: Array<number | null | undefined>): number | null {
+  let hasValue = false;
+  let sum = 0;
+  for (const value of values) {
+    if (value == null) continue;
+    hasValue = true;
+    sum += value;
+  }
+  return hasValue ? sum : null;
 }
 
 function marketCandleEntryStreamHealth(
