@@ -33,6 +33,7 @@ mod registry;
 mod rules;
 mod signal;
 mod statistics;
+pub mod tools;
 
 pub use error::{AnomalyError, Result};
 pub use evaluator::{EVAL_WINDOW, evaluate};

@@ -55,6 +55,14 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   `evaluate` / `evaluate_with(&registry, …)` loop, the metrics projection, and
   `classify`.
 
+  `tools.rs` exposes the evaluator as the deferred, read-only
+  `finance_evaluate_candle_signal` agent tool. It pulls either the latest
+  stored closed candle or one requested `open_time`, fetches the rolling window
+  with `end = Some(latest.open_time)`, delegates to `evaluate`, and returns the
+  resolved candle, window status, and structured signal trace. It is an
+  inspection surface for "does this stream currently have a rara signal?", not a
+  strategy/deployment/order tool.
+
   `volatility_regime` and `directional_run` are **orthogonal** tail-risk
   detectors: the first measures dispersion (magnitude), the second sign
   persistence (direction). Both are structurally invisible to the first five —

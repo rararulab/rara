@@ -412,6 +412,11 @@ fn finance_market_data_tools(
             ),
         ),
         Arc::new(
+            rara_trading::anomaly::tools::FinanceEvaluateCandleSignalTool::new(
+                market_data_repo.clone(),
+            ),
+        ),
+        Arc::new(
             rara_trading::backtest::tools::FinanceBacktestSignalTool::new(market_data_repo.clone()),
         ),
     ]
@@ -495,6 +500,7 @@ mod tests {
             "finance_query_candles",
             "finance_find_candle_gaps",
             "finance_get_candle_freshness",
+            "finance_evaluate_candle_signal",
             "finance_backtest_signal",
         ] {
             assert!(
@@ -532,6 +538,7 @@ mod tests {
             "finance_query_candles",
             "finance_find_candle_gaps",
             "finance_get_candle_freshness",
+            "finance_evaluate_candle_signal",
             "finance_backtest_signal",
         ] {
             assert!(
@@ -541,7 +548,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            7,
+            8,
             "finance market-data helper should only register read-side candle and signal tools"
         );
     }
@@ -573,6 +580,7 @@ mod tests {
             "finance_query_candles",
             "finance_find_candle_gaps",
             "finance_get_candle_freshness",
+            "finance_evaluate_candle_signal",
             "finance_backtest_signal",
         ] {
             assert!(
