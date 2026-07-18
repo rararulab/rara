@@ -45,6 +45,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::finance_candle_fanout::{
+    DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND, market_candle_config_fanout_safety,
+    market_candle_fanout_safety, unsafe_market_candle_fanout_message,
+    validate_market_candle_request_budget,
+};
+
 const MAX_CATALOG_SOURCE_ID_LEN: usize = 128;
 const MAX_FEED_ID_LEN: usize = 128;
 const MAX_SOURCE_NAME_LEN: usize = 128;
@@ -64,9 +70,6 @@ const DEFAULT_MAX_IMMEDIATE_PER_HOUR: u16 = 6;
 const DEFAULT_FEED_EVENT_LIMIT: i64 = 20;
 const MAX_FEED_EVENT_LIMIT: i64 = 200;
 const DEFAULT_MARKET_CANDLE_CATALOG_SOURCE_ID: &str = "binance-market-candles";
-const DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 10.0;
-const MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 100.0;
-const MIN_MARKET_CANDLE_INTERVAL_SECS: u64 = 5;
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub(super) struct FinanceListFeedBundlesParams {
@@ -3197,67 +3200,6 @@ fn normalize_watchlist_timeframes(
     Ok(out)
 }
 
-#[derive(Debug, Clone)]
-struct MarketCandleFanoutSafety {
-    stream_count:                  usize,
-    poll_request_count:            usize,
-    configured_interval_secs:      u64,
-    estimated_requests_per_second: f64,
-    request_budget_per_second:     f64,
-    minimum_safe_interval_secs:    u64,
-    safe_to_start:                 bool,
-}
-
-fn validate_market_candle_request_budget(budget: f64) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        budget.is_finite() && budget > 0.0,
-        "max_requests_per_second must be positive"
-    );
-    anyhow::ensure!(
-        budget <= MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
-        "max_requests_per_second must be <= {MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND}"
-    );
-    Ok(())
-}
-
-fn market_candle_fanout_safety(
-    provider: Option<&str>,
-    transport: &serde_json::Value,
-    symbols: &[String],
-    timeframes: &[String],
-    request_budget_per_second: f64,
-) -> anyhow::Result<MarketCandleFanoutSafety> {
-    validate_market_candle_request_budget(request_budget_per_second)?;
-    let configured_interval_secs = transport
-        .get("interval_secs")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| anyhow::anyhow!("market candle source has no interval_secs"))?;
-    anyhow::ensure!(
-        configured_interval_secs > 0,
-        "market candle source has invalid interval_secs"
-    );
-
-    let stream_count = symbols.len().saturating_mul(timeframes.len());
-    let poll_request_count = if provider == Some("binance") {
-        stream_count
-    } else {
-        1
-    };
-    let estimated_requests_per_second = poll_request_count as f64 / configured_interval_secs as f64;
-    let minimum_safe_interval_secs = MIN_MARKET_CANDLE_INTERVAL_SECS
-        .max((poll_request_count as f64 / request_budget_per_second).ceil() as u64);
-
-    Ok(MarketCandleFanoutSafety {
-        stream_count,
-        poll_request_count,
-        configured_interval_secs,
-        estimated_requests_per_second,
-        request_budget_per_second,
-        minimum_safe_interval_secs,
-        safe_to_start: configured_interval_secs >= minimum_safe_interval_secs,
-    })
-}
-
 fn apply_market_candle_fanout_guard(
     config: &mut DataFeedConfig,
     start_now: bool,
@@ -3288,35 +3230,6 @@ fn ensure_market_candle_fanout_safe_to_enable(config: &DataFeedConfig) -> anyhow
         unsafe_market_candle_fanout_message(&safety)
     );
     Ok(())
-}
-
-fn market_candle_config_fanout_safety(
-    config: &DataFeedConfig,
-) -> anyhow::Result<MarketCandleFanoutSafety> {
-    let final_symbols = extract_normalized_string_array(&config.transport, "symbols", true);
-    let final_timeframes = extract_normalized_string_array(&config.transport, "timeframes", false);
-    let provider = config
-        .transport
-        .get("provider")
-        .and_then(serde_json::Value::as_str);
-    market_candle_fanout_safety(
-        provider,
-        &config.transport,
-        &final_symbols,
-        &final_timeframes,
-        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
-    )
-}
-
-fn unsafe_market_candle_fanout_message(safety: &MarketCandleFanoutSafety) -> String {
-    format!(
-        "market candle watchlist fans out to {} requests per poll at interval_secs={}; configured \
-         interval is unsafe for the default request budget. Increase interval_secs to at least {} \
-         or call finance_plan_instrument_watchlist and retry after reviewing the plan.",
-        safety.poll_request_count,
-        safety.configured_interval_secs,
-        safety.minimum_safe_interval_secs
-    )
 }
 
 fn watchlist_plan_warning(

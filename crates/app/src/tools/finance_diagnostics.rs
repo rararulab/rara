@@ -35,6 +35,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::finance_candle_fanout::{
+    market_candle_config_fanout_safety, unsafe_market_candle_fanout_message,
+};
+
 const MAX_STALE_AFTER_SECS: u64 = 31_536_000;
 const MAX_DIAGNOSTIC_SOURCE_REFS: usize = 32;
 const MAX_DIAGNOSTIC_SOURCE_REF_LEN: usize = 128;
@@ -129,6 +133,8 @@ pub(super) struct FeedSourceDiagnostic {
     pub configured_timeframes: Vec<String>,
     pub selector_coverage:     FeedSelectorCoverage,
     pub selector_diagnostic:   Option<String>,
+    pub fanout_safe_to_start:  Option<bool>,
+    pub fanout_diagnostic:     Option<String>,
     pub enabled:               Option<bool>,
     pub configured_status:     Option<String>,
     pub runtime_state:         FeedRuntimeState,
@@ -457,6 +463,7 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     &configured_timeframes,
                     subscription,
                 );
+                let (fanout_safe_to_start, fanout_diagnostic) = market_candle_start_safety(feed);
                 FeedSourceDiagnostic {
                     source_name: source_name.clone(),
                     catalog_source_id: catalog_source.map(|source| source.id.clone()),
@@ -469,6 +476,8 @@ impl FinanceDiagnoseCandleSubscriptionsTool {
                     configured_timeframes,
                     selector_coverage,
                     selector_diagnostic,
+                    fanout_safe_to_start,
+                    fanout_diagnostic,
                     enabled: feed.map(|feed| feed.enabled),
                     configured_status: feed.map(|feed| feed.status.to_string()),
                     runtime_state: runtime_state(
@@ -589,6 +598,23 @@ fn runtime_state(feed: Option<&DataFeedConfig>, running: bool) -> FeedRuntimeSta
         (Some(feed), _) if !feed.enabled => FeedRuntimeState::Disabled,
         (Some(_), true) => FeedRuntimeState::Running,
         (Some(_), false) => FeedRuntimeState::Stopped,
+    }
+}
+
+fn market_candle_start_safety(feed: Option<&DataFeedConfig>) -> (Option<bool>, Option<String>) {
+    let Some(feed) = feed else {
+        return (None, None);
+    };
+    if feed.feed_type != FeedType::MarketCandle {
+        return (None, None);
+    }
+
+    match market_candle_config_fanout_safety(feed) {
+        Ok(safety) => (
+            Some(safety.safe_to_start),
+            (!safety.safe_to_start).then(|| unsafe_market_candle_fanout_message(&safety)),
+        ),
+        Err(err) => (Some(false), Some(err.to_string())),
     }
 }
 
@@ -1130,6 +1156,10 @@ fn subscribe_instruments_hint(
 }
 
 fn enable_feed_source_hint(feed: &FeedSourceDiagnostic) -> Option<FinanceDiagnosticNextActionHint> {
+    if feed.fanout_safe_to_start == Some(false) {
+        return None;
+    }
+
     let catalog_source_id = feed.catalog_source_id.as_ref()?;
     Some(FinanceDiagnosticNextActionHint {
         tool:            "finance_enable_feed_source".to_owned(),
@@ -1145,6 +1175,10 @@ fn enable_feed_source_hint(feed: &FeedSourceDiagnostic) -> Option<FinanceDiagnos
 fn restart_feed_source_hint(
     feed: &FeedSourceDiagnostic,
 ) -> Option<FinanceDiagnosticNextActionHint> {
+    if feed.fanout_safe_to_start == Some(false) {
+        return None;
+    }
+
     if let Some(catalog_source_id) = &feed.catalog_source_id {
         return Some(FinanceDiagnosticNextActionHint {
             tool:            "finance_restart_feed_source".to_owned(),
@@ -1375,6 +1409,12 @@ mod tests {
             .created_at(now)
             .updated_at(now)
             .build()
+    }
+
+    fn large_binance_symbols() -> Vec<String> {
+        std::iter::once("BTCUSDT".to_owned())
+            .chain((1..500).map(|index| format!("ASSET{index:03}USDT")))
+            .collect()
     }
 
     async fn fixture() -> (
@@ -1810,6 +1850,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn diagnose_suppresses_restart_hint_when_stopped_feed_fanout_is_unsafe() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        let mut unsafe_feed = feed_config();
+        unsafe_feed.transport["symbols"] = serde_json::json!(large_binance_symbols());
+        unsafe_feed.transport["timeframes"] = serde_json::json!(["1m", "5m"]);
+        unsafe_feed.updated_at = ts("2026-07-10T08:31:00Z");
+        assert!(
+            tool.data_feed_svc
+                .update_feed(&unsafe_feed)
+                .await
+                .expect("unsafe feed update should succeed")
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::NeedsRuntime);
+        assert_eq!(sub.feed_sources[0].runtime_state, FeedRuntimeState::Stopped);
+        assert_eq!(sub.feed_sources[0].fanout_safe_to_start, Some(false));
+        assert!(
+            sub.feed_sources[0]
+                .fanout_diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("at least 100")),
+            "unexpected fanout diagnostic: {:?}",
+            sub.feed_sources[0].fanout_diagnostic
+        );
+        assert!(
+            sub.next_action_hint.is_none(),
+            "unsafe stopped feed should not expose a restart hint that will be rejected"
+        );
+    }
+
+    #[tokio::test]
     async fn diagnose_reports_missing_data_when_feed_is_running_without_candles() {
         let (tool, finance_registry, data_feed_registry, _market_repo, _feed_store, ctx) =
             fixture().await;
@@ -2040,6 +2129,60 @@ mod tests {
         );
         assert_eq!(next_action.required_params, Vec::<String>::new());
         assert_eq!(next_action.optional_params, ["start_now".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn diagnose_suppresses_enable_hint_when_disabled_feed_fanout_is_unsafe() {
+        let (tool, finance_registry, _data_feed_registry, _market_repo, _feed_store, ctx) =
+            fixture().await;
+        insert_subscription(&finance_registry, &ctx).await;
+        let mut disabled = feed_config();
+        disabled.enabled = false;
+        disabled.status = FeedStatus::Idle;
+        disabled.transport["symbols"] = serde_json::json!(large_binance_symbols());
+        disabled.transport["timeframes"] = serde_json::json!(["1m", "5m"]);
+        disabled.updated_at = ts("2026-07-10T08:31:00Z");
+        assert!(
+            tool.data_feed_svc
+                .update_feed(&disabled)
+                .await
+                .expect("disabled feed update should succeed")
+        );
+
+        let result = tool
+            .run(
+                FinanceDiagnoseCandleSubscriptionsParams {
+                    subscription_id:    None,
+                    catalog_source_ids: Vec::new(),
+                    source_names:       Vec::new(),
+                    feed_ids:           Vec::new(),
+                    as_of:              Some("2026-07-10T08:31:00Z".to_owned()),
+                    stale_after_secs:   None,
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let sub = &result.subscriptions[0];
+        assert_eq!(sub.status, SubscriptionHealth::Unconfigured);
+        assert_eq!(
+            sub.feed_sources[0].runtime_state,
+            FeedRuntimeState::Disabled
+        );
+        assert_eq!(sub.feed_sources[0].fanout_safe_to_start, Some(false));
+        assert!(
+            sub.feed_sources[0]
+                .fanout_diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("fans out to 1000 requests")),
+            "unexpected fanout diagnostic: {:?}",
+            sub.feed_sources[0].fanout_diagnostic
+        );
+        assert!(
+            sub.next_action_hint.is_none(),
+            "unsafe disabled feed should not expose an enable hint that will be rejected"
+        );
     }
 
     #[tokio::test]

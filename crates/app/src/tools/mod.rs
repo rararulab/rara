@@ -31,6 +31,7 @@ mod edit_file;
 mod fff_find;
 mod fff_grep;
 mod file_stats;
+mod finance_candle_fanout;
 mod finance_diagnostics;
 mod finance_feed;
 mod find_files;
