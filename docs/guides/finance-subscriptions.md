@@ -237,6 +237,10 @@ enforce the same safety invariant: `finance_enable_feed_source` and
 turning a staged disabled watchlist into an enabled/running poller. This is the
 preferred path when tracking tens or hundreds of instruments because Binance
 polling fans out as `symbols × timeframes` requests per poll.
+`finance_diagnose_candle_subscriptions` reports the same fan-out safety on each
+feed source through `fanout_safe_to_start` and `fanout_diagnostic`; when a
+disabled or stopped feed is unsafe, diagnostics omit the enable/restart
+`next_action_hint` rather than suggesting an operation the guard will reject.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized

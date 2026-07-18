@@ -153,8 +153,10 @@ dispatch loop (`crates/app/src/lib.rs`).
   operator raises `transport.interval_secs`. The app-side
   `finance_enable_feed_source` and `finance_restart_feed_source` controls must
   enforce the same guard, because enabling a persisted disabled feed can start
-  it on app restart even when `start_now=false`. Do not silently persist or
-  start an enabled poller that will hit provider rate limits.
+  it on app restart even when `start_now=false`. Candle diagnostics must reuse
+  the same fan-out calculation and avoid enable/restart `next_action_hint`
+  values for unsafe feeds. Do not silently persist, start, or recommend starting
+  an enabled poller that will hit provider rate limits.
 - **`backtest` has no look-ahead** — the number-one backtest bug. Signal
   evaluation for bar `i` sees only `candles[i.saturating_sub(EVAL_WINDOW)..i]`
   plus `latest = candles[i]`, never a bar `> i` (the same invariant `dispatch`
