@@ -150,8 +150,11 @@ dispatch loop (`crates/app/src/lib.rs`).
   `finance_subscribe_instruments` path computes the final configured
   `symbols × timeframes` request count and rejects unsafe `start_now=true`
   subscriptions. Unsafe staged subscriptions keep the feed disabled until an
-  operator raises `transport.interval_secs`; do not silently persist an enabled
-  poller that will hit provider rate limits on app restart.
+  operator raises `transport.interval_secs`. The app-side
+  `finance_enable_feed_source` and `finance_restart_feed_source` controls must
+  enforce the same guard, because enabling a persisted disabled feed can start
+  it on app restart even when `start_now=false`. Do not silently persist or
+  start an enabled poller that will hit provider rate limits.
 - **`backtest` has no look-ahead** — the number-one backtest bug. Signal
   evaluation for bar `i` sees only `candles[i.saturating_sub(EVAL_WINDOW)..i]`
   plus `latest = candles[i]`, never a bar `> i` (the same invariant `dispatch`
