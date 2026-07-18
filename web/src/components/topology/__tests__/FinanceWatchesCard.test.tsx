@@ -241,6 +241,10 @@ describe('FinanceWatchesCard', () => {
     renderCard('session-1');
 
     expect(await screen.findByText('Curated bundles')).toBeInTheDocument();
+    expect(screen.getByText('Default bundle')).toBeInTheDocument();
+    expect(
+      screen.getByText('Sources are on; Watch subscribes this session without changing ingestion.'),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Watch bundle' }));
 
     await waitFor(() => {
@@ -292,6 +296,11 @@ describe('FinanceWatchesCard', () => {
 
     renderCard('session-1');
 
+    expect(
+      await screen.findByText(
+        'Enable bundle starts ingestion; Watch subscribes this session after sources are on.',
+      ),
+    ).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Enable bundle' }));
 
     await waitFor(() => {
@@ -333,6 +342,7 @@ describe('FinanceWatchesCard', () => {
 
     expect(await screen.findByText('Provider binance')).toBeInTheDocument();
     expect(screen.getByText('Provider longbridge')).toBeInTheDocument();
+    expect(screen.getAllByText('Default source')).toHaveLength(2);
   });
 
   it('shows_catalog_kline_load_before_watch', async () => {
@@ -547,6 +557,11 @@ describe('FinanceWatchesCard', () => {
 
     renderCard('session-1');
 
+    expect(
+      await screen.findByText(
+        'Enable source starts ingestion; Watch subscribes this session after it is on.',
+      ),
+    ).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Enable source' }));
 
     await waitFor(() => {
@@ -622,6 +637,9 @@ describe('FinanceWatchesCard', () => {
 
     renderCard('session-1');
 
+    expect(
+      await screen.findByText('Configure this source before ingestion can start.'),
+    ).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Configure' }));
 
     expect(openSettingsMock).toHaveBeenCalledWith('data-feeds', {
