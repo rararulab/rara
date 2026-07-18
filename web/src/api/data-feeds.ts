@@ -202,9 +202,37 @@ export interface FinanceFeedBundle {
   subscriptions: FeedCatalogSubscriptions;
 }
 
+export interface FinanceToolHint {
+  tool: string;
+  default_params: Record<string, unknown>;
+  required_params: string[];
+  optional_params: string[];
+}
+
+export interface FinanceFeedSourceConfigureHint {
+  action: string;
+  section: string;
+  default_params: Record<string, unknown>;
+  required_params: string[];
+  optional_params: string[];
+}
+
+export interface FinanceFeedBundleQuickStartHint {
+  bundle_id: string;
+  name: string;
+  feed_types: FeedType[];
+  providers: string[];
+  can_start_now: boolean;
+  requires_configuration: boolean;
+  subscribe_bundle_hint: FinanceToolHint | null;
+  configure_hints: FinanceFeedSourceConfigureHint[];
+  list_sources_hint: FinanceToolHint;
+}
+
 export interface FinanceFeedBundlesResponse {
   bundles: FinanceFeedBundle[];
   count: number;
+  quick_start_hints?: FinanceFeedBundleQuickStartHint[];
 }
 
 export interface EnableCatalogEntryRequest {
