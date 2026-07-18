@@ -59,8 +59,10 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   `finance_evaluate_candle_signal` agent tool. It pulls either the latest
   stored closed candle or one requested `open_time`, fetches the rolling window
   with `end = Some(latest.open_time)`, delegates to `evaluate`, and returns the
-  resolved candle, window status, and structured signal trace. It is an
-  inspection surface for "does this stream currently have a rara signal?", not a
+  resolved candle, window status, composite anomaly signal, and the per-builtin
+  signal trace (`signal_name`, computed `value`, `fired`, and the fired
+  `reason_fragment`). It is an inspection surface for "does this stream
+  currently have a rara signal?" and "which builtin signals contributed?", not a
   strategy/deployment/order tool.
 
   `volatility_regime` and `directional_run` are **orthogonal** tail-risk
@@ -80,7 +82,9 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   new signal contributes to the reason (via its `fragment`) and the fired-count.
   `builtin_registry()` order **is** the reason-fragment order (drawdown, return,
   volume, z-score, jump, volatility regime, directional run), so append new
-  signals and keep the existing order stable. `evaluate_with` is the test seam
+  signals and keep the existing order stable. `evaluate_trace` is the
+  agent-facing pure seam for composite + per-builtin trace over the builtin
+  registry; `evaluate_with` is the explicit-registry test seam
   (`registered_signal_participates_in_evaluation` injects an extra signal).
 
 - `backtest/` — signal-accuracy backtest harness (issue 2437), the first rung

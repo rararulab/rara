@@ -21,7 +21,7 @@ use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{AnomalyMetrics, AnomalySignal, EVAL_WINDOW, evaluate};
+use super::{AnomalyMetrics, AnomalySignal, EVAL_WINDOW, evaluate_trace};
 use crate::market_data::{
     CandleLatestQuery, CandleRangeQuery, CandleRecentQuery, MarketCandle, MarketDataRepositoryRef,
     Timeframe,
@@ -53,6 +53,7 @@ pub struct FinanceEvaluateCandleSignalResult {
     pub has_signal:          bool,
     pub status:              String,
     pub signal:              Option<FinanceEvaluatedAnomalySignal>,
+    pub signal_trace:        Vec<FinanceEvaluatedBuiltinSignal>,
     pub diagnostic_hint:     Option<FinanceEvaluateCandleSignalDiagnosticHint>,
 }
 
@@ -88,6 +89,14 @@ pub struct FinanceEvaluatedAnomalySignal {
     pub metrics:  FinanceEvaluatedAnomalyMetrics,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FinanceEvaluatedBuiltinSignal {
+    pub signal_name:     String,
+    pub value:           Option<f64>,
+    pub fired:           bool,
+    pub reason_fragment: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct FinanceEvaluatedAnomalyMetrics {
     pub window_return:     f64,
@@ -113,8 +122,9 @@ pub struct FinanceEvaluateCandleSignalDiagnosticHint {
     name = "finance_evaluate_candle_signal",
     description = "Evaluate the latest or a specified stored closed OHLCV candle through rara's \
                    built-in market-anomaly signal evaluator. Use this after discovering a candle \
-                   stream when the user asks whether the current stream has an anomaly signal. \
-                   This is read-only and never places trades.",
+                   stream when the user asks whether the current stream has an anomaly signal or \
+                   which built-in signals contributed to it. This is read-only and never places \
+                   trades.",
     tier = "deferred",
     read_only,
     concurrency_safe
@@ -193,7 +203,13 @@ impl ToolExecute for FinanceEvaluateCandleSignalTool {
             })
             .await?;
         let window_candle_count = window.len();
-        let signal = evaluate(&window, &latest)?.map(FinanceEvaluatedAnomalySignal::from);
+        let evaluation = evaluate_trace(&window, &latest)?;
+        let signal_trace = evaluation
+            .signals
+            .into_iter()
+            .map(FinanceEvaluatedBuiltinSignal::from)
+            .collect();
+        let signal = evaluation.signal.map(FinanceEvaluatedAnomalySignal::from);
         let has_signal = signal.is_some();
         let status = if has_signal {
             "signal"
@@ -224,6 +240,7 @@ impl ToolExecute for FinanceEvaluateCandleSignalTool {
             has_signal,
             status: status.to_owned(),
             signal,
+            signal_trace,
             diagnostic_hint: None,
         })
     }
@@ -293,6 +310,7 @@ fn missing_result(
         has_signal: false,
         status: "missing".to_owned(),
         signal: None,
+        signal_trace: Vec::new(),
         diagnostic_hint: source_scoped_missing_candle_diagnostic_hint(source_name.as_deref()),
     }
 }
@@ -361,6 +379,17 @@ impl From<AnomalySignal> for FinanceEvaluatedAnomalySignal {
             severity: signal.severity.label().to_owned(),
             reason:   signal.reason,
             metrics:  FinanceEvaluatedAnomalyMetrics::from(signal.metrics),
+        }
+    }
+}
+
+impl From<super::SignalEvaluation> for FinanceEvaluatedBuiltinSignal {
+    fn from(signal: super::SignalEvaluation) -> Self {
+        Self {
+            signal_name:     signal.name.to_owned(),
+            value:           signal.value,
+            fired:           signal.fired,
+            reason_fragment: signal.reason_fragment,
         }
     }
 }
@@ -545,6 +574,41 @@ mod tests {
         );
         assert_eq!(signal.metrics.directional_run, Some(6.0));
         assert_eq!(
+            result
+                .signal_trace
+                .iter()
+                .map(|signal| signal.signal_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "max_drawdown",
+                "window_return",
+                "volume_surge",
+                "robust_zscore",
+                "jump_ratio",
+                "volatility_regime",
+                "directional_run",
+            ]
+        );
+        let directional_run = result
+            .signal_trace
+            .iter()
+            .find(|signal| signal.signal_name == "directional_run")
+            .expect("directional-run trace row");
+        assert_eq!(directional_run.value, Some(6.0));
+        assert!(directional_run.fired);
+        assert_eq!(
+            directional_run.reason_fragment.as_deref(),
+            Some("directional run +6 bars")
+        );
+        let max_drawdown = result
+            .signal_trace
+            .iter()
+            .find(|signal| signal.signal_name == "max_drawdown")
+            .expect("drawdown trace row");
+        assert_eq!(max_drawdown.value, Some(0.0));
+        assert!(!max_drawdown.fired);
+        assert!(max_drawdown.reason_fragment.is_none());
+        assert_eq!(
             result.evaluated_candle.expect("evaluated candle").open_time,
             "2026-07-10T00:06:00Z"
         );
@@ -572,6 +636,8 @@ mod tests {
         assert_eq!(result.status, "normal");
         assert!(!result.has_signal);
         assert!(result.signal.is_none());
+        assert_eq!(result.signal_trace.len(), 7);
+        assert!(result.signal_trace.iter().all(|signal| !signal.fired));
         assert_eq!(result.window_candle_count, 1);
         assert_eq!(
             result.evaluated_candle.expect("evaluated candle").open_time,
@@ -592,6 +658,7 @@ mod tests {
         assert_eq!(result.window_status, "missing");
         assert!(!result.has_signal);
         assert!(result.evaluated_candle.is_none());
+        assert!(result.signal_trace.is_empty());
         let hint = result.diagnostic_hint.expect("diagnostic hint");
         assert_eq!(hint.tool, "finance_diagnose_candle_subscriptions");
         assert_eq!(
