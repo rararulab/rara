@@ -49,6 +49,7 @@
 mod error;
 mod report;
 mod runner;
+pub mod tools;
 
 pub use error::{BacktestError, Result};
 pub use report::BacktestReport;
