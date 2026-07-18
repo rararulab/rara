@@ -315,9 +315,14 @@ severity/reason/metrics shape used by proactive candle directives. It is
 read-only and never places trades or gives trade advice.
 `finance_backtest_signal` uses the same range semantics over one stored stream,
 replays rara's built-in market-anomaly evaluator, and returns the fixed
-signal-accuracy report; it is read-only and never places trades. It rejects
-over-limit ranges instead of paginating the replay, because a paged backtest
-would lose the prior evaluation window and produce non-additive reports.
+signal-accuracy report plus `signal_attribution`, a per-builtin-signal breakdown
+of trigger count, evaluated forward trades, win-rate, signed mean/median forward
+return, and max drawdown under the same fixed naive-long rule. A single candle
+can count in multiple attribution rows when multiple signals fire; the
+top-level composite report remains the dispatch-equivalent view. The tool is
+read-only and never places trades. It rejects over-limit ranges instead of
+paginating the replay, because a paged backtest would lose the prior evaluation
+window and produce non-additive reports.
 
 Identity and session routing are always taken from `ToolContext`. Finance tool
 schemas do not accept `owner`, `user_id`, `session`, or `session_key` identity
@@ -418,7 +423,8 @@ returned by `finance_list_candle_streams` includes ready-to-call hints for
 `finance_query_candles`, plus `finance_evaluate_candle_signal` for checking the
 latest stored candle against the live anomaly evaluator and
 `finance_backtest_signal` for replaying the same stream through rara's built-in
-anomaly signal harness; range tools still require explicit `start`/`end`.
+anomaly signal harness and inspecting per-signal attribution; range tools still
+require explicit `start`/`end`.
 `finance_list_candle_streams`, `finance_get_recent_candles`, and
 `finance_query_candles` return `has_more` when additional rows match the
 selectors beyond the returned `query_limit`; narrow by `source_name`, `venue`,

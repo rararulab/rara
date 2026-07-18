@@ -21,7 +21,9 @@ use rara_tool_macro::ToolDef;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{BacktestReport, HOLD_BARS, run_backtest};
+use super::{
+    BacktestReport, HOLD_BARS, SignalAttributionReport, run_backtest, run_signal_attribution,
+};
 use crate::market_data::{CandleRangeQuery, MarketDataRepositoryRef, Timeframe};
 
 const DEFAULT_BACKTEST_LIMIT: usize = 10_000;
@@ -46,14 +48,15 @@ pub struct FinanceBacktestSignalParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FinanceBacktestSignalResult {
-    pub selector:        FinanceBacktestSignalSelector,
-    pub start:           String,
-    pub end:             String,
-    pub candle_count:    usize,
-    pub query_limit:     usize,
-    pub hold_bars:       usize,
-    pub report:          BacktestReport,
-    pub diagnostic_hint: Option<FinanceBacktestSignalDiagnosticHint>,
+    pub selector:           FinanceBacktestSignalSelector,
+    pub start:              String,
+    pub end:                String,
+    pub candle_count:       usize,
+    pub query_limit:        usize,
+    pub hold_bars:          usize,
+    pub report:             BacktestReport,
+    pub signal_attribution: SignalAttributionReport,
+    pub diagnostic_hint:    Option<FinanceBacktestSignalDiagnosticHint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -135,6 +138,7 @@ impl ToolExecute for FinanceBacktestSignalTool {
 
         let candle_count = candles.len();
         let report = run_backtest(&candles)?;
+        let signal_attribution = run_signal_attribution(&candles)?;
         let diagnostic_hint =
             source_scoped_empty_candles_diagnostic_hint(source_name.as_deref(), candle_count == 0);
 
@@ -146,6 +150,7 @@ impl ToolExecute for FinanceBacktestSignalTool {
             query_limit: limit,
             hold_bars: HOLD_BARS,
             report,
+            signal_attribution,
             diagnostic_hint,
         })
     }
@@ -373,6 +378,26 @@ mod tests {
         assert_eq!(result.report.evaluated_trade_count, 2);
         assert_eq!(result.report.win_count, 1);
         assert_eq!(result.report.win_rate, Some(0.5));
+        assert_eq!(result.signal_attribution.composite_trigger_count, 2);
+        let volume_surge = result
+            .signal_attribution
+            .signals
+            .iter()
+            .find(|signal| signal.signal_name == "volume_surge")
+            .expect("volume surge row");
+        assert_eq!(volume_surge.trigger_count, 2);
+        assert_eq!(volume_surge.evaluated_trade_count, 2);
+        assert_eq!(volume_surge.win_count, 1);
+        assert_eq!(volume_surge.win_rate, Some(0.5));
+        let directional_run = result
+            .signal_attribution
+            .signals
+            .iter()
+            .find(|signal| signal.signal_name == "directional_run")
+            .expect("directional run row");
+        assert_eq!(directional_run.trigger_count, 0);
+        assert_eq!(directional_run.evaluated_trade_count, 0);
+        assert_eq!(directional_run.win_rate, None);
         assert!(result.diagnostic_hint.is_none());
     }
 
@@ -404,6 +429,14 @@ mod tests {
 
         assert_eq!(result.candle_count, 0);
         assert_eq!(result.report.trigger_count, 0);
+        assert_eq!(result.signal_attribution.composite_trigger_count, 0);
+        assert!(
+            result
+                .signal_attribution
+                .signals
+                .iter()
+                .all(|signal| signal.trigger_count == 0)
+        );
         let hint = result.diagnostic_hint.expect("diagnostic hint");
         assert_eq!(hint.tool, "finance_diagnose_candle_subscriptions");
         assert_eq!(

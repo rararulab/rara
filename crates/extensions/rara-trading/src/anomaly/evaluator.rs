@@ -51,6 +51,19 @@ pub const EVAL_WINDOW: usize = 30;
 /// [`Severity::Critical`] — the flash-crash shape.
 const CRITICAL_DRAWDOWN: f64 = 0.06;
 
+/// Agent/research-facing snapshot of one builtin signal's evaluation.
+///
+/// This deliberately exposes only the stable data currently needed by
+/// Layer-② backtests: the signal name and fired flag, not the [`Signal`] trait
+/// object itself.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SignalEvaluation {
+    /// Stable signal identifier from [`Signal::name`].
+    pub(crate) name:  &'static str,
+    /// Whether this signal crossed its trip threshold.
+    pub(crate) fired: bool,
+}
+
 /// Evaluate the newly closed `latest` candle against its preceding `window`
 /// (ordered oldest-to-newest, excluding `latest`).
 ///
@@ -66,6 +79,30 @@ const CRITICAL_DRAWDOWN: f64 = 0.06;
 /// or the latest candle is not strictly positive.
 pub fn evaluate(window: &[MarketCandle], latest: &MarketCandle) -> Result<Option<AnomalySignal>> {
     evaluate_with(&builtin_registry(), window, latest)
+}
+
+/// Return the builtin signal names in stable registry order.
+pub(crate) fn builtin_signal_names() -> Vec<&'static str> {
+    builtin_registry()
+        .iter()
+        .map(|signal| signal.name())
+        .collect()
+}
+
+/// Evaluate every builtin signal against `latest` and return the per-signal
+/// outputs in stable registry order.
+///
+/// This is the read-side attribution seam for backtests. It uses the exact same
+/// context preparation and signal order as [`evaluate`], so a fired output here
+/// corresponds to one contribution to the composite [`AnomalySignal`] on the
+/// same bar.
+pub(crate) fn evaluate_builtin_signals(
+    window: &[MarketCandle],
+    latest: &MarketCandle,
+) -> Result<Vec<SignalEvaluation>> {
+    let registry = builtin_registry();
+    let evaluated = evaluate_registry_outputs(&registry, window, latest)?;
+    Ok(signal_evaluations_from(&evaluated))
 }
 
 /// Evaluate `latest` against `window` using an explicit signal `registry`.
@@ -84,6 +121,16 @@ pub(crate) fn evaluate_with(
     window: &[MarketCandle],
     latest: &MarketCandle,
 ) -> Result<Option<AnomalySignal>> {
+    let evaluated = evaluate_registry_outputs(registry, window, latest)?;
+    let metrics = metrics_from(&evaluated);
+    Ok(classify(&evaluated, metrics))
+}
+
+fn evaluate_registry_outputs<'a>(
+    registry: &'a SignalRegistry,
+    window: &[MarketCandle],
+    latest: &MarketCandle,
+) -> Result<Vec<(&'a dyn Signal, SignalOutput)>> {
     let mut closes = Vec::with_capacity(window.len() + 1);
     for candle in window {
         closes.push(close_f64(candle)?);
@@ -92,7 +139,18 @@ pub(crate) fn evaluate_with(
 
     // One prior close is the minimum needed to form a single return.
     if closes.len() < 2 {
-        return Ok(None);
+        return Ok(registry
+            .iter()
+            .map(|signal| {
+                (
+                    signal.as_ref(),
+                    SignalOutput {
+                        value: None,
+                        fired: false,
+                    },
+                )
+            })
+            .collect());
     }
 
     let history_volumes: Vec<f64> = window.iter().map(volume_f64).collect();
@@ -106,16 +164,23 @@ pub(crate) fn evaluate_with(
         .latest_volume(latest_volume)
         .build();
 
-    let evaluated: Vec<(&dyn Signal, SignalOutput)> = registry
+    Ok(registry
         .iter()
         .map(|signal| {
             let output = signal.evaluate(&ctx);
             (signal.as_ref(), output)
         })
-        .collect();
+        .collect())
+}
 
-    let metrics = metrics_from(&evaluated);
-    Ok(classify(&evaluated, metrics))
+fn signal_evaluations_from(evaluated: &[(&dyn Signal, SignalOutput)]) -> Vec<SignalEvaluation> {
+    evaluated
+        .iter()
+        .map(|(signal, output)| SignalEvaluation {
+            name:  signal.name(),
+            fired: output.fired,
+        })
+        .collect()
 }
 
 /// Project the collected signal outputs onto the public [`AnomalyMetrics`]

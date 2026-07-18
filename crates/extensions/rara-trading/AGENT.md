@@ -89,22 +89,27 @@ Six modules, each a `mod.rs` (re-exports + `//!` docs only) over sub-files:
   fires on, applies one **fixed naive rule** (enter long at the trigger bar's
   close, exit `HOLD_BARS` bars later at that bar's close) to answer "is a signal
   actually any good?". `runner.rs` holds `run_backtest(candles) ->
-  Result<BacktestReport>` (the **pure** deterministic core the unit tests bind
-  to) and the thin async `backtest(repo, query)` entry that fetches via
-  `MarketDataRepository::candles` and delegates to the core — the same
+  Result<BacktestReport>` (the **pure** deterministic composite core the unit
+  tests bind to), `run_signal_attribution(candles) ->
+  Result<SignalAttributionReport>` (the same no-look-ahead replay grouped by
+  builtin signal name), and the thin async `backtest(repo, query)` entry that
+  fetches via `MarketDataRepository::candles` and delegates to the core — the same
   pure-core/async-entry seam as `anomaly::evaluate` / the dispatch adapter.
   `report.rs` = `BacktestReport` (`bon::Builder`, the fixed metric set:
   `trigger_count`, `evaluated_trade_count`, `win_count`, `win_rate`, signed
-  `mean`/`median_forward_return`, strategy `max_drawdown`); `error.rs` =
+  `mean`/`median_forward_return`, strategy `max_drawdown`) plus
+  `SignalAttributionReport` / `SignalAttribution` (the same fixed metrics per
+  builtin signal row; a bar can count in multiple rows when multiple signals
+  fire); `error.rs` =
   `BacktestError` (snafu; `Evaluate` wraps `AnomalyError`, `FetchCandles` wraps
   the repository read). It only **consumes** `anomaly::evaluate` and
   `market_data`; it changes neither. `tools.rs` exposes the same narrow harness
   as the deferred, read-only `finance_backtest_signal` agent tool: the tool
   validates a single candle range, fetches from the shared market-data
   repository, rejects over-limit ranges instead of paginating a non-additive
-  replay, delegates to `run_backtest`, and returns the fixed report plus
-  diagnostic hints. It is not the heavier research-desk `trading_backtest`
-  surface.
+  replay, delegates to `run_backtest` and `run_signal_attribution`, and returns
+  the fixed composite report, per-signal attribution rows, and diagnostic hints.
+  It is not the heavier research-desk `trading_backtest` surface.
 
 The write→read→enrich wiring lives in `dispatch/pipeline.rs` (`on_feed_event`):
 it upserts the closed candle, pulls the window via `recent_candles`, runs
@@ -140,10 +145,11 @@ dispatch loop (`crates/app/src/lib.rs`).
   counted in `trigger_count` but **excluded** from `evaluated_trade_count` and
   every P&L metric — never zero-filled. Consequence of violation: fabricated
   edge that would ship a future ③ execution gate on a lie.
-- **The backtest unit is the composite `AnomalySignal`, and forward returns are
-  signed.** A "trigger" is one bar where `evaluate` returns `Some` (what
-  `dispatch` acts on) — not per-signal attribution (a documented future
-  extension). A trade wins **iff** its forward return is strictly `> 0.0`;
+- **The primary backtest unit is the composite `AnomalySignal`, and forward
+  returns are signed.** A composite "trigger" is one bar where `evaluate`
+  returns `Some` (what `dispatch` acts on). Per-signal attribution is a secondary
+  grouped view over the same replay, not a separate strategy definition. A trade
+  wins **iff** its forward return is strictly `> 0.0`;
   because the detectors are tail/volatility signals, a low win rate with a
   negative mean is a valid, informative result. Report the signed mean/median;
   do not take absolute value. `HOLD_BARS` is a `const`, never YAML.

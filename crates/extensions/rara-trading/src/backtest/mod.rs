@@ -24,7 +24,9 @@
 //! trigger bar's close, exit `HOLD_BARS` bars later at that bar's close — then
 //! reports a **fixed metric set** ([`BacktestReport`]): trigger count, win
 //! rate, signed mean/median forward return, and the naive strategy's max
-//! drawdown.
+//! drawdown. It also reports [`SignalAttributionReport`], the same fixed
+//! forward-return metrics grouped by each builtin signal that contributed to
+//! composite anomalies.
 //!
 //! Two seams, mirroring the `anomaly` module:
 //! - [`run_backtest`] — the **pure, deterministic core** over an ordered candle
@@ -52,5 +54,5 @@ mod runner;
 pub mod tools;
 
 pub use error::{BacktestError, Result};
-pub use report::BacktestReport;
-pub use runner::{HOLD_BARS, backtest, run_backtest};
+pub use report::{BacktestReport, SignalAttribution, SignalAttributionReport};
+pub use runner::{HOLD_BARS, backtest, run_backtest, run_signal_attribution};
