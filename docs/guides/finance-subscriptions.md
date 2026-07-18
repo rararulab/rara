@@ -231,9 +231,12 @@ for raising `transport.interval_secs` before the feed is started. The mutating
 subscription tool enforces the same guard: an unsafe watchlist with
 `start_now=true` is rejected, while `start_now=false` stages the requested
 selection and subscription with the feed persisted as disabled so app restart
-does not accidentally start an unsafe poller. This is the preferred path when
-tracking tens or hundreds of instruments because Binance polling fans out as
-`symbols × timeframes` requests per poll.
+does not accidentally start an unsafe poller. Agent-side feed source controls
+enforce the same safety invariant: `finance_enable_feed_source` and
+`finance_restart_feed_source` reject unsafe market-candle feeds instead of
+turning a staged disabled watchlist into an enabled/running poller. This is the
+preferred path when tracking tens or hundreds of instruments because Binance
+polling fans out as `symbols × timeframes` requests per poll.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized

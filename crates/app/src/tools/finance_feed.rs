@@ -1947,9 +1947,14 @@ impl ToolExecute for FinanceEnableFeedSourceTool {
         let already_enabled = existing.as_ref().is_some_and(|feed| feed.enabled);
 
         let (config, created) = match existing {
-            Some(feed) if already_enabled && already_running => (feed, false),
+            Some(feed) if already_enabled && already_running => {
+                let config = config_from_source(&source, Some(feed))?;
+                ensure_market_candle_fanout_safe_to_enable(&config)?;
+                (config, false)
+            }
             Some(feed) => {
                 let config = config_from_source(&source, Some(feed))?;
+                ensure_market_candle_fanout_safe_to_enable(&config)?;
                 anyhow::ensure!(
                     self.svc.update_feed(&config).await?,
                     "failed to update existing finance feed source: {source_name}"
@@ -1959,6 +1964,7 @@ impl ToolExecute for FinanceEnableFeedSourceTool {
             }
             None => {
                 let config = config_from_source(&source, None)?;
+                ensure_market_candle_fanout_safe_to_enable(&config)?;
                 self.svc.create_feed(&config).await?;
                 self.registry.register(config.clone())?;
                 (config, true)
@@ -2060,6 +2066,7 @@ impl ToolExecute for FinanceRestartFeedSourceTool {
         let was_running = self.registry.is_running(&config.name);
 
         normalize_finance_feed_config(&mut config)?;
+        ensure_market_candle_fanout_safe_to_enable(&config)?;
         config.status = FeedStatus::Idle;
         config.last_error = None;
         config.updated_at = Timestamp::now();
@@ -3255,28 +3262,11 @@ fn apply_market_candle_fanout_guard(
     config: &mut DataFeedConfig,
     start_now: bool,
 ) -> anyhow::Result<bool> {
-    let final_symbols = extract_normalized_string_array(&config.transport, "symbols", true);
-    let final_timeframes = extract_normalized_string_array(&config.transport, "timeframes", false);
-    let provider = config
-        .transport
-        .get("provider")
-        .and_then(serde_json::Value::as_str);
-    let safety = market_candle_fanout_safety(
-        provider,
-        &config.transport,
-        &final_symbols,
-        &final_timeframes,
-        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
-    )?;
+    let safety = market_candle_config_fanout_safety(config)?;
     anyhow::ensure!(
         safety.safe_to_start || !start_now,
-        "market candle watchlist fans out to {} requests per poll at interval_secs={}; configured \
-         interval is unsafe for the default request budget. Increase interval_secs to at least {} \
-         or call finance_plan_instrument_watchlist and retry with start_now=false after reviewing \
-         the plan.",
-        safety.poll_request_count,
-        safety.configured_interval_secs,
-        safety.minimum_safe_interval_secs
+        "{}",
+        unsafe_market_candle_fanout_message(&safety)
     );
 
     let disabled_for_fanout_safety = !safety.safe_to_start;
@@ -3285,6 +3275,48 @@ fn apply_market_candle_fanout_guard(
     config.last_error = None;
     config.updated_at = Timestamp::now();
     Ok(disabled_for_fanout_safety)
+}
+
+fn ensure_market_candle_fanout_safe_to_enable(config: &DataFeedConfig) -> anyhow::Result<()> {
+    if config.feed_type != FeedType::MarketCandle {
+        return Ok(());
+    }
+    let safety = market_candle_config_fanout_safety(config)?;
+    anyhow::ensure!(
+        safety.safe_to_start,
+        "{}",
+        unsafe_market_candle_fanout_message(&safety)
+    );
+    Ok(())
+}
+
+fn market_candle_config_fanout_safety(
+    config: &DataFeedConfig,
+) -> anyhow::Result<MarketCandleFanoutSafety> {
+    let final_symbols = extract_normalized_string_array(&config.transport, "symbols", true);
+    let final_timeframes = extract_normalized_string_array(&config.transport, "timeframes", false);
+    let provider = config
+        .transport
+        .get("provider")
+        .and_then(serde_json::Value::as_str);
+    market_candle_fanout_safety(
+        provider,
+        &config.transport,
+        &final_symbols,
+        &final_timeframes,
+        DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+    )
+}
+
+fn unsafe_market_candle_fanout_message(safety: &MarketCandleFanoutSafety) -> String {
+    format!(
+        "market candle watchlist fans out to {} requests per poll at interval_secs={}; configured \
+         interval is unsafe for the default request budget. Increase interval_secs to at least {} \
+         or call finance_plan_instrument_watchlist and retry after reviewing the plan.",
+        safety.poll_request_count,
+        safety.configured_interval_secs,
+        safety.minimum_safe_interval_secs
+    )
 }
 
 fn watchlist_plan_warning(
@@ -7313,6 +7345,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enable_feed_source_rejects_unsafe_market_candle_fanout() {
+        let (_list, tool, _disable, _restart, _subscribe, svc, registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let existing = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": large_binance_symbols(),
+                "timeframes": ["1m", "5m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&existing).await.unwrap();
+
+        let err = tool
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "binance-market-candles".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .expect_err("unsafe fanout should not be enabled");
+
+        assert!(
+            err.to_string()
+                .contains("fans out to 1000 requests per poll"),
+            "unexpected error: {err}"
+        );
+        let feed = svc.get_feed("existing-binance").await.unwrap().unwrap();
+        assert!(!feed.enabled);
+        assert!(!registry.is_running("finance-binance-market-candles"));
+    }
+
+    #[tokio::test]
     async fn enable_feed_source_is_mutating() {
         let (_list, tool, _disable, _restart, _subscribe, _svc, _registry, _finance_registry) =
             tool().await;
@@ -7505,6 +7585,52 @@ mod tests {
             )
             .await
             .unwrap();
+        assert!(!registry.is_running("finance-binance-market-candles"));
+    }
+
+    #[tokio::test]
+    async fn restart_feed_source_rejects_unsafe_market_candle_fanout() {
+        let (_list, _enable, _disable, restart, _subscribe, svc, registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let config = DataFeedConfig::builder()
+            .id("existing-binance".to_owned())
+            .name("finance-binance-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "market-data".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "binance",
+                "base_url": "https://api.binance.com",
+                "interval_secs": 60,
+                "headers": {},
+                "venue": "binance",
+                "symbols": large_binance_symbols(),
+                "timeframes": ["1m", "5m"],
+                "max_candles_per_poll": 1000
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&config).await.unwrap();
+
+        let err = restart
+            .run(
+                FinanceRestartFeedSourceParams {
+                    catalog_source_id: Some("binance-market-candles".to_owned()),
+                    feed_id:           None,
+                },
+                &context(),
+            )
+            .await
+            .expect_err("unsafe fanout should not be restarted");
+
+        assert!(
+            err.to_string()
+                .contains("fans out to 1000 requests per poll"),
+            "unexpected error: {err}"
+        );
         assert!(!registry.is_running("finance-binance-market-candles"));
     }
 
