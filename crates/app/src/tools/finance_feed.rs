@@ -100,9 +100,10 @@ struct FinanceFeedBundleFilters {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct FinanceListFeedBundlesResult {
-    pub bundles: Vec<FinanceFeedBundleEntry>,
-    pub count:   usize,
-    pub filters: FinanceFeedBundleFiltersEcho,
+    pub bundles:           Vec<FinanceFeedBundleEntry>,
+    pub count:             usize,
+    pub quick_start_hints: Vec<FinanceFeedBundleQuickStartHint>,
+    pub filters:           FinanceFeedBundleFiltersEcho,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -191,6 +192,19 @@ pub(super) struct FinanceFeedBundleSubscribeHint {
     pub default_params:  serde_json::Value,
     pub required_params: Vec<String>,
     pub optional_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct FinanceFeedBundleQuickStartHint {
+    pub bundle_id:              String,
+    pub name:                   String,
+    pub feed_types:             Vec<String>,
+    pub providers:              Vec<String>,
+    pub can_start_now:          bool,
+    pub requires_configuration: bool,
+    pub subscribe_bundle_hint:  Option<FinanceFeedBundleSubscribeHint>,
+    pub configure_hints:        Vec<FinanceFeedSourceConfigureHint>,
+    pub list_sources_hint:      FinanceFeedBundleListSourcesHint,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1438,10 +1452,12 @@ impl ToolExecute for FinanceListFeedBundlesTool {
             })
             .collect::<Vec<_>>();
         let count = bundles.len();
+        let quick_start_hints = bundle_quick_start_hints(&bundles);
 
         Ok(FinanceListFeedBundlesResult {
             bundles,
             count,
+            quick_start_hints,
             filters: filters.echo(),
         })
     }
@@ -4161,6 +4177,25 @@ fn subscribe_bundle_hint_for_bundle(
     })
 }
 
+fn bundle_quick_start_hints(
+    bundles: &[FinanceFeedBundleEntry],
+) -> Vec<FinanceFeedBundleQuickStartHint> {
+    bundles
+        .iter()
+        .map(|bundle| FinanceFeedBundleQuickStartHint {
+            bundle_id:              bundle.id.clone(),
+            name:                   bundle.name.clone(),
+            feed_types:             bundle.feed_types.clone(),
+            providers:              bundle.providers.clone(),
+            can_start_now:          bundle.can_enable && bundle.subscribe_bundle_hint.is_some(),
+            requires_configuration: bundle.requires_configuration,
+            subscribe_bundle_hint:  bundle.subscribe_bundle_hint.clone(),
+            configure_hints:        bundle.configure_hints.clone(),
+            list_sources_hint:      bundle.list_sources_hint.clone(),
+        })
+        .collect()
+}
+
 fn bundle_subscription_hint(
     source_entries: &[FinanceFeedSourceEntry],
 ) -> Option<FinanceFeedSourceSubscriptionHint> {
@@ -5057,6 +5092,51 @@ mod tests {
         assert_eq!(load.configured_market_fanout_diagnostic, None);
     }
 
+    fn assert_macro_news_quick_start_hint(hints: &[super::FinanceFeedBundleQuickStartHint]) {
+        let hint = hints
+            .iter()
+            .find(|hint| hint.bundle_id == "macro-news")
+            .expect("macro-news quick start hint should exist");
+        assert_eq!(hint.name, "Macro News");
+        assert_eq!(hint.feed_types, ["rss"]);
+        assert!(hint.providers.is_empty());
+        assert!(hint.can_start_now);
+        assert!(!hint.requires_configuration);
+        assert_eq!(
+            hint.subscribe_bundle_hint
+                .as_ref()
+                .expect("macro-news quick start should include subscribe hint")
+                .default_params,
+            serde_json::json!({
+                "bundle_id": "macro-news",
+                "start_now": true,
+            })
+        );
+        assert_eq!(
+            hint.list_sources_hint.default_params,
+            serde_json::json!({
+                "catalog_source_ids": [
+                    "fed-press-releases",
+                    "fed-h15-announcements",
+                    "fed-h10-announcements",
+                    "sec-press-releases"
+                ]
+            })
+        );
+    }
+
+    fn assert_longbridge_quick_start_hint(hints: &[super::FinanceFeedBundleQuickStartHint]) {
+        let hint = hints
+            .iter()
+            .find(|hint| hint.bundle_id == "longbridge-equities-daily")
+            .expect("longbridge quick start hint should exist");
+        assert!(!hint.can_start_now);
+        assert!(hint.requires_configuration);
+        assert!(hint.subscribe_bundle_hint.is_none());
+        assert_eq!(hint.configure_hints.len(), 1);
+        assert_longbridge_configure_hint(&hint.configure_hints[0]);
+    }
+
     #[tokio::test]
     async fn list_feed_bundles_returns_actionable_default_data_feeding_presets() {
         let (
@@ -5077,6 +5157,9 @@ mod tests {
             .expect("list feed bundles");
 
         assert!(result.count >= 3);
+        assert_eq!(result.quick_start_hints.len(), result.bundles.len());
+        assert_macro_news_quick_start_hint(&result.quick_start_hints);
+
         let macro_news = result
             .bundles
             .iter()
@@ -5207,6 +5290,7 @@ mod tests {
                 .iter()
                 .any(|hint| hint.contains("Longbridge"))
         );
+        assert_longbridge_quick_start_hint(&result.quick_start_hints);
     }
 
     #[tokio::test]
@@ -5240,6 +5324,12 @@ mod tests {
             .expect("filtered bundles");
 
         assert_eq!(result.count, 1);
+        assert_eq!(result.quick_start_hints.len(), 1);
+        assert_eq!(
+            result.quick_start_hints[0].bundle_id,
+            "binance-major-crypto-15m"
+        );
+        assert!(result.quick_start_hints[0].can_start_now);
         let bundle = &result.bundles[0];
         assert_eq!(bundle.id, "binance-major-crypto-15m");
         assert_eq!(bundle.providers, ["binance"]);
