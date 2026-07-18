@@ -311,8 +311,12 @@ stream, or one explicit `open_time`, through rara's built-in market-anomaly
 evaluator. The evaluation window is pulled strictly before the evaluated
 candle, matching the dispatch path and avoiding look-ahead. The result reports
 the evaluated candle, window size/status, whether a signal fired, and the same
-severity/reason/metrics shape used by proactive candle directives. It is
-read-only and never places trades or gives trade advice.
+severity/reason/metrics shape used by proactive candle directives. It also
+returns `signal_trace`, one row per builtin signal in registry order, with the
+signal name, computed value when evaluable, fired flag, and reason fragment when
+that signal fired. Use this trace when rara needs to explain which detector
+contributed to the current composite anomaly. It is read-only and never places
+trades or gives trade advice.
 `finance_backtest_signal` uses the same range semantics over one stored stream,
 replays rara's built-in market-anomaly evaluator, and returns the fixed
 signal-accuracy report plus `signal_attribution`, a per-builtin-signal breakdown

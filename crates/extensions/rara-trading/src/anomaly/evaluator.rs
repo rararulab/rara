@@ -53,15 +53,30 @@ const CRITICAL_DRAWDOWN: f64 = 0.06;
 
 /// Agent/research-facing snapshot of one builtin signal's evaluation.
 ///
-/// This deliberately exposes only the stable data currently needed by
-/// Layer-② backtests: the signal name and fired flag, not the [`Signal`] trait
-/// object itself.
+/// This deliberately exposes stable evaluation data — not the [`Signal`] trait
+/// object itself — so tools can explain which builtin signals fired and
+/// backtests can attribute composite anomalies without coupling to the registry
+/// implementation.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SignalEvaluation {
     /// Stable signal identifier from [`Signal::name`].
-    pub(crate) name:  &'static str,
+    pub(crate) name:            &'static str,
+    /// The signal's computed value, or `None` when not evaluable.
+    pub(crate) value:           Option<f64>,
     /// Whether this signal crossed its trip threshold.
-    pub(crate) fired: bool,
+    pub(crate) fired:           bool,
+    /// Human-readable fragment, present only when [`Self::fired`] is true.
+    pub(crate) reason_fragment: Option<String>,
+}
+
+/// Composite anomaly result plus the per-builtin-signal trace for the same
+/// evaluation pass.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EvaluationTrace {
+    /// The composite signal [`evaluate`] would return.
+    pub(crate) signal:  Option<AnomalySignal>,
+    /// Builtin signal evaluations in stable registry order.
+    pub(crate) signals: Vec<SignalEvaluation>,
 }
 
 /// Evaluate the newly closed `latest` candle against its preceding `window`
@@ -79,6 +94,26 @@ pub(crate) struct SignalEvaluation {
 /// or the latest candle is not strictly positive.
 pub fn evaluate(window: &[MarketCandle], latest: &MarketCandle) -> Result<Option<AnomalySignal>> {
     evaluate_with(&builtin_registry(), window, latest)
+}
+
+/// Evaluate `latest` once and return both the composite anomaly and the
+/// per-builtin signal trace.
+///
+/// # Errors
+///
+/// Returns [`super::AnomalyError::NonPositivePrice`] if any close in the window
+/// or the latest candle is not strictly positive.
+pub(crate) fn evaluate_trace(
+    window: &[MarketCandle],
+    latest: &MarketCandle,
+) -> Result<EvaluationTrace> {
+    let registry = builtin_registry();
+    let evaluated = evaluate_registry_outputs(&registry, window, latest)?;
+    let metrics = metrics_from(&evaluated);
+    Ok(EvaluationTrace {
+        signal:  classify(&evaluated, metrics),
+        signals: signal_evaluations_from(&evaluated),
+    })
 }
 
 /// Return the builtin signal names in stable registry order.
@@ -177,8 +212,10 @@ fn signal_evaluations_from(evaluated: &[(&dyn Signal, SignalOutput)]) -> Vec<Sig
     evaluated
         .iter()
         .map(|(signal, output)| SignalEvaluation {
-            name:  signal.name(),
-            fired: output.fired,
+            name:            signal.name(),
+            value:           output.value,
+            fired:           output.fired,
+            reason_fragment: output.fired.then(|| signal.fragment(output)),
         })
         .collect()
 }
