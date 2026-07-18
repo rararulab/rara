@@ -227,9 +227,13 @@ source's `interval_secs` against a conservative request-rate budget, and returns
 safe `finance_subscribe_instruments` parameters. If the configured polling
 interval is too aggressive for the watchlist size, the subscribe hint sets
 `start_now=false` and the result includes a Settings → Data Feeds configure hint
-for raising `transport.interval_secs` before the feed is started. This is the
-preferred path when tracking tens or hundreds of instruments because Binance
-polling fans out as `symbols × timeframes` requests per poll.
+for raising `transport.interval_secs` before the feed is started. The mutating
+subscription tool enforces the same guard: an unsafe watchlist with
+`start_now=true` is rejected, while `start_now=false` stages the requested
+selection and subscription with the feed persisted as disabled so app restart
+does not accidentally start an unsafe poller. This is the preferred path when
+tracking tens or hundreds of instruments because Binance polling fans out as
+`symbols × timeframes` requests per poll.
 
 The lower-level `finance_subscribe` tool remains available for callers that
 already know the exact selectors. Its result echoes the persisted normalized

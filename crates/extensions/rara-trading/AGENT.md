@@ -146,6 +146,12 @@ dispatch loop (`crates/app/src/lib.rs`).
 - **Candle selectors are normalized before storage** (venue lowercase, symbol
   uppercase, timeframe canonical). `recent_candles`/`latest_closed_candle`
   match on the normalized form.
+- **Binance watchlist fan-out is guarded before starting a feed.** The app-side
+  `finance_subscribe_instruments` path computes the final configured
+  `symbols × timeframes` request count and rejects unsafe `start_now=true`
+  subscriptions. Unsafe staged subscriptions keep the feed disabled until an
+  operator raises `transport.interval_secs`; do not silently persist an enabled
+  poller that will hit provider rate limits on app restart.
 - **`backtest` has no look-ahead** — the number-one backtest bug. Signal
   evaluation for bar `i` sees only `candles[i.saturating_sub(EVAL_WINDOW)..i]`
   plus `latest = candles[i]`, never a bar `> i` (the same invariant `dispatch`
