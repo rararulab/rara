@@ -180,7 +180,15 @@ subscription changes. It combines the built-in source catalog, persisted feed
 runtime state, event watermarks (`event_count`, `last_event_type`,
 `last_event_at`, and `lag_seconds`), configured K-line selectors, and
 provider metadata. It also reports source-name subscription matches for the
-current user/session and returns action hints for the next safe step:
+current user/session. The `load` block gives the operator-facing pressure
+summary: current-user and current-session subscription counts, distinct
+subscribed market-candle stream count, configured market-candle poll fan-out,
+estimated requests per second, request budget, minimum safe interval, and
+safe-to-start diagnostic. Use it before enabling or restarting a large K-line
+source: `runtime.running=false` explains process state, while
+`load.configured_market_fanout_safe_to_start=false` explains why starting the
+source would exceed the venue request budget. The same source entry returns
+action hints for the next safe step:
 `enable_hint` for materializing a ready built-in source,
 `configure_hint` for opening Settings → Data Feeds on a source that needs
 operator-owned transport/auth fields,
