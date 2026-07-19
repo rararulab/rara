@@ -207,6 +207,15 @@ PR body uses `.github/pull_request_template.md`. Labels: pick one type
 component choice further (e.g. backend → `core`/`backend`; frontend →
 `ui`/`extension`).
 
+The PR body's job is to give the reviewer the mental model you had — the
+problem, the approach you chose, and *why that approach* over the
+alternatives you rejected. Write it as prose a reviewer can follow without
+opening the diff; the diff already shows *what* changed, so don't just list
+files touched. A bullet-list of changes plus a wall of verification
+commands is **not** an acceptable body — if the reviewer would have to
+reverse-engineer your reasoning from the code, the description has failed
+its job.
+
 If a CI check fails: read the failure log, diagnose root cause, fix in
 the worktree, push again. Do not mark tests `#[ignore]` to make CI green.
 If a failure looks transient, check `gh run list --branch main --limit 10`

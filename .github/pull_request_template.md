@@ -1,6 +1,11 @@
-## Summary
+## What & why
 
-<!-- Brief description of the changes -->
+<!-- Explain your change as a story a reviewer can follow WITHOUT reading the diff first:
+  - What problem or goal prompted this? (the issue's Intent — don't just restate the title)
+  - What approach did you take, and *why this one*? Name the key design decision.
+  - What did you consider and reject, or what non-obvious constraint/tradeoff shaped it?
+  The diff shows WHAT changed. This section must explain WHY it looks like this.
+  If a reviewer would have to reverse-engineer your reasoning from the code, this section is too thin. -->
 
 ## Type of change
 
@@ -28,8 +33,9 @@
 
 Closes #
 
-## Test plan
+## How to verify
 
-- [ ] `just test` passes
+<!-- Commands you ran or steps a reviewer can repeat — evidence, not an exhaustive command dump. -->
+- [ ] `just test` / relevant `cargo test -p …` passes
 - [ ] `just lint` passes
-- [ ] Tested locally
+- [ ] Tested locally (say how)
