@@ -2628,9 +2628,7 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
             replace_existing_instruments,
         )?;
         let disabled_for_fanout_safety = apply_market_candle_fanout_guard(&mut config, start_now)?;
-        if config.enabled {
-            preflight_finance_feed_config(&config).await?;
-        }
+        preflight_finance_feed_config(&config).await?;
 
         let feed_updated = if created {
             self.data_feed_svc.create_feed(&config).await?;
@@ -4906,7 +4904,7 @@ fn normalize_finance_feed_config(config: &mut DataFeedConfig) -> anyhow::Result<
 }
 
 async fn preflight_finance_feed_config(config: &DataFeedConfig) -> anyhow::Result<()> {
-    if config.feed_type != FeedType::MarketCandle {
+    if !config.enabled || config.feed_type != FeedType::MarketCandle {
         return Ok(());
     }
     let source = MarketCandleSource::from_config(config)?;
