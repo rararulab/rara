@@ -329,6 +329,55 @@ describe('FinanceWatchesCard', () => {
     expect(screen.getByText('Rara can quick-start this bundle from chat.')).toBeInTheDocument();
   });
 
+  it('discloses_keyless_best_effort_yahoo_bundle_quality', async () => {
+    const source = catalogEntry({
+      id: 'yahoo-market-candles',
+      name: 'Yahoo US Equities Daily',
+      source_name: 'finance-yahoo-market-candles',
+      feed_type: 'market_candle',
+      provider: 'yahoo',
+      tags: [
+        'finance',
+        'market-data',
+        'yahoo',
+        'no-auth',
+        'best-effort',
+        'delayed',
+        'unofficial-api',
+      ],
+      enabled: false,
+      transport_template: {
+        provider: 'yahoo',
+        venue: 'yahoo',
+        symbols: ['AAPL'],
+        timeframes: ['1d'],
+      },
+    });
+    catalogMock.mockResolvedValue([]);
+    financeBundlesMock.mockResolvedValue({
+      bundles: [
+        financeBundle({
+          id: 'yahoo-us-equities-daily',
+          name: 'Yahoo US Equities Daily',
+          feed_types: ['market_candle'],
+          providers: ['yahoo'],
+          sources: [source],
+        }),
+      ],
+      count: 1,
+    });
+    financeSubscriptionsMock.mockResolvedValue({
+      subscriptions: [],
+      count: 0,
+    } satisfies FinanceSubscriptionsResponse);
+
+    renderCard('session-1');
+
+    expect(await screen.findByText('No key required')).toBeInTheDocument();
+    expect(screen.getByText('Best effort')).toBeInTheDocument();
+    expect(screen.getByText('Delayed / unofficial')).toBeInTheDocument();
+  });
+
   it('uses_quick_start_configure_hint_for_bundle_settings_target', async () => {
     const source = catalogEntry({
       id: 'longbridge-default-candles',

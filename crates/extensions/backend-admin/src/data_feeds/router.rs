@@ -3110,7 +3110,7 @@ mod tests {
             .await
             .unwrap();
         let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(result["count"], 4);
+        assert_eq!(result["count"], 6);
 
         let bundles = result["bundles"].as_array().unwrap();
         let macro_news = bundles
@@ -3168,6 +3168,34 @@ mod tests {
             .unwrap();
         assert_eq!(longbridge["requires_configuration"], true);
         assert_eq!(longbridge["can_enable"], false);
+
+        let yahoo = bundles
+            .iter()
+            .find(|bundle| bundle["id"] == "yahoo-us-equities-daily")
+            .unwrap();
+        assert_eq!(yahoo["providers"], serde_json::json!(["yahoo"]));
+        assert_eq!(yahoo["requires_configuration"], false);
+        assert_eq!(yahoo["can_enable"], true);
+        assert_eq!(yahoo["sources"][0]["provider"], "yahoo");
+        assert_eq!(
+            yahoo["sources"][0]["configured_timeframes"],
+            serde_json::json!(["1d"])
+        );
+        assert_eq!(
+            yahoo["sources"][0]["load"]["configured_market_request_budget_per_second"],
+            0.2
+        );
+        assert_eq!(
+            yahoo["sources"][0]["load"]["configured_market_fanout_safe_to_start"],
+            true
+        );
+        assert!(
+            yahoo["sources"][0]["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tag| tag == "best-effort")
+        );
     }
 
     #[test]

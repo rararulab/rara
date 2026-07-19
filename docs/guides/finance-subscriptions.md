@@ -125,6 +125,16 @@ Ready Binance catalog entries use Binance's public spot kline API directly and
 do not require rara to hold exchange credentials. They still emit only
 `market_candle_closed` feed events.
 
+Yahoo catalog entries are also keyless, but they use Yahoo Finance's
+undocumented public chart endpoint and are deliberately marked `best-effort`,
+`delayed`, `unofficial-api`, and `redistribution-restricted`. They are research
+feeds, not execution-grade market data. The built-in US and global starters use
+daily candles, poll every 15 minutes, cap Yahoo traffic at 0.2 requests per
+second, and space requests by five seconds. Custom Yahoo transports may use
+`1m`, `5m`, `15m`, `30m`, `1h`, or `1d`, but the fan-out guard enforces at
+least a 60-second polling cadence and raises the safe interval as the configured
+symbol/timeframe cross-product grows.
+
 ## Conversation tools
 
 The app registers feed-oriented tools for finance data source discovery,
@@ -147,7 +157,8 @@ runtime control, subscription management, and inspection:
 `finance_list_feed_bundles` is the preferred discovery view when the user asks
 what default finance data feeding rara can provide. It groups built-in catalog
 sources into curated presets such as `macro-news`, `binance-spot-starter`,
-`binance-major-crypto-15m`, and `longbridge-equities-daily`. Each bundle echoes
+`binance-major-crypto-15m`, `yahoo-us-equities-daily`,
+`yahoo-global-starter`, and `longbridge-equities-daily`. Each bundle echoes
 its `catalog_source_ids`, providers, feed types, aggregate
 `enabled_source_count`, `ready_source_count`, persisted/running/subscribed
 counts, per-session subscription counts, setup hints for operator-only presets,
@@ -429,7 +440,7 @@ or the subset whose source matches `catalog_source_ids`, `source_names`, or
   running, plus configured `venue`, `symbols`, and `timeframes`;
 - selector coverage (`covered`, `missing_selectors`, or `unavailable`) with a
   deterministic diagnostic such as `missing symbols: ETHUSDT; missing
-  timeframes: 5m`, so a fresh-runtime/no-data case can be separated from a
+timeframes: 5m`, so a fresh-runtime/no-data case can be separated from a
   feed configuration that cannot emit the subscribed stream;
 - persisted feed-event summary (`event_count`, `last_event_type`,
   `last_event_at`, and `lag_seconds`) to confirm the source is emitting the
@@ -517,23 +528,23 @@ Use this checklist before considering a deployment ready:
    recent persisted events for the subscribed source, including filtered views
    by `event_kinds`.
 10. Confirm `finance_diagnose_candle_subscriptions` reports a running feed, a
-   recent feed event, `selector_coverage = covered`, and a fresh latest candle
-   for the subscribed stream.
+    recent feed event, `selector_coverage = covered`, and a fresh latest candle
+    for the subscribed stream.
 11. Confirm `finance_get_latest_candle` returns the latest stored closed candle
-   for the subscribed `(venue, symbol, timeframe)`.
+    for the subscribed `(venue, symbol, timeframe)`.
 12. Confirm
-   `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
-   returns the stored stream watermark.
-11. Confirm `finance_get_recent_candles`,
-   `GET /api/v1/data-feeds/market-data/candles/recent?venue=...&symbol=...&timeframe=...`,
-   `finance_query_candles`, and
-   `GET /api/v1/data-feeds/market-data/candles?venue=...&symbol=...&timeframe=...&start=...&end=...`
-   return ordered candles with decimal values encoded as strings.
-12. Confirm one matching item wakes the same session at most once.
-13. Confirm a seventh matching item in an hour is tape-only under the default
-   immediate-delivery budget.
-14. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
-   account tool is agent-callable.
+    `GET /api/v1/data-feeds/market-data/candle-streams?venue=...&symbol=...`
+    returns the stored stream watermark.
+13. Confirm `finance_get_recent_candles`,
+    `GET /api/v1/data-feeds/market-data/candles/recent?venue=...&symbol=...&timeframe=...`,
+    `finance_query_candles`, and
+    `GET /api/v1/data-feeds/market-data/candles?venue=...&symbol=...&timeframe=...&start=...&end=...`
+    return ordered candles with decimal values encoded as strings.
+14. Confirm one matching item wakes the same session at most once.
+15. Confirm a seventh matching item in an hour is tape-only under the default
+    immediate-delivery budget.
+16. Confirm no feed URL, ticker provider URL, credentials, order, deployment, or
+    account tool is agent-callable.
 
 ## Non-goals
 
