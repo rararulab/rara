@@ -81,6 +81,20 @@ pub fn default_finance_feed_bundles() -> Vec<DefaultFeedBundle> {
             ["binance-major-crypto-15m"],
         ),
         feed_bundle(
+            "tencent-cn-equities-daily",
+            "Tencent CN A-Shares Daily",
+            "Keyless forward-adjusted daily candles for a focused Shanghai and Shenzhen research \
+             watchlist.",
+            [
+                "finance",
+                "market-data",
+                "equities",
+                "cn-a-shares",
+                "tencent",
+            ],
+            ["tencent-cn-equities-daily"],
+        ),
+        feed_bundle(
             "yahoo-us-equities-daily",
             "Yahoo US Equities Daily",
             "Keyless best-effort daily candles for a focused US equities research watchlist.",
@@ -159,6 +173,14 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             &["15m"],
             300,
         ),
+        tencent_market_candles_source(
+            "tencent-cn-equities-daily",
+            "Tencent CN A-Shares Daily",
+            "Keyless Tencent Finance forward-adjusted daily candles for A-share research. Best \
+             effort, sourced from a public web endpoint, and not intended for execution-grade \
+             decisions or redistribution.",
+            &["SH600519", "SZ000001", "SZ300750", "SH601318", "SH600036"],
+        ),
         yahoo_market_candles_source(
             "yahoo-market-candles",
             "Yahoo US Equities Daily",
@@ -207,6 +229,52 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             &["1d"],
         ),
     ]
+}
+
+fn tencent_market_candles_source(
+    id: &str,
+    name: &str,
+    description: &str,
+    symbols: &[&str],
+) -> DefaultFeedSource {
+    DefaultFeedSource {
+        id:                     id.to_owned(),
+        name:                   name.to_owned(),
+        description:            description.to_owned(),
+        feed_type:              FeedType::MarketCandle,
+        provider:               Some("tencent".to_owned()),
+        tags:                   [
+            "finance",
+            "market-data",
+            "equities",
+            "cn-a-shares",
+            "tencent",
+            "no-auth",
+            "forward-adjusted",
+            "best-effort",
+            "unofficial-api",
+            "redistribution-restricted",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        transport:              Some(serde_json::json!({
+            "provider": "tencent",
+            "base_url": "https://web.ifzq.gtimg.cn",
+            "interval_secs": 3600,
+            "headers": {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://gu.qq.com/"
+            },
+            "venue": "tencent",
+            "symbols": symbols,
+            "timeframes": ["1d"],
+            "max_candles_per_poll": 5
+        })),
+        auth:                   None,
+        requires_configuration: false,
+        setup_hint:             None,
+    }
 }
 
 fn yahoo_market_candles_source(
@@ -536,5 +604,33 @@ mod tests {
             .find(|bundle| bundle.id == "yahoo-global-starter")
             .expect("missing Yahoo global starter bundle");
         assert_eq!(global.catalog_source_ids, ["yahoo-global-market-candles"]);
+    }
+
+    #[test]
+    fn tencent_preset_is_keyless_forward_adjusted_cn_equities() {
+        let sources = default_finance_feed_sources();
+        let tencent = sources
+            .iter()
+            .find(|source| source.id == "tencent-cn-equities-daily")
+            .expect("missing Tencent CN equities preset");
+
+        assert!(tencent.can_enable());
+        assert!(!tencent.requires_configuration);
+        assert_eq!(tencent.provider.as_deref(), Some("tencent"));
+        assert!(tencent.auth.is_none());
+        for tag in ["no-auth", "forward-adjusted", "cn-a-shares"] {
+            assert!(tencent.tags.iter().any(|candidate| candidate == tag));
+        }
+        let transport = tencent.transport.as_ref().expect("transport template");
+        assert_eq!(transport["provider"], "tencent");
+        assert_eq!(transport["base_url"], "https://web.ifzq.gtimg.cn");
+        assert_eq!(transport["venue"], "tencent");
+        assert_eq!(transport["timeframes"], serde_json::json!(["1d"]));
+
+        let bundle = default_finance_feed_bundles()
+            .into_iter()
+            .find(|bundle| bundle.id == "tencent-cn-equities-daily")
+            .expect("missing Tencent CN equities bundle");
+        assert_eq!(bundle.catalog_source_ids, ["tencent-cn-equities-daily"]);
     }
 }

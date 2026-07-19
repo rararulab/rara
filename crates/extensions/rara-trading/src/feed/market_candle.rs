@@ -53,6 +53,11 @@ const MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 100.0;
 const YAHOO_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 0.2;
 const YAHOO_MIN_INTERVAL_SECS: u64 = 60;
 const YAHOO_REQUEST_SPACING_SECS: u64 = 5;
+const TENCENT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 1.0;
+const TENCENT_MIN_INTERVAL_SECS: u64 = 60;
+const TENCENT_REQUEST_SPACING_SECS: u64 = 1;
+const TENCENT_MAX_CANDLES_PER_REQUEST: usize = 640;
+const TENCENT_A_SHARE_LOT_SIZE: u32 = 100;
 
 /// Minimum polling cadence for a market-candle feed, in seconds.
 ///
@@ -116,21 +121,25 @@ pub fn market_candle_fanout_safety(
     );
 
     let stream_count = symbols.len().saturating_mul(timeframes.len());
-    let poll_request_count = if matches!(provider, Some("binance" | "yahoo")) {
+    let poll_request_count = if matches!(provider, Some("binance" | "tencent" | "yahoo")) {
         stream_count
     } else {
         1
     };
-    let request_budget_per_second = if provider == Some("yahoo") {
-        request_budget_per_second.min(YAHOO_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND)
-    } else {
-        request_budget_per_second
+    let request_budget_per_second = match provider {
+        Some("tencent") => {
+            request_budget_per_second.min(TENCENT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND)
+        }
+        Some("yahoo") => {
+            request_budget_per_second.min(YAHOO_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND)
+        }
+        _ => request_budget_per_second,
     };
     let estimated_requests_per_second = poll_request_count as f64 / configured_interval_secs as f64;
-    let provider_minimum_interval_secs = if provider == Some("yahoo") {
-        YAHOO_MIN_INTERVAL_SECS
-    } else {
-        MIN_INTERVAL_SECS
+    let provider_minimum_interval_secs = match provider {
+        Some("tencent") => TENCENT_MIN_INTERVAL_SECS,
+        Some("yahoo") => YAHOO_MIN_INTERVAL_SECS,
+        _ => MIN_INTERVAL_SECS,
     };
     let minimum_safe_interval_secs = provider_minimum_interval_secs
         .max((poll_request_count as f64 / request_budget_per_second).ceil() as u64);
@@ -270,6 +279,20 @@ struct YahooQuote {
 }
 
 #[derive(Debug, Deserialize)]
+struct TencentKlineResponse {
+    code: i64,
+    #[serde(default)]
+    msg:  String,
+    data: Option<HashMap<String, TencentKlineData>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TencentKlineData {
+    #[serde(default)]
+    qfqday: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawCandle {
     venue:      String,
     symbol:     String,
@@ -364,6 +387,28 @@ impl MarketCandleSource {
             .append_pair("symbol", symbol)
             .append_pair("interval", timeframe)
             .append_pair("limit", "2");
+        Ok(url)
+    }
+
+    fn build_tencent_kline_url(&self, symbol: &str, timeframe: &str) -> anyhow::Result<Url> {
+        anyhow::ensure!(
+            timeframe == "1d",
+            "Tencent market candle timeframe {timeframe:?} is unsupported; use 1d"
+        );
+        let base_url = self
+            .transport
+            .base_url
+            .as_deref()
+            .unwrap_or("https://web.ifzq.gtimg.cn");
+        let wire_symbol = tencent_wire_symbol(symbol)?;
+        let limit = self
+            .transport
+            .max_candles_per_poll
+            .saturating_add(1)
+            .min(TENCENT_MAX_CANDLES_PER_REQUEST);
+        let param = format!("{wire_symbol},day,,,{limit},qfq");
+        let mut url = Url::parse(base_url)?.join("/appstock/app/fqkline/get")?;
+        url.query_pairs_mut().append_pair("param", &param);
         Ok(url)
     }
 
@@ -515,6 +560,44 @@ impl MarketCandleSource {
         }
 
         Ok(events)
+    }
+
+    fn parse_tencent_candle_events(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        body: &[u8],
+    ) -> anyhow::Result<Vec<FeedEvent>> {
+        let response: TencentKlineResponse = serde_json::from_slice(body)?;
+        anyhow::ensure!(
+            response.code == 0,
+            "Tencent K-line returned code {}: {}",
+            response.code,
+            response.msg
+        );
+        let wire_symbol = tencent_wire_symbol(symbol)?;
+        let rows = response
+            .data
+            .and_then(|mut data| data.remove(&wire_symbol))
+            .map(|data| data.qfqday)
+            .unwrap_or_default();
+        let received_at = Timestamp::now();
+        let mut candles = rows
+            .into_iter()
+            .filter_map(|row| {
+                tencent_daily_candle(row, &self.transport.venue, symbol, timeframe, received_at)
+            })
+            .collect::<Vec<_>>();
+        candles.sort_by(|left, right| left.open_time.cmp(&right.open_time));
+        let keep_from = candles
+            .len()
+            .saturating_sub(self.transport.max_candles_per_poll);
+
+        Ok(candles
+            .into_iter()
+            .skip(keep_from)
+            .map(|candle| self.event_from_candle(candle, received_at))
+            .collect())
     }
 
     fn event_from_candle(&self, candle: ParsedCandle, received_at: Timestamp) -> FeedEvent {
@@ -755,6 +838,84 @@ impl MarketCandleSource {
         true
     }
 
+    async fn poll_tencent_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        let mut any_success = false;
+        let mut request_count = 0_usize;
+
+        for symbol in &self.transport.symbols {
+            for timeframe in &self.transport.timeframes {
+                let url = match self.build_tencent_kline_url(symbol, timeframe) {
+                    Ok(url) => url,
+                    Err(err) => {
+                        self.record_error(format!("failed to build Tencent K-line URL: {err}"));
+                        continue;
+                    }
+                };
+
+                if request_count > 0 {
+                    tokio::time::sleep(Duration::from_secs(TENCENT_REQUEST_SPACING_SECS)).await;
+                }
+                request_count += 1;
+
+                let mut request = self.client.get(url);
+                for (key, value) in &self.transport.headers {
+                    request = request.header(key.as_str(), value.as_str());
+                }
+                request = apply_request_auth(request, &self.auth);
+
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(err) => {
+                        self.record_error(format!("Tencent K-line fetch failed: {err}"));
+                        continue;
+                    }
+                };
+                let status = response.status();
+                if !status.is_success() {
+                    self.record_error(format!(
+                        "Tencent K-line fetch received non-success status: {status}"
+                    ));
+                    continue;
+                }
+                let body = match response.bytes().await {
+                    Ok(body) => body,
+                    Err(err) => {
+                        self.record_error(format!("failed to read Tencent K-line body: {err}"));
+                        continue;
+                    }
+                };
+                if body.len() > MAX_BODY_BYTES {
+                    self.record_error(format!(
+                        "Tencent K-line response exceeded {MAX_BODY_BYTES} bytes"
+                    ));
+                    continue;
+                }
+                let events = match self.parse_tencent_candle_events(symbol, timeframe, &body) {
+                    Ok(events) => events,
+                    Err(err) => {
+                        self.record_error(format!(
+                            "failed to parse Tencent K-line response: {err}"
+                        ));
+                        continue;
+                    }
+                };
+
+                any_success = true;
+                for event in events {
+                    if tx.send(event).await.is_err() {
+                        tracing::info!("event channel closed, stopping market candle loop");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if any_success {
+            self.record_success();
+        }
+        true
+    }
+
     async fn poll_yahoo_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
         let mut any_success = false;
         let mut request_count = 0_usize;
@@ -834,6 +995,7 @@ impl MarketCandleSource {
     async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
         match self.transport.provider.as_deref() {
             Some("binance") => self.poll_binance_once(tx).await,
+            Some("tencent") => self.poll_tencent_once(tx).await,
             Some("yahoo") => self.poll_yahoo_once(tx).await,
             _ => self.poll_normalized_once(tx).await,
         }
@@ -953,6 +1115,33 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
                 "Binance market candle base_url must use HTTPS"
             );
         }
+        "tencent" => {
+            let base_url = transport
+                .base_url
+                .as_deref()
+                .unwrap_or("https://web.ifzq.gtimg.cn");
+            let url = Url::parse(base_url)?;
+            let test_loopback = cfg!(test)
+                && url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+            anyhow::ensure!(
+                url.scheme() == "https" || test_loopback,
+                "Tencent market candle base_url must use HTTPS"
+            );
+            for symbol in &transport.symbols {
+                tencent_wire_symbol(symbol)?;
+            }
+            for timeframe in &transport.timeframes {
+                anyhow::ensure!(
+                    timeframe == "1d",
+                    "Tencent market candle timeframe {timeframe:?} is unsupported; use 1d"
+                );
+            }
+            anyhow::ensure!(
+                transport.max_candles_per_poll < TENCENT_MAX_CANDLES_PER_REQUEST,
+                "Tencent max_candles_per_poll must be < {TENCENT_MAX_CANDLES_PER_REQUEST}"
+            );
+        }
         "yahoo" => {
             let base_url = transport
                 .base_url
@@ -976,10 +1165,10 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
         transport.interval_secs > 0,
         "market candle interval_secs must be greater than zero"
     );
-    let minimum_interval_secs = if transport.provider.as_deref() == Some("yahoo") {
-        YAHOO_MIN_INTERVAL_SECS
-    } else {
-        MIN_INTERVAL_SECS
+    let minimum_interval_secs = match transport.provider.as_deref() {
+        Some("tencent") => TENCENT_MIN_INTERVAL_SECS,
+        Some("yahoo") => YAHOO_MIN_INTERVAL_SECS,
+        _ => MIN_INTERVAL_SECS,
     };
     anyhow::ensure!(
         transport.interval_secs >= minimum_interval_secs,
@@ -1030,6 +1219,52 @@ fn yahoo_interval(timeframe: &str) -> anyhow::Result<&'static str> {
     }
 }
 
+fn tencent_wire_symbol(symbol: &str) -> anyhow::Result<String> {
+    let code = symbol
+        .strip_prefix("SH")
+        .or_else(|| symbol.strip_prefix("SZ"));
+    anyhow::ensure!(
+        code.is_some_and(|code| code.len() == 6 && code.bytes().all(|byte| byte.is_ascii_digit())),
+        "Tencent market candle symbol {symbol:?} is unsupported; use an exchange-prefixed symbol \
+         such as SH600519 or SZ000001"
+    );
+    Ok(symbol.to_ascii_lowercase())
+}
+
+fn tencent_daily_candle(
+    row: Vec<String>,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+    received_at: Timestamp,
+) -> Option<ParsedCandle> {
+    let [date, open, close, high, low, volume, ..] = row.as_slice() else {
+        return None;
+    };
+    let open_time = format!("{date}T09:30:00+08:00").parse::<Timestamp>().ok()?;
+    let close_time = format!("{date}T15:00:00+08:00").parse::<Timestamp>().ok()?;
+    if close_time > received_at {
+        return None;
+    }
+
+    Some(ParsedCandle {
+        venue:      venue.to_owned(),
+        symbol:     symbol.to_owned(),
+        timeframe:  timeframe.to_owned(),
+        open_time:  open_time.to_string(),
+        close_time: close_time.to_string(),
+        open:       Decimal::from_str(open).ok()?,
+        high:       Decimal::from_str(high).ok()?,
+        low:        Decimal::from_str(low).ok()?,
+        close:      Decimal::from_str(close).ok()?,
+        // Tencent reports A-share volume in board lots (手); normalize to shares so
+        // the stored OHLCV stream matches Yahoo/FMP equity volume semantics.
+        volume:     Decimal::from_str(volume)
+            .ok()?
+            .checked_mul(Decimal::from(TENCENT_A_SHARE_LOT_SIZE))?,
+    })
+}
+
 fn yahoo_timeframe_millis(timeframe: &str) -> anyhow::Result<i64> {
     let timeframe = Timeframe::parse(timeframe)?;
     let seconds = timeframe.step()?.as_secs();
@@ -1078,10 +1313,13 @@ fn dedupe_sort(values: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+    use rust_decimal::Decimal;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path, query_param},
+        matchers::{header, method, path, query_param},
     };
 
     use super::{MarketCandleSource, market_candle_fanout_safety};
@@ -1159,6 +1397,141 @@ mod tests {
             .build();
 
         MarketCandleSource::from_config(&config).expect("Yahoo config should parse")
+    }
+
+    fn tencent_config(base_url: &str, symbols: &[&str]) -> DataFeedConfig {
+        DataFeedConfig::builder()
+            .id("tencent-candles-test".to_owned())
+            .name("tencent-cn-equities".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "cn-a-shares".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "tencent",
+                "base_url": base_url,
+                "interval_secs": 900,
+                "headers": {
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://gu.qq.com/"
+                },
+                "venue": "tencent",
+                "symbols": symbols,
+                "timeframes": ["1d"],
+                "max_candles_per_poll": 5
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build()
+    }
+
+    #[test]
+    fn tencent_provider_rejects_noncanonical_cn_symbol() {
+        let error = match MarketCandleSource::from_config(&tencent_config(
+            "https://web.ifzq.gtimg.cn",
+            &["600519"],
+        )) {
+            Ok(_) => panic!("Tencent must reject a symbol without its exchange prefix"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("SH600519"),
+            "error should explain the Tencent symbol namespace: {error}"
+        );
+    }
+
+    #[test]
+    fn tencent_fanout_uses_one_request_per_symbol() {
+        let safety = market_candle_fanout_safety(
+            Some("tencent"),
+            &serde_json::json!({"interval_secs": 900}),
+            &[
+                "SH600519".to_owned(),
+                "SZ000001".to_owned(),
+                "SZ300750".to_owned(),
+            ],
+            &["1d".to_owned()],
+            super::DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+        )
+        .expect("fan-out should calculate");
+
+        assert_eq!(safety.stream_count, 3);
+        assert_eq!(safety.poll_request_count, 3);
+    }
+
+    #[tokio::test]
+    async fn tencent_poll_fetches_keyless_qfq_daily_candles() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/appstock/app/fqkline/get"))
+            .and(query_param("param", "sh600519,day,,,6,qfq"))
+            .and(header("User-Agent", "Mozilla/5.0"))
+            .and(header("Referer", "https://gu.qq.com/"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "sh600519": {
+      "qfqday": [
+        ["2026-07-17", "1269.010", "1253.000", "1269.330", "1238.980", "58417.000"],
+        ["2100-01-01", "1300.000", "1310.000", "1320.000", "1290.000", "1000.000"]
+      ]
+    }
+  }
+}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source =
+            MarketCandleSource::from_config(&tencent_config(&server.uri(), &[" sh600519 "]))
+                .expect("Tencent config should parse");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+        assert!(source.poll_once(&tx).await);
+        drop(tx);
+
+        let event = rx.recv().await.expect("closed Tencent candle event");
+        assert_eq!(event.source_name, "tencent-cn-equities");
+        assert_eq!(event.payload["venue"], "tencent");
+        assert_eq!(event.payload["symbol"], "SH600519");
+        assert_eq!(event.payload["timeframe"], "1d");
+        assert_eq!(event.payload["open_time"], "2026-07-17T01:30:00Z");
+        assert_eq!(event.payload["close_time"], "2026-07-17T07:00:00Z");
+        assert_eq!(event.payload["open"], "1269.010");
+        assert_eq!(event.payload["high"], "1269.330");
+        assert_eq!(event.payload["low"], "1238.980");
+        assert_eq!(event.payload["close"], "1253.000");
+        assert_eq!(event.payload["volume"], "5841700.000");
+        assert!(
+            rx.recv().await.is_none(),
+            "future daily bar must be skipped"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live access to the public Tencent Finance endpoint"]
+    async fn tencent_live_endpoint_returns_a_closed_daily_candle_without_auth() {
+        let source = MarketCandleSource::from_config(&tencent_config(
+            "https://web.ifzq.gtimg.cn",
+            &["SH600519"],
+        ))
+        .expect("live Tencent config should parse");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+
+        assert!(source.poll_once(&tx).await);
+        drop(tx);
+
+        let event = rx.recv().await.expect("live Tencent candle event");
+        assert_eq!(event.payload["venue"], "tencent");
+        assert_eq!(event.payload["symbol"], "SH600519");
+        assert_eq!(event.payload["timeframe"], "1d");
+        assert!(event.payload["close"].as_str().is_some_and(|value| {
+            Decimal::from_str(value).is_ok_and(|close| close > Decimal::ZERO)
+        }));
     }
 
     #[test]
