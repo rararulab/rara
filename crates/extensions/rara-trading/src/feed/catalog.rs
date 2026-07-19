@@ -81,20 +81,6 @@ pub fn default_finance_feed_bundles() -> Vec<DefaultFeedBundle> {
             ["binance-major-crypto-15m"],
         ),
         feed_bundle(
-            "yahoo-us-equities-daily",
-            "Yahoo US Equities Daily",
-            "Keyless best-effort daily candles for a focused US equities research watchlist.",
-            ["finance", "market-data", "equities", "yahoo", "best-effort"],
-            ["yahoo-market-candles"],
-        ),
-        feed_bundle(
-            "yahoo-global-starter",
-            "Yahoo Global Starter",
-            "Keyless best-effort daily candles for a small cross-market research watchlist.",
-            ["finance", "market-data", "global", "yahoo", "best-effort"],
-            ["yahoo-global-market-candles"],
-        ),
-        feed_bundle(
             "longbridge-equities-daily",
             "Longbridge Equities Daily",
             "Longbridge equities daily candles preset for configured normalized endpoints.",
@@ -172,6 +158,8 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
                 "no-auth",
                 "best-effort",
                 "delayed",
+                "experimental",
+                "region-dependent",
                 "unofficial-api",
                 "redistribution-restricted",
             ],
@@ -191,6 +179,8 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
                 "no-auth",
                 "best-effort",
                 "delayed",
+                "experimental",
+                "region-dependent",
                 "unofficial-api",
                 "redistribution-restricted",
             ],
@@ -500,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn yahoo_presets_are_keyless_best_effort_daily_sources() {
+    fn yahoo_presets_are_explicit_region_dependent_sources_not_quick_start_bundles() {
         let sources = default_finance_feed_sources();
         let yahoo = sources
             .iter()
@@ -514,6 +504,8 @@ mod tests {
             "no-auth",
             "best-effort",
             "delayed",
+            "experimental",
+            "region-dependent",
             "unofficial-api",
             "redistribution-restricted",
         ] {
@@ -526,15 +518,14 @@ mod tests {
         assert_eq!(transport["interval_secs"], 900);
 
         let bundles = default_finance_feed_bundles();
-        let us = bundles
-            .iter()
-            .find(|bundle| bundle.id == "yahoo-us-equities-daily")
-            .expect("missing Yahoo US equities bundle");
-        assert_eq!(us.catalog_source_ids, ["yahoo-market-candles"]);
-        let global = bundles
-            .iter()
-            .find(|bundle| bundle.id == "yahoo-global-starter")
-            .expect("missing Yahoo global starter bundle");
-        assert_eq!(global.catalog_source_ids, ["yahoo-global-market-candles"]);
+        assert!(
+            bundles.iter().all(|bundle| {
+                !bundle
+                    .catalog_source_ids
+                    .iter()
+                    .any(|source_id| source_id.starts_with("yahoo-"))
+            }),
+            "region-dependent Yahoo sources must not be advertised as quick-start bundles"
+        );
     }
 }

@@ -125,12 +125,24 @@ Ready Binance catalog entries use Binance's public spot kline API directly and
 do not require rara to hold exchange credentials. They still emit only
 `market_candle_closed` feed events.
 
-Yahoo catalog entries are also keyless, but they use Yahoo Finance's
-undocumented public chart endpoint and are deliberately marked `best-effort`,
-`delayed`, `unofficial-api`, and `redistribution-restricted`. They are research
-feeds, not execution-grade market data. The built-in US and global starters use
-daily candles, poll every 15 minutes, cap Yahoo traffic at 0.2 requests per
-second, and space requests by five seconds. Custom Yahoo transports may use
+Yahoo catalog entries are keyless, but they use Yahoo Finance's undocumented
+public chart endpoint and are deliberately marked `experimental`,
+`region-dependent`, `best-effort`, `delayed`, `unofficial-api`, and
+`redistribution-restricted`. They remain available as explicit research
+sources, but are not curated quick-start bundles or execution-grade market
+data. Enabling a Yahoo source first probes its first configured stream from the
+rara server. A region/access block fails with `code=region_blocked` or
+`code=access_blocked`; throttling fails with `code=rate_limited` and includes a
+retry interval. No new or updated enabled state is persisted when this
+preflight fails.
+
+At runtime, Yahoo feeds poll every 15 minutes by default, cap traffic at 0.2
+requests per second, and space requests by five seconds. The first runtime poll
+also waits five seconds after activation preflight, avoiding an immediate
+duplicate request. A provider-wide 403 or 429 stops the current symbol fan-out
+immediately and opens a source-local circuit for the classified cooldown, so a
+blocked egress does not turn a large watchlist into repeated failed requests.
+Custom Yahoo transports may use
 `1m`, `5m`, `15m`, `30m`, `1h`, or `1d`, but the fan-out guard enforces at
 least a 60-second polling cadence and raises the safe interval as the configured
 symbol/timeframe cross-product grows.
@@ -157,8 +169,9 @@ runtime control, subscription management, and inspection:
 `finance_list_feed_bundles` is the preferred discovery view when the user asks
 what default finance data feeding rara can provide. It groups built-in catalog
 sources into curated presets such as `macro-news`, `binance-spot-starter`,
-`binance-major-crypto-15m`, `yahoo-us-equities-daily`,
-`yahoo-global-starter`, and `longbridge-equities-daily`. Each bundle echoes
+`binance-major-crypto-15m`, and `longbridge-equities-daily`. Region-dependent
+Yahoo sources are discoverable through `finance_list_feed_sources` instead of
+the quick-start bundle list. Each bundle echoes
 its `catalog_source_ids`, providers, feed types, aggregate
 `enabled_source_count`, `ready_source_count`, persisted/running/subscribed
 counts, per-session subscription counts, setup hints for operator-only presets,

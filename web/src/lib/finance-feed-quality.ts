@@ -35,5 +35,8 @@ export function financeFeedQualityDisclosures(sources: TaggedFeedSource[]): stri
   ) {
     disclosures.push('Delayed / unofficial');
   }
+  if (sources.some((source) => source.tags.includes('region-dependent'))) {
+    disclosures.push('Region dependent');
+  }
   return disclosures;
 }

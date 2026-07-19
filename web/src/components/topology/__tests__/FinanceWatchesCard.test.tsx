@@ -343,6 +343,8 @@ describe('FinanceWatchesCard', () => {
         'no-auth',
         'best-effort',
         'delayed',
+        'experimental',
+        'region-dependent',
         'unofficial-api',
       ],
       enabled: false,
@@ -376,6 +378,7 @@ describe('FinanceWatchesCard', () => {
     expect(await screen.findByText('No key required')).toBeInTheDocument();
     expect(screen.getByText('Best effort')).toBeInTheDocument();
     expect(screen.getByText('Delayed / unofficial')).toBeInTheDocument();
+    expect(screen.getByText('Region dependent')).toBeInTheDocument();
   });
 
   it('uses_quick_start_configure_hint_for_bundle_settings_target', async () => {

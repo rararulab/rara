@@ -2013,6 +2013,7 @@ impl ToolExecute for FinanceEnableFeedSourceTool {
             Some(feed) => {
                 let config = config_from_source(&source, Some(feed))?;
                 ensure_market_candle_fanout_safe_to_enable(&config)?;
+                preflight_finance_feed_config(&config).await?;
                 anyhow::ensure!(
                     self.svc.update_feed(&config).await?,
                     "failed to update existing finance feed source: {source_name}"
@@ -2023,6 +2024,7 @@ impl ToolExecute for FinanceEnableFeedSourceTool {
             None => {
                 let config = config_from_source(&source, None)?;
                 ensure_market_candle_fanout_safe_to_enable(&config)?;
+                preflight_finance_feed_config(&config).await?;
                 self.svc.create_feed(&config).await?;
                 self.registry.register(config.clone())?;
                 (config, true)
@@ -2125,6 +2127,7 @@ impl ToolExecute for FinanceRestartFeedSourceTool {
 
         normalize_finance_feed_config(&mut config)?;
         ensure_market_candle_fanout_safe_to_enable(&config)?;
+        preflight_finance_feed_config(&config).await?;
         config.status = FeedStatus::Idle;
         config.last_error = None;
         config.updated_at = Timestamp::now();
@@ -2625,6 +2628,9 @@ impl ToolExecute for FinanceSubscribeInstrumentsTool {
             replace_existing_instruments,
         )?;
         let disabled_for_fanout_safety = apply_market_candle_fanout_guard(&mut config, start_now)?;
+        if config.enabled {
+            preflight_finance_feed_config(&config).await?;
+        }
 
         let feed_updated = if created {
             self.data_feed_svc.create_feed(&config).await?;
@@ -4897,6 +4903,17 @@ fn normalize_finance_feed_config(config: &mut DataFeedConfig) -> anyhow::Result<
         MarketCandleSource::normalize_config(config)?;
     }
     Ok(())
+}
+
+async fn preflight_finance_feed_config(config: &DataFeedConfig) -> anyhow::Result<()> {
+    if config.feed_type != FeedType::MarketCandle {
+        return Ok(());
+    }
+    let source = MarketCandleSource::from_config(config)?;
+    source
+        .preflight()
+        .await
+        .map_err(|failure| anyhow::anyhow!("market candle provider preflight failed: {failure}"))
 }
 
 fn merge_tags(mut tags: Vec<String>, existing: &[String]) -> Vec<String> {
@@ -7670,6 +7687,49 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("requires configuration"));
+    }
+
+    #[tokio::test]
+    async fn enable_feed_source_preflights_yahoo_before_persisting_enabled_state() {
+        let (_list, tool, _disable, _restart, _subscribe, svc, _registry, _finance_registry) =
+            tool().await;
+        let now = jiff::Timestamp::now();
+        let existing = DataFeedConfig::builder()
+            .id("existing-yahoo".to_owned())
+            .name("finance-yahoo-market-candles".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "experimental".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "yahoo",
+                "base_url": "https://127.0.0.1:9",
+                "interval_secs": 900,
+                "headers": {},
+                "venue": "yahoo",
+                "symbols": ["AAPL"],
+                "timeframes": ["1d"],
+                "max_candles_per_poll": 5
+            }))
+            .enabled(false)
+            .status(FeedStatus::Idle)
+            .created_at(now)
+            .updated_at(now)
+            .build();
+        svc.create_feed(&existing).await.unwrap();
+
+        let err = tool
+            .run(
+                FinanceEnableFeedSourceParams {
+                    catalog_source_id: "yahoo-market-candles".to_owned(),
+                    start_now:         Some(false),
+                },
+                &context(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("code=unavailable"));
+        let persisted = svc.get_feed("existing-yahoo").await.unwrap().unwrap();
+        assert!(!persisted.enabled);
     }
 
     #[tokio::test]

@@ -893,6 +893,7 @@ async fn enable_catalog_feed(
             .updated_at(now)
             .build();
         normalize_active_feed_config(&mut updated)?;
+        preflight_active_feed_config(&updated).await?;
         state.svc.update_feed(&updated).await?;
         (StatusCode::OK, updated)
     } else {
@@ -909,6 +910,7 @@ async fn enable_catalog_feed(
             .updated_at(now)
             .build();
         normalize_active_feed_config(&mut created)?;
+        preflight_active_feed_config(&created).await?;
         state.svc.create_feed(&created).await?;
         (StatusCode::CREATED, created)
     };
@@ -1071,6 +1073,7 @@ async fn create_feed(
         .updated_at(now)
         .build();
     normalize_active_feed_config(&mut config)?;
+    preflight_active_feed_config(&config).await?;
 
     // 1. Persist to database.
     state.svc.create_feed(&config).await?;
@@ -1156,6 +1159,9 @@ async fn update_feed(
         .updated_at(Timestamp::now())
         .build();
     normalize_active_feed_config(&mut updated)?;
+    if updated.enabled {
+        preflight_active_feed_config(&updated).await?;
+    }
 
     // 1. Persist to database.
     state.svc.update_feed(&updated).await?;
@@ -1245,6 +1251,7 @@ async fn toggle_feed(
 
     if feed.enabled {
         normalize_active_feed_config(&mut feed)?;
+        preflight_active_feed_config(&feed).await?;
     }
     if !state.svc.update_feed(&feed).await? {
         return Err(ProblemDetails::internal(format!(
@@ -2480,6 +2487,26 @@ fn normalize_active_feed_config(config: &mut DataFeedConfig) -> Result<(), Probl
     }
 }
 
+async fn preflight_active_feed_config(config: &DataFeedConfig) -> Result<(), ProblemDetails> {
+    if config.feed_type != FeedType::MarketCandle {
+        return Ok(());
+    }
+    let source = MarketCandleSource::from_config(config).map_err(|err| {
+        ProblemDetails::bad_request(format!("invalid market candle config: {err}"))
+    })?;
+    source.preflight().await.map_err(|failure| {
+        if failure.retryable {
+            ProblemDetails::service_unavailable(format!(
+                "market candle provider preflight failed: {failure}"
+            ))
+        } else {
+            ProblemDetails::bad_request(format!(
+                "market candle provider preflight failed: {failure}"
+            ))
+        }
+    })
+}
+
 fn sync_registry_and_maybe_start(config: &DataFeedConfig, registry: &Arc<DataFeedRegistry>) {
     let _ = registry.remove(&config.name);
     if let Err(e) = registry.register(config.clone()) {
@@ -2935,6 +2962,7 @@ mod tests {
         assert!(ids.contains(&"fed-press-releases"));
         assert!(ids.contains(&"sec-press-releases"));
         assert!(ids.contains(&"binance-market-candles"));
+        assert!(ids.contains(&"yahoo-market-candles"));
 
         let binance = entries
             .as_array()
@@ -2980,6 +3008,29 @@ mod tests {
                 - 2.0 / 60.0)
                 .abs()
                 < f64::EPSILON
+        );
+
+        let yahoo = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "yahoo-market-candles")
+            .unwrap();
+        assert_eq!(yahoo["provider"], "yahoo");
+        assert_eq!(yahoo["requires_configuration"], false);
+        assert!(
+            yahoo["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tag| tag == "experimental")
+        );
+        assert!(
+            yahoo["tags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tag| tag == "region-dependent")
         );
 
         let longbridge = entries
@@ -3110,7 +3161,7 @@ mod tests {
             .await
             .unwrap();
         let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(result["count"], 6);
+        assert_eq!(result["count"], 4);
 
         let bundles = result["bundles"].as_array().unwrap();
         let macro_news = bundles
@@ -3169,33 +3220,11 @@ mod tests {
         assert_eq!(longbridge["requires_configuration"], true);
         assert_eq!(longbridge["can_enable"], false);
 
-        let yahoo = bundles
-            .iter()
-            .find(|bundle| bundle["id"] == "yahoo-us-equities-daily")
-            .unwrap();
-        assert_eq!(yahoo["providers"], serde_json::json!(["yahoo"]));
-        assert_eq!(yahoo["requires_configuration"], false);
-        assert_eq!(yahoo["can_enable"], true);
-        assert_eq!(yahoo["sources"][0]["provider"], "yahoo");
-        assert_eq!(
-            yahoo["sources"][0]["configured_timeframes"],
-            serde_json::json!(["1d"])
-        );
-        assert_eq!(
-            yahoo["sources"][0]["load"]["configured_market_request_budget_per_second"],
-            0.2
-        );
-        assert_eq!(
-            yahoo["sources"][0]["load"]["configured_market_fanout_safe_to_start"],
-            true
-        );
-        assert!(
-            yahoo["sources"][0]["tags"]
+        assert!(bundles.iter().all(|bundle| {
+            bundle["providers"]
                 .as_array()
-                .unwrap()
-                .iter()
-                .any(|tag| tag == "best-effort")
-        );
+                .is_none_or(|providers| providers.iter().all(|provider| provider != "yahoo"))
+        }));
     }
 
     #[test]
@@ -3670,6 +3699,48 @@ mod tests {
         assert_eq!(feed.transport["venue"], "binance");
         assert_eq!(feed.transport["symbols"][0], "BTCUSDT");
         assert!(feed.enabled);
+    }
+
+    #[tokio::test]
+    async fn finance_catalog_enable_preflights_yahoo_before_persisting() {
+        let (app, pools) = app_with_user_and_pools(user_of(Role::Admin)).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data-feeds/catalog/yahoo-market-candles/enable")
+                    .header("Authorization", "Bearer s3cret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "transport": {
+                                "base_url": "https://127.0.0.1:9",
+                                "symbols": ["AAPL"],
+                                "timeframes": ["1d"]
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            problem["detail"]
+                .as_str()
+                .unwrap()
+                .contains("code=unavailable"),
+            "unexpected preflight problem: {problem}"
+        );
+
+        let svc = DataFeedSvc::new(pools);
+        assert!(svc.list_feeds().await.unwrap().is_empty());
     }
 
     #[tokio::test]
