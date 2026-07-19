@@ -419,6 +419,68 @@ describe('DataFeedsPanel', () => {
     });
   });
 
+  it('discloses keyless best-effort Yahoo bundle quality', async () => {
+    const yahoo: FeedCatalogEntry = {
+      id: 'yahoo-market-candles',
+      name: 'Yahoo US Equities Daily',
+      description: 'Best-effort Yahoo Finance daily candles for research.',
+      feed_type: 'market_candle',
+      provider: 'yahoo',
+      tags: [
+        'finance',
+        'market-data',
+        'yahoo',
+        'no-auth',
+        'best-effort',
+        'delayed',
+        'unofficial-api',
+      ],
+      source_name: 'finance-yahoo-market-candles',
+      enabled: false,
+      feed_id: null,
+      requires_configuration: false,
+      setup_hint: null,
+      transport_template: {
+        provider: 'yahoo',
+        venue: 'yahoo',
+        symbols: ['AAPL'],
+        timeframes: ['1d'],
+      },
+    };
+
+    catalogMock.mockResolvedValue([yahoo] satisfies FeedCatalogEntry[]);
+    financeBundlesMock.mockResolvedValue({
+      count: 1,
+      bundles: [
+        {
+          id: 'yahoo-us-equities-daily',
+          name: 'Yahoo US Equities Daily',
+          description: 'Keyless best-effort daily candles.',
+          tags: ['finance', 'market-data', 'equities', 'yahoo', 'best-effort'],
+          catalog_source_ids: ['yahoo-market-candles'],
+          feed_types: ['market_candle'],
+          providers: ['yahoo'],
+          source_count: 1,
+          enabled_source_count: 0,
+          ready_source_count: 1,
+          requires_configuration: false,
+          can_enable: true,
+          sources: [yahoo],
+          subscriptions: {
+            user_subscribed: false,
+            user_subscription_ids: [],
+          },
+        },
+      ],
+    } satisfies FinanceFeedBundlesResponse);
+
+    renderPanel();
+
+    expect(await screen.findAllByText('No key required')).toHaveLength(2);
+    expect(screen.getAllByText('Best effort')).toHaveLength(2);
+    expect(screen.getAllByText('Delayed / unofficial')).toHaveLength(2);
+  });
+
   it('opens the catalog configure dialog from a requires-config finance bundle', async () => {
     const longbridge: FeedCatalogEntry = {
       id: 'longbridge-market-candles',

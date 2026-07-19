@@ -83,6 +83,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { candleSubscriptionStreamHealth } from '@/lib/finance-candle-health';
+import { financeFeedQualityDisclosures } from '@/lib/finance-feed-quality';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1603,6 +1604,7 @@ function FeedCatalogCard({
     const load = catalogLoadLabel(entry);
     const fanoutDiagnostic = catalogFanoutDiagnostic(entry);
     const provider = catalogProvider(entry);
+    const qualityDisclosures = financeFeedQualityDisclosures([entry]);
     const subscribed = entry.subscriptions?.user_subscribed === true;
     const unsubscribeButton = subscribed ? (
       <Button
@@ -1632,6 +1634,11 @@ function FeedCatalogCard({
                 Provider {provider}
               </Badge>
             )}
+            {qualityDisclosures.map((disclosure) => (
+              <Badge key={disclosure} variant="outline" className="text-xs text-muted-foreground">
+                {disclosure}
+              </Badge>
+            ))}
             {entry.enabled && (
               <Badge variant="secondary" className="text-xs text-foreground">
                 Enabled
@@ -1832,6 +1839,7 @@ function FinanceFeedBundlesCard({ bundles }: { bundles: FinanceFeedBundle[] }) {
               bundle.providers.length > 0 ? summarizeList(bundle.providers) : 'Mixed sources';
             const feedTypeLabel = bundle.feed_types.map(typeLabel).join(' + ');
             const sourceNames = bundle.sources.map((source) => catalogSourceName(source));
+            const qualityDisclosures = financeFeedQualityDisclosures(bundle.sources);
             const canEnable = bundle.can_enable && readyDisabledSources.length > 0;
             const singleConfigurableSource =
               configurableSources.length === 1 ? (configurableSources[0] ?? null) : null;
@@ -1845,6 +1853,15 @@ function FinanceFeedBundlesCard({ bundles }: { bundles: FinanceFeedBundle[] }) {
                       <Badge variant="outline" className="text-xs">
                         {configuredLabel}
                       </Badge>
+                      {qualityDisclosures.map((disclosure) => (
+                        <Badge
+                          key={disclosure}
+                          variant="outline"
+                          className="text-xs text-muted-foreground"
+                        >
+                          {disclosure}
+                        </Badge>
+                      ))}
                       {configuredSources.length === bundle.source_count && (
                         <Badge variant="secondary" className="text-xs text-foreground">
                           Enabled

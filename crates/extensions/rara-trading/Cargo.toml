@@ -32,3 +32,4 @@ rara-tool-macro = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
+wiremock = "0.6"

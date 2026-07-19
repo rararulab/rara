@@ -32,6 +32,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { expectedCandleStreamHealthForGroups } from '@/lib/finance-candle-health';
+import { financeFeedQualityDisclosures } from '@/lib/finance-feed-quality';
 
 interface FinanceWatchesCardProps {
   sessionKey: string;
@@ -229,6 +230,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                   const providers = summarizeList(bundle.providers, 2);
                   const load = bundleLoadLabel(bundle);
                   const fanoutDiagnostic = bundleFanoutDiagnostic(bundle);
+                  const qualityDisclosures = financeFeedQualityDisclosures(bundle.sources);
                   return (
                     <div key={bundle.id} className="rounded-md border bg-muted/20 px-3 py-2">
                       <div className="flex items-start justify-between gap-2">
@@ -249,6 +251,15 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                             <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                               {bundle.enabled_source_count}/{bundle.source_count} sources on
                             </Badge>
+                            {qualityDisclosures.map((disclosure) => (
+                              <Badge
+                                key={disclosure}
+                                variant="outline"
+                                className="px-1.5 py-0 text-[10px] text-muted-foreground"
+                              >
+                                {disclosure}
+                              </Badge>
+                            ))}
                             {subscribed && (
                               <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                                 watching
@@ -359,6 +370,7 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
               });
               const load = catalogLoadLabel(entry);
               const fanoutDiagnostic = catalogFanoutDiagnostic(entry);
+              const qualityDisclosures = financeFeedQualityDisclosures([entry]);
               return (
                 <div key={entry.id} className="rounded-md border bg-background/60 px-3 py-2">
                   <div className="flex items-start justify-between gap-2">
@@ -379,6 +391,15 @@ export function FinanceWatchesCard({ sessionKey }: FinanceWatchesCardProps) {
                             Provider {provider}
                           </Badge>
                         )}
+                        {qualityDisclosures.map((disclosure) => (
+                          <Badge
+                            key={disclosure}
+                            variant="outline"
+                            className="px-1.5 py-0 text-[10px] text-muted-foreground"
+                          >
+                            {disclosure}
+                          </Badge>
+                        ))}
                         {!entry.enabled && (
                           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                             {needsConfiguration ? 'needs config' : 'source off'}

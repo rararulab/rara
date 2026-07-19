@@ -81,6 +81,20 @@ pub fn default_finance_feed_bundles() -> Vec<DefaultFeedBundle> {
             ["binance-major-crypto-15m"],
         ),
         feed_bundle(
+            "yahoo-us-equities-daily",
+            "Yahoo US Equities Daily",
+            "Keyless best-effort daily candles for a focused US equities research watchlist.",
+            ["finance", "market-data", "equities", "yahoo", "best-effort"],
+            ["yahoo-market-candles"],
+        ),
+        feed_bundle(
+            "yahoo-global-starter",
+            "Yahoo Global Starter",
+            "Keyless best-effort daily candles for a small cross-market research watchlist.",
+            ["finance", "market-data", "global", "yahoo", "best-effort"],
+            ["yahoo-global-market-candles"],
+        ),
+        feed_bundle(
             "longbridge-equities-daily",
             "Longbridge Equities Daily",
             "Longbridge equities daily candles preset for configured normalized endpoints.",
@@ -145,6 +159,43 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             &["15m"],
             300,
         ),
+        yahoo_market_candles_source(
+            "yahoo-market-candles",
+            "Yahoo US Equities Daily",
+            "Keyless Yahoo Finance daily candles for research. Best effort, potentially delayed, \
+             unofficial, and not intended for execution-grade decisions or redistribution.",
+            [
+                "finance",
+                "market-data",
+                "equities",
+                "yahoo",
+                "no-auth",
+                "best-effort",
+                "delayed",
+                "unofficial-api",
+                "redistribution-restricted",
+            ],
+            &["AAPL", "MSFT", "NVDA", "SPY", "QQQ"],
+        ),
+        yahoo_market_candles_source(
+            "yahoo-global-market-candles",
+            "Yahoo Global Market Daily",
+            "Keyless Yahoo Finance daily candles for cross-market research. Best effort, \
+             potentially delayed, unofficial, and not intended for execution-grade decisions or \
+             redistribution.",
+            [
+                "finance",
+                "market-data",
+                "global",
+                "yahoo",
+                "no-auth",
+                "best-effort",
+                "delayed",
+                "unofficial-api",
+                "redistribution-restricted",
+            ],
+            &["^GSPC", "^N225", "000001.SS", "BTC-USD", "EURUSD=X"],
+        ),
         provider_preset(
             "longbridge-market-candles",
             "Longbridge Market Data",
@@ -156,6 +207,36 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             &["1d"],
         ),
     ]
+}
+
+fn yahoo_market_candles_source(
+    id: &str,
+    name: &str,
+    description: &str,
+    tags: impl IntoIterator<Item = &'static str>,
+    symbols: &[&str],
+) -> DefaultFeedSource {
+    DefaultFeedSource {
+        id:                     id.to_owned(),
+        name:                   name.to_owned(),
+        description:            description.to_owned(),
+        feed_type:              FeedType::MarketCandle,
+        provider:               Some("yahoo".to_owned()),
+        tags:                   tags.into_iter().map(str::to_owned).collect(),
+        transport:              Some(serde_json::json!({
+            "provider": "yahoo",
+            "base_url": "https://query1.finance.yahoo.com",
+            "interval_secs": 900,
+            "headers": {},
+            "venue": "yahoo",
+            "symbols": symbols,
+            "timeframes": ["1d"],
+            "max_candles_per_poll": 5
+        })),
+        auth:                   None,
+        requires_configuration: false,
+        setup_hint:             None,
+    }
 }
 
 fn feed_bundle(
@@ -416,5 +497,44 @@ mod tests {
         );
         assert_eq!(transport["timeframes"], serde_json::json!(["1d"]));
         assert_eq!(transport["url"], "");
+    }
+
+    #[test]
+    fn yahoo_presets_are_keyless_best_effort_daily_sources() {
+        let sources = default_finance_feed_sources();
+        let yahoo = sources
+            .iter()
+            .find(|source| source.id == "yahoo-market-candles")
+            .expect("missing Yahoo market candle preset");
+
+        assert!(yahoo.can_enable());
+        assert_eq!(yahoo.provider.as_deref(), Some("yahoo"));
+        assert!(yahoo.auth.is_none());
+        for tag in [
+            "no-auth",
+            "best-effort",
+            "delayed",
+            "unofficial-api",
+            "redistribution-restricted",
+        ] {
+            assert!(yahoo.tags.iter().any(|candidate| candidate == tag));
+        }
+        let transport = yahoo.transport.as_ref().expect("transport template");
+        assert_eq!(transport["provider"], "yahoo");
+        assert_eq!(transport["venue"], "yahoo");
+        assert_eq!(transport["timeframes"], serde_json::json!(["1d"]));
+        assert_eq!(transport["interval_secs"], 900);
+
+        let bundles = default_finance_feed_bundles();
+        let us = bundles
+            .iter()
+            .find(|bundle| bundle.id == "yahoo-us-equities-daily")
+            .expect("missing Yahoo US equities bundle");
+        assert_eq!(us.catalog_source_ids, ["yahoo-market-candles"]);
+        let global = bundles
+            .iter()
+            .find(|bundle| bundle.id == "yahoo-global-starter")
+            .expect("missing Yahoo global starter bundle");
+        assert_eq!(global.catalog_source_ids, ["yahoo-global-market-candles"]);
     }
 }

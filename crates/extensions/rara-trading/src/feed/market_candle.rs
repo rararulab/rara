@@ -15,7 +15,7 @@
 //! Config-driven latest market candle data feed.
 //!
 //! This transport fetches either an operator-managed normalized candle endpoint
-//! or a built-in public provider such as Binance, then emits one
+//! or a built-in public provider such as Binance or Yahoo, then emits one
 //! `market_candle_closed` event per closed bar.
 
 use std::{
@@ -50,6 +50,9 @@ const MAX_CANDLES_PER_POLL: usize = 10_000;
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 10.0;
 const MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 100.0;
+const YAHOO_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 0.2;
+const YAHOO_MIN_INTERVAL_SECS: u64 = 60;
+const YAHOO_REQUEST_SPACING_SECS: u64 = 5;
 
 /// Minimum polling cadence for a market-candle feed, in seconds.
 ///
@@ -113,13 +116,23 @@ pub fn market_candle_fanout_safety(
     );
 
     let stream_count = symbols.len().saturating_mul(timeframes.len());
-    let poll_request_count = if provider == Some("binance") {
+    let poll_request_count = if matches!(provider, Some("binance" | "yahoo")) {
         stream_count
     } else {
         1
     };
+    let request_budget_per_second = if provider == Some("yahoo") {
+        request_budget_per_second.min(YAHOO_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND)
+    } else {
+        request_budget_per_second
+    };
     let estimated_requests_per_second = poll_request_count as f64 / configured_interval_secs as f64;
-    let minimum_safe_interval_secs = MIN_INTERVAL_SECS
+    let provider_minimum_interval_secs = if provider == Some("yahoo") {
+        YAHOO_MIN_INTERVAL_SECS
+    } else {
+        MIN_INTERVAL_SECS
+    };
+    let minimum_safe_interval_secs = provider_minimum_interval_secs
         .max((poll_request_count as f64 / request_budget_per_second).ceil() as u64);
 
     Ok(MarketCandleFanoutSafety {
@@ -225,6 +238,38 @@ struct CandleBatch {
 }
 
 #[derive(Debug, Deserialize)]
+struct YahooChartResponse {
+    chart: YahooChart,
+}
+
+#[derive(Debug, Deserialize)]
+struct YahooChart {
+    result: Option<Vec<YahooChartResult>>,
+    error:  Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YahooChartResult {
+    timestamp:  Option<Vec<i64>>,
+    indicators: YahooIndicators,
+}
+
+#[derive(Debug, Deserialize)]
+struct YahooIndicators {
+    quote: Vec<YahooQuote>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YahooQuote {
+    open:   Vec<Option<serde_json::Number>>,
+    high:   Vec<Option<serde_json::Number>>,
+    low:    Vec<Option<serde_json::Number>>,
+    close:  Vec<Option<serde_json::Number>>,
+    #[serde(default)]
+    volume: Vec<Option<serde_json::Number>>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawCandle {
     venue:      String,
     symbol:     String,
@@ -322,6 +367,24 @@ impl MarketCandleSource {
         Ok(url)
     }
 
+    fn build_yahoo_chart_url(&self, symbol: &str, timeframe: &str) -> anyhow::Result<Url> {
+        let base_url = self
+            .transport
+            .base_url
+            .as_deref()
+            .unwrap_or("https://query1.finance.yahoo.com");
+        let mut url = Url::parse(base_url)?.join("/v8/finance/chart")?;
+        url.path_segments_mut()
+            .map_err(|()| anyhow::anyhow!("Yahoo market candle base_url cannot be a base URL"))?
+            .push(symbol);
+        url.query_pairs_mut()
+            .append_pair("interval", yahoo_interval(timeframe)?)
+            .append_pair("range", "5d")
+            .append_pair("events", "history")
+            .append_pair("includePrePost", "false");
+        Ok(url)
+    }
+
     fn record_error(&self, message: String) {
         let was_in_error = self.in_error.swap(true, Ordering::SeqCst);
         if was_in_error {
@@ -383,6 +446,69 @@ impl MarketCandleSource {
 
         for row in rows.into_iter().take(self.transport.max_candles_per_poll) {
             let Some(candle) = self.parse_binance_row(symbol, timeframe, row, now_ms) else {
+                continue;
+            };
+            events.push(self.event_from_candle(candle, received_at));
+        }
+
+        Ok(events)
+    }
+
+    fn parse_yahoo_candle_events(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        body: &[u8],
+    ) -> anyhow::Result<Vec<FeedEvent>> {
+        let response: YahooChartResponse = serde_json::from_slice(body)?;
+        if let Some(error) = response.chart.error {
+            anyhow::bail!("Yahoo chart returned an error: {error}");
+        }
+        let result = response
+            .chart
+            .result
+            .and_then(|results| results.into_iter().next())
+            .ok_or_else(|| anyhow::anyhow!("Yahoo chart response contained no result"))?;
+        let timestamps = result
+            .timestamp
+            .ok_or_else(|| anyhow::anyhow!("Yahoo chart response contained no timestamps"))?;
+        let quote = result
+            .indicators
+            .quote
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Yahoo chart response contained no quote"))?;
+        let received_at = Timestamp::now();
+        let now_ms = received_at.as_millisecond();
+        let step_ms = yahoo_timeframe_millis(timeframe)?;
+        let mut events = Vec::new();
+
+        for (index, open_time_seconds) in timestamps
+            .into_iter()
+            .enumerate()
+            .take(self.transport.max_candles_per_poll)
+        {
+            let Some(open_time_ms) = open_time_seconds.checked_mul(1000) else {
+                continue;
+            };
+            let Some(close_time_ms) = open_time_ms
+                .checked_add(step_ms)
+                .and_then(|value| value.checked_sub(1))
+            else {
+                continue;
+            };
+            if close_time_ms > now_ms {
+                continue;
+            }
+            let Some(candle) = yahoo_candle_at(
+                &quote,
+                index,
+                &self.transport.venue,
+                symbol,
+                timeframe,
+                open_time_ms,
+                close_time_ms,
+            ) else {
                 continue;
             };
             events.push(self.event_from_candle(candle, received_at));
@@ -629,11 +755,87 @@ impl MarketCandleSource {
         true
     }
 
+    async fn poll_yahoo_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        let mut any_success = false;
+        let mut request_count = 0_usize;
+
+        for symbol in &self.transport.symbols {
+            for timeframe in &self.transport.timeframes {
+                let url = match self.build_yahoo_chart_url(symbol, timeframe) {
+                    Ok(url) => url,
+                    Err(err) => {
+                        self.record_error(format!("failed to build Yahoo chart URL: {err}"));
+                        continue;
+                    }
+                };
+
+                if request_count > 0 {
+                    tokio::time::sleep(Duration::from_secs(YAHOO_REQUEST_SPACING_SECS)).await;
+                }
+                request_count += 1;
+
+                let mut request = self.client.get(url);
+                for (key, value) in &self.transport.headers {
+                    request = request.header(key.as_str(), value.as_str());
+                }
+                request = apply_request_auth(request, &self.auth);
+
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(err) => {
+                        self.record_error(format!("Yahoo chart fetch failed: {err}"));
+                        continue;
+                    }
+                };
+                let status = response.status();
+                if !status.is_success() {
+                    self.record_error(format!(
+                        "Yahoo chart fetch received non-success status: {status}"
+                    ));
+                    continue;
+                }
+                let body = match response.bytes().await {
+                    Ok(body) => body,
+                    Err(err) => {
+                        self.record_error(format!("failed to read Yahoo chart body: {err}"));
+                        continue;
+                    }
+                };
+                if body.len() > MAX_BODY_BYTES {
+                    self.record_error(format!(
+                        "Yahoo chart response exceeded {MAX_BODY_BYTES} bytes"
+                    ));
+                    continue;
+                }
+                let events = match self.parse_yahoo_candle_events(symbol, timeframe, &body) {
+                    Ok(events) => events,
+                    Err(err) => {
+                        self.record_error(format!("failed to parse Yahoo chart response: {err}"));
+                        continue;
+                    }
+                };
+
+                any_success = true;
+                for event in events {
+                    if tx.send(event).await.is_err() {
+                        tracing::info!("event channel closed, stopping market candle loop");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if any_success {
+            self.record_success();
+        }
+        true
+    }
+
     async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
-        if self.transport.provider.as_deref() == Some("binance") {
-            self.poll_binance_once(tx).await
-        } else {
-            self.poll_normalized_once(tx).await
+        match self.transport.provider.as_deref() {
+            Some("binance") => self.poll_binance_once(tx).await,
+            Some("yahoo") => self.poll_yahoo_once(tx).await,
+            _ => self.poll_normalized_once(tx).await,
         }
     }
 }
@@ -751,17 +953,40 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
                 "Binance market candle base_url must use HTTPS"
             );
         }
+        "yahoo" => {
+            let base_url = transport
+                .base_url
+                .as_deref()
+                .unwrap_or("https://query1.finance.yahoo.com");
+            let url = Url::parse(base_url)?;
+            let test_loopback = cfg!(test)
+                && url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+            anyhow::ensure!(
+                url.scheme() == "https" || test_loopback,
+                "Yahoo market candle base_url must use HTTPS"
+            );
+            for timeframe in &transport.timeframes {
+                yahoo_interval(timeframe)?;
+            }
+        }
         provider => anyhow::bail!("unsupported market candle provider: {provider}"),
     }
     anyhow::ensure!(
         transport.interval_secs > 0,
         "market candle interval_secs must be greater than zero"
     );
+    let minimum_interval_secs = if transport.provider.as_deref() == Some("yahoo") {
+        YAHOO_MIN_INTERVAL_SECS
+    } else {
+        MIN_INTERVAL_SECS
+    };
     anyhow::ensure!(
-        transport.interval_secs >= MIN_INTERVAL_SECS,
-        "market candle interval_secs must be at least {MIN_INTERVAL_SECS} seconds: each poll tick \
-         fans out to symbols × timeframes /api/v3/klines requests, so polling faster trips \
-         Binance's per-IP request-weight rate limit and gets the deployment IP-banned"
+        transport.interval_secs >= minimum_interval_secs,
+        "market candle interval_secs must be at least {minimum_interval_secs} seconds for \
+         provider {:?}; each poll may fan out to symbols × timeframes requests, so faster polling \
+         can trip provider request-weight and rate limit policies",
+        transport.provider.as_deref().unwrap_or("normalized")
     );
     anyhow::ensure!(
         !transport.venue.is_empty(),
@@ -790,6 +1015,61 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn yahoo_interval(timeframe: &str) -> anyhow::Result<&'static str> {
+    match timeframe {
+        "1m" => Ok("1m"),
+        "5m" => Ok("5m"),
+        "15m" => Ok("15m"),
+        "30m" => Ok("30m"),
+        "1h" => Ok("1h"),
+        "1d" => Ok("1d"),
+        _ => anyhow::bail!(
+            "Yahoo market candle timeframe {timeframe:?} is unsupported; use one of 1m, 5m, 15m, \
+             30m, 1h, or 1d"
+        ),
+    }
+}
+
+fn yahoo_timeframe_millis(timeframe: &str) -> anyhow::Result<i64> {
+    let timeframe = Timeframe::parse(timeframe)?;
+    let seconds = timeframe.step()?.as_secs();
+    seconds
+        .checked_mul(1000)
+        .ok_or_else(|| anyhow::anyhow!("Yahoo timeframe is too large"))
+}
+
+fn yahoo_candle_at(
+    quote: &YahooQuote,
+    index: usize,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+    open_time_ms: i64,
+    close_time_ms: i64,
+) -> Option<ParsedCandle> {
+    fn decimal_at(values: &[Option<serde_json::Number>], index: usize) -> Option<Decimal> {
+        Decimal::from_str(&values.get(index)?.as_ref()?.to_string()).ok()
+    }
+
+    Some(ParsedCandle {
+        venue:      venue.to_owned(),
+        symbol:     symbol.to_owned(),
+        timeframe:  timeframe.to_owned(),
+        open_time:  Timestamp::from_millisecond(open_time_ms).ok()?.to_string(),
+        close_time: Timestamp::from_millisecond(close_time_ms).ok()?.to_string(),
+        open:       decimal_at(&quote.open, index)?,
+        high:       decimal_at(&quote.high, index)?,
+        low:        decimal_at(&quote.low, index)?,
+        close:      decimal_at(&quote.close, index)?,
+        volume:     quote
+            .volume
+            .get(index)
+            .and_then(Option::as_ref)
+            .and_then(|value| Decimal::from_str(&value.to_string()).ok())
+            .unwrap_or(Decimal::ZERO),
+    })
+}
+
 fn dedupe_sort(values: &mut Vec<String>) {
     let mut seen = HashSet::new();
     values.retain(|value| seen.insert(value.clone()));
@@ -799,8 +1079,12 @@ fn dedupe_sort(values: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param},
+    };
 
-    use super::MarketCandleSource;
+    use super::{MarketCandleSource, market_candle_fanout_safety};
 
     fn candle_source() -> MarketCandleSource {
         let config = DataFeedConfig::builder()
@@ -847,6 +1131,34 @@ mod tests {
             .build();
 
         MarketCandleSource::from_config(&config).expect("Binance config should parse")
+    }
+
+    fn yahoo_source() -> MarketCandleSource {
+        yahoo_source_with_base_url("https://query1.finance.yahoo.com", "AAPL")
+    }
+
+    fn yahoo_source_with_base_url(base_url: &str, symbol: &str) -> MarketCandleSource {
+        let config = DataFeedConfig::builder()
+            .id("yahoo-candles-test".to_owned())
+            .name("yahoo-public".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "best-effort".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "yahoo",
+                "base_url": base_url,
+                "interval_secs": 900,
+                "venue": "yahoo",
+                "symbols": [symbol],
+                "timeframes": ["1d"],
+                "max_candles_per_poll": 5
+            }))
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build();
+
+        MarketCandleSource::from_config(&config).expect("Yahoo config should parse")
     }
 
     #[test]
@@ -1026,6 +1338,170 @@ mod tests {
             url.as_str(),
             "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=2"
         );
+    }
+
+    #[test]
+    fn yahoo_provider_builds_public_chart_url() {
+        let source = yahoo_source();
+        let url = source
+            .build_yahoo_chart_url("^GSPC", "1d")
+            .expect("URL should build");
+
+        assert_eq!(
+            url.as_str(),
+            "https://query1.finance.yahoo.com/v8/finance/chart/^GSPC?interval=1d&range=5d&events=history&includePrePost=false"
+        );
+    }
+
+    #[test]
+    fn yahoo_chart_becomes_closed_candle_events_and_skips_open_or_null_bars() {
+        let source = yahoo_source();
+        let events = source
+            .parse_yahoo_candle_events(
+                "AAPL",
+                "1d",
+                br#"{
+  "chart": {
+    "result": [{
+      "meta": {"symbol": "AAPL"},
+      "timestamp": [1713139200, 4102444800, 1713312000],
+      "indicators": {
+        "quote": [{
+          "open": [172.50, 190.00, null],
+          "high": [176.63, 192.00, 180.00],
+          "low": [172.45, 189.50, 175.00],
+          "close": [175.04, 191.25, 179.00],
+          "volume": [73531800, 1000, 2000]
+        }]
+      }
+    }],
+    "error": null
+  }
+}"#,
+            )
+            .expect("Yahoo chart should parse");
+
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.source_name, "yahoo-public");
+        assert_eq!(event.event_type, "market_candle_closed");
+        assert!(event.tags.contains(&"venue:yahoo".to_owned()));
+        assert!(event.tags.contains(&"symbol:AAPL".to_owned()));
+        assert!(event.tags.contains(&"timeframe:1d".to_owned()));
+        assert_eq!(event.payload["open"], "172.5");
+        assert_eq!(event.payload["high"], "176.63");
+        assert_eq!(event.payload["low"], "172.45");
+        assert_eq!(event.payload["close"], "175.04");
+        assert_eq!(event.payload["volume"], "73531800");
+    }
+
+    #[test]
+    fn yahoo_chart_normalizes_missing_volume_to_zero() {
+        let source = yahoo_source();
+        let events = source
+            .parse_yahoo_candle_events(
+                "AAPL",
+                "1d",
+                br#"{
+  "chart": {
+    "result": [{
+      "timestamp": [1713139200],
+      "indicators": {
+        "quote": [{
+          "open": [172.50],
+          "high": [176.63],
+          "low": [172.45],
+          "close": [175.04],
+          "volume": [null]
+        }]
+      }
+    }],
+    "error": null
+  }
+}"#,
+            )
+            .expect("Yahoo chart should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["volume"], "0");
+    }
+
+    #[tokio::test]
+    async fn yahoo_poll_fetches_chart_and_emits_closed_candle() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v8/finance/chart/AAPL"))
+            .and(query_param("interval", "1d"))
+            .and(query_param("range", "5d"))
+            .and(query_param("events", "history"))
+            .and(query_param("includePrePost", "false"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+  "chart": {
+    "result": [{
+      "timestamp": [1713139200],
+      "indicators": {
+        "quote": [{
+          "open": [172.50],
+          "high": [176.63],
+          "low": [172.45],
+          "close": [175.04],
+          "volume": [73531800]
+        }]
+      }
+    }],
+    "error": null
+  }
+}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source = yahoo_source_with_base_url(&server.uri(), "AAPL");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        assert!(source.poll_yahoo_once(&tx).await);
+        drop(tx);
+
+        let event = rx.recv().await.expect("closed candle event");
+        assert_eq!(event.payload["symbol"], "AAPL");
+        assert_eq!(event.payload["close"], "175.04");
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[test]
+    fn yahoo_fanout_uses_one_request_per_stream_and_conservative_budget() {
+        let transport = serde_json::json!({"interval_secs": 60});
+        let symbols = (0..100)
+            .map(|index| format!("SYM{index}"))
+            .collect::<Vec<_>>();
+        let timeframes = vec!["1d".to_owned()];
+
+        let safety = market_candle_fanout_safety(
+            Some("yahoo"),
+            &transport,
+            &symbols,
+            &timeframes,
+            super::DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+        )
+        .expect("fan-out should calculate");
+
+        assert_eq!(safety.poll_request_count, 100);
+        assert_eq!(safety.request_budget_per_second, 0.2);
+        assert_eq!(safety.minimum_safe_interval_secs, 500);
+        assert!(!safety.safe_to_start);
+
+        let one_symbol = market_candle_fanout_safety(
+            Some("yahoo"),
+            &serde_json::json!({"interval_secs": 5}),
+            &["AAPL".to_owned()],
+            &timeframes,
+            super::DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+        )
+        .expect("fan-out should calculate");
+        assert_eq!(one_symbol.minimum_safe_interval_secs, 60);
+        assert!(!one_symbol.safe_to_start);
     }
 
     #[test]
