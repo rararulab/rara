@@ -720,7 +720,9 @@ pub async fn start_with_options(
             rara_paths::data_dir().join("trading/finance-subscriptions.json"),
         ),
     );
-    let market_data_repo = init_market_data_repository().await;
+    let market_data_repo = init_market_data_repository()
+        .await
+        .whatever_context("Failed to initialize required market-data repository")?;
 
     // -- Data feed subsystem --------------------------------------------------
     // Create the event channel and registry before tool registration so
@@ -1509,31 +1511,26 @@ fn normalize_restored_data_feed_config(config: &mut DataFeedConfig) -> anyhow::R
     Ok(config.transport != before)
 }
 
-async fn init_market_data_repository() -> rara_trading::market_data::MarketDataRepositoryRef {
+async fn init_market_data_repository()
+-> anyhow::Result<rara_trading::market_data::MarketDataRepositoryRef> {
     let database_url = std::env::var("RARA_MARKET_DATA_DATABASE_URL").ok();
     init_market_data_repository_from_database_url(database_url.as_deref()).await
 }
 
 async fn init_market_data_repository_from_database_url(
     database_url: Option<&str>,
-) -> rara_trading::market_data::MarketDataRepositoryRef {
+) -> anyhow::Result<rara_trading::market_data::MarketDataRepositoryRef> {
     match database_url
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(database_url) => match connect_timescale_market_data_repository(database_url).await {
-            Ok(repo) => Arc::new(repo),
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "market-data Timescale initialization failed; using in-memory repository"
-                );
-                in_memory_market_data_repository()
-            }
-        },
+        Some(database_url) => {
+            let repo = connect_timescale_market_data_repository(database_url).await?;
+            Ok(Arc::new(repo))
+        }
         _ => {
             warn!("RARA_MARKET_DATA_DATABASE_URL not set; using in-memory market-data repository");
-            in_memory_market_data_repository()
+            Ok(in_memory_market_data_repository())
         }
     }
 }
@@ -1711,8 +1708,6 @@ mod tests {
 
     use jiff::Timestamp;
     use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
-    use rara_trading::market_data::{MarketCandle, Timeframe};
-    use rust_decimal::Decimal;
 
     use super::AppConfig;
 
@@ -1823,28 +1818,11 @@ mita:
     }
 
     #[tokio::test]
-    async fn market_data_repository_falls_back_when_timescale_initialization_fails() {
-        let repo =
+    async fn configured_market_data_database_failure_blocks_startup() {
+        let result =
             super::init_market_data_repository_from_database_url(Some("not-a-postgres-url")).await;
-        let candle = MarketCandle {
-            source_name:       "fallback-test".to_owned(),
-            venue:             "binance".to_owned(),
-            symbol:            "BTCUSDT".to_owned(),
-            timeframe:         Timeframe::parse("1m").unwrap(),
-            open_time:         "2026-07-10T08:00:00Z".parse().unwrap(),
-            close_time:        "2026-07-10T08:01:00Z".parse().unwrap(),
-            open:              Decimal::from_str_exact("61500.12").unwrap(),
-            high:              Decimal::from_str_exact("61640.00").unwrap(),
-            low:               Decimal::from_str_exact("61480.50").unwrap(),
-            close:             Decimal::from_str_exact("61610.30").unwrap(),
-            volume:            Decimal::from_str_exact("124.551").unwrap(),
-            ingested_at:       Timestamp::now(),
-            provider_sequence: None,
-        };
 
-        repo.upsert_closed_candle(candle)
-            .await
-            .expect("fallback repository should accept candles");
+        assert!(result.is_err());
     }
 
     #[test]

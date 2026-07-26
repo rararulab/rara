@@ -1,4 +1,4 @@
-# Build context for docker/Dockerfile (server-only rara image).
+# Shared build context for the server and web images.
 #
 # Keep this a BLOCK-list: the Rust workspace has many build.rs scripts that
 # read files across the tree, so excluding by allow-list is fragile. We only
@@ -21,8 +21,7 @@ vendor/
 # Nested worktrees
 .worktrees/
 
-# Frontend / desktop — server-only image, no web build, no nginx
-web/
+# Non-web application surfaces
 desktop/
 extension/
 site/

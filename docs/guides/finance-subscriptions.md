@@ -43,9 +43,10 @@ export RARA_MARKET_DATA_DATABASE_URL='postgres://user:pass@host:5432/rara'
 On startup, rara applies the market-candle migration from
 `crates/extensions/rara-trading/migrations/0001_market_candles.sql`. The
 TimescaleDB extension must be installed in the target database. If the variable
-is missing, or if the connection or schema migration fails, rara falls back to
-an in-memory repository, which is suitable only for local development because
-candle history is not durable.
+is missing, rara uses an in-memory repository suitable only for local
+development because candle history is not durable. If the variable is present,
+the connection and schema migration are required: either failure blocks rara
+startup instead of silently losing production candle history.
 
 Local Timescale contract tests use testcontainers and do not require a manually
 managed database:

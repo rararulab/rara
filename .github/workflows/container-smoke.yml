@@ -1,12 +1,8 @@
 name: container-smoke
 
-# Build the server-only rara image (docker/Dockerfile) and prove it boots
-# and serves /api/health → healthy. This is the canonical, executable Verify
-# for the containerization work (issue #2239).
-#
-# It does NOT push to any registry — publishing is deliberately out of scope
-# (decision #9; it must not re-introduce the publish pipeline #443 removed).
-# The image is built and loaded locally, run, and probed.
+# Build both production images without publishing them. The backend must boot
+# and serve /api/health; the web image must run read-only as a non-root user,
+# serve the SPA, and expose its health endpoint.
 #
 # Gated behind a paths filter so it only runs on PRs touching the
 # container / deploy files. Not a required merge gate.
@@ -15,6 +11,7 @@ on:
   pull_request:
     paths:
       - "docker/**"
+      - "web/**"
       - ".dockerignore"
       - "deploy/k8s/**"
       - ".github/workflows/container-smoke.yml"
@@ -153,3 +150,71 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f rara-smoke || true; docker volume rm rara-cfg || true
+
+  web-smoke:
+    name: web build + health
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build web image (linux/amd64, load locally — no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: rara-web:smoke
+          cache-from: type=gha,scope=container-smoke-web
+          cache-to: type=gha,mode=max,scope=container-smoke-web
+
+      - name: Assert web image runs as non-root
+        run: |
+          user="$(docker inspect -f '{{.Config.User}}' rara-web:smoke)"
+          echo "image User = '${user}'"
+          if [ -z "${user}" ] || [ "${user}" = "root" ] || [ "${user}" = "0" ]; then
+            echo "FAIL: image must run as a non-root user"
+            exit 1
+          fi
+
+      - name: Boot web container and assert health + SPA
+        run: |
+          # nginx resolves its backend when it starts. The smoke only needs a
+          # live DNS entry; backend behavior is covered by the server job.
+          docker network create rara-web-smoke >/dev/null
+          docker run -d --rm --name rara-server --network rara-web-smoke \
+            alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 \
+            tail -f /dev/null
+          docker run -d --rm --name rara-web-smoke --network rara-web-smoke \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p 18080:8080 rara-web:smoke
+
+          # Poll the health condition instead of relying on curl's retry
+          # classification. During startup nginx can accept TCP and reset the
+          # first request; curl exit 56 is not retried by --retry-connrefused.
+          body=""
+          for i in $(seq 1 20); do
+            if body="$(curl -fsS http://127.0.0.1:18080/healthz)"; then
+              break
+            fi
+            sleep 1
+          done
+          test "${body}" = "ok"
+          curl -fsS http://127.0.0.1:18080/ | grep -q '<div id="root"></div>'
+
+      - name: Web container logs (always)
+        if: always()
+        run: docker logs rara-web-smoke || true
+
+      - name: Web cleanup
+        if: always()
+        run: |
+          docker rm -f rara-web-smoke rara-server || true
+          docker network rm rara-web-smoke || true
