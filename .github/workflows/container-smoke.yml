@@ -196,8 +196,16 @@ jobs:
             --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             -p 18080:8080 rara-web:smoke
 
-          body="$(curl --retry 20 --retry-delay 1 --retry-connrefused \
-            -fsS http://127.0.0.1:18080/healthz)"
+          # Poll the health condition instead of relying on curl's retry
+          # classification. During startup nginx can accept TCP and reset the
+          # first request; curl exit 56 is not retried by --retry-connrefused.
+          body=""
+          for i in $(seq 1 20); do
+            if body="$(curl -fsS http://127.0.0.1:18080/healthz)"; then
+              break
+            fi
+            sleep 1
+          done
           test "${body}" = "ok"
           curl -fsS http://127.0.0.1:18080/ | grep -q '<div id="root"></div>'
 
