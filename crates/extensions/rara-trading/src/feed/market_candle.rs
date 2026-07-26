@@ -22,10 +22,10 @@ use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -35,8 +35,8 @@ use rara_kernel::data_feed::{
     StatusReporterRef, polling::apply_request_auth,
 };
 use reqwest::{
-    Url,
-    header::{HeaderName, HeaderValue},
+    StatusCode, Url,
+    header::{HeaderName, HeaderValue, RETRY_AFTER},
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,9 @@ const MAX_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 100.0;
 const YAHOO_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND: f64 = 0.2;
 const YAHOO_MIN_INTERVAL_SECS: u64 = 60;
 const YAHOO_REQUEST_SPACING_SECS: u64 = 5;
+const YAHOO_ACCESS_BLOCK_COOLDOWN_SECS: u64 = 6 * 60 * 60;
+const YAHOO_RATE_LIMIT_COOLDOWN_SECS: u64 = 15 * 60;
+const YAHOO_MAX_COOLDOWN_SECS: u64 = 24 * 60 * 60;
 
 /// Minimum polling cadence for a market-candle feed, in seconds.
 ///
@@ -221,15 +224,188 @@ pub struct MarketCandleTransport {
 }
 
 pub struct MarketCandleSource {
-    name:       String,
-    tags:       Vec<String>,
-    transport:  MarketCandleTransport,
-    auth:       Option<AuthConfig>,
-    client:     reqwest::Client,
-    reporter:   Option<StatusReporterRef>,
-    in_error:   Arc<AtomicBool>,
-    symbols:    HashSet<String>,
-    timeframes: HashSet<String>,
+    name:          String,
+    tags:          Vec<String>,
+    transport:     MarketCandleTransport,
+    auth:          Option<AuthConfig>,
+    client:        reqwest::Client,
+    reporter:      Option<StatusReporterRef>,
+    in_error:      Arc<AtomicBool>,
+    yahoo_circuit: Mutex<YahooCircuitBreaker>,
+    symbols:       HashSet<String>,
+    timeframes:    HashSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketCandleProviderFailureKind {
+    RegionBlocked,
+    AccessBlocked,
+    RateLimited,
+    Unavailable,
+    InvalidResponse,
+}
+
+impl MarketCandleProviderFailureKind {
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::RegionBlocked => "region_blocked",
+            Self::AccessBlocked => "access_blocked",
+            Self::RateLimited => "rate_limited",
+            Self::Unavailable => "unavailable",
+            Self::InvalidResponse => "invalid_response",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketCandleProviderFailure {
+    pub provider:            String,
+    pub kind:                MarketCandleProviderFailureKind,
+    pub status:              Option<u16>,
+    pub retryable:           bool,
+    pub retry_after_seconds: Option<u64>,
+    message:                 String,
+}
+
+impl std::fmt::Display for MarketCandleProviderFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "provider={} code={} retryable={}",
+            self.provider,
+            self.kind.code(),
+            self.retryable
+        )?;
+        if let Some(status) = self.status {
+            write!(formatter, " status={status}")?;
+        }
+        if let Some(seconds) = self.retry_after_seconds {
+            write!(formatter, " retry_after_secs={seconds}")?;
+        }
+        write!(formatter, ": {}", self.message)
+    }
+}
+
+impl std::error::Error for MarketCandleProviderFailure {}
+
+impl MarketCandleProviderFailure {
+    fn from_yahoo_response(status: StatusCode, retry_after: Option<u64>, body: &[u8]) -> Self {
+        let body = String::from_utf8_lossy(body).to_ascii_lowercase();
+        let (kind, retryable, retry_after_seconds, message) = match status {
+            StatusCode::FORBIDDEN if body.contains("mainland china") => (
+                MarketCandleProviderFailureKind::RegionBlocked,
+                false,
+                Some(YAHOO_ACCESS_BLOCK_COOLDOWN_SECS),
+                "Yahoo Finance is unavailable from this server's egress region; use a supported \
+                 equity provider or change the server egress region"
+                    .to_owned(),
+            ),
+            StatusCode::FORBIDDEN => (
+                MarketCandleProviderFailureKind::AccessBlocked,
+                false,
+                Some(YAHOO_ACCESS_BLOCK_COOLDOWN_SECS),
+                "Yahoo Finance rejected this server's egress; do not retry the same request per \
+                 symbol"
+                    .to_owned(),
+            ),
+            StatusCode::TOO_MANY_REQUESTS => {
+                let retry_after_seconds = retry_after
+                    .unwrap_or(YAHOO_RATE_LIMIT_COOLDOWN_SECS)
+                    .min(YAHOO_MAX_COOLDOWN_SECS);
+                (
+                    MarketCandleProviderFailureKind::RateLimited,
+                    true,
+                    Some(retry_after_seconds),
+                    "Yahoo Finance rate-limited this server; retry after the provider cooldown"
+                        .to_owned(),
+                )
+            }
+            status if status.is_server_error() => (
+                MarketCandleProviderFailureKind::Unavailable,
+                true,
+                None,
+                "Yahoo Finance is temporarily unavailable".to_owned(),
+            ),
+            _ => (
+                MarketCandleProviderFailureKind::InvalidResponse,
+                false,
+                None,
+                "Yahoo Finance rejected the chart request".to_owned(),
+            ),
+        };
+        Self {
+            provider: "yahoo".to_owned(),
+            kind,
+            status: Some(status.as_u16()),
+            retryable,
+            retry_after_seconds,
+            message,
+        }
+    }
+
+    fn yahoo_request(message: impl Into<String>) -> Self {
+        Self {
+            provider:            "yahoo".to_owned(),
+            kind:                MarketCandleProviderFailureKind::Unavailable,
+            status:              None,
+            retryable:           true,
+            retry_after_seconds: None,
+            message:             message.into(),
+        }
+    }
+
+    fn yahoo_invalid_response(message: impl Into<String>) -> Self {
+        Self {
+            provider:            "yahoo".to_owned(),
+            kind:                MarketCandleProviderFailureKind::InvalidResponse,
+            status:              None,
+            retryable:           false,
+            retry_after_seconds: None,
+            message:             message.into(),
+        }
+    }
+
+    fn opens_provider_circuit(&self) -> bool {
+        matches!(
+            self.kind,
+            MarketCandleProviderFailureKind::RegionBlocked
+                | MarketCandleProviderFailureKind::AccessBlocked
+                | MarketCandleProviderFailureKind::RateLimited
+                | MarketCandleProviderFailureKind::Unavailable
+        )
+    }
+
+    fn circuit_duration(&self) -> Duration {
+        Duration::from_secs(
+            self.retry_after_seconds
+                .unwrap_or(YAHOO_RATE_LIMIT_COOLDOWN_SECS),
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+struct YahooCircuitBreaker {
+    open_until: Option<Instant>,
+}
+
+impl YahooCircuitBreaker {
+    fn remaining(&mut self) -> Option<Duration> {
+        let open_until = self.open_until?;
+        match open_until.checked_duration_since(Instant::now()) {
+            Some(remaining) => Some(remaining),
+            None => {
+                self.open_until = None;
+                None
+            }
+        }
+    }
+
+    fn open_for(&mut self, duration: Duration) {
+        self.open_until = Instant::now().checked_add(duration);
+    }
+
+    fn close(&mut self) { self.open_until = None; }
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,6 +501,7 @@ impl MarketCandleSource {
             client,
             reporter: None,
             in_error: Arc::new(AtomicBool::new(false)),
+            yahoo_circuit: Mutex::new(YahooCircuitBreaker::default()),
             symbols,
             timeframes,
         })
@@ -383,6 +560,108 @@ impl MarketCandleSource {
             .append_pair("events", "history")
             .append_pair("includePrePost", "false");
         Ok(url)
+    }
+
+    async fn fetch_yahoo_chart_body(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+    ) -> Result<Vec<u8>, MarketCandleProviderFailure> {
+        let url = self
+            .build_yahoo_chart_url(symbol, timeframe)
+            .map_err(|err| {
+                MarketCandleProviderFailure::yahoo_invalid_response(format!(
+                    "failed to build Yahoo chart URL: {err}"
+                ))
+            })?;
+        let mut request = self.client.get(url);
+        for (key, value) in &self.transport.headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+        request = apply_request_auth(request, &self.auth);
+
+        let response = request.send().await.map_err(|err| {
+            debug!(feed = %self.name, error = %err, "Yahoo chart request failed");
+            MarketCandleProviderFailure::yahoo_request("Yahoo chart request failed")
+        })?;
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
+        let body = response.bytes().await.map_err(|err| {
+            debug!(feed = %self.name, error = %err, "failed to read Yahoo chart response");
+            MarketCandleProviderFailure::yahoo_request("failed to read Yahoo chart response")
+        })?;
+        if body.len() > MAX_BODY_BYTES {
+            return Err(MarketCandleProviderFailure::yahoo_invalid_response(
+                format!("Yahoo chart response exceeded {MAX_BODY_BYTES} bytes"),
+            ));
+        }
+        if !status.is_success() {
+            return Err(MarketCandleProviderFailure::from_yahoo_response(
+                status,
+                retry_after,
+                &body,
+            ));
+        }
+        Ok(body.to_vec())
+    }
+
+    /// Probe the first configured stream before a provider-backed feed is
+    /// enabled.
+    ///
+    /// Normalized endpoints and providers with stable public contracts are
+    /// validated structurally at config load. Yahoo needs an actual request
+    /// because availability depends on the server's egress region and current
+    /// provider throttling state.
+    pub async fn preflight(&self) -> Result<(), MarketCandleProviderFailure> {
+        if self.transport.provider.as_deref() != Some("yahoo") {
+            return Ok(());
+        }
+        let symbol = self.transport.symbols.first().ok_or_else(|| {
+            MarketCandleProviderFailure::yahoo_invalid_response(
+                "Yahoo preflight requires at least one symbol",
+            )
+        })?;
+        let timeframe = self.transport.timeframes.first().ok_or_else(|| {
+            MarketCandleProviderFailure::yahoo_invalid_response(
+                "Yahoo preflight requires at least one timeframe",
+            )
+        })?;
+        let body = self.fetch_yahoo_chart_body(symbol, timeframe).await?;
+        self.parse_yahoo_candle_events(symbol, timeframe, &body)
+            .map_err(|err| {
+                MarketCandleProviderFailure::yahoo_invalid_response(format!(
+                    "failed to parse Yahoo chart response: {err}"
+                ))
+            })?;
+        Ok(())
+    }
+
+    fn yahoo_circuit_remaining(&self) -> Option<Duration> {
+        self.yahoo_circuit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remaining()
+    }
+
+    #[cfg(test)]
+    fn yahoo_circuit_is_open(&self) -> bool { self.yahoo_circuit_remaining().is_some() }
+
+    fn open_yahoo_circuit(&self, duration: Duration) {
+        self.yahoo_circuit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .open_for(duration);
+    }
+
+    fn close_yahoo_circuit(&self) {
+        self.yahoo_circuit
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .close();
     }
 
     fn record_error(&self, message: String) {
@@ -756,57 +1035,38 @@ impl MarketCandleSource {
     }
 
     async fn poll_yahoo_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        if let Some(remaining) = self.yahoo_circuit_remaining() {
+            debug!(
+                feed = %self.name,
+                retry_after_secs = remaining.as_secs(),
+                "Yahoo provider circuit is open; skipping poll"
+            );
+            return true;
+        }
+
         let mut any_success = false;
         let mut request_count = 0_usize;
 
         for symbol in &self.transport.symbols {
             for timeframe in &self.transport.timeframes {
-                let url = match self.build_yahoo_chart_url(symbol, timeframe) {
-                    Ok(url) => url,
-                    Err(err) => {
-                        self.record_error(format!("failed to build Yahoo chart URL: {err}"));
-                        continue;
-                    }
-                };
-
                 if request_count > 0 {
                     tokio::time::sleep(Duration::from_secs(YAHOO_REQUEST_SPACING_SECS)).await;
                 }
                 request_count += 1;
 
-                let mut request = self.client.get(url);
-                for (key, value) in &self.transport.headers {
-                    request = request.header(key.as_str(), value.as_str());
-                }
-                request = apply_request_auth(request, &self.auth);
-
-                let response = match request.send().await {
-                    Ok(response) => response,
-                    Err(err) => {
-                        self.record_error(format!("Yahoo chart fetch failed: {err}"));
-                        continue;
-                    }
-                };
-                let status = response.status();
-                if !status.is_success() {
-                    self.record_error(format!(
-                        "Yahoo chart fetch received non-success status: {status}"
-                    ));
-                    continue;
-                }
-                let body = match response.bytes().await {
+                let body = match self.fetch_yahoo_chart_body(symbol, timeframe).await {
                     Ok(body) => body,
-                    Err(err) => {
-                        self.record_error(format!("failed to read Yahoo chart body: {err}"));
+                    Err(failure) => {
+                        let opens_provider_circuit = failure.opens_provider_circuit();
+                        let circuit_duration = failure.circuit_duration();
+                        self.record_error(failure.to_string());
+                        if opens_provider_circuit {
+                            self.open_yahoo_circuit(circuit_duration);
+                            return true;
+                        }
                         continue;
                     }
                 };
-                if body.len() > MAX_BODY_BYTES {
-                    self.record_error(format!(
-                        "Yahoo chart response exceeded {MAX_BODY_BYTES} bytes"
-                    ));
-                    continue;
-                }
                 let events = match self.parse_yahoo_candle_events(symbol, timeframe, &body) {
                     Ok(events) => events,
                     Err(err) => {
@@ -826,6 +1086,7 @@ impl MarketCandleSource {
         }
 
         if any_success {
+            self.close_yahoo_circuit();
             self.record_success();
         }
         true
@@ -861,7 +1122,12 @@ impl DataFeed for MarketCandleSource {
             "market candle feed started"
         );
 
-        let mut interval_timer = tokio::time::interval(interval);
+        let first_poll_at = if self.transport.provider.as_deref() == Some("yahoo") {
+            tokio::time::Instant::now() + Duration::from_secs(YAHOO_REQUEST_SPACING_SECS)
+        } else {
+            tokio::time::Instant::now()
+        };
+        let mut interval_timer = tokio::time::interval_at(first_poll_at, interval);
         interval_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
@@ -1078,13 +1344,16 @@ fn dedupe_sort(values: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+    use std::time::Duration;
+
+    use rara_kernel::data_feed::{DataFeed, DataFeedConfig, FeedStatus, FeedType};
+    use tokio_util::sync::CancellationToken;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path, query_param},
     };
 
-    use super::{MarketCandleSource, market_candle_fanout_safety};
+    use super::{MarketCandleProviderFailureKind, MarketCandleSource, market_candle_fanout_safety};
 
     fn candle_source() -> MarketCandleSource {
         let config = DataFeedConfig::builder()
@@ -1468,6 +1737,121 @@ mod tests {
         assert_eq!(event.payload["symbol"], "AAPL");
         assert_eq!(event.payload["close"], "175.04");
         assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn yahoo_run_delays_first_poll_after_activation_preflight() {
+        let server = MockServer::start().await;
+        let source = yahoo_source_with_base_url(&server.uri(), "AAPL");
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let run = source.run(tx, cancel.clone());
+        tokio::pin!(run);
+
+        tokio::select! {
+            result = &mut run => panic!("Yahoo feed stopped before cancellation: {result:?}"),
+            () = tokio::time::sleep(Duration::from_millis(50)) => cancel.cancel(),
+        }
+        run.await.expect("Yahoo feed should stop cleanly");
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("wiremock request history");
+        assert!(
+            requests.is_empty(),
+            "activation preflight must not be followed by an immediate runtime request"
+        );
+    }
+
+    #[tokio::test]
+    async fn yahoo_preflight_classifies_mainland_china_block() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v8/finance/chart/AAPL"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_string(
+                    "Yahoo services are no longer accessible from mainland China.",
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source = yahoo_source_with_base_url(&server.uri(), "AAPL");
+
+        let failure = source
+            .preflight()
+            .await
+            .expect_err("region-blocked Yahoo must fail preflight");
+
+        assert_eq!(failure.kind, MarketCandleProviderFailureKind::RegionBlocked);
+        assert_eq!(failure.status, Some(403));
+        assert!(!failure.retryable);
+        assert!(failure.to_string().contains("code=region_blocked"));
+        assert!(failure.to_string().contains("egress region"));
+    }
+
+    #[tokio::test]
+    async fn yahoo_provider_block_stops_fanout_and_opens_circuit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("Forbidden"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut source = yahoo_source_with_base_url(&server.uri(), "AAPL");
+        source.transport.symbols = vec!["AAPL".to_owned(), "MSFT".to_owned()];
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        assert!(source.poll_yahoo_once(&tx).await);
+        assert!(source.yahoo_circuit_is_open());
+        assert!(source.poll_yahoo_once(&tx).await);
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("wiremock request history");
+        assert_eq!(
+            requests.len(),
+            1,
+            "403 must stop fanout and suppress retries"
+        );
+    }
+
+    #[tokio::test]
+    async fn yahoo_rate_limit_stops_fanout_and_honors_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "120")
+                    .set_body_string("Too Many Requests"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut source = yahoo_source_with_base_url(&server.uri(), "AAPL");
+        source.transport.symbols = vec!["AAPL".to_owned(), "MSFT".to_owned()];
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        assert!(source.poll_yahoo_once(&tx).await);
+
+        let remaining = source
+            .yahoo_circuit_remaining()
+            .expect("429 should open the provider circuit");
+        assert!(remaining.as_secs() >= 119);
+        assert!(remaining.as_secs() <= 120);
+        assert!(source.poll_yahoo_once(&tx).await);
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("wiremock request history");
+        assert_eq!(
+            requests.len(),
+            1,
+            "429 must stop fanout and suppress retries"
+        );
     }
 
     #[test]

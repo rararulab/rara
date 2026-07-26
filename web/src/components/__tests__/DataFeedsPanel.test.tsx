@@ -433,6 +433,8 @@ describe('DataFeedsPanel', () => {
         'no-auth',
         'best-effort',
         'delayed',
+        'experimental',
+        'region-dependent',
         'unofficial-api',
       ],
       source_name: 'finance-yahoo-market-candles',
@@ -479,6 +481,7 @@ describe('DataFeedsPanel', () => {
     expect(await screen.findAllByText('No key required')).toHaveLength(2);
     expect(screen.getAllByText('Best effort')).toHaveLength(2);
     expect(screen.getAllByText('Delayed / unofficial')).toHaveLength(2);
+    expect(screen.getAllByText('Region dependent')).toHaveLength(2);
   });
 
   it('opens the catalog configure dialog from a requires-config finance bundle', async () => {
