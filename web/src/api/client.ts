@@ -29,10 +29,9 @@ export interface AuthUser {
   is_admin: boolean;
 }
 
-/** Derive a sensible default backend URL from the current page hostname. */
+/** Use the page origin by default so deployed reverse proxies remain in the request path. */
 function defaultBackendUrl(): string {
-  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  return `http://${host}:25555`;
+  return typeof window !== 'undefined' ? window.location.origin : 'http://localhost:25555';
 }
 
 /** Read the backend URL from localStorage, env, or fallback to default. */
