@@ -16,8 +16,10 @@
 
 import { useMemo } from 'react';
 
+import { FleetTaskCard } from './FleetTaskCard';
 import { WorkerCard, type WorkerInfo, type WorkerStatus } from './WorkerCard';
 
+import { useFleetTasks } from '@/hooks/use-fleet-tasks';
 import type { TopologyEventEntry } from '@/hooks/use-topology-subscription';
 
 export interface WorkerInboxProps {
@@ -40,6 +42,11 @@ export interface WorkerInboxProps {
  * the topology event buffer, with status, manifest name, last activity
  * seq, and event count. Completed / failed workers are kept visible —
  * the surface is an observation deck, not a job queue.
+ *
+ * Below the in-process workers, a fleet section lists out-of-process
+ * fleet tasks polled from `GET /api/v1/fleet/tasks` (issue 2197). The
+ * section renders nothing at all while there are no tasks — no
+ * empty-shell noise in the rail.
  */
 export function WorkerInbox({
   rootSessionKey,
@@ -48,25 +55,35 @@ export function WorkerInbox({
   onSelectChild,
 }: WorkerInboxProps) {
   const workers = useMemo(() => deriveWorkers(rootSessionKey, events), [rootSessionKey, events]);
-
-  if (workers.length === 0) {
-    return (
-      <div className="rounded border border-dashed border-border px-2 py-3 text-[11px] text-muted-foreground">
-        No workers spawned yet.
-      </div>
-    );
-  }
+  const { data: fleetTasks } = useFleetTasks();
+  const tasks = fleetTasks ?? [];
 
   return (
     <div className="space-y-1.5">
-      {workers.map((worker) => (
-        <WorkerCard
-          key={worker.childSession}
-          worker={worker}
-          active={activeChildSession === worker.childSession}
-          onSelect={onSelectChild}
-        />
-      ))}
+      {workers.length === 0 ? (
+        <div className="rounded border border-dashed border-border px-2 py-3 text-[11px] text-muted-foreground">
+          No workers spawned yet.
+        </div>
+      ) : (
+        workers.map((worker) => (
+          <WorkerCard
+            key={worker.childSession}
+            worker={worker}
+            active={activeChildSession === worker.childSession}
+            onSelect={onSelectChild}
+          />
+        ))
+      )}
+      {tasks.length > 0 && (
+        <section aria-label="Fleet tasks" className="space-y-1.5 pt-1.5">
+          <h3 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Fleet tasks
+          </h3>
+          {tasks.map((task) => (
+            <FleetTaskCard key={task.id} task={task} />
+          ))}
+        </section>
+      )}
     </div>
   );
 }

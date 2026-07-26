@@ -72,11 +72,22 @@ button would be overreach.
 - `WorkerInbox.tsx` — right-rail derived view. The reducer
   `deriveWorkers` folds the same event buffer into one `WorkerInfo`
   per spawned child (status, manifest name, last activity seq, event
-  count). Pure; re-runs via `useMemo`.
+  count). Pure; re-runs via `useMemo`. Below the workers it renders a
+  fleet-tasks section (issue #2197) fed by `@/hooks/use-fleet-tasks`
+  polling `GET /api/v1/fleet/tasks`; the section renders nothing at all
+  when the API returns no tasks (no empty-shell noise in the rail).
 - `WorkerCard.tsx` — clickable card per worker; click swaps the
   `Topology` page's `viewChild` state so the timeline focuses on that
   child. The back-to-root affordance lives in the timeline header, not
   the inbox.
+- `FleetTaskCard.tsx` — read-only card per dispatched fleet task
+  (issue #2197): agent type, code-point-safe truncated prompt, status
+  badge (`queued`/`running`/`succeeded`/`failed`/`lost`); terminal
+  tasks add the result contract (branch, external PR link, token
+  usage, cost) and failed / lost tasks surface the error text. Wire
+  types live in `@/api/fleet` and mirror issue #2194's `fleet_tasks`
+  record minus `callback_token`. Not clickable — fleet tasks are not
+  sessions, so there is no timeline focus to swap to.
 - `SessionAnchorMinimap.tsx` — right-rail vertical anchor minimap
   (issue #2052). Reads `anchors[]` from the session row that `Chat.tsx`
   fetches and renders one row per anchor in append order, day-grouped
