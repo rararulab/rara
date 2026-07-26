@@ -3110,9 +3110,9 @@ mod tests {
             .await
             .unwrap();
         let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(result["count"], 6);
-
         let bundles = result["bundles"].as_array().unwrap();
+        assert_eq!(result["count"], bundles.len());
+
         let macro_news = bundles
             .iter()
             .find(|bundle| bundle["id"] == "macro-news")
@@ -3195,6 +3195,19 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|tag| tag == "best-effort")
+        );
+
+        let fmp = bundles
+            .iter()
+            .find(|bundle| bundle["id"] == "fmp-us-equities-daily")
+            .unwrap();
+        assert_eq!(fmp["providers"], serde_json::json!(["fmp"]));
+        assert_eq!(fmp["requires_configuration"], true);
+        assert_eq!(fmp["can_enable"], false);
+        assert_eq!(fmp["sources"][0]["provider"], "fmp");
+        assert_eq!(
+            fmp["sources"][0]["configured_timeframes"],
+            serde_json::json!(["1d"])
         );
     }
 

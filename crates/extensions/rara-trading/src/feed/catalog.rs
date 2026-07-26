@@ -95,6 +95,13 @@ pub fn default_finance_feed_bundles() -> Vec<DefaultFeedBundle> {
             ["yahoo-global-market-candles"],
         ),
         feed_bundle(
+            "fmp-us-equities-daily",
+            "FMP US Equities Daily",
+            "Official FMP end-of-day candles for a focused US equities research watchlist.",
+            ["finance", "market-data", "equities", "fmp", "delayed"],
+            ["fmp-us-equities-daily"],
+        ),
+        feed_bundle(
             "longbridge-equities-daily",
             "Longbridge Equities Daily",
             "Longbridge equities daily candles preset for configured normalized endpoints.",
@@ -196,6 +203,13 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             ],
             &["^GSPC", "^N225", "000001.SS", "BTC-USD", "EURUSD=X"],
         ),
+        fmp_market_candles_source(
+            "fmp-us-equities-daily",
+            "FMP US Equities Daily",
+            "Official FMP end-of-day OHLCV candles for research. Requires an FMP API key and may \
+             be delayed according to the account's market-data plan.",
+            &["AAPL", "MSFT", "NVDA", "SPY", "QQQ"],
+        ),
         provider_preset(
             "longbridge-market-candles",
             "Longbridge Market Data",
@@ -207,6 +221,50 @@ pub fn default_finance_feed_sources() -> Vec<DefaultFeedSource> {
             &["1d"],
         ),
     ]
+}
+
+fn fmp_market_candles_source(
+    id: &str,
+    name: &str,
+    description: &str,
+    symbols: &[&str],
+) -> DefaultFeedSource {
+    DefaultFeedSource {
+        id:                     id.to_owned(),
+        name:                   name.to_owned(),
+        description:            description.to_owned(),
+        feed_type:              FeedType::MarketCandle,
+        provider:               Some("fmp".to_owned()),
+        tags:                   [
+            "finance",
+            "market-data",
+            "equities",
+            "fmp",
+            "official-api",
+            "delayed",
+            "requires-api-key",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        transport:              Some(serde_json::json!({
+            "provider": "fmp",
+            "base_url": "https://financialmodelingprep.com",
+            "interval_secs": 900,
+            "headers": {},
+            "venue": "fmp",
+            "symbols": symbols,
+            "timeframes": ["1d"],
+            "max_candles_per_poll": 5
+        })),
+        auth:                   None,
+        requires_configuration: true,
+        setup_hint:             Some(
+            "Add an FMP API key using API Key (Header), set the field name to apikey, then enable \
+             the source. Query authentication is also supported."
+                .to_owned(),
+        ),
+    }
 }
 
 fn yahoo_market_candles_source(
@@ -536,5 +594,39 @@ mod tests {
             .find(|bundle| bundle.id == "yahoo-global-starter")
             .expect("missing Yahoo global starter bundle");
         assert_eq!(global.catalog_source_ids, ["yahoo-global-market-candles"]);
+    }
+
+    #[test]
+    fn fmp_preset_is_an_official_configurable_equity_alternative() {
+        let sources = default_finance_feed_sources();
+        let fmp = sources
+            .iter()
+            .find(|source| source.id == "fmp-us-equities-daily")
+            .expect("missing FMP US equities preset");
+
+        assert!(!fmp.can_enable());
+        assert!(fmp.requires_configuration);
+        assert_eq!(fmp.provider.as_deref(), Some("fmp"));
+        assert!(fmp.auth.is_none());
+        for tag in ["official-api", "delayed", "requires-api-key"] {
+            assert!(fmp.tags.iter().any(|candidate| candidate == tag));
+        }
+        assert!(
+            fmp.setup_hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("apikey")),
+            "setup should explain the required FMP auth field"
+        );
+        let transport = fmp.transport.as_ref().expect("transport template");
+        assert_eq!(transport["provider"], "fmp");
+        assert_eq!(transport["base_url"], "https://financialmodelingprep.com");
+        assert_eq!(transport["venue"], "fmp");
+        assert_eq!(transport["timeframes"], serde_json::json!(["1d"]));
+
+        let bundle = default_finance_feed_bundles()
+            .into_iter()
+            .find(|bundle| bundle.id == "fmp-us-equities-daily")
+            .expect("missing FMP US equities bundle");
+        assert_eq!(bundle.catalog_source_ids, ["fmp-us-equities-daily"]);
     }
 }

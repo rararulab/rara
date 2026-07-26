@@ -29,7 +29,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use rara_kernel::data_feed::{
     AuthConfig, DataFeed, DataFeedConfig, FeedEvent, FeedEventId, FeedStatus, FeedType,
     StatusReporterRef, polling::apply_request_auth,
@@ -116,7 +116,7 @@ pub fn market_candle_fanout_safety(
     );
 
     let stream_count = symbols.len().saturating_mul(timeframes.len());
-    let poll_request_count = if matches!(provider, Some("binance" | "yahoo")) {
+    let poll_request_count = if matches!(provider, Some("binance" | "fmp" | "yahoo")) {
         stream_count
     } else {
         1
@@ -270,6 +270,16 @@ struct YahooQuote {
 }
 
 #[derive(Debug, Deserialize)]
+struct FmpEodCandle {
+    date:   String,
+    open:   serde_json::Number,
+    high:   serde_json::Number,
+    low:    serde_json::Number,
+    close:  serde_json::Number,
+    volume: serde_json::Number,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawCandle {
     venue:      String,
     symbol:     String,
@@ -303,6 +313,7 @@ impl MarketCandleSource {
             serde_json::from_value(config.transport.clone())?;
         normalize_transport(&mut transport)?;
         validate_transport(&transport)?;
+        validate_provider_auth(&transport, config.auth.as_ref())?;
         config.transport = serde_json::to_value(transport)?;
         Ok(())
     }
@@ -382,6 +393,33 @@ impl MarketCandleSource {
             .append_pair("range", "5d")
             .append_pair("events", "history")
             .append_pair("includePrePost", "false");
+        Ok(url)
+    }
+
+    fn build_fmp_eod_url(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        now: Timestamp,
+    ) -> anyhow::Result<Url> {
+        anyhow::ensure!(
+            timeframe == "1d",
+            "FMP market candle timeframe {timeframe:?} is unsupported; use 1d"
+        );
+        let base_url = self
+            .transport
+            .base_url
+            .as_deref()
+            .unwrap_or("https://financialmodelingprep.com");
+        let from = now.checked_sub(SignedDuration::from_hours(24 * 10))?;
+        let mut url = Url::parse(base_url)?.join("/stable/historical-price-eod/full")?;
+        url.query_pairs_mut()
+            .append_pair("symbol", symbol)
+            .append_pair("from", &from.strftime("%F").to_string())
+            .append_pair("to", &now.strftime("%F").to_string());
+        if let Some(AuthConfig::Query { name, value }) = &self.auth {
+            url.query_pairs_mut().append_pair(name, value);
+        }
         Ok(url)
     }
 
@@ -515,6 +553,32 @@ impl MarketCandleSource {
         }
 
         Ok(events)
+    }
+
+    fn parse_fmp_candle_events(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        body: &[u8],
+    ) -> anyhow::Result<Vec<FeedEvent>> {
+        let rows: Vec<FmpEodCandle> = serde_json::from_slice(body)?;
+        let received_at = Timestamp::now();
+        let mut candles = rows
+            .into_iter()
+            .filter_map(|row| {
+                fmp_candle(row, &self.transport.venue, symbol, timeframe, received_at)
+            })
+            .collect::<Vec<_>>();
+        candles.sort_by(|left, right| left.open_time.cmp(&right.open_time));
+        let keep_from = candles
+            .len()
+            .saturating_sub(self.transport.max_candles_per_poll);
+
+        Ok(candles
+            .into_iter()
+            .skip(keep_from)
+            .map(|candle| self.event_from_candle(candle, received_at))
+            .collect())
     }
 
     fn event_from_candle(&self, candle: ParsedCandle, received_at: Timestamp) -> FeedEvent {
@@ -831,9 +895,81 @@ impl MarketCandleSource {
         true
     }
 
+    async fn poll_fmp_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
+        let mut any_success = false;
+
+        for symbol in &self.transport.symbols {
+            for timeframe in &self.transport.timeframes {
+                let url = match self.build_fmp_eod_url(symbol, timeframe, Timestamp::now()) {
+                    Ok(url) => url,
+                    Err(err) => {
+                        self.record_error(format!("failed to build FMP historical URL: {err}"));
+                        continue;
+                    }
+                };
+                let mut request = self.client.get(url);
+                for (key, value) in &self.transport.headers {
+                    request = request.header(key.as_str(), value.as_str());
+                }
+                request = apply_request_auth(request, &self.auth);
+
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(_) => {
+                        self.record_error("FMP historical request failed".to_owned());
+                        continue;
+                    }
+                };
+                let status = response.status();
+                if !status.is_success() {
+                    self.record_error(format!(
+                        "FMP historical request received non-success status: {status}"
+                    ));
+                    continue;
+                }
+                let body = match response.bytes().await {
+                    Ok(body) => body,
+                    Err(_) => {
+                        self.record_error("failed to read FMP historical response".to_owned());
+                        continue;
+                    }
+                };
+                if body.len() > MAX_BODY_BYTES {
+                    self.record_error(format!(
+                        "FMP historical response exceeded {MAX_BODY_BYTES} bytes"
+                    ));
+                    continue;
+                }
+                let events = match self.parse_fmp_candle_events(symbol, timeframe, &body) {
+                    Ok(events) => events,
+                    Err(err) => {
+                        self.record_error(format!(
+                            "failed to parse FMP historical response: {err}"
+                        ));
+                        continue;
+                    }
+                };
+
+                any_success = true;
+                for event in events {
+                    if tx.send(event).await.is_err() {
+                        tracing::info!("event channel closed, stopping market candle loop");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if any_success {
+            self.record_success();
+        }
+        true
+    }
+
     async fn poll_once(&self, tx: &mpsc::Sender<FeedEvent>) -> bool {
         match self.transport.provider.as_deref() {
             Some("binance") => self.poll_binance_once(tx).await,
+            Some("fmp") => self.poll_fmp_once(tx).await,
             Some("yahoo") => self.poll_yahoo_once(tx).await,
             _ => self.poll_normalized_once(tx).await,
         }
@@ -970,6 +1106,26 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
                 yahoo_interval(timeframe)?;
             }
         }
+        "fmp" => {
+            let base_url = transport
+                .base_url
+                .as_deref()
+                .unwrap_or("https://financialmodelingprep.com");
+            let url = Url::parse(base_url)?;
+            let test_loopback = cfg!(test)
+                && url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+            anyhow::ensure!(
+                url.scheme() == "https" || test_loopback,
+                "FMP market candle base_url must use HTTPS"
+            );
+            for timeframe in &transport.timeframes {
+                anyhow::ensure!(
+                    timeframe == "1d",
+                    "FMP market candle timeframe {timeframe:?} is unsupported; use 1d"
+                );
+            }
+        }
         provider => anyhow::bail!("unsupported market candle provider: {provider}"),
     }
     anyhow::ensure!(
@@ -1012,6 +1168,26 @@ fn validate_transport(transport: &MarketCandleTransport) -> anyhow::Result<()> {
         HeaderName::from_bytes(name.as_bytes())?;
         HeaderValue::from_str(value)?;
     }
+    Ok(())
+}
+
+fn validate_provider_auth(
+    transport: &MarketCandleTransport,
+    auth: Option<&AuthConfig>,
+) -> anyhow::Result<()> {
+    if transport.provider.as_deref() != Some("fmp") {
+        return Ok(());
+    }
+    let valid = match auth {
+        Some(AuthConfig::Header { name, value } | AuthConfig::Query { name, value }) => {
+            name.eq_ignore_ascii_case("apikey") && !value.trim().is_empty()
+        }
+        _ => false,
+    };
+    anyhow::ensure!(
+        valid,
+        "FMP market candle provider requires a non-empty apikey header or query parameter"
+    );
     Ok(())
 }
 
@@ -1070,6 +1246,39 @@ fn yahoo_candle_at(
     })
 }
 
+fn fmp_candle(
+    row: FmpEodCandle,
+    venue: &str,
+    symbol: &str,
+    timeframe: &str,
+    received_at: Timestamp,
+) -> Option<ParsedCandle> {
+    let open_time = format!("{}T00:00:00Z", row.date)
+        .parse::<Timestamp>()
+        .ok()?;
+    let close_time = open_time
+        .checked_add(SignedDuration::from_hours(24))
+        .ok()?
+        .checked_sub(SignedDuration::from_millis(1))
+        .ok()?;
+    if close_time > received_at {
+        return None;
+    }
+    let decimal = |value: serde_json::Number| Decimal::from_str(&value.to_string()).ok();
+    Some(ParsedCandle {
+        venue:      venue.to_owned(),
+        symbol:     symbol.to_owned(),
+        timeframe:  timeframe.to_owned(),
+        open_time:  open_time.to_string(),
+        close_time: close_time.to_string(),
+        open:       decimal(row.open)?,
+        high:       decimal(row.high)?,
+        low:        decimal(row.low)?,
+        close:      decimal(row.close)?,
+        volume:     decimal(row.volume)?,
+    })
+}
+
 fn dedupe_sort(values: &mut Vec<String>) {
     let mut seen = HashSet::new();
     values.retain(|value| seen.insert(value.clone()));
@@ -1078,10 +1287,10 @@ fn dedupe_sort(values: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use rara_kernel::data_feed::{DataFeedConfig, FeedStatus, FeedType};
+    use rara_kernel::data_feed::{AuthConfig, DataFeedConfig, FeedStatus, FeedType};
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path, query_param},
+        matchers::{header, method, path, query_param},
     };
 
     use super::{MarketCandleSource, market_candle_fanout_safety};
@@ -1159,6 +1368,199 @@ mod tests {
             .build();
 
         MarketCandleSource::from_config(&config).expect("Yahoo config should parse")
+    }
+
+    fn fmp_config(base_url: &str, auth: Option<AuthConfig>) -> DataFeedConfig {
+        DataFeedConfig::builder()
+            .id("fmp-candles-test".to_owned())
+            .name("fmp-us-equities".to_owned())
+            .feed_type(FeedType::MarketCandle)
+            .tags(vec!["finance".to_owned(), "equities".to_owned()])
+            .transport(serde_json::json!({
+                "provider": "fmp",
+                "base_url": base_url,
+                "interval_secs": 900,
+                "venue": "fmp",
+                "symbols": ["AAPL"],
+                "timeframes": ["1d"],
+                "max_candles_per_poll": 5
+            }))
+            .maybe_auth(auth)
+            .enabled(true)
+            .status(FeedStatus::Idle)
+            .created_at(jiff::Timestamp::UNIX_EPOCH)
+            .updated_at(jiff::Timestamp::UNIX_EPOCH)
+            .build()
+    }
+
+    fn fmp_source_with_base_url(base_url: &str) -> MarketCandleSource {
+        MarketCandleSource::from_config(&fmp_config(
+            base_url,
+            Some(AuthConfig::Query {
+                name:  "apikey".to_owned(),
+                value: "test-secret".to_owned(),
+            }),
+        ))
+        .expect("FMP config should parse")
+    }
+
+    #[test]
+    fn fmp_provider_requires_an_api_key() {
+        let error = match MarketCandleSource::from_config(&fmp_config(
+            "https://financialmodelingprep.com",
+            None,
+        )) {
+            Ok(_) => panic!("FMP must reject a config without an API key"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("apikey"),
+            "error should explain the required FMP credential: {error}"
+        );
+    }
+
+    #[test]
+    fn fmp_provider_rejects_non_apikey_query_auth() {
+        let error = match MarketCandleSource::from_config(&fmp_config(
+            "https://financialmodelingprep.com",
+            Some(AuthConfig::Query {
+                name:  "token".to_owned(),
+                value: "test-secret".to_owned(),
+            }),
+        )) {
+            Ok(_) => panic!("FMP must reject the wrong query credential name"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("apikey"),
+            "error should name the supported FMP credential: {error}"
+        );
+    }
+
+    #[test]
+    fn fmp_provider_accepts_apikey_header_auth() {
+        MarketCandleSource::from_config(&fmp_config(
+            "https://financialmodelingprep.com",
+            Some(AuthConfig::Header {
+                name:  "apikey".to_owned(),
+                value: "test-secret".to_owned(),
+            }),
+        ))
+        .expect("FMP should accept its documented header authentication");
+    }
+
+    #[test]
+    fn fmp_provider_builds_a_bounded_eod_url() {
+        let source = fmp_source_with_base_url("https://financialmodelingprep.com");
+        let now = "2026-07-19T12:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .expect("fixed timestamp");
+        let url = source
+            .build_fmp_eod_url("AAPL", "1d", now)
+            .expect("FMP URL should build");
+
+        assert_eq!(
+            url.as_str(),
+            "https://financialmodelingprep.com/stable/historical-price-eod/full?symbol=AAPL&from=2026-07-09&to=2026-07-19&apikey=test-secret"
+        );
+    }
+
+    #[test]
+    fn fmp_fanout_uses_one_request_per_symbol() {
+        let safety = market_candle_fanout_safety(
+            Some("fmp"),
+            &serde_json::json!({"interval_secs": 900}),
+            &["AAPL".to_owned(), "MSFT".to_owned(), "NVDA".to_owned()],
+            &["1d".to_owned()],
+            super::DEFAULT_MARKET_CANDLE_REQUEST_BUDGET_PER_SECOND,
+        )
+        .expect("fan-out should calculate");
+
+        assert_eq!(safety.stream_count, 3);
+        assert_eq!(safety.poll_request_count, 3);
+    }
+
+    #[tokio::test]
+    async fn fmp_poll_fetches_eod_candles_with_query_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stable/historical-price-eod/full"))
+            .and(query_param("symbol", "AAPL"))
+            .and(query_param("apikey", "test-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"[
+  {
+    "symbol": "AAPL",
+    "date": "2024-04-15",
+    "open": 172.50,
+    "high": 176.63,
+    "low": 172.45,
+    "close": 175.04,
+    "volume": 73531800
+  },
+  {
+    "symbol": "AAPL",
+    "date": "2100-01-01",
+    "open": 190.00,
+    "high": 192.00,
+    "low": 189.50,
+    "close": 191.25,
+    "volume": 1000
+  }
+]"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source = fmp_source_with_base_url(&server.uri());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+        assert!(source.poll_once(&tx).await);
+        drop(tx);
+
+        let event = rx.recv().await.expect("closed FMP candle event");
+        assert_eq!(event.source_name, "fmp-us-equities");
+        assert_eq!(event.payload["venue"], "fmp");
+        assert_eq!(event.payload["symbol"], "AAPL");
+        assert_eq!(event.payload["timeframe"], "1d");
+        assert_eq!(event.payload["open_time"], "2024-04-15T00:00:00Z");
+        assert_eq!(event.payload["close_time"], "2024-04-15T23:59:59.999Z");
+        assert_eq!(event.payload["open"], "172.5");
+        assert_eq!(event.payload["high"], "176.63");
+        assert_eq!(event.payload["low"], "172.45");
+        assert_eq!(event.payload["close"], "175.04");
+        assert_eq!(event.payload["volume"], "73531800");
+        assert!(
+            rx.recv().await.is_none(),
+            "future daily bar must be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn fmp_poll_sends_apikey_header_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stable/historical-price-eod/full"))
+            .and(query_param("symbol", "AAPL"))
+            .and(header("apikey", "test-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("[]", "application/json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source = MarketCandleSource::from_config(&fmp_config(
+            &server.uri(),
+            Some(AuthConfig::Header {
+                name:  "apikey".to_owned(),
+                value: "test-secret".to_owned(),
+            }),
+        ))
+        .expect("FMP header config should parse");
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+        assert!(source.poll_once(&tx).await);
     }
 
     #[test]
