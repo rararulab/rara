@@ -85,7 +85,7 @@ jobs:
       # Use mise so the Go version stays in lockstep with mise.toml at the
       # repo root (matches go.work). See docs/guides/tooling.md.
       - name: Set up mise toolchain
-        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4
 
       - name: Build devtool
         run: cd scripts && go build -o bin/devtool ./cmd/devtool/
