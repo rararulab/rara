@@ -30,7 +30,7 @@ jobs:
           fetch-depth: false
           persist-credentials: false
       - name: Install mdbook and mdbook-mermaid
-        uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2
+        uses: taiki-e/install-action@b6b84cf49ebfe0176417bdce007c624f0db37f20 # v2
         with:
           tool: mdbook,mdbook-mermaid
       - name: Build mdbook
