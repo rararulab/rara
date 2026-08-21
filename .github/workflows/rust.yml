@@ -114,7 +114,7 @@ jobs:
       # The old arc image had nextest baked in; GitHub-hosted images do not.
       # `.config/nextest.toml` profile `ci` exists since #1912.
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2
+        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2
         with:
           tool: cargo-nextest
 
